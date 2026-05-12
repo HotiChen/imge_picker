@@ -13,6 +13,7 @@ class BookEditor {
         this.cropDragState = null;
         this.libraryPhotos = [];
         this.libFolderStack = [];
+        this.importedPhotos = [];
         this._draggedPageIdx = -1;
 
         this.init();
@@ -31,6 +32,7 @@ class BookEditor {
         this.bindEvents();
         this.renderAll();
         this.checkCloudStatus();
+        this.loadImportedPhotos();
     }
 
     // ─── 頁面管理 ─────────────────────────────
@@ -104,6 +106,7 @@ class BookEditor {
         this.renderCurrentPage();
         this.renderPageList();
         this.saveToStorage();
+        this.updateStripHighlights();
     }
 
     clearSlot(slotIdx) {
@@ -113,6 +116,7 @@ class BookEditor {
         this.renderCurrentPage();
         this.renderPageList();
         this.saveToStorage();
+        this.updateStripHighlights();
     }
 
     // ─── 裁切模式 ─────────────────────────────
@@ -147,6 +151,72 @@ class BookEditor {
         wrapper.style.width = `${100 * scale}%`;
         wrapper.style.height = `${100 * scale}%`;
         wrapper.style.transform = `translate(calc(-50% + ${cropX}%), calc(-50% + ${cropY}%))`;
+    }
+
+    // ─── 帶入照片列 ──────────────────────────
+
+    async loadImportedPhotos() {
+        const raw = localStorage.getItem('book_editor_import');
+        if (!raw) return;
+        try {
+            const { folderPath, photoIds } = JSON.parse(raw);
+            localStorage.removeItem('book_editor_import');
+
+            const result = await driveManager.loadPhotosFromFolder(folderPath);
+            const idSet = new Set(photoIds);
+
+            this.importedPhotos = result.photos.filter(p => idSet.has(p.id));
+            // 也同步填入素材庫
+            this.libraryPhotos = result.photos;
+            const input = document.getElementById('libFolderInput');
+            if (input) input.value = folderPath.replace(/\/$/, '');
+            this.renderLibrary();
+            this.renderImportStrip();
+        } catch (e) {
+            console.error('帶入照片失敗', e);
+        }
+    }
+
+    renderImportStrip() {
+        const strip = document.getElementById('importStrip');
+        if (!strip || !this.importedPhotos.length) return;
+        strip.style.display = 'flex';
+
+        const placedIds = this._getPlacedPhotoIds();
+        const label = document.getElementById('importStripLabel');
+        if (label) label.textContent = `匯入 ${this.importedPhotos.length} 張・${placedIds.size} 已放入`;
+
+        const container = document.getElementById('importStripPhotos');
+        if (!container) return;
+        container.innerHTML = this.importedPhotos.map(photo => `
+            <div class="import-thumb ${placedIds.has(photo.id) ? 'placed' : ''}"
+                 data-photo-id="${photo.id}" draggable="true" title="${photo.name}">
+                <img src="${driveManager.getImageUrl(photo, true)}" loading="lazy">
+            </div>
+        `).join('');
+
+        container.querySelectorAll('.import-thumb').forEach(el => {
+            el.addEventListener('dragstart', e => e.dataTransfer.setData('text/plain', el.dataset.photoId));
+            el.addEventListener('click', () => {
+                if (this.pendingSlotIdx >= 0) this.setSlotPhoto(this.pendingSlotIdx, el.dataset.photoId);
+            });
+        });
+    }
+
+    updateStripHighlights() {
+        if (!this.importedPhotos.length) return;
+        const placedIds = this._getPlacedPhotoIds();
+        document.querySelectorAll('.import-thumb').forEach(el => {
+            el.classList.toggle('placed', placedIds.has(el.dataset.photoId));
+        });
+        const label = document.getElementById('importStripLabel');
+        if (label) label.textContent = `匯入 ${this.importedPhotos.length} 張・${placedIds.size} 已放入`;
+    }
+
+    _getPlacedPhotoIds() {
+        const ids = new Set();
+        this.book.pages.forEach(page => page.slots.forEach(s => { if (s.photoId) ids.add(s.photoId); }));
+        return ids;
     }
 
     // ─── 照片庫 ──────────────────────────────
@@ -721,6 +791,15 @@ class BookEditor {
 
         // 自動排版
         this._on('runAutoLayoutBtn', 'click', () => this.runAutoLayout());
+
+        // 帶入照片列收合
+        this._on('importStripToggle', 'click', () => {
+            const strip = document.getElementById('importStrip');
+            const btn = document.getElementById('importStripToggle');
+            if (!strip) return;
+            strip.classList.toggle('collapsed');
+            if (btn) btn.textContent = strip.classList.contains('collapsed') ? '▲' : '▼';
+        });
 
         // 分享 / 雲端
         this._on('shareBtn', 'click', () => this.saveToCloud());
