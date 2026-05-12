@@ -12,6 +12,7 @@ const AutoLayout = {
             case 'uniform':  return this._uniformLayout(withOrient);
             case 'story':    return this._storyLayout(withOrient);
             case 'byRating': return this._ratingLayout(withOrient);
+            case 'random':   return this._randomLayout(withOrient);
             default:         return this._magazineLayout(withOrient);
         }
     },
@@ -120,6 +121,29 @@ const AutoLayout = {
                 pages.push(this._makePage('full-bleed', [p.id]));
                 i++;
             }
+        }
+        return pages;
+    },
+
+    // 隨機型：隨機挑版型塞滿照片
+    _randomLayout(photos) {
+        // 所有可用版型（含自訂，排除空白）
+        const pool = Object.entries(LAYOUTS)
+            .filter(([, def]) => def.slots.length > 0)
+            .map(([id, def]) => ({ id, count: def.slots.length }));
+
+        const pages = [];
+        let i = 0;
+
+        while (i < photos.length) {
+            const remaining = photos.length - i;
+            // 只挑不超過剩餘張數的版型，避免空格子
+            const fits = pool.filter(l => l.count <= remaining);
+            const candidates = fits.length > 0 ? fits : pool.filter(l => l.count === 1);
+            const pick = candidates[Math.floor(Math.random() * candidates.length)];
+            const ids = photos.slice(i, i + pick.count).map(p => p.id);
+            pages.push(this._makePage(pick.id, ids));
+            i += pick.count;
         }
         return pages;
     },
