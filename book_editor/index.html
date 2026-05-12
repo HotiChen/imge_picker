@@ -108,8 +108,11 @@
 
             <!-- Layout Selector -->
             <div class="panel-section">
-                <div class="panel-title">目前頁版型</div>
-                <div class="layout-grid">
+                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+                    <div class="panel-title" style="margin:0;">目前頁版型</div>
+                    <button id="openLayoutEditorBtn" class="btn btn-secondary" style="padding:3px 8px;font-size:0.7rem;">+ 自訂</button>
+                </div>
+                <div class="layout-grid" id="layoutGrid">
                     <!-- Full Bleed -->
                     <button class="layout-btn" data-layout="full-bleed" title="全出血">
                         <div class="layout-btn-preview">
@@ -198,6 +201,28 @@
     </div>
 </div>
 
+<!-- Layout Editor Modal -->
+<div id="layoutEditorModal" class="modal-overlay">
+    <div class="modal-box" style="width:min(680px,92vw);max-height:92vh;">
+        <div class="modal-header">
+            <h3>自訂版型編輯器</h3>
+            <button id="closeLayoutEditorBtn" class="btn btn-icon">×</button>
+        </div>
+        <div style="padding:12px 18px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px;">
+            <label style="font-size:0.75rem;color:var(--text-muted);white-space:nowrap;">版型名稱</label>
+            <input type="text" id="layoutName" placeholder="請輸入版型名稱" class="layout-name-input">
+        </div>
+        <div style="padding:14px 18px;flex:1;overflow:auto;">
+            <p style="font-size:0.72rem;color:var(--text-muted);margin-bottom:10px;">在畫布上拖拉建立格子，拖角落調整大小</p>
+            <div id="layoutEditorCanvas" class="layout-editor-canvas"></div>
+        </div>
+        <div style="padding:12px 18px;border-top:1px solid var(--border);display:flex;gap:8px;justify-content:flex-end;">
+            <button id="cancelLayoutEditorBtn" class="btn btn-secondary">取消</button>
+            <button id="saveLayoutEditorBtn" class="btn btn-primary">儲存版型</button>
+        </div>
+    </div>
+</div>
+
 <!-- Shared from picker -->
 <script src="../js/config.js"></script>
 <script src="../js/toast.js"></script>
@@ -206,6 +231,7 @@
 <script src="js/layouts.js"></script>
 <script src="js/auto_layout.js"></script>
 <script src="js/exporter.js"></script>
+<script src="js/layout_editor.js"></script>
 <script src="js/book_editor.js"></script>
 </body>
 </html>

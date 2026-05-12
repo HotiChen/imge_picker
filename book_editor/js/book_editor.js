@@ -17,6 +17,9 @@ class BookEditor {
     }
 
     async init() {
+        const customIds = LayoutEditor.loadSaved();
+        customIds.forEach(id => this.addCustomLayoutBtn(id, LAYOUTS[id].name));
+
         if (!this.loadFromStorage()) {
             this._addPage('cover', 'full-bleed');
             this._addPage('inner', '2-up-h');
@@ -370,6 +373,25 @@ class BookEditor {
         }
     }
 
+    addCustomLayoutBtn(id, name) {
+        const grid = document.getElementById('layoutGrid');
+        if (!grid || grid.querySelector(`[data-layout="${id}"]`)) return;
+
+        const btn = document.createElement('button');
+        btn.className = 'layout-btn';
+        btn.dataset.layout = id;
+        btn.title = name;
+
+        const layout = LAYOUTS[id];
+        const slotPreviews = (layout?.slots || []).map(s =>
+            `<div style="position:absolute;left:${s.x}%;top:${s.y}%;width:${s.w}%;height:${s.h}%;background:rgba(255,255,255,0.15);border-radius:1px;"></div>`
+        ).join('');
+        btn.innerHTML = `<div class="layout-btn-preview" style="position:relative;">${slotPreviews}</div>`;
+
+        btn.addEventListener('click', () => this.setLayout(id));
+        grid.appendChild(btn);
+    }
+
     updateLayoutSelector() {
         const page = this.book.pages[this.currentPageIndex];
         document.querySelectorAll('.layout-btn').forEach(btn => {
@@ -484,6 +506,18 @@ class BookEditor {
 
         // 自動排版
         this._on('runAutoLayoutBtn', 'click', () => this.runAutoLayout());
+
+        // 自訂版型編輯器
+        this._on('openLayoutEditorBtn', 'click', () => {
+            LayoutEditor.open();
+            LayoutEditor.initCanvas();
+        });
+        this._on('closeLayoutEditorBtn', 'click', () => LayoutEditor.close());
+        this._on('cancelLayoutEditorBtn', 'click', () => LayoutEditor.close());
+        this._on('saveLayoutEditorBtn', 'click', () => LayoutEditor.save());
+        this._on('layoutEditorModal', 'click', e => {
+            if (e.target.id === 'layoutEditorModal') LayoutEditor.close();
+        });
 
         // 匯出
         this._on('exportBtn', 'click', () => BookExporter.exportAll(this.book));
