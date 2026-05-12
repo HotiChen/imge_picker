@@ -32,10 +32,11 @@ class DriveManager {
         this.currentFolderId = folderPath;
         this.currentFolderName = folderPath.split('/').filter(x => x).pop() || folderPath;
 
-        sysLogger.info('Drive', `正在載入路徑: ${folderPath}`);
+        sysLogger?.info('Drive', `正在載入路徑: ${folderPath}`);
 
         try {
-            document.getElementById('loadingState').style.display = 'flex';
+            const loadingEl = document.getElementById('loadingState');
+            if (loadingEl) loadingEl.style.display = 'flex';
 
             const url = `${CONFIG.WORKER_URL}/?list=${encodeURIComponent(folderPath)}`;
             const response = await fetch(url);
@@ -65,9 +66,9 @@ class DriveManager {
                 });
 
                 this.loadSavedData();
-                document.getElementById('loadingState').style.display = 'none';
+                if (loadingEl) loadingEl.style.display = 'none';
 
-                sysLogger.success('Drive', `成功載入 ${this.photos.length} 張照片`);
+                sysLogger?.success('Drive', `成功載入 ${this.photos.length} 張照片`);
 
                 return {
                     photos: this.photos,
@@ -80,10 +81,11 @@ class DriveManager {
                 throw new Error(result.message || '無法讀取照片資料夾');
             }
         } catch (error) {
-            sysLogger.error('Drive', `載入路徑失敗: ${error.message}`);
+            sysLogger?.error('Drive', `載入路徑失敗: ${error.message}`);
             console.error('照片載入失敗:', error);
             toast.error('檔案載入失敗，請檢查 Worker 設定');
-            document.getElementById('loadingState').style.display = 'none';
+            const loadingEl = document.getElementById('loadingState');
+            if (loadingEl) loadingEl.style.display = 'none';
             return { photos: [], folders: [] };
         }
     }
@@ -162,7 +164,7 @@ class DriveManager {
 
         if (!isAutoSave) {
             toast.info(`正在同步「${this.currentFolderName}」to Google Sheets...`);
-            sysLogger.info('Drive', `正在發送同步請求至雲端: ${this.currentFolderName}`);
+            sysLogger?.info('Drive', `正在發送同步請求至雲端: ${this.currentFolderName}`);
         } else {
             console.log(`[AutoSave] 正在自動備份「${this.currentFolderName}」...`);
         }
@@ -176,10 +178,10 @@ class DriveManager {
             });
             if (!isAutoSave) {
                 toast.success('儲存請求已發送 (請確認試算表已建立)');
-                sysLogger.success('Drive', '同步請求發送成功');
+                sysLogger?.success('Drive', '同步請求發送成功');
             }
         } catch (error) {
-            sysLogger.error('Drive', `同步失敗: ${error.message}`);
+            sysLogger?.error('Drive', `同步失敗: ${error.message}`);
             console.error('GAS 儲存出錯:', error);
             if (!isAutoSave) toast.error('同步失敗');
         }
@@ -360,7 +362,7 @@ class DriveManager {
         a.click();
         URL.revokeObjectURL(url);
         toast.success('本地備份檔已下載');
-        sysLogger.success('Backup', `已完成本地資料備份外帶 (${backup.timestamp})`);
+        sysLogger?.success('Backup', `已完成本地資料備份外帶 (${backup.timestamp})`);
     }
 }
 
