@@ -650,7 +650,7 @@ class BookEditor {
         const slotPreviews = (layout?.slots || []).map(s =>
             `<div style="position:absolute;left:${s.x}%;top:${s.y}%;width:${s.w}%;height:${s.h}%;background:rgba(255,255,255,0.15);border-radius:1px;"></div>`
         ).join('');
-        btn.innerHTML = `<div class="layout-btn-preview" style="position:relative;">${slotPreviews}</div>`;
+        btn.innerHTML = `<div class="layout-btn-preview">${slotPreviews}</div>`;
         btn.addEventListener('click', () => this.setLayout(id));
 
         const delBtn = document.createElement('button');
