@@ -44,7 +44,8 @@ class BookEditor {
             type,
             layout,
             slots: layoutDef.slots.map(() => ({ photoId: null, crop: { x: 0, y: 0, scale: 1 } })),
-            bg: '#ffffff'
+            bg: '#ffffff',
+            locked: false
         };
 
         if (type === 'cover') {
@@ -308,10 +309,11 @@ class BookEditor {
             const isActive = idx === this.currentPageIndex;
             const label = { cover: '封面', 'back-cover': '封底' }[page.type] || `第 ${idx} 頁`;
             return `
-                <div class="page-thumb ${isActive ? 'active' : ''}" data-page-idx="${idx}">
+                <div class="page-thumb ${isActive ? 'active' : ''} ${page.locked ? 'locked' : ''}" data-page-idx="${idx}">
                     <div class="page-thumb-preview">${renderPageThumbnailHTML(page)}</div>
                     <div class="page-thumb-label">${label}</div>
                     ${page.type === 'inner' ? `<button class="page-delete-btn" data-page-idx="${idx}" title="刪除">×</button>` : ''}
+                    <button class="page-lock-btn" data-page-idx="${idx}" title="${page.locked ? '解鎖此頁' : '鎖定此頁'}">${page.locked ? '🔒' : '🔓'}</button>
                 </div>
             `;
         }).join('');
@@ -322,6 +324,7 @@ class BookEditor {
 
             el.addEventListener('click', e => {
                 if (e.target.classList.contains('page-delete-btn')) return;
+                if (e.target.classList.contains('page-lock-btn')) return;
                 this.exitCropMode();
                 this.currentPageIndex = idx;
                 this.renderAll();
@@ -373,6 +376,22 @@ class BookEditor {
                 if (confirm('確定刪除這頁？')) this.deletePage(parseInt(el.dataset.pageIdx));
             });
         });
+
+        list.querySelectorAll('.page-lock-btn').forEach(el => {
+            el.addEventListener('click', e => {
+                e.stopPropagation();
+                this.togglePageLock(parseInt(el.dataset.pageIdx));
+            });
+        });
+    }
+
+    togglePageLock(idx) {
+        const page = this.book.pages[idx];
+        if (!page) return;
+        page.locked = !page.locked;
+        this.renderPageList();
+        this.saveToStorage();
+        toast.success(page.locked ? '🔒 已鎖定此頁' : '🔓 已解鎖此頁');
     }
 
     renderCurrentPage(cropSlotIdx = -1) {

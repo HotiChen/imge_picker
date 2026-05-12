@@ -67,7 +67,8 @@ const Viewer = {
         if (counter) {
             const labels = { cover: '封面', 'back-cover': '封底' };
             const label = labels[page.type] || `第 ${this.currentPageIndex} 頁`;
-            counter.textContent = `${label}（${this.currentPageIndex + 1} / ${this.book.pages.length}）`;
+            const lockMark = page.locked ? ' 🔒' : '';
+            counter.textContent = `${label}${lockMark}（${this.currentPageIndex + 1} / ${this.book.pages.length}）`;
         }
 
         document.getElementById('prevBtn').disabled = this.currentPageIndex === 0;

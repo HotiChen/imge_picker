@@ -186,6 +186,28 @@ html, body {
 }
 .page-thumb:hover .page-delete-btn { display: flex; }
 
+.page-lock-btn {
+    position: absolute;
+    bottom: 20px;
+    left: 4px;
+    width: 18px;
+    height: 18px;
+    background: rgba(0,0,0,0.45);
+    border: none;
+    border-radius: 50%;
+    color: white;
+    font-size: 9px;
+    cursor: pointer;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
+    transition: background 0.15s;
+}
+.page-thumb:hover .page-lock-btn { display: flex; }
+.page-thumb.locked .page-lock-btn { display: flex; background: rgba(243,128,32,0.85); }
+.page-thumb.locked { box-shadow: inset 0 0 0 2px rgba(243,128,32,0.25); }
+
 /* ─── Center Panel ─── */
 .center-panel {
     flex: 1;
