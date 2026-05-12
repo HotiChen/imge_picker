@@ -233,9 +233,9 @@ if (window.app && window.app.syncToCloud) {
 
 ### Google Cloud Console 設定
 ```
-專案 ID: focused-premise-451917-c2
-API Key: AIzaSyCt023VL1UP5MrpVLkMs0CMI7zLHf417JQ
-Client ID: 405217818254-37bhsl49nakvsesaqckk6vsn29urggcb.apps.googleusercontent.com
+專案 ID: [REDACTED]
+API Key: [REDACTED - 請見 config.js 的 API_KEY 欄位]
+Client ID: [REDACTED - 請見 config.js 的 CLIENT_ID 欄位]
 ```
 
 ### 已授權網域
