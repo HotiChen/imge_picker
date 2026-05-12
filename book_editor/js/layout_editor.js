@@ -55,6 +55,7 @@ const LayoutEditor = {
         this.canvas.querySelectorAll('.editor-slot').forEach(el => {
             el.addEventListener('mousedown', e => {
                 if (e.target.classList.contains('rh') || e.target.classList.contains('editor-slot-del')) return;
+                e.preventDefault();
                 e.stopPropagation();
                 const idx = parseInt(el.dataset.idx);
                 const rect = this.canvas.getBoundingClientRect();
@@ -70,6 +71,7 @@ const LayoutEditor = {
         // Resize handles
         this.canvas.querySelectorAll('.rh').forEach(handle => {
             handle.addEventListener('mousedown', e => {
+                e.preventDefault();
                 e.stopPropagation();
                 const idx = parseInt(handle.dataset.idx);
                 const rect = this.canvas.getBoundingClientRect();
@@ -92,6 +94,7 @@ const LayoutEditor = {
         // 拖拉建立新格子
         this.canvas.addEventListener('mousedown', e => {
             if (e.target !== this.canvas) return;
+            e.preventDefault();
             const rect = this.canvas.getBoundingClientRect();
             this.dragging = {
                 type: 'create',
