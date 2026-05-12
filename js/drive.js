@@ -1,4 +1,5 @@
 // 照片儲存管理員 (支援完整選圖功能：評分、標注、備註、同步)
+if (typeof sysLogger === 'undefined') window.sysLogger = { info: () => {}, success: () => {}, error: () => {}, warn: () => {} };
 class DriveManager {
     constructor() {
         this.isSignedIn = false;
