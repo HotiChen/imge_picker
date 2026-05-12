@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>操作說明書 | 選圖軟體 Pro</title>
+    <link rel="stylesheet" href="css/styles.css">
+    <style>
+        :root {
+            --primary: #f38020;
+            --bg-tutorial: #050505;
+        }
+
+        body {
+            background-color: var(--bg-tutorial);
+            color: white;
+            padding: 0;
+            margin: 0;
+            font-family: 'Inter', sans-serif;
+            overflow-x: hidden;
+        }
+
+        .guide-container {
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 60px 20px;
+        }
+
+        .hero-title {
+            text-align: center;
+            margin-bottom: 80px;
+        }
+
+        .hero-title h1 {
+            font-size: 3rem;
+            margin-bottom: 10px;
+            color: var(--primary);
+        }
+
+        .hero-title p {
+            opacity: 0.6;
+            font-size: 1.2rem;
+        }
+
+        .step-box {
+            background: #111;
+            border-radius: 30px;
+            padding: 40px;
+            margin-bottom: 60px;
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 40px;
+            align-items: center;
+        }
+
+        .step-text h2 {
+            font-size: 1.8rem;
+            margin-top: 0;
+            color: var(--primary);
+        }
+
+        .step-text p {
+            line-height: 1.8;
+            color: #ccc;
+        }
+
+        .kbd {
+            background: #333;
+            padding: 3px 8px;
+            border-radius: 5px;
+            font-size: 0.9rem;
+            border-bottom: 2px solid #000;
+        }
+
+        /* 模擬介面的 Demo 區域 */
+        .demo-area {
+            background: #000;
+            border-radius: 20px;
+            padding: 30px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            border: 1px dashed rgba(255, 255, 255, 0.2);
+            position: relative;
+            min-height: 250px;
+        }
+
+        /* 修正 Demo 中的 Card 大小 */
+        .demo-area .photo-card {
+            width: 220px;
+            pointer-events: none;
+        }
+
+        .demo-area .bulk-action-bar {
+            position: relative;
+            bottom: 0;
+            left: 0;
+            transform: none;
+            min-width: auto;
+            width: 100%;
+            scale: 0.8;
+        }
+
+        .demo-area .select-toggle-btn::after {
+            opacity: 1;
+        }
+
+        .tag {
+            background: var(--primary);
+            color: white;
+            padding: 4px 12px;
+            border-radius: 10px;
+            font-size: 0.8rem;
+            font-weight: bold;
+            margin-bottom: 15px;
+            display: inline-block;
+        }
+
+        .footer-action {
+            text-align: center;
+            margin-top: 80px;
+        }
+
+        .btn-large {
+            background: var(--primary);
+            color: white;
+            padding: 15px 40px;
+            border-radius: 40px;
+            text-decoration: none;
+            font-weight: bold;
+            transition: 0.3s;
+        }
+
+        .btn-large:hover {
+            transform: scale(1.05);
+            box-shadow: 0 0 30px rgba(243, 128, 32, 0.4);
+        }
+
+        @media (max-width: 768px) {
+            .step-box {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+
+<body>
+
+    <div class="guide-container">
+        <div class="hero-title">
+            <h1>選圖軟體</h1>
+            <p>簡單、極速、專業的照片篩選指南</p>
+        </div>
+
+        <!-- Step 1: 批量選取 -->
+        <div class="step-box">
+            <div class="step-text">
+                <span class="tag">高效操作</span>
+                <h2>1. 勾選與批量選取</h2>
+                <p>點擊照片右上角的「白色圓圈」即可快速勾選照片。您也可以使用快捷鍵進行進階選取：</p>
+                <p>
+                    • <span class="kbd">Shift + 點擊</span>：連續選取整排照片。<br>
+                    • <span class="kbd">Ctrl / Cmd + 點擊</span>：跳躍式選取照片。
+                </p>
+            </div>
+            <div class="demo-area">
+                <!-- 直接使用實際的選取樣式 Class -->
+                <div class="photo-card selected">
+                    <div class="photo-image-container">
+                        <div
+                            style="width:100%; height:150px; background:#333; display:flex; align-items:center; justify-content:center;">
+                            相片範例</div>
+                        <div class="select-toggle-btn"></div>
+                    </div>
+                    <div class="photo-info-section">
+                        <div class="photo-name">範例照片.jpg</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Step 2: 批量評分 -->
+        <div class="step-box" style="direction: rtl;">
+            <div class="step-text" style="direction: ltr;">
+                <span class="tag">生產力</span>
+                <h2>2. 瞬間完成評分</h2>
+                <p>當您選中多張照片後，底部的「批量操作條」會自動彈出。您可以直接在操作條上點選星星，或使用鍵盤：</p>
+                <p>
+                    • 按下數字 <span class="kbd">1</span> - <span class="kbd">5</span>：所有選中的照片會同步評分。<br>
+                    • 按下 <span class="kbd">Esc</span>：取消所有選取。
+                </p>
+            </div>
+            <div class="demo-area" style="direction: ltr;">
+                <div class="bulk-action-bar active">
+                    <span class="bulk-info" style="font-size:0.8rem; padding-right:15px;">已選取 12 張</span>
+                    <div class="bulk-stars">
+                        <span class="bulk-star" style="color:var(--warning)">★</span>
+                        <span class="bulk-star" style="color:var(--warning)">★</span>
+                        <span class="bulk-star" style="color:var(--warning)">★</span>
+                        <span class="bulk-star">★</span>
+                        <span class="bulk-star">★</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Step 3: 智慧縮放 -->
+        <div class="step-box">
+            <div class="step-text">
+                <span class="tag">標註功能</span>
+                <h2>3. 智慧對焦縮放</h2>
+                <p>點開照片進入「劇院模式」後，將滑鼠移到想要檢查的細節（例如眼睛或背景），直接**捲動滾輪**。</p>
+                <p>
+                    • 照片會直接以您的**滑鼠位置**為中心進行放大。<br>
+                    • 下方工具欄可以切換「畫圈標註」或「平移」模式。
+                </p>
+            </div>
+            <div class="demo-area" style="background: #111; overflow:hidden;">
+                <div
+                    style="position:relative; width:100px; height:100px; border-radius:50%; border:3px solid var(--primary); display:flex; align-items:center; justify-content:center; background:rgba(243, 128, 32, 0.1);">
+                    <span style="color:var(--primary); font-weight:bold;">1</span>
+                    <div style="position:absolute; bottom:-30px; font-size:0.7rem; color:#aaa;">標註圈圈編號</div>
+                </div>
+                <div style="margin-left:40px; border:2px solid #555; padding:10px; border-radius:10px;">
+                    🖱️ 對準此處捲動
+                </div>
+            </div>
+        </div>
+
+        <div class="footer-action">
+            <a href="#" class="btn-large" onclick="window.close()">我看懂了，開始使用</a>
+        </div>
+    </div>
+
+</body>
+
+</html>

@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>相簿排版工具 - 專業相簿排版系統</title>
+
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+
+    <!-- Fabric.js for Canvas Manipulation -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/fabric.js/5.3.1/fabric.min.js"></script>
+    <!-- JSZip for batch (shared from picker logic if needed) -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+
+    <link rel="stylesheet" href="css/designer.css">
+</head>
+
+<body class="dark-theme">
+    <div class="app-container">
+        <!-- Top Toolbar -->
+        <header class="top-bar">
+            <div class="logo-area">
+                <span class="logo-icon">🎨</span>
+                <h1>相簿排版工具</h1>
+            </div>
+            <div class="workspace-actions">
+                <button id="undoBtn" class="icon-btn" title="復原">↺</button>
+                <button id="redoBtn" class="icon-btn" title="重做">↻</button>
+                <div class="divider"></div>
+                <button id="clearBtn" class="btn btn-outline">清空畫布</button>
+                <button id="exportBtn" class="btn btn-primary">匯出成品</button>
+            </div>
+        </header>
+
+        <main class="main-layout">
+            <!-- Left Sidebar: Photo Library -->
+            <aside class="library-sidebar">
+                <div class="sidebar-header">
+                    <h3>素材庫</h3>
+                    <button id="refreshLibrary" class="refresh-btn">⟳</button>
+                </div>
+                <div id="photoLibrary" class="library-grid">
+                    <!-- Photos from R2 will be loaded here -->
+                    <div class="loading-placeholder">請先從選圖工具同步照片...</div>
+                </div>
+            </aside>
+
+            <!-- Center: The Canvas -->
+            <section class="canvas-workspace">
+                <div id="canvasContainer" class="canvas-container">
+                    <canvas id="mainCanvas"></canvas>
+                </div>
+                <!-- Bottom Filmstrip (Optional, maybe keep sidebar only for now) -->
+            </section>
+
+            <!-- Right Sidebar: Properties & AI -->
+            <aside class="props-sidebar">
+                <div class="tabs">
+                    <button class="tab-btn active" data-tab="background">背景</button>
+                    <button class="tab-btn" data-tab="layout">版面</button>
+                    <button class="tab-btn" data-tab="ai">AI 創生</button>
+                </div>
+
+                <div class="tab-content scrollable">
+                    <!-- Background Tab -->
+                    <div id="backgroundTab" class="tab-pane active">
+                        <label>背景顏色</label>
+                        <div class="color-picker-grid">
+                            <div class="color-swatch-btn" style="background: #ffffff" data-color="#ffffff"></div>
+                            <div class="color-swatch-btn" style="background: #000000" data-color="#000000"></div>
+                            <div class="color-swatch-btn" style="background: #fbf0e4" data-color="#fbf0e4"></div>
+                            <input type="color" id="customColor" class="color-input">
+                        </div>
+
+                        <div class="spacer-lg"></div>
+
+                        <label>背景圖片</label>
+                        <div class="image-upload-zone" id="bgUpload">
+                            <span>點擊或拖放圖片</span>
+                        </div>
+                    </div>
+
+                    <!-- Layout Tab -->
+                    <div id="layoutTab" class="tab-pane">
+                        <label>自動排版模板</label>
+                        <div class="layout-grid">
+                            <div class="layout-thumb" data-template="1-photo">1</div>
+                            <div class="layout-thumb" data-template="2-photos">2</div>
+                            <div class="layout-thumb" data-template="4-grid">4</div>
+                        </div>
+                    </div>
+
+                    <!-- AI Tab -->
+                    <div id="aiTab" class="tab-pane">
+                        <label>AI 背景生成系統</label>
+                        <textarea id="aiPrompt" placeholder="描述您想要的背景... 例如：夢幻森林, 韓式簡約棚拍, 復古莫蘭迪..."></textarea>
+                        <button id="generateAiBg" class="btn btn-ai btn-block">
+                            ✨ 開始生成背景
+                        </button>
+                        <div id="aiResult" class="ai-result-preview">
+                            <div class="ai-loading" style="display: none;">AI 思考中...</div>
+                        </div>
+                    </div>
+                </div>
+            </aside>
+        </main>
+    </div>
+
+    <!-- Export Modal Placeholder -->
+    <div id="exportModal" class="modal">
+        <div class="modal-content">
+            <h3>匯出預覽</h3>
+            <div id="exportPreview"></div>
+            <div class="modal-actions">
+                <button id="confirmDownload" class="btn btn-primary">下載 PNG</button>
+                <button id="closeExport" class="btn btn-secondary">取消</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Base Configuration (Reused from picker) -->
+    <script src="../js/config.js"></script>
+    <script src="../js/toast.js"></script>
+    <script src="../js/drive.js"></script>
+
+    <!-- Designer Logic -->
+    <script src="js/designer_core.js"></script>
+</body>
+
+</html>

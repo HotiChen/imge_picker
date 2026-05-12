@@ -1,0 +1,9 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# Backups
+backups/
+
+# Local config overrides (copy config.js and fill in real keys locally)
+js/config.local.js
