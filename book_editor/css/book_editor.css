@@ -683,3 +683,30 @@ html, body {
     line-height: 16px;
     text-align: center;
 }
+
+/* ─── Toast (copied from styles.css) ─── */
+.toast-container {
+    position: fixed; top: 16px; right: 16px;
+    z-index: 2000;
+    display: flex; flex-direction: column; gap: 8px;
+    pointer-events: none;
+}
+.toast {
+    display: flex; align-items: center; gap: 12px;
+    padding: 10px 16px;
+    background: #1e2a45; border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+    min-width: 260px; pointer-events: all;
+    animation: slideInRight 200ms ease;
+}
+.toast.success { border-left: 4px solid #2ed573; }
+.toast.error   { border-left: 4px solid #ff4757; }
+.toast.info    { border-left: 4px solid #1e90ff; }
+.toast.warning { border-left: 4px solid #ffa502; }
+.toast-icon { flex-shrink: 0; }
+.toast-content { flex: 1; }
+.toast-message { font-size: 0.8rem; color: #c5cae9; }
+@keyframes slideInRight {
+    from { opacity: 0; transform: translateX(60px); }
+    to   { opacity: 1; transform: translateX(0); }
+}
