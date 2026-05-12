@@ -506,6 +506,13 @@ class BookEditor {
         if (bgInput) bgInput.value = page.bg || '#ffffff';
 
         this._bindSlotInteractions(displayW, displayH);
+
+        // 攔截整個預覽區的 dragover/drop，防止瀏覽器顯示原生「拖放檔案」UI
+        const area2 = document.getElementById('pagePreviewArea');
+        if (area2) {
+            area2.addEventListener('dragover', e => e.preventDefault(), { capture: true });
+            area2.addEventListener('drop',     e => e.preventDefault(), { capture: true });
+        }
     }
 
     _appendGuides(canvas, displayW, displayH, settings) {
