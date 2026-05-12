@@ -12,6 +12,7 @@ class BookEditor {
         this.cropSlotIdx = -1;
         this.cropDragState = null;
         this.libraryPhotos = [];
+        this._draggedPageIdx = -1;
 
         this.init();
     }
@@ -251,12 +252,54 @@ class BookEditor {
         }).join('');
 
         list.querySelectorAll('.page-thumb').forEach(el => {
+            const idx = parseInt(el.dataset.pageIdx);
+            const page = this.book.pages[idx];
+
             el.addEventListener('click', e => {
                 if (e.target.classList.contains('page-delete-btn')) return;
                 this.exitCropMode();
-                this.currentPageIndex = parseInt(el.dataset.pageIdx);
+                this.currentPageIndex = idx;
                 this.renderAll();
             });
+
+            // drag-to-reorder (inner pages only)
+            if (page?.type === 'inner') {
+                el.setAttribute('draggable', 'true');
+                el.addEventListener('dragstart', e => {
+                    this._draggedPageIdx = idx;
+                    e.dataTransfer.effectAllowed = 'move';
+                    e.dataTransfer.setData('text/page-drag', String(idx));
+                    el.style.opacity = '0.5';
+                });
+                el.addEventListener('dragend', () => {
+                    el.style.opacity = '';
+                    this._draggedPageIdx = -1;
+                    list.querySelectorAll('.page-thumb').forEach(t => t.classList.remove('drag-over'));
+                });
+                el.addEventListener('dragover', e => {
+                    if (this._draggedPageIdx < 0 || !e.dataTransfer.types.includes('text/page-drag')) return;
+                    e.preventDefault();
+                    e.dataTransfer.dropEffect = 'move';
+                    list.querySelectorAll('.page-thumb').forEach(t => t.classList.remove('drag-over'));
+                    el.classList.add('drag-over');
+                });
+                el.addEventListener('dragleave', () => el.classList.remove('drag-over'));
+                el.addEventListener('drop', e => {
+                    e.preventDefault();
+                    el.classList.remove('drag-over');
+                    const from = this._draggedPageIdx;
+                    const to = idx;
+                    if (from === to || from < 0) return;
+                    if (this.book.pages[from]?.type !== 'inner' || this.book.pages[to]?.type !== 'inner') return;
+                    const [moved] = this.book.pages.splice(from, 1);
+                    this.book.pages.splice(to, 0, moved);
+                    if (this.currentPageIndex === from) this.currentPageIndex = to;
+                    else if (from < to && this.currentPageIndex > from && this.currentPageIndex <= to) this.currentPageIndex--;
+                    else if (from > to && this.currentPageIndex >= to && this.currentPageIndex < from) this.currentPageIndex++;
+                    this.renderAll();
+                    this.saveToStorage();
+                });
+            }
         });
 
         list.querySelectorAll('.page-delete-btn').forEach(el => {
@@ -289,8 +332,14 @@ class BookEditor {
 
         area.innerHTML = renderPageHTML(page, displayW, displayH, cropSlotIdx);
 
+        const counterText = `${this.currentPageIndex + 1} / ${this.book.pages.length}`;
         const counter = document.getElementById('pageCounter');
-        if (counter) counter.textContent = `${this.currentPageIndex + 1} / ${this.book.pages.length}`;
+        if (counter) counter.textContent = counterText;
+        const counterBot = document.getElementById('pageCounterBot');
+        if (counterBot) counterBot.textContent = counterText;
+
+        const bgInput = document.getElementById('pageBgColor');
+        if (bgInput) bgInput.value = page.bg || '#ffffff';
 
         this._bindSlotInteractions(displayW, displayH);
     }
@@ -400,10 +449,16 @@ class BookEditor {
     }
 
     updatePageNav() {
-        const prev = document.getElementById('prevPageBtn');
-        const next = document.getElementById('nextPageBtn');
-        if (prev) prev.disabled = this.currentPageIndex === 0;
-        if (next) next.disabled = this.currentPageIndex === this.book.pages.length - 1;
+        const atStart = this.currentPageIndex === 0;
+        const atEnd = this.currentPageIndex === this.book.pages.length - 1;
+        ['prevPageBtn', 'prevPageBtnBot'].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.disabled = atStart;
+        });
+        ['nextPageBtn', 'nextPageBtnBot'].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.disabled = atEnd;
+        });
     }
 
     // ─── 自動排版 ────────────────────────────
@@ -479,13 +534,31 @@ class BookEditor {
             if (e.key === 'Enter') { const path = e.target.value.trim(); if (path) this.loadLibrary(path); }
         });
 
-        // 頁面導航
-        this._on('prevPageBtn', 'click', () => {
+        // 頁面導航（頂欄 + 底部）
+        const goPrev = () => {
             if (this.currentPageIndex > 0) { this.exitCropMode(); this.currentPageIndex--; this.renderAll(); }
-        });
-        this._on('nextPageBtn', 'click', () => {
+        };
+        const goNext = () => {
             if (this.currentPageIndex < this.book.pages.length - 1) { this.exitCropMode(); this.currentPageIndex++; this.renderAll(); }
-        });
+        };
+        this._on('prevPageBtn', 'click', goPrev);
+        this._on('nextPageBtn', 'click', goNext);
+        this._on('prevPageBtnBot', 'click', goPrev);
+        this._on('nextPageBtnBot', 'click', goNext);
+
+        // 頁面背景色
+        const applyBg = color => {
+            const page = this.book.pages[this.currentPageIndex];
+            if (!page) return;
+            page.bg = color;
+            const canvas = document.querySelector('.page-canvas');
+            if (canvas) canvas.style.background = color;
+            this.renderPageList();
+            this.saveToStorage();
+        };
+        this._on('pageBgColor', 'input', e => applyBg(e.target.value));
+        this._on('pageBgWhiteBtn', 'click', () => { applyBg('#ffffff'); const i = document.getElementById('pageBgColor'); if (i) i.value = '#ffffff'; });
+        this._on('pageBgBlackBtn', 'click', () => { applyBg('#000000'); const i = document.getElementById('pageBgColor'); if (i) i.value = '#000000'; });
 
         // 新增頁面
         this._on('addPageBtn', 'click', () => this.addInnerPage());

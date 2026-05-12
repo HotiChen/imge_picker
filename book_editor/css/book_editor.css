@@ -151,6 +151,7 @@ html, body {
 }
 .page-thumb:hover { border-color: rgba(243,128,32,0.4); }
 .page-thumb.active { border-color: var(--primary); }
+.page-thumb.drag-over { border-color: var(--primary); background: rgba(243,128,32,0.12); }
 
 .page-thumb-preview {
     width: 100%;

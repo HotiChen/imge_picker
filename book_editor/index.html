@@ -85,9 +85,9 @@
             </div>
             <div id="pagePreviewArea" class="page-preview-area"></div>
             <div class="page-nav-bar">
-                <button id="prevPageBtn" class="btn btn-icon">◀</button>
-                <span id="pageCounter" class="page-counter">1 / 1</span>
-                <button id="nextPageBtn" class="btn btn-icon">▶</button>
+                <button id="prevPageBtnBot" class="btn btn-icon">◀</button>
+                <span id="pageCounterBot" class="page-counter">1 / 1</span>
+                <button id="nextPageBtnBot" class="btn btn-icon">▶</button>
             </div>
         </section>
 
@@ -162,6 +162,12 @@
                     <button class="layout-btn" data-layout="blank" title="空白頁">
                         <div class="layout-btn-preview" style="border:1px dashed rgba(255,255,255,0.1);border-radius:2px;"></div>
                     </button>
+                </div>
+                <div style="display:flex;align-items:center;gap:8px;margin-top:10px;">
+                    <label style="font-size:0.7rem;color:var(--text-muted);white-space:nowrap;">頁面背景</label>
+                    <input type="color" id="pageBgColor" value="#ffffff" style="width:32px;height:24px;border:none;border-radius:3px;padding:1px;cursor:pointer;background:none;">
+                    <button id="pageBgWhiteBtn" class="btn btn-secondary" style="padding:2px 8px;font-size:0.7rem;">白</button>
+                    <button id="pageBgBlackBtn" class="btn btn-secondary" style="padding:2px 8px;font-size:0.7rem;">黑</button>
                 </div>
             </div>
 
