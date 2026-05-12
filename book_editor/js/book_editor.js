@@ -114,6 +114,13 @@ class BookEditor {
         const page = this.book.pages[this.currentPageIndex];
         if (!page || !page.slots[slotIdx]) return;
         page.slots[slotIdx] = { photoId: null, crop: { x: 0, y: 0, scale: 1 } };
+        if (this.cropMode && this.cropSlotIdx === slotIdx) {
+            this.cropMode = false;
+            this.cropSlotIdx = -1;
+            this.cropDragState = null;
+            const bar = document.getElementById('cropModeBar');
+            if (bar) bar.style.display = 'none';
+        }
         this.renderCurrentPage();
         this.renderPageList();
         this.saveToStorage();
@@ -541,6 +548,14 @@ class BookEditor {
     }
 
     _bindSlotInteractions(displayW, displayH) {
+        // Remove old global crop drag listeners before (re)binding
+        if (this._cropMoveHandler) {
+            document.removeEventListener('mousemove', this._cropMoveHandler);
+            document.removeEventListener('mouseup', this._cropUpHandler);
+            this._cropMoveHandler = null;
+            this._cropUpHandler = null;
+        }
+
         document.querySelectorAll('.page-slot').forEach(slotEl => {
             const slotIdx = parseInt(slotEl.dataset.slotIdx);
             const hasPhoto = slotEl.classList.contains('has-photo');
@@ -554,16 +569,13 @@ class BookEditor {
                 });
             }
 
-            // 點擊格子
-            slotEl.addEventListener('click', e => {
-                if (e.target.classList.contains('slot-clear-btn')) return;
-                if (this.cropMode && this.cropSlotIdx === slotIdx) return;
-                if (hasPhoto) {
-                    this.enterCropMode(slotIdx);
-                } else {
+            // 空格子：點擊選照片
+            if (!hasPhoto) {
+                slotEl.addEventListener('click', e => {
+                    if (e.target.classList.contains('slot-clear-btn')) return;
                     this.openPhotoModal(slotIdx);
-                }
-            });
+                });
+            }
 
             // 拖放
             slotEl.addEventListener('dragover', e => e.preventDefault());
@@ -573,12 +585,15 @@ class BookEditor {
                 if (photoId) this.setSlotPhoto(slotIdx, photoId);
             });
 
-            // 裁切拖移
-            if (this.cropMode && this.cropSlotIdx === slotIdx) {
+            // 有照片的格子：mousedown 直接進入裁切 + 開始拖移（單一手勢）
+            if (hasPhoto) {
                 slotEl.addEventListener('mousedown', e => {
                     if (e.target.classList.contains('slot-clear-btn')) return;
-                    this.cropDragState = { lastX: e.clientX, lastY: e.clientY };
                     e.preventDefault();
+                    if (!this.cropMode || this.cropSlotIdx !== slotIdx) {
+                        this.enterCropMode(slotIdx);
+                    }
+                    this.cropDragState = { lastX: e.clientX, lastY: e.clientY };
                 });
 
                 slotEl.addEventListener('wheel', e => {
@@ -592,35 +607,39 @@ class BookEditor {
             }
         });
 
-        // 裁切模式全域 mousemove / mouseup
-        if (this.cropMode) {
-            const onMove = e => {
-                if (!this.cropDragState) return;
-                const page = this.book.pages[this.currentPageIndex];
-                if (!page?.slots[this.cropSlotIdx]) return;
+        // 全域 mousemove / mouseup（只保留一組）
+        this._cropMoveHandler = e => {
+            if (!this.cropDragState || !this.cropMode) return;
+            const page = this.book.pages[this.currentPageIndex];
+            if (!page?.slots[this.cropSlotIdx]) return;
 
-                const slotEl = document.querySelector(`[data-slot-idx="${this.cropSlotIdx}"]`);
-                if (!slotEl) return;
-                const rect = slotEl.getBoundingClientRect();
-                const dx = (e.clientX - this.cropDragState.lastX) / rect.width;
-                const dy = (e.clientY - this.cropDragState.lastY) / rect.height;
+            const slotEl = document.querySelector(`[data-slot-idx="${this.cropSlotIdx}"]`);
+            if (!slotEl) return;
+            const rect = slotEl.getBoundingClientRect();
+            const dx = (e.clientX - this.cropDragState.lastX) / rect.width;
+            const dy = (e.clientY - this.cropDragState.lastY) / rect.height;
 
-                const crop = page.slots[this.cropSlotIdx].crop;
-                crop.x = (crop.x || 0) + dx;
-                crop.y = (crop.y || 0) + dy;
-                this.cropDragState = { lastX: e.clientX, lastY: e.clientY };
-                this._updateSlotTransform(this.cropSlotIdx);
-            };
-            const onUp = () => { this.cropDragState = null; };
+            const crop = page.slots[this.cropSlotIdx].crop;
+            const scale = crop.scale || 1;
+            const maxPan = (scale - 1) / 2;
+            crop.x = Math.max(-maxPan, Math.min(maxPan, (crop.x || 0) + dx));
+            crop.y = Math.max(-maxPan, Math.min(maxPan, (crop.y || 0) + dy));
+            this.cropDragState = { lastX: e.clientX, lastY: e.clientY };
+            this._updateSlotTransform(this.cropSlotIdx);
+        };
+        this._cropUpHandler = () => { this.cropDragState = null; };
 
-            document.addEventListener('mousemove', onMove);
-            document.addEventListener('mouseup', onUp);
-        }
+        document.addEventListener('mousemove', this._cropMoveHandler);
+        document.addEventListener('mouseup', this._cropUpHandler);
     }
 
     addCustomLayoutBtn(id, name) {
         const grid = document.getElementById('layoutGrid');
         if (!grid || grid.querySelector(`[data-layout="${id}"]`)) return;
+
+        const wrapper = document.createElement('div');
+        wrapper.className = 'layout-btn-wrapper';
+        wrapper.dataset.layoutId = id;
 
         const btn = document.createElement('button');
         btn.className = 'layout-btn';
@@ -632,9 +651,22 @@ class BookEditor {
             `<div style="position:absolute;left:${s.x}%;top:${s.y}%;width:${s.w}%;height:${s.h}%;background:rgba(255,255,255,0.15);border-radius:1px;"></div>`
         ).join('');
         btn.innerHTML = `<div class="layout-btn-preview" style="position:relative;">${slotPreviews}</div>`;
-
         btn.addEventListener('click', () => this.setLayout(id));
-        grid.appendChild(btn);
+
+        const delBtn = document.createElement('button');
+        delBtn.className = 'layout-btn-del';
+        delBtn.title = '刪除版型';
+        delBtn.textContent = '×';
+        delBtn.addEventListener('click', e => {
+            e.stopPropagation();
+            if (!confirm(`確定刪除版型「${name}」？`)) return;
+            LayoutEditor.deleteCustom(id);
+            wrapper.remove();
+        });
+
+        wrapper.appendChild(btn);
+        wrapper.appendChild(delBtn);
+        grid.appendChild(wrapper);
     }
 
     updateLayoutSelector() {

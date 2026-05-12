@@ -384,6 +384,36 @@ html, body {
     gap: 6px;
 }
 
+.layout-btn-wrapper {
+    position: relative;
+    aspect-ratio: 0.75;
+}
+.layout-btn-wrapper .layout-btn {
+    width: 100%;
+    height: 100%;
+    aspect-ratio: unset;
+}
+.layout-btn-del {
+    display: none;
+    position: absolute;
+    top: -5px;
+    right: -5px;
+    width: 16px;
+    height: 16px;
+    background: rgba(255,71,87,0.9);
+    border: none;
+    border-radius: 50%;
+    color: white;
+    font-size: 11px;
+    line-height: 1;
+    cursor: pointer;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    z-index: 10;
+}
+.layout-btn-wrapper:hover .layout-btn-del { display: flex; }
+
 .layout-btn {
     aspect-ratio: 0.75;
     background: var(--bg-input);
