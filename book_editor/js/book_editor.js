@@ -166,8 +166,8 @@ class BookEditor {
             const idSet = new Set(photoIds);
 
             this.importedPhotos = result.photos.filter(p => idSet.has(p.id));
-            // 也同步填入素材庫
-            this.libraryPhotos = result.photos;
+            // 素材庫只顯示匯入的照片，保持一致
+            this.libraryPhotos = this.importedPhotos;
             const input = document.getElementById('libFolderInput');
             if (input) input.value = folderPath.replace(/\/$/, '');
             this.renderLibrary();
