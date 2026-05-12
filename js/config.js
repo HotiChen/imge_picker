@@ -1,6 +1,6 @@
 const CONFIG = {
     // 照片儲存配置
-    WORKER_URL: 'YOUR_CLOUDFLARE_WORKER_URL', // e.g. https://yourworker.workers.dev
+    WORKER_URL: 'https://imagepicker.hotichen.workers.dev',
     DEFAULT_FOLDER: 'YOUR_DEFAULT_FOLDER/', // e.g. 20260122/
 
     // 雖然使用雲端儲存，但如果還是想把結果存回 Google Sheets，這裡可以保留
