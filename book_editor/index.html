@@ -99,9 +99,13 @@
             <!-- Photo Library -->
             <div class="panel-section">
                 <div class="panel-title">照片素材庫</div>
-                <div class="lib-folder-row" style="margin-bottom:8px;">
+                <div class="lib-folder-row" style="margin-bottom:6px;">
                     <input type="text" id="libFolderInput" placeholder="資料夾路徑">
                     <button id="libLoadBtn" class="btn btn-secondary" style="padding:4px 10px;white-space:nowrap;">載入</button>
+                </div>
+                <div id="libNavRow" style="display:none;align-items:center;gap:6px;margin-bottom:6px;">
+                    <button id="libBackBtn" class="btn btn-secondary" style="padding:2px 8px;font-size:0.72rem;">← 返回</button>
+                    <span id="libCurrentPath" style="font-size:0.7rem;color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"></span>
                 </div>
                 <div id="libraryGrid" class="library-grid">
                     <div class="lib-empty">輸入路徑後點載入</div>

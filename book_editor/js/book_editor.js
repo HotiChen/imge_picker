@@ -12,6 +12,7 @@ class BookEditor {
         this.cropSlotIdx = -1;
         this.cropDragState = null;
         this.libraryPhotos = [];
+        this.libFolderStack = [];
         this._draggedPageIdx = -1;
 
         this.init();
@@ -149,14 +150,18 @@ class BookEditor {
 
     // ─── 照片庫 ──────────────────────────────
 
-    async loadLibrary(folderPath) {
+    async loadLibrary(folderPath, pushStack = true) {
         const loadBtn = document.getElementById('libLoadBtn');
         if (loadBtn) loadBtn.disabled = true;
         try {
             const result = await driveManager.loadPhotosFromFolder(folderPath);
             this.libraryPhotos = result.photos || [];
-            this.renderLibrary();
-            toast.success(`載入 ${this.libraryPhotos.length} 張照片`);
+            const folders = result.folders || [];
+            if (pushStack) this.libFolderStack = [folderPath];
+            this._updateLibNav(folderPath);
+            this.renderLibrary(null, folders);
+            const msg = [folders.length && `${folders.length} 個資料夾`, this.libraryPhotos.length && `${this.libraryPhotos.length} 張照片`].filter(Boolean).join('、');
+            toast.success(`載入 ${msg}`);
         } catch (e) {
             toast.error('載入失敗');
         } finally {
@@ -164,20 +169,79 @@ class BookEditor {
         }
     }
 
-    renderLibrary(targetEl) {
+    async navigateLibraryTo(folderPath) {
+        const loadBtn = document.getElementById('libLoadBtn');
+        if (loadBtn) loadBtn.disabled = true;
+        try {
+            const result = await driveManager.loadPhotosFromFolder(folderPath);
+            this.libraryPhotos = result.photos || [];
+            const folders = result.folders || [];
+            this.libFolderStack.push(folderPath);
+            this._updateLibNav(folderPath);
+            this.renderLibrary(null, folders);
+        } catch (e) {
+            toast.error('載入失敗');
+        } finally {
+            if (loadBtn) loadBtn.disabled = false;
+        }
+    }
+
+    async navigateLibraryBack() {
+        if (this.libFolderStack.length <= 1) return;
+        this.libFolderStack.pop();
+        const prev = this.libFolderStack[this.libFolderStack.length - 1];
+        const loadBtn = document.getElementById('libLoadBtn');
+        if (loadBtn) loadBtn.disabled = true;
+        try {
+            const result = await driveManager.loadPhotosFromFolder(prev);
+            this.libraryPhotos = result.photos || [];
+            const folders = result.folders || [];
+            this._updateLibNav(prev);
+            this.renderLibrary(null, folders);
+        } catch (e) {
+            toast.error('載入失敗');
+        } finally {
+            if (loadBtn) loadBtn.disabled = false;
+        }
+    }
+
+    _updateLibNav(currentPath) {
+        const navRow = document.getElementById('libNavRow');
+        const pathEl = document.getElementById('libCurrentPath');
+        if (navRow) navRow.style.display = this.libFolderStack.length > 1 ? 'flex' : 'none';
+        if (pathEl) pathEl.textContent = currentPath || '';
+    }
+
+    renderLibrary(targetEl, folders = []) {
         const grid = targetEl || document.getElementById('libraryGrid');
         if (!grid) return;
 
-        if (this.libraryPhotos.length === 0) {
+        if (folders.length === 0 && this.libraryPhotos.length === 0) {
             grid.innerHTML = '<div class="lib-empty">輸入路徑後點載入</div>';
             return;
         }
 
-        grid.innerHTML = this.libraryPhotos.map(photo => `
+        const folderHTML = folders.map(f => {
+            const name = f.replace(/\/$/, '').split('/').pop();
+            return `<div class="lib-folder" data-folder-path="${f}" title="${name}" style="aspect-ratio:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;background:var(--bg-card);border-radius:var(--radius-sm);cursor:pointer;border:2px solid transparent;transition:border-color 0.15s;">
+                <span style="font-size:1.4rem;">📁</span>
+                <span style="font-size:0.6rem;color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;width:100%;text-align:center;padding:0 4px;">${name}</span>
+            </div>`;
+        }).join('');
+
+        const photoHTML = this.libraryPhotos.map(photo => `
             <div class="lib-photo" data-photo-id="${photo.id}" draggable="true" title="${photo.name}">
                 <img src="${driveManager.getImageUrl(photo, true)}" loading="lazy">
             </div>
         `).join('');
+
+        grid.innerHTML = folderHTML + photoHTML;
+
+        grid.querySelectorAll('.lib-folder').forEach(el => {
+            el.addEventListener('click', () => this.navigateLibraryTo(el.dataset.folderPath));
+            el.addEventListener('mouseenter', () => el.style.borderColor = 'rgba(243,128,32,0.5)');
+            el.addEventListener('mouseleave', () => el.style.borderColor = 'transparent');
+        });
 
         grid.querySelectorAll('.lib-photo').forEach(el => {
             el.addEventListener('dragstart', e => {
@@ -585,12 +649,13 @@ class BookEditor {
 
         // 照片庫
         this._on('libLoadBtn', 'click', () => {
-            const path = document.getElementById('libFolderInput')?.value.trim();
-            if (path) this.loadLibrary(path);
+            const path = document.getElementById('libFolderInput')?.value.trim() || '';
+            this.loadLibrary(path);
         });
         this._on('libFolderInput', 'keydown', e => {
-            if (e.key === 'Enter') { const path = e.target.value.trim(); if (path) this.loadLibrary(path); }
+            if (e.key === 'Enter') { const path = e.target.value.trim(); this.loadLibrary(path); }
         });
+        this._on('libBackBtn', 'click', () => this.navigateLibraryBack());
 
         // 頁面導航（頂欄 + 底部）
         const goPrev = () => {
