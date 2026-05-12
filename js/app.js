@@ -180,7 +180,27 @@ class App {
         return card;
     }
 
+    openBookEditor() {
+        const ids = this.selectedPhotoIds.size > 0
+            ? Array.from(this.selectedPhotoIds)
+            : driveManager.photos.filter(p => p.rating > 0).map(p => p.id);
+
+        if (ids.length === 0) {
+            toast.warning('請先選取照片或給照片評分，才能帶入相本書');
+            return;
+        }
+
+        localStorage.setItem('book_editor_import', JSON.stringify({
+            folderPath: driveManager.currentFolderId,
+            photoIds: ids
+        }));
+        window.open('book_editor/index.html', '_blank');
+    }
+
     bindEvents() {
+        // 相本書
+        this.addListener('openBookEditorBtn', 'click', () => this.openBookEditor());
+
         // 載入按鈕
         this.addListener('loadPhotosBtn', 'click', () => {
             const path = document.getElementById('driveUrl').value.trim();
