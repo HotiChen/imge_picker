@@ -14,6 +14,7 @@ class BookEditor {
         this.libraryPhotos = [];
         this.libFolderStack = [];
         this.importedPhotos = [];
+        this.showGuides = false;
         this._draggedPageIdx = -1;
 
         this.init();
@@ -486,6 +487,15 @@ class BookEditor {
 
         area.innerHTML = renderPageHTML(page, displayW, displayH, cropSlotIdx);
 
+        const canvas = area.querySelector('.page-canvas');
+        if (canvas) {
+            if (this.showGuides) {
+                this._appendGuides(canvas, displayW, displayH, settings);
+            } else {
+                canvas.style.boxShadow = '';
+            }
+        }
+
         const counterText = `${this.currentPageIndex + 1} / ${this.book.pages.length}`;
         const counter = document.getElementById('pageCounter');
         if (counter) counter.textContent = counterText;
@@ -496,6 +506,31 @@ class BookEditor {
         if (bgInput) bgInput.value = page.bg || '#ffffff';
 
         this._bindSlotInteractions(displayW, displayH);
+    }
+
+    _appendGuides(canvas, displayW, displayH, settings) {
+        // mm → px at current display scale
+        const bleedMm = 3, safeMm = 3;
+        const scaleX = displayW / (settings.width * 10);   // px per mm
+        const scaleY = displayH / (settings.height * 10);
+        const bleedX = bleedMm * scaleX, bleedY = bleedMm * scaleY;
+        const safeX  = safeMm  * scaleX, safeY  = safeMm  * scaleY;
+
+        canvas.style.position = 'relative';
+        // bleed shown as box-shadow (outside trim, no overflow change needed)
+        canvas.style.boxShadow = `0 0 0 ${Math.round(bleedX)}px rgba(220,50,50,0.35)`;
+
+        const el = document.createElement('div');
+        el.className = 'guide-overlay';
+        el.style.cssText = 'position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:20;overflow:visible;';
+        el.innerHTML = `
+            <div style="position:absolute;top:${safeY}px;left:${safeX}px;right:${safeX}px;bottom:${safeY}px;border:1px dashed rgba(66,133,244,0.8);pointer-events:none;"></div>
+            <div style="position:absolute;top:0;bottom:0;left:50%;width:1px;background:rgba(40,200,100,0.7);transform:translateX(-0.5px);pointer-events:none;"></div>
+            <span style="position:absolute;top:-18px;left:0;font-size:9px;color:rgba(220,50,50,0.9);background:rgba(0,0,0,0.55);padding:1px 5px;border-radius:2px;white-space:nowrap;">← 出血 ${bleedMm}mm →</span>
+            <span style="position:absolute;top:${safeY+2}px;left:${safeX+3}px;font-size:9px;color:rgba(100,160,255,0.95);background:rgba(0,0,0,0.55);padding:1px 5px;border-radius:2px;white-space:nowrap;">安全邊距 ${safeMm}mm</span>
+            <span style="position:absolute;top:4px;left:50%;transform:translateX(-50%);font-size:9px;color:rgba(40,200,100,0.95);background:rgba(0,0,0,0.55);padding:1px 5px;border-radius:2px;white-space:nowrap;">書脊</span>
+        `;
+        canvas.appendChild(el);
     }
 
     _bindSlotInteractions(displayW, displayH) {
@@ -791,6 +826,18 @@ class BookEditor {
 
         // 自動排版
         this._on('runAutoLayoutBtn', 'click', () => this.runAutoLayout());
+
+        // 參考線 toggle
+        this._on('guideToggleBtn', 'click', () => {
+            this.showGuides = !this.showGuides;
+            const btn = document.getElementById('guideToggleBtn');
+            if (btn) {
+                btn.style.borderColor = this.showGuides ? 'var(--primary)' : '';
+                btn.style.color = this.showGuides ? 'var(--primary)' : '';
+                btn.textContent = this.showGuides ? '⊞ 參考線 ✓' : '⊞ 參考線';
+            }
+            this.renderCurrentPage(this.cropMode ? this.cropSlotIdx : -1);
+        });
 
         // 帶入照片列收合
         this._on('importStripToggle', 'click', () => {
