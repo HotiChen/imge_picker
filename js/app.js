@@ -11,6 +11,8 @@ class App {
         };
         this.selectedPhotoIds = new Set();
         this.lastSelectedIndex = -1; // 用於 Shift 選取
+        this.folderStack = []; // [{path, name}] 資料夾導航歷史
+        this.currentFolders = []; // 目前層級的子資料夾清單
 
         this.init();
     }
@@ -80,18 +82,25 @@ class App {
     }
 
     async handleLoadPhotos(path) {
-        if (!path) return;
-        this.showLoading(`正在載入照片庫中讀取...`);
+        if (path === undefined || path === null) return;
+        this.showLoading(`正在載入...`);
         try {
             const result = await driveManager.loadPhotosFromFolder(path);
             if (result) {
                 this.photos = result.photos || [];
+                this.currentFolders = result.folders || [];
+
+                this.updateFolderNav();
                 this.applyFilters();
-                this.renderPhotoGrid();
+
+                if (this.currentFolders.length > 0 && this.photos.length === 0) {
+                    this.renderFolderGrid();
+                } else {
+                    this.renderPhotoGrid();
+                }
                 this.updateStats();
                 this.updateExpiryCountdown(result.projectCreatedTime);
 
-                // [新功能] 偵測雲端是否存在之前的評分紀錄
                 const hasCloudData = await driveManager.checkIfDataExistsOnCloud();
                 if (hasCloudData) {
                     document.getElementById('discoveryModal').classList.add('active');
@@ -100,6 +109,75 @@ class App {
         } finally {
             this.hideLoading();
         }
+    }
+
+    navigateToFolder(folderPath) {
+        this.folderStack.push({
+            path: driveManager.currentFolderId || '',
+            name: driveManager.currentFolderName || ''
+        });
+        this.handleLoadPhotos(folderPath);
+    }
+
+    navigateBack() {
+        if (this.folderStack.length === 0) return;
+        const prev = this.folderStack.pop();
+        this.handleLoadPhotos(prev.path);
+    }
+
+    updateFolderNav() {
+        const nav = document.getElementById('folderNav');
+        if (!nav) return;
+
+        if (this.folderStack.length === 0) {
+            nav.style.display = 'none';
+            nav.innerHTML = '';
+            return;
+        }
+
+        nav.style.display = 'flex';
+
+        const crumbs = this.folderStack
+            .filter(item => item.name)
+            .map((item, idx) => `<span class="breadcrumb-item" data-idx="${idx}">${item.name}</span>`)
+            .join('<span class="breadcrumb-sep"> › </span>');
+
+        const currentName = driveManager.currentFolderName;
+        const current = currentName
+            ? `<span class="breadcrumb-sep"> › </span><span class="breadcrumb-current">${currentName}</span>`
+            : '';
+
+        nav.innerHTML = `
+            <button class="btn btn-text breadcrumb-back" onclick="app.navigateBack()">← 返回</button>
+            <nav class="breadcrumb">${crumbs}${current}</nav>
+        `;
+
+        nav.querySelectorAll('.breadcrumb-item').forEach(item => {
+            item.addEventListener('click', () => {
+                const idx = parseInt(item.dataset.idx);
+                const target = this.folderStack[idx];
+                this.folderStack = this.folderStack.slice(0, idx);
+                this.handleLoadPhotos(target.path);
+            });
+        });
+    }
+
+    renderFolderGrid() {
+        const grid = document.getElementById('photoGrid');
+        grid.innerHTML = '';
+        document.getElementById('emptyState').style.display = 'none';
+        this.currentFolders.forEach(folder => grid.appendChild(this.createFolderCard(folder)));
+    }
+
+    createFolderCard(folder) {
+        const card = document.createElement('div');
+        card.className = 'folder-card';
+        card.innerHTML = `
+            <div class="folder-icon">📁</div>
+            <div class="folder-name">${folder.name}</div>
+        `;
+        card.addEventListener('click', () => this.navigateToFolder(folder.id));
+        return card;
     }
 
     bindEvents() {

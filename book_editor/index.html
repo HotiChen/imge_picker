@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>相本書編輯器</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <link rel="stylesheet" href="css/book_editor.css">
+</head>
+<body>
+<div class="app-container">
+
+    <!-- Top Bar -->
+    <header class="top-bar">
+        <div class="top-bar-left">
+            <a href="../index.html" class="btn btn-icon" title="回到選圖">←</a>
+            <span style="font-size:1.1rem;">📖</span>
+            <input type="text" id="bookName" class="book-title-input" value="未命名相本" placeholder="相本名稱">
+            <span id="cloudStatusIndicator" style="font-size:0.72rem;color:#9fa8da;white-space:nowrap;"></span>
+        </div>
+        <div class="top-bar-center">
+            <button id="prevPageBtn" class="btn btn-icon" title="上一頁">◀</button>
+            <span id="pageCounter" class="page-counter">1 / 1</span>
+            <button id="nextPageBtn" class="btn btn-icon" title="下一頁">▶</button>
+        </div>
+        <div class="top-bar-right">
+            <button id="clearBookBtn" class="btn btn-danger" title="清除相本">🗑 重置</button>
+            <button id="shareBtn" class="btn btn-secondary">☁ 分享</button>
+            <button id="exportBtn" class="btn btn-primary">⬇ 匯出 JPG</button>
+        </div>
+    </header>
+
+    <main class="main-layout">
+
+        <!-- Left Panel: Settings + Page List -->
+        <aside class="left-panel">
+            <div class="panel-section">
+                <div class="panel-title">內頁尺寸</div>
+                <div class="settings-grid">
+                    <div class="setting-item">
+                        <label>寬 (cm)</label>
+                        <input type="number" id="bookWidth" value="20" min="5" max="100" step="0.5">
+                    </div>
+                    <div class="setting-item">
+                        <label>高 (cm)</label>
+                        <input type="number" id="bookHeight" value="20" min="5" max="100" step="0.5">
+                    </div>
+                    <div class="setting-item" style="grid-column:1/-1;">
+                        <label>DPI（匯出解析度）</label>
+                        <input type="number" id="bookDpi" value="300" min="72" max="600" step="1">
+                    </div>
+                </div>
+            </div>
+
+            <div class="panel-section">
+                <div class="panel-title">封面尺寸（可獨立設定）</div>
+                <div class="settings-grid">
+                    <div class="setting-item">
+                        <label>寬 (cm)</label>
+                        <input type="number" id="coverWidth" value="20" min="5" max="100" step="0.5">
+                    </div>
+                    <div class="setting-item">
+                        <label>高 (cm)</label>
+                        <input type="number" id="coverHeight" value="20" min="5" max="100" step="0.5">
+                    </div>
+                </div>
+            </div>
+
+            <div class="panel-section" style="flex-shrink:0;">
+                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+                    <div class="panel-title" style="margin:0;">頁面</div>
+                    <button id="addPageBtn" class="btn btn-secondary" style="padding:3px 10px;font-size:0.75rem;">+ 新增頁</button>
+                </div>
+            </div>
+
+            <div id="pageList" class="page-list-area"></div>
+        </aside>
+
+        <!-- Center Panel: Page Preview -->
+        <section class="center-panel">
+            <div id="cropModeBar" class="crop-mode-bar">
+                <span>✂ 裁切模式：拖移平移 · 滾輪縮放</span>
+                <button id="cropDoneBtn" class="btn btn-primary" style="padding:4px 12px;font-size:0.8rem;">完成</button>
+            </div>
+            <div id="pagePreviewArea" class="page-preview-area"></div>
+            <div class="page-nav-bar">
+                <button id="prevPageBtnBot" class="btn btn-icon">◀</button>
+                <span id="pageCounterBot" class="page-counter">1 / 1</span>
+                <button id="nextPageBtnBot" class="btn btn-icon">▶</button>
+            </div>
+        </section>
+
+        <!-- Right Panel: Library + Layout + Auto Layout -->
+        <aside class="right-panel">
+
+            <!-- Photo Library -->
+            <div class="panel-section">
+                <div class="panel-title">照片素材庫</div>
+                <div class="lib-folder-row" style="margin-bottom:6px;">
+                    <input type="text" id="libFolderInput" placeholder="資料夾路徑">
+                    <button id="libLoadBtn" class="btn btn-secondary" style="padding:4px 10px;white-space:nowrap;">載入</button>
+                </div>
+                <div id="libNavRow" style="display:none;align-items:center;gap:6px;margin-bottom:6px;">
+                    <button id="libBackBtn" class="btn btn-secondary" style="padding:2px 8px;font-size:0.72rem;">← 返回</button>
+                    <span id="libCurrentPath" style="font-size:0.7rem;color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"></span>
+                </div>
+                <div id="libraryGrid" class="library-grid">
+                    <div class="lib-empty">輸入路徑後點載入</div>
+                </div>
+            </div>
+
+            <!-- Layout Selector -->
+            <div class="panel-section">
+                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+                    <div class="panel-title" style="margin:0;">目前頁版型</div>
+                    <button id="openLayoutEditorBtn" class="btn btn-secondary" style="padding:3px 8px;font-size:0.7rem;">+ 自訂</button>
+                </div>
+                <div class="layout-grid" id="layoutGrid">
+                    <!-- Full Bleed -->
+                    <button class="layout-btn" data-layout="full-bleed" title="全出血">
+                        <div class="layout-btn-preview">
+                            <div class="layout-slot-preview" style="width:100%;height:100%;"></div>
+                        </div>
+                    </button>
+                    <!-- 1-up -->
+                    <button class="layout-btn" data-layout="1-up" title="單張留白">
+                        <div class="layout-btn-preview" style="padding:10%;">
+                            <div class="layout-slot-preview" style="width:100%;height:100%;"></div>
+                        </div>
+                    </button>
+                    <!-- 2-up-h -->
+                    <button class="layout-btn" data-layout="2-up-h" title="左右兩張">
+                        <div class="layout-btn-preview" style="gap:2px;">
+                            <div class="layout-slot-preview" style="width:calc(50% - 1px);height:100%;"></div>
+                            <div class="layout-slot-preview" style="width:calc(50% - 1px);height:100%;"></div>
+                        </div>
+                    </button>
+                    <!-- 2-up-v -->
+                    <button class="layout-btn" data-layout="2-up-v" title="上下兩張">
+                        <div class="layout-btn-preview" style="flex-direction:column;gap:2px;">
+                            <div class="layout-slot-preview" style="width:100%;height:calc(50% - 1px);"></div>
+                            <div class="layout-slot-preview" style="width:100%;height:calc(50% - 1px);"></div>
+                        </div>
+                    </button>
+                    <!-- 3-up -->
+                    <button class="layout-btn" data-layout="3-up" title="三格">
+                        <div class="layout-btn-preview" style="gap:2px;">
+                            <div class="layout-slot-preview" style="width:56%;height:100%;"></div>
+                            <div style="width:calc(44% - 2px);height:100%;display:flex;flex-direction:column;gap:2px;">
+                                <div class="layout-slot-preview" style="width:100%;height:calc(50% - 1px);"></div>
+                                <div class="layout-slot-preview" style="width:100%;height:calc(50% - 1px);"></div>
+                            </div>
+                        </div>
+                    </button>
+                    <!-- 4-grid -->
+                    <button class="layout-btn" data-layout="4-grid" title="四格">
+                        <div class="layout-btn-preview" style="flex-wrap:wrap;gap:2px;">
+                            <div class="layout-slot-preview" style="width:calc(50% - 1px);height:calc(50% - 1px);"></div>
+                            <div class="layout-slot-preview" style="width:calc(50% - 1px);height:calc(50% - 1px);"></div>
+                            <div class="layout-slot-preview" style="width:calc(50% - 1px);height:calc(50% - 1px);"></div>
+                            <div class="layout-slot-preview" style="width:calc(50% - 1px);height:calc(50% - 1px);"></div>
+                        </div>
+                    </button>
+                    <!-- blank -->
+                    <button class="layout-btn" data-layout="blank" title="空白頁">
+                        <div class="layout-btn-preview" style="border:1px dashed rgba(255,255,255,0.1);border-radius:2px;"></div>
+                    </button>
+                </div>
+                <div style="display:flex;align-items:center;gap:8px;margin-top:10px;">
+                    <label style="font-size:0.7rem;color:var(--text-muted);white-space:nowrap;">頁面背景</label>
+                    <input type="color" id="pageBgColor" value="#ffffff" style="width:32px;height:24px;border:none;border-radius:3px;padding:1px;cursor:pointer;background:none;">
+                    <button id="pageBgWhiteBtn" class="btn btn-secondary" style="padding:2px 8px;font-size:0.7rem;">白</button>
+                    <button id="pageBgBlackBtn" class="btn btn-secondary" style="padding:2px 8px;font-size:0.7rem;">黑</button>
+                </div>
+            </div>
+
+            <!-- Auto Layout -->
+            <div class="panel-section" style="flex:1;">
+                <div class="panel-title">自動排版</div>
+                <div class="auto-layout-section">
+                    <select id="autoLayoutStyle" class="auto-style-select">
+                        <option value="magazine">🎨 雜誌型（5星全版，大小混搭）</option>
+                        <option value="uniform">🗂 整齊型（固定每頁兩張）</option>
+                        <option value="story">📖 故事型（依橫直式配對）</option>
+                        <option value="byRating">⭐ 依評分（5星全版→4星單張→其餘多格）</option>
+                    </select>
+                    <button id="runAutoLayoutBtn" class="btn btn-primary btn-block">
+                        ✨ 自動排版
+                    </button>
+                    <p style="font-size:0.7rem;color:var(--text-muted);line-height:1.5;">
+                        會取代所有內頁，封面封底保留。
+                    </p>
+                </div>
+            </div>
+
+        </aside>
+    </main>
+</div>
+
+<!-- Photo Picker Modal -->
+<div id="photoPickerModal" class="modal-overlay">
+    <div class="modal-box">
+        <div class="modal-header">
+            <h3>選擇照片</h3>
+            <button id="closePhotoModal" class="btn btn-icon">×</button>
+        </div>
+        <div id="modalLibraryGrid" class="modal-library-grid">
+            <div style="grid-column:1/-1;text-align:center;padding:32px;color:var(--text-muted);">請先在右側載入照片庫</div>
+        </div>
+    </div>
+</div>
+
+<!-- Share Modal -->
+<div id="shareModal" class="modal-overlay">
+    <div class="modal-box" style="width:min(480px,90vw);">
+        <div class="modal-header">
+            <h3>分享給客戶</h3>
+            <button id="closeShareModalBtn" class="btn btn-icon">×</button>
+        </div>
+        <div style="padding:20px 18px;">
+            <p style="font-size:0.82rem;color:var(--text-secondary);margin-bottom:14px;">已儲存到雲端。將以下連結傳送給客戶，客戶可翻頁預覽並批准相本。</p>
+            <div style="display:flex;gap:6px;margin-bottom:10px;">
+                <input id="shareUrl" type="text" readonly style="flex:1;background:var(--bg-input);border:1px solid var(--border);border-radius:4px;color:var(--text-primary);padding:7px 10px;font-size:0.8rem;outline:none;">
+                <button id="copyShareUrlBtn" class="btn btn-primary">複製</button>
+            </div>
+            <p style="font-size:0.72rem;color:var(--text-muted);">再次點「分享」會更新雲端版本。客戶批准後，頂部會顯示通知。</p>
+        </div>
+    </div>
+</div>
+
+<!-- Layout Editor Modal -->
+<div id="layoutEditorModal" class="modal-overlay">
+    <div class="modal-box" style="width:min(680px,92vw);max-height:92vh;">
+        <div class="modal-header">
+            <h3>自訂版型編輯器</h3>
+            <button id="closeLayoutEditorBtn" class="btn btn-icon">×</button>
+        </div>
+        <div style="padding:12px 18px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px;">
+            <label style="font-size:0.75rem;color:var(--text-muted);white-space:nowrap;">版型名稱</label>
+            <input type="text" id="layoutName" placeholder="請輸入版型名稱" class="layout-name-input">
+        </div>
+        <div style="padding:14px 18px;flex:1;overflow:auto;">
+            <p style="font-size:0.72rem;color:var(--text-muted);margin-bottom:10px;">在畫布上拖拉建立格子，拖角落調整大小</p>
+            <div id="layoutEditorCanvas" class="layout-editor-canvas"></div>
+        </div>
+        <div style="padding:12px 18px;border-top:1px solid var(--border);display:flex;gap:8px;justify-content:flex-end;">
+            <button id="cancelLayoutEditorBtn" class="btn btn-secondary">取消</button>
+            <button id="saveLayoutEditorBtn" class="btn btn-primary">儲存版型</button>
+        </div>
+    </div>
+</div>
+
+<!-- Shared from picker -->
+<script src="../js/config.js"></script>
+<script src="../js/toast.js"></script>
+<script src="../js/drive.js"></script>
+<!-- Book Editor -->
+<script src="js/layouts.js"></script>
+<script src="js/auto_layout.js"></script>
+<script src="js/exporter.js"></script>
+<script src="js/layout_editor.js"></script>
+<script src="js/book_editor.js"></script>
+</body>
+</html>

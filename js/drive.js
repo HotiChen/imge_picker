@@ -71,10 +71,10 @@ class DriveManager {
 
                 return {
                     photos: this.photos,
-                    folders: [],
+                    folders: (result.folders || []),
                     currentName: this.currentFolderName,
                     projectCreatedTime: projectCreatedTime ? new Date(projectCreatedTime).toISOString() : null,
-                    canGoBack: false
+                    canGoBack: !!folderPath
                 };
             } else {
                 throw new Error(result.message || '無法讀取照片資料夾');

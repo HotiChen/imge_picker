@@ -2194,6 +2194,80 @@ body {
 
 /* 響應式規則已整合至上方 Responsive 區塊 */
 
+/* ==================== Folder Navigation ==================== */
+.folder-nav {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 0;
+    flex-wrap: wrap;
+}
+
+.breadcrumb-back {
+    font-size: 0.875rem;
+    padding: 4px 10px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    white-space: nowrap;
+}
+
+.breadcrumb {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 2px;
+    font-size: 0.875rem;
+    color: var(--text-muted);
+}
+
+.breadcrumb-item {
+    color: var(--primary);
+    cursor: pointer;
+    transition: opacity 0.15s;
+}
+
+.breadcrumb-item:hover { opacity: 0.7; }
+
+.breadcrumb-sep { color: var(--text-muted); }
+
+.breadcrumb-current {
+    color: var(--text-primary);
+    font-weight: 500;
+}
+
+/* ==================== Folder Cards ==================== */
+.folder-card {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    padding: 24px 16px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    transition: border-color 0.2s, background 0.2s, transform 0.15s;
+    aspect-ratio: 1;
+    min-height: 120px;
+}
+
+.folder-card:hover {
+    border-color: var(--primary);
+    background: rgba(243, 128, 32, 0.05);
+    transform: translateY(-2px);
+}
+
+.folder-icon { font-size: 2.5rem; line-height: 1; }
+
+.folder-name {
+    font-size: 0.9rem;
+    font-weight: 500;
+    color: var(--text-primary);
+    text-align: center;
+    word-break: break-all;
+}
+
 /* ==================== Footer ==================== */
 .app-footer {
     text-align: center;
