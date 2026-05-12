@@ -19,6 +19,7 @@
             <a href="../index.html" class="btn btn-icon" title="回到選圖">←</a>
             <span style="font-size:1.1rem;">📖</span>
             <input type="text" id="bookName" class="book-title-input" value="未命名相本" placeholder="相本名稱">
+            <span id="cloudStatusIndicator" style="font-size:0.72rem;color:#9fa8da;white-space:nowrap;"></span>
         </div>
         <div class="top-bar-center">
             <button id="prevPageBtn" class="btn btn-icon" title="上一頁">◀</button>
@@ -27,6 +28,7 @@
         </div>
         <div class="top-bar-right">
             <button id="clearBookBtn" class="btn btn-danger" title="清除相本">🗑 重置</button>
+            <button id="shareBtn" class="btn btn-secondary">☁ 分享</button>
             <button id="exportBtn" class="btn btn-primary">⬇ 匯出 JPG</button>
         </div>
     </header>
@@ -203,6 +205,24 @@
         </div>
         <div id="modalLibraryGrid" class="modal-library-grid">
             <div style="grid-column:1/-1;text-align:center;padding:32px;color:var(--text-muted);">請先在右側載入照片庫</div>
+        </div>
+    </div>
+</div>
+
+<!-- Share Modal -->
+<div id="shareModal" class="modal-overlay">
+    <div class="modal-box" style="width:min(480px,90vw);">
+        <div class="modal-header">
+            <h3>分享給客戶</h3>
+            <button id="closeShareModalBtn" class="btn btn-icon">×</button>
+        </div>
+        <div style="padding:20px 18px;">
+            <p style="font-size:0.82rem;color:var(--text-secondary);margin-bottom:14px;">已儲存到雲端。將以下連結傳送給客戶，客戶可翻頁預覽並批准相本。</p>
+            <div style="display:flex;gap:6px;margin-bottom:10px;">
+                <input id="shareUrl" type="text" readonly style="flex:1;background:var(--bg-input);border:1px solid var(--border);border-radius:4px;color:var(--text-primary);padding:7px 10px;font-size:0.8rem;outline:none;">
+                <button id="copyShareUrlBtn" class="btn btn-primary">複製</button>
+            </div>
+            <p style="font-size:0.72rem;color:var(--text-muted);">再次點「分享」會更新雲端版本。客戶批准後，頂部會顯示通知。</p>
         </div>
     </div>
 </div>

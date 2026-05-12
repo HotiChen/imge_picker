@@ -29,6 +29,7 @@ class BookEditor {
         }
         this.bindEvents();
         this.renderAll();
+        this.checkCloudStatus();
     }
 
     // ─── 頁面管理 ─────────────────────────────
@@ -512,6 +513,63 @@ class BookEditor {
         return false;
     }
 
+    // ─── 雲端分享 ────────────────────────────
+
+    _generateId() {
+        if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID();
+        return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+            const r = Math.random() * 16 | 0;
+            return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+        });
+    }
+
+    async saveToCloud() {
+        const btn = document.getElementById('shareBtn');
+        if (btn) { btn.disabled = true; btn.textContent = '儲存中...'; }
+        try {
+            if (!this.book.cloudId) this.book.cloudId = this._generateId();
+            const id = this.book.cloudId;
+
+            const r = await fetch(`${CONFIG.WORKER_URL}/api/books/${id}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(this.book)
+            });
+            if (!r.ok) throw new Error('雲端儲存失敗（' + r.status + '）');
+
+            this.saveToStorage();
+
+            const viewUrl = new URL(`view.html?id=${id}`, window.location.href).href;
+            const urlInput = document.getElementById('shareUrl');
+            if (urlInput) urlInput.value = viewUrl;
+            document.getElementById('shareModal')?.classList.add('active');
+            this.checkCloudStatus();
+        } catch (e) {
+            toast.error(e.message || '分享失敗，請確認網路連線');
+        } finally {
+            if (btn) { btn.disabled = false; btn.textContent = '☁ 分享'; }
+        }
+    }
+
+    async checkCloudStatus() {
+        if (!this.book.cloudId) return;
+        try {
+            const r = await fetch(`${CONFIG.WORKER_URL}/api/books/${this.book.cloudId}/status`);
+            if (!r.ok) return;
+            const data = await r.json();
+            const el = document.getElementById('cloudStatusIndicator');
+            if (el) {
+                if (data.approved) {
+                    el.textContent = '✓ 客戶已批准';
+                    el.style.color = '#27ae60';
+                } else {
+                    el.textContent = '☁ 已分享';
+                    el.style.color = '#9fa8da';
+                }
+            }
+        } catch (e) {}
+    }
+
     // ─── 事件綁定 ────────────────────────────
 
     bindEvents() {
@@ -579,6 +637,23 @@ class BookEditor {
 
         // 自動排版
         this._on('runAutoLayoutBtn', 'click', () => this.runAutoLayout());
+
+        // 分享 / 雲端
+        this._on('shareBtn', 'click', () => this.saveToCloud());
+        this._on('closeShareModalBtn', 'click', () => document.getElementById('shareModal')?.classList.remove('active'));
+        this._on('shareModal', 'click', e => { if (e.target.id === 'shareModal') document.getElementById('shareModal').classList.remove('active'); });
+        this._on('copyShareUrlBtn', 'click', () => {
+            const url = document.getElementById('shareUrl')?.value;
+            if (!url) return;
+            navigator.clipboard?.writeText(url)
+                .then(() => toast.success('已複製連結'))
+                .catch(() => {
+                    const el = document.getElementById('shareUrl');
+                    el.select();
+                    document.execCommand('copy');
+                    toast.success('已複製連結');
+                });
+        });
 
         // 自訂版型編輯器
         this._on('openLayoutEditorBtn', 'click', () => {

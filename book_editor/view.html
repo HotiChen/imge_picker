@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>相本預覽</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+    <style>
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+        html, body {
+            height: 100%;
+            font-family: 'Inter', -apple-system, sans-serif;
+            background: #0d0d1a;
+            color: #e8eaf6;
+            overflow: hidden;
+        }
+        .viewer-wrap { display: flex; flex-direction: column; height: 100vh; }
+
+        .viewer-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 24px;
+            height: 52px;
+            background: #16213e;
+            border-bottom: 1px solid rgba(255,255,255,0.08);
+            flex-shrink: 0;
+            gap: 12px;
+        }
+        .viewer-title { font-size: 1rem; font-weight: 600; }
+        .approved-badge {
+            font-size: 0.8rem;
+            color: #27ae60;
+            background: rgba(39,174,96,0.1);
+            border: 1px solid rgba(39,174,96,0.3);
+            border-radius: 12px;
+            padding: 3px 10px;
+        }
+
+        .viewer-page-area {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 40px;
+            overflow: hidden;
+        }
+
+        .viewer-footer {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 16px;
+            padding: 12px 20px;
+            background: #16213e;
+            border-top: 1px solid rgba(255,255,255,0.08);
+            flex-shrink: 0;
+        }
+
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+            border-radius: 4px;
+            font-size: 0.85rem;
+            font-weight: 500;
+            cursor: pointer;
+            border: none;
+            transition: background 0.15s, opacity 0.15s;
+        }
+        .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+        .btn-icon {
+            width: 36px; height: 36px; padding: 0;
+            background: rgba(255,255,255,0.05);
+            color: #9fa8da;
+            border: 1px solid rgba(255,255,255,0.08);
+            font-size: 1rem;
+        }
+        .btn-icon:hover:not(:disabled) { background: rgba(255,255,255,0.1); color: #e8eaf6; }
+        .btn-approve {
+            background: #f38020; color: white;
+            padding: 8px 28px;
+            font-size: 0.9rem;
+        }
+        .btn-approve:hover:not(:disabled) { background: #e06010; }
+        .btn-approved {
+            background: #27ae60; color: white;
+            padding: 8px 28px;
+            font-size: 0.9rem;
+        }
+        .page-counter { font-size: 0.85rem; color: #9fa8da; min-width: 64px; text-align: center; }
+        .sep { width: 1px; height: 24px; background: rgba(255,255,255,0.1); }
+
+        /* hide editor-specific UI in viewer */
+        .slot-clear-btn { display: none !important; }
+        .slot-empty-hint { opacity: 0.2; pointer-events: none; }
+        .crop-hint { display: none !important; }
+        .page-slot { cursor: default !important; }
+
+        .state-msg {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 12px;
+            color: #546e7a;
+            font-size: 0.95rem;
+        }
+        .state-msg .icon { font-size: 2.5rem; }
+        .error .icon { color: #ff4757; }
+    </style>
+</head>
+<body>
+<div class="viewer-wrap">
+    <header class="viewer-header">
+        <span class="viewer-title" id="bookTitle">載入中...</span>
+        <span id="approvedBadge" class="approved-badge" style="display:none;">✓ 客戶已批准</span>
+    </header>
+
+    <main class="viewer-page-area" id="pageArea">
+        <div class="state-msg">
+            <span class="icon">📖</span>
+            <span>正在載入相本...</span>
+        </div>
+    </main>
+
+    <footer class="viewer-footer">
+        <button id="prevBtn" class="btn btn-icon" disabled>◀</button>
+        <span id="pageCounter" class="page-counter">—</span>
+        <button id="nextBtn" class="btn btn-icon" disabled>▶</button>
+        <div class="sep"></div>
+        <button id="approveBtn" class="btn btn-approve">批准相本</button>
+    </footer>
+</div>
+
+<script src="../js/config.js"></script>
+<script src="js/layouts.js"></script>
+<script src="js/viewer.js"></script>
+</body>
+</html>
