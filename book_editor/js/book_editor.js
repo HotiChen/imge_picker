@@ -2,6 +2,7 @@ class BookEditor {
     constructor() {
         this.book = {
             name: '未命名相本',
+            clientFolders: [],
             settings: { width: 20, height: 20, unit: 'cm', dpi: 300 },
             coverSettings: { width: 20, height: 20, unit: 'cm', dpi: 300 },
             pages: []
@@ -739,16 +740,64 @@ class BookEditor {
         });
     }
 
+    async openShareModal() {
+        document.getElementById('shareFolderStep').style.display = '';
+        document.getElementById('shareUrlStep').style.display = 'none';
+        document.getElementById('shareModal')?.classList.add('active');
+        await this._renderShareFolders();
+    }
+
+    async _renderShareFolders() {
+        const container = document.getElementById('shareFolderList');
+        if (!container) return;
+
+        const rootPath = this.libFolderStack[0];
+        if (!rootPath) {
+            container.innerHTML = '<p style="font-size:0.75rem;color:var(--text-muted);">請先在右側載入照片素材庫，才能選擇資料夾。</p>';
+            return;
+        }
+
+        container.innerHTML = '<p style="font-size:0.75rem;color:var(--text-muted);">載入中...</p>';
+        const { folders } = await this._fetchFolderDirect(rootPath);
+
+        if (folders.length === 0) {
+            // 根目錄本身就是唯一資料夾
+            const checked = (this.book.clientFolders || []).length === 0
+                || (this.book.clientFolders || []).includes(rootPath);
+            container.innerHTML = `<label class="share-folder-item">
+                <input type="checkbox" class="share-folder-cb" value="${rootPath}" ${checked ? 'checked' : ''}>
+                <span>📁 ${rootPath.replace(/\/$/, '').split('/').pop() || rootPath}</span>
+            </label>`;
+            return;
+        }
+
+        const current = new Set(this.book.clientFolders || []);
+        container.innerHTML = folders.map(f => {
+            const name = f.replace(/\/$/, '').split('/').pop();
+            const checked = current.size === 0 || current.has(f);
+            return `<label class="share-folder-item">
+                <input type="checkbox" class="share-folder-cb" value="${f}" ${checked ? 'checked' : ''}>
+                <span>📁 ${name}</span>
+            </label>`;
+        }).join('');
+    }
+
     async saveToCloud() {
-        const btn = document.getElementById('shareBtn');
+        const clientFolders = [...document.querySelectorAll('.share-folder-cb:checked')].map(el => el.value);
+        this.book.clientFolders = clientFolders;
+
+        const btn = document.getElementById('shareConfirmBtn');
         if (btn) { btn.disabled = true; btn.textContent = '儲存中...'; }
         try {
             if (!this.book.cloudId) this.book.cloudId = this._generateId();
             const id = this.book.cloudId;
 
+            const headers = { 'Content-Type': 'application/json' };
+            if (CONFIG.PHOTOGRAPHER_TOKEN) headers['Authorization'] = `Bearer ${CONFIG.PHOTOGRAPHER_TOKEN}`;
+
             const r = await fetch(`${CONFIG.WORKER_URL}/api/books/${id}`, {
                 method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
+                headers,
                 body: JSON.stringify(this.book)
             });
             if (!r.ok) throw new Error('雲端儲存失敗（' + r.status + '）');
@@ -758,12 +807,14 @@ class BookEditor {
             const viewUrl = new URL(`view.html?id=${id}`, window.location.href).href;
             const urlInput = document.getElementById('shareUrl');
             if (urlInput) urlInput.value = viewUrl;
-            document.getElementById('shareModal')?.classList.add('active');
+
+            document.getElementById('shareFolderStep').style.display = 'none';
+            document.getElementById('shareUrlStep').style.display = '';
             this.checkCloudStatus();
         } catch (e) {
             toast.error(e.message || '分享失敗，請確認網路連線');
         } finally {
-            if (btn) { btn.disabled = false; btn.textContent = '☁ 分享'; }
+            if (btn) { btn.disabled = false; btn.textContent = '儲存並產生分享連結 →'; }
         }
     }
 
@@ -873,7 +924,8 @@ class BookEditor {
         });
 
         // 分享 / 雲端
-        this._on('shareBtn', 'click', () => this.saveToCloud());
+        this._on('shareBtn', 'click', () => this.openShareModal());
+        this._on('shareConfirmBtn', 'click', () => this.saveToCloud());
         this._on('closeShareModalBtn', 'click', () => document.getElementById('shareModal')?.classList.remove('active'));
         this._on('shareModal', 'click', e => { if (e.target.id === 'shareModal') document.getElementById('shareModal').classList.remove('active'); });
         this._on('copyShareUrlBtn', 'click', () => {
@@ -908,7 +960,7 @@ class BookEditor {
         this._on('clearBookBtn', 'click', () => {
             if (confirm('確定要清除相本並重新開始？')) {
                 localStorage.removeItem('book_editor_state');
-                this.book = { name: '未命名相本', settings: { width: 20, height: 20, unit: 'cm', dpi: 300 }, coverSettings: { width: 20, height: 20, unit: 'cm', dpi: 300 }, pages: [] };
+                this.book = { name: '未命名相本', clientFolders: [], settings: { width: 20, height: 20, unit: 'cm', dpi: 300 }, coverSettings: { width: 20, height: 20, unit: 'cm', dpi: 300 }, pages: [] };
                 this._addPage('cover', 'full-bleed');
                 this._addPage('inner', '2-up-h');
                 this._addPage('inner', '2-up-h');

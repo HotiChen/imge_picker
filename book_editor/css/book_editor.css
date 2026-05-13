@@ -649,6 +649,31 @@ html, body {
     pointer-events: none;
 }
 
+/* ─── Share Modal ─── */
+.share-folder-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    max-height: 220px;
+    overflow-y: auto;
+    margin-bottom: 4px;
+}
+.share-folder-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 0.82rem;
+    cursor: pointer;
+    padding: 8px 10px;
+    border-radius: 6px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    transition: border-color 0.15s;
+    user-select: none;
+}
+.share-folder-item:hover { border-color: rgba(243,128,32,0.4); }
+.share-folder-item input[type="checkbox"] { accent-color: var(--primary); width: 15px; height: 15px; cursor: pointer; flex-shrink: 0; }
+
 /* ─── Library Filter Bar ─── */
 .lib-filter-select {
     flex: 1;
