@@ -12,6 +12,10 @@ class BookEditor {
         this.cropMode = false;
         this.cropSlotIdx = -1;
         this.cropDragState = null;
+        this.slotEditMode = false;
+        this.slotPosDragState = null;
+        this._slotPosMoveHandler = null;
+        this._slotPosUpHandler = null;
         this.libraryPhotos = [];
         this.libAllPhotos = [];
         this.libFolderStack = [];
@@ -89,9 +93,10 @@ class BookEditor {
         if (!page || !LAYOUTS[layoutId]) return;
         const existing = page.slots || [];
         page.layout = layoutId;
-        page.slots = LAYOUTS[layoutId].slots.map((_, idx) =>
-            existing[idx] || { photoId: null, crop: { x: 0, y: 0, scale: 1 } }
-        );
+        page.slots = LAYOUTS[layoutId].slots.map((_, idx) => {
+            const old = existing[idx] || {};
+            return { photoId: old.photoId || null, crop: old.crop || { x: 0, y: 0, scale: 1 } };
+        });
         this.renderCurrentPage();
         this.renderPageList();
         this.saveToStorage();
@@ -144,6 +149,131 @@ class BookEditor {
         const bar = document.getElementById('cropModeBar');
         if (bar) bar.style.display = 'none';
         this.saveToStorage();
+    }
+
+    enterSlotEditMode() {
+        if (this.cropMode) this.exitCropMode();
+        this.slotEditMode = true;
+        this.renderCurrentPage();
+        const bar = document.getElementById('slotEditModeBar');
+        if (bar) bar.style.display = 'flex';
+        const btn = document.getElementById('slotEditBtn');
+        if (btn) { btn.style.borderColor = 'var(--primary)'; btn.style.color = 'var(--primary)'; }
+    }
+
+    exitSlotEditMode() {
+        this.slotEditMode = false;
+        this.renderCurrentPage();
+        const bar = document.getElementById('slotEditModeBar');
+        if (bar) bar.style.display = 'none';
+        const btn = document.getElementById('slotEditBtn');
+        if (btn) { btn.style.borderColor = ''; btn.style.color = ''; }
+    }
+
+    _bindSlotPositionEdit() {
+        const area = document.getElementById('pagePreviewArea');
+        const canvas = area?.querySelector('.page-canvas');
+        if (!canvas) return;
+
+        document.querySelectorAll('.page-slot').forEach(slotEl => {
+            const slotIdx = parseInt(slotEl.dataset.slotIdx);
+            slotEl.classList.add('slot-edit-active');
+
+            ['nw', 'ne', 'se', 'sw'].forEach(dir => {
+                const handle = document.createElement('div');
+                handle.className = `slot-pos-handle pos-${dir}`;
+                slotEl.appendChild(handle);
+                handle.addEventListener('mousedown', e => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    const rect = canvas.getBoundingClientRect();
+                    this.slotPosDragState = {
+                        type: 'resize', slotIdx, dir,
+                        startX: e.clientX, startY: e.clientY,
+                        cW: rect.width, cH: rect.height,
+                        orig: this._getSlotGeometry(slotIdx)
+                    };
+                });
+            });
+
+            slotEl.addEventListener('mousedown', e => {
+                if (e.target.classList.contains('slot-pos-handle')) return;
+                e.preventDefault();
+                const rect = canvas.getBoundingClientRect();
+                this.slotPosDragState = {
+                    type: 'move', slotIdx,
+                    startX: e.clientX, startY: e.clientY,
+                    cW: rect.width, cH: rect.height,
+                    orig: this._getSlotGeometry(slotIdx)
+                };
+            });
+        });
+
+        this._slotPosMoveHandler = e => {
+            if (!this.slotPosDragState) return;
+            const d = this.slotPosDragState;
+            const dx = (e.clientX - d.startX) / d.cW * 100;
+            const dy = (e.clientY - d.startY) / d.cH * 100;
+            const page = this.book.pages[this.currentPageIndex];
+            if (!page) return;
+            const slot = page.slots[d.slotIdx];
+            if (!slot) return;
+            const o = d.orig;
+
+            if (d.type === 'move') {
+                slot.override = {
+                    x: Math.max(0, Math.min(100 - o.w, o.x + dx)),
+                    y: Math.max(0, Math.min(100 - o.h, o.y + dy)),
+                    w: o.w, h: o.h
+                };
+            } else {
+                let { x, y, w, h } = { ...o };
+                const dir = d.dir;
+                if (dir.includes('n')) {
+                    const newY = Math.min(o.y + dy, o.y + o.h - 5);
+                    h = Math.max(5, o.h - (newY - o.y));
+                    y = newY;
+                }
+                if (dir.includes('s')) h = Math.max(5, o.h + dy);
+                if (dir.includes('e')) w = Math.max(5, o.w + dx);
+                if (dir.includes('w')) {
+                    const newX = Math.min(o.x + dx, o.x + o.w - 5);
+                    w = Math.max(5, o.w - (newX - o.x));
+                    x = newX;
+                }
+                slot.override = { x, y, w, h };
+            }
+
+            const slotEl = document.querySelector(`[data-slot-idx="${d.slotIdx}"]`);
+            if (slotEl) {
+                const g = slot.override;
+                slotEl.style.left = g.x + '%';
+                slotEl.style.top = g.y + '%';
+                slotEl.style.width = g.w + '%';
+                slotEl.style.height = g.h + '%';
+            }
+        };
+
+        this._slotPosUpHandler = () => {
+            if (this.slotPosDragState) {
+                this.renderPageList();
+                this.saveToStorage();
+            }
+            this.slotPosDragState = null;
+        };
+
+        document.addEventListener('mousemove', this._slotPosMoveHandler);
+        document.addEventListener('mouseup', this._slotPosUpHandler);
+    }
+
+    _getSlotGeometry(slotIdx) {
+        const page = this.book.pages[this.currentPageIndex];
+        if (!page) return { x: 0, y: 0, w: 50, h: 50 };
+        const slot = page.slots[slotIdx];
+        if (slot?.override) return { ...slot.override };
+        const slotDef = LAYOUTS[page.layout]?.slots[slotIdx];
+        if (!slotDef) return { x: 0, y: 0, w: 50, h: 50 };
+        return { x: slotDef.x, y: slotDef.y, w: slotDef.w, h: slotDef.h };
     }
 
     _updateSlotTransform(slotIdx) {
@@ -538,12 +668,23 @@ class BookEditor {
     }
 
     _bindSlotInteractions(displayW, displayH) {
-        // Remove old global crop drag listeners before (re)binding
+        // Remove old global listeners before (re)binding
         if (this._cropMoveHandler) {
             document.removeEventListener('mousemove', this._cropMoveHandler);
             document.removeEventListener('mouseup', this._cropUpHandler);
             this._cropMoveHandler = null;
             this._cropUpHandler = null;
+        }
+        if (this._slotPosMoveHandler) {
+            document.removeEventListener('mousemove', this._slotPosMoveHandler);
+            document.removeEventListener('mouseup', this._slotPosUpHandler);
+            this._slotPosMoveHandler = null;
+            this._slotPosUpHandler = null;
+        }
+
+        if (this.slotEditMode) {
+            this._bindSlotPositionEdit();
+            return;
         }
 
         document.querySelectorAll('.page-slot').forEach(slotEl => {
@@ -901,6 +1042,10 @@ class BookEditor {
 
         // 裁切完成
         this._on('cropDoneBtn', 'click', () => this.exitCropMode());
+
+        // 格位調整
+        this._on('slotEditBtn', 'click', () => { if (this.slotEditMode) this.exitSlotEditMode(); else this.enterSlotEditMode(); });
+        this._on('slotEditDoneBtn', 'click', () => this.exitSlotEditMode());
 
         // 照片選取 Modal 關閉
         this._on('closePhotoModal', 'click', () => { this.pendingSlotIdx = -1; this.closePhotoModal(); });

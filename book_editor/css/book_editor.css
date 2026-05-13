@@ -239,6 +239,25 @@ html, body {
     position: relative;
 }
 
+/* ─── Slot Position Edit Mode ─── */
+.slot-edit-active {
+    outline: 2px dashed rgba(100,180,255,0.7) !important;
+    cursor: move !important;
+}
+.slot-pos-handle {
+    position: absolute;
+    width: 10px;
+    height: 10px;
+    background: #64b4ff;
+    border: 1px solid white;
+    border-radius: 2px;
+    z-index: 20;
+}
+.pos-nw { top: -5px; left: -5px; cursor: nw-resize; }
+.pos-ne { top: -5px; right: -5px; cursor: ne-resize; }
+.pos-se { bottom: -5px; right: -5px; cursor: se-resize; }
+.pos-sw { bottom: -5px; left: -5px; cursor: sw-resize; }
+
 .page-nav-bar {
     display: flex;
     align-items: center;

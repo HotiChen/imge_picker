@@ -27,6 +27,7 @@
             <button id="nextPageBtn" class="btn btn-icon" title="下一頁">▶</button>
         </div>
         <div class="top-bar-right">
+            <button id="slotEditBtn" class="btn btn-secondary" title="調整格子位置與大小">⊡ 調格位</button>
             <button id="guideToggleBtn" class="btn btn-secondary" title="顯示出血／安全邊距／書脊參考線">⊞ 參考線</button>
             <button id="clearBookBtn" class="btn btn-danger" title="清除相本">🗑 重置</button>
             <button id="shareBtn" class="btn btn-secondary">☁ 分享</button>
@@ -85,6 +86,10 @@
             <div id="cropModeBar" class="crop-mode-bar">
                 <span>✂ 裁切模式：拖移平移 · 滾輪縮放</span>
                 <button id="cropDoneBtn" class="btn btn-primary" style="padding:4px 12px;font-size:0.8rem;">完成</button>
+            </div>
+            <div id="slotEditModeBar" class="crop-mode-bar" style="background:rgba(100,180,255,0.12);border-color:rgba(100,180,255,0.3);color:#64b4ff;">
+                <span>⊡ 格位調整：拖移格子移動位置 · 拖角調整大小</span>
+                <button id="slotEditDoneBtn" class="btn btn-primary" style="padding:4px 12px;font-size:0.8rem;">完成</button>
             </div>
             <div id="pagePreviewArea" class="page-preview-area"></div>
             <div class="page-nav-bar">

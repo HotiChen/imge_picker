@@ -64,6 +64,10 @@ function renderPageHTML(page, displayW, displayH, cropSlotIdx = -1) {
         const scale = slot.crop?.scale || 1;
         const cropX = (slot.crop?.x || 0) * 100;
         const cropY = (slot.crop?.y || 0) * 100;
+        const sx = slot.override?.x ?? slotDef.x;
+        const sy = slot.override?.y ?? slotDef.y;
+        const sw = slot.override?.w ?? slotDef.w;
+        const sh = slot.override?.h ?? slotDef.h;
 
         let innerHTML = '';
         if (slot.photoId) {
@@ -87,7 +91,7 @@ function renderPageHTML(page, displayW, displayH, cropSlotIdx = -1) {
         return `
             <div class="page-slot ${slot.photoId ? 'has-photo' : 'empty'} ${isCropActive ? 'crop-active' : ''}"
                  data-slot-idx="${idx}"
-                 style="position:absolute; left:${slotDef.x}%; top:${slotDef.y}%; width:${slotDef.w}%; height:${slotDef.h}%; overflow:hidden; box-sizing:border-box;">
+                 style="position:absolute; left:${sx}%; top:${sy}%; width:${sw}%; height:${sh}%; overflow:hidden; box-sizing:border-box;">
                 ${innerHTML}
             </div>
         `;
@@ -107,15 +111,19 @@ function renderPageThumbnailHTML(page) {
 
     const slotsHTML = layout.slots.map((slotDef, idx) => {
         const slot = page.slots[idx] || { photoId: null, crop: { x: 0, y: 0, scale: 1 } };
+        const tsx = slot.override?.x ?? slotDef.x;
+        const tsy = slot.override?.y ?? slotDef.y;
+        const tsw = slot.override?.w ?? slotDef.w;
+        const tsh = slot.override?.h ?? slotDef.h;
         if (!slot.photoId) {
-            return `<div style="position:absolute;left:${slotDef.x}%;top:${slotDef.y}%;width:${slotDef.w}%;height:${slotDef.h}%;background:rgba(255,255,255,0.08);box-sizing:border-box;"></div>`;
+            return `<div style="position:absolute;left:${tsx}%;top:${tsy}%;width:${tsw}%;height:${tsh}%;background:rgba(255,255,255,0.08);box-sizing:border-box;"></div>`;
         }
         const scale = slot.crop?.scale || 1;
         const cropX = (slot.crop?.x || 0) * 100;
         const cropY = (slot.crop?.y || 0) * 100;
         const src = `https://images.weserv.nl/?url=${CONFIG.WORKER_URL.replace(/^https?:\/\//, '')}/${slot.photoId}&w=120&q=60`;
         return `
-            <div style="position:absolute;left:${slotDef.x}%;top:${slotDef.y}%;width:${slotDef.w}%;height:${slotDef.h}%;overflow:hidden;box-sizing:border-box;">
+            <div style="position:absolute;left:${tsx}%;top:${tsy}%;width:${tsw}%;height:${tsh}%;overflow:hidden;box-sizing:border-box;">
                 <div style="position:absolute;overflow:hidden;width:${100*scale}%;height:${100*scale}%;top:50%;left:50%;transform:translate(calc(-50% + ${cropX}%),calc(-50% + ${cropY}%));">
                     <img src="${src}" style="width:100%;height:100%;object-fit:cover;display:block;">
                 </div>
