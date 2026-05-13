@@ -77,9 +77,9 @@ function renderPageHTML(page, displayW, displayH, cropSlotIdx = -1) {
                     position:absolute; overflow:hidden;
                     width:${100 * scale}%; height:${100 * scale}%;
                     top:50%; left:50%;
-                    transform:translate(calc(-50% + ${cropX}%), calc(-50% + ${cropY}%));
+                    transform:translate(-50%,-50%);
                 ">
-                    <img src="${src}" draggable="false" style="width:100%;height:100%;object-fit:cover;display:block;pointer-events:none;">
+                    <img src="${src}" draggable="false" style="width:100%;height:100%;object-fit:cover;object-position:${50+cropX}% ${50+cropY}%;display:block;pointer-events:none;">
                 </div>
                 <button class="slot-clear-btn" data-slot-idx="${idx}" title="移除照片">×</button>
                 ${isCropActive ? '<div class="crop-hint">拖移平移 · 滾輪縮放</div>' : ''}
@@ -124,8 +124,8 @@ function renderPageThumbnailHTML(page) {
         const src = `https://images.weserv.nl/?url=${CONFIG.WORKER_URL.replace(/^https?:\/\//, '')}/${slot.photoId}&w=120&q=60`;
         return `
             <div style="position:absolute;left:${tsx}%;top:${tsy}%;width:${tsw}%;height:${tsh}%;overflow:hidden;box-sizing:border-box;">
-                <div style="position:absolute;overflow:hidden;width:${100*scale}%;height:${100*scale}%;top:50%;left:50%;transform:translate(calc(-50% + ${cropX}%),calc(-50% + ${cropY}%));">
-                    <img src="${src}" style="width:100%;height:100%;object-fit:cover;display:block;">
+                <div style="position:absolute;overflow:hidden;width:${100*scale}%;height:${100*scale}%;top:50%;left:50%;transform:translate(-50%,-50%);">
+                    <img src="${src}" style="width:100%;height:100%;object-fit:cover;object-position:${50+cropX}% ${50+cropY}%;display:block;">
                 </div>
             </div>
         `;

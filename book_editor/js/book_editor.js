@@ -287,7 +287,8 @@ class BookEditor {
         const cropY = (crop.y || 0) * 100;
         wrapper.style.width = `${100 * scale}%`;
         wrapper.style.height = `${100 * scale}%`;
-        wrapper.style.transform = `translate(calc(-50% + ${cropX}%), calc(-50% + ${cropY}%))`;
+        const img = wrapper.querySelector('img');
+        if (img) img.style.objectPosition = `${50 + cropX}% ${50 + cropY}%`;
     }
 
     // ─── 照片庫 ──────────────────────────────
@@ -752,10 +753,8 @@ class BookEditor {
             const dy = (e.clientY - this.cropDragState.lastY) / rect.height;
 
             const crop = page.slots[this.cropSlotIdx].crop;
-            const scale = crop.scale || 1;
-            const maxPan = Math.max(0.5, (scale - 1) / 2);
-            crop.x = Math.max(-maxPan, Math.min(maxPan, (crop.x || 0) + dx));
-            crop.y = Math.max(-maxPan, Math.min(maxPan, (crop.y || 0) + dy));
+            crop.x = Math.max(-0.5, Math.min(0.5, (crop.x || 0) + dx));
+            crop.y = Math.max(-0.5, Math.min(0.5, (crop.y || 0) + dy));
             this.cropDragState = { lastX: e.clientX, lastY: e.clientY };
             this._updateSlotTransform(this.cropSlotIdx);
         };
