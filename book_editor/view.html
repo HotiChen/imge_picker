@@ -81,23 +81,48 @@
         .btn-icon:hover:not(:disabled) { background: rgba(255,255,255,0.1); color: #e8eaf6; }
         .btn-approve {
             background: #f38020; color: white;
-            padding: 8px 28px;
-            font-size: 0.9rem;
+            padding: 8px 28px; font-size: 0.9rem;
         }
         .btn-approve:hover:not(:disabled) { background: #e06010; }
         .btn-approved {
             background: #27ae60; color: white;
-            padding: 8px 28px;
-            font-size: 0.9rem;
+            padding: 8px 28px; font-size: 0.9rem;
         }
-        .page-counter { font-size: 0.85rem; color: #9fa8da; min-width: 64px; text-align: center; }
+        .btn-save {
+            background: #3d5afe; color: white;
+            padding: 8px 20px; font-size: 0.9rem;
+        }
+        .btn-save:hover:not(:disabled) { background: #304ffe; }
+
+        .page-counter { font-size: 0.85rem; color: #9fa8da; min-width: 80px; text-align: center; }
         .sep { width: 1px; height: 24px; background: rgba(255,255,255,0.1); }
 
-        /* hide editor-specific UI in viewer */
+        /* 隱藏編輯器專用 UI */
         .slot-clear-btn { display: none !important; }
         .slot-empty-hint { opacity: 0.2; pointer-events: none; }
         .crop-hint { display: none !important; }
         .page-slot { cursor: default !important; }
+
+        /* 未鎖定頁的格子：hover 顯示換圖提示 */
+        .page-slot.swappable {
+            cursor: pointer !important;
+        }
+        .page-slot.swappable .slot-swap-hint {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: rgba(0,0,0,0.45);
+            color: white;
+            font-size: 1.6rem;
+            opacity: 0;
+            transition: opacity 0.18s;
+            pointer-events: none;
+            z-index: 5;
+        }
+        .page-slot.swappable:hover .slot-swap-hint { opacity: 1; }
+        .page-slot.swappable.empty .slot-swap-hint { opacity: 0.35; }
 
         .state-msg {
             display: flex;
@@ -109,6 +134,61 @@
         }
         .state-msg .icon { font-size: 2.5rem; }
         .error .icon { color: #ff4757; }
+
+        /* ─── 照片選取 Modal ─── */
+        .viewer-picker-overlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.75);
+            z-index: 1000;
+            align-items: center;
+            justify-content: center;
+        }
+        .viewer-picker-overlay.active { display: flex; }
+        .viewer-picker-box {
+            background: #16213e;
+            border-radius: 10px;
+            width: min(720px, 92vw);
+            max-height: 85vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            box-shadow: 0 16px 48px rgba(0,0,0,0.5);
+        }
+        .viewer-picker-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 14px 20px;
+            border-bottom: 1px solid rgba(255,255,255,0.08);
+            flex-shrink: 0;
+        }
+        .viewer-picker-header h3 { font-size: 0.95rem; font-weight: 600; }
+        .viewer-picker-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+            gap: 6px;
+            padding: 14px;
+            overflow-y: auto;
+            flex: 1;
+        }
+        .viewer-picker-photo {
+            aspect-ratio: 1;
+            border-radius: 4px;
+            overflow: hidden;
+            cursor: pointer;
+            border: 2px solid transparent;
+            transition: border-color 0.15s, transform 0.12s;
+        }
+        .viewer-picker-photo:hover {
+            border-color: #f38020;
+            transform: scale(1.03);
+        }
+        .viewer-picker-photo img {
+            width: 100%; height: 100%;
+            object-fit: cover; display: block;
+        }
     </style>
 </head>
 <body>
@@ -130,8 +210,22 @@
         <span id="pageCounter" class="page-counter">—</span>
         <button id="nextBtn" class="btn btn-icon" disabled>▶</button>
         <div class="sep"></div>
+        <button id="saveChangesBtn" class="btn btn-save" style="display:none;">💾 儲存修改</button>
         <button id="approveBtn" class="btn btn-approve">批准相本</button>
     </footer>
+</div>
+
+<!-- 照片選取 Modal -->
+<div id="viewerPickerModal" class="viewer-picker-overlay">
+    <div class="viewer-picker-box">
+        <div class="viewer-picker-header">
+            <h3>選擇照片</h3>
+            <button id="closeViewerPickerBtn" class="btn btn-icon">×</button>
+        </div>
+        <div id="viewerPickerGrid" class="viewer-picker-grid">
+            <div style="grid-column:1/-1;text-align:center;padding:32px;color:#9fa8da;">載入中...</div>
+        </div>
+    </div>
 </div>
 
 <script src="../js/config.js"></script>
