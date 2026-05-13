@@ -108,6 +108,14 @@
                     <button id="libBackBtn" class="btn btn-secondary" style="padding:2px 8px;font-size:0.72rem;">← 返回</button>
                     <span id="libCurrentPath" style="font-size:0.7rem;color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"></span>
                 </div>
+                <div id="libFilterBar" style="display:none;align-items:center;gap:6px;margin-bottom:6px;">
+                    <select id="libFilterRating" class="lib-filter-select">
+                        <option value="0">全部評分</option>
+                        <option value="3">⭐ 3星以上</option>
+                        <option value="4">⭐ 4星以上</option>
+                        <option value="5">⭐ 只看5星</option>
+                    </select>
+                </div>
                 <div id="libraryGrid" class="library-grid">
                     <div class="lib-empty">輸入路徑後點載入</div>
                 </div>
@@ -201,14 +209,6 @@
         </aside>
     </main>
 
-    <!-- Import Strip (帶入照片列) -->
-    <div id="importStrip" class="import-strip" style="display:none;">
-        <div class="import-strip-header">
-            <span id="importStripLabel">匯入 0 張</span>
-            <button id="importStripToggle" class="btn btn-icon" title="收合">▼</button>
-        </div>
-        <div id="importStripPhotos" class="import-strip-photos"></div>
-    </div>
 </div>
 
 <!-- Photo Picker Modal -->
