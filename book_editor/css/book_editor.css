@@ -649,69 +649,81 @@ html, body {
     pointer-events: none;
 }
 
-/* ─── Import Strip ─── */
-.import-strip {
-    flex-shrink: 0;
-    background: #0a0f1e;
-    border-top: 1px solid rgba(255,255,255,0.08);
+/* ─── Share Modal ─── */
+.share-folder-list {
     display: flex;
     flex-direction: column;
-    max-height: 110px;
-    transition: max-height 0.2s ease;
+    gap: 6px;
+    max-height: 220px;
+    overflow-y: auto;
+    margin-bottom: 4px;
 }
-.import-strip.collapsed { max-height: 32px; overflow: hidden; }
-.import-strip-header {
+.share-folder-item {
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    padding: 0 12px;
-    height: 28px;
-    flex-shrink: 0;
-}
-.import-strip-header span {
-    font-size: 0.7rem;
-    color: var(--text-muted);
-}
-.import-strip-photos {
-    flex: 1;
-    display: flex;
-    gap: 5px;
-    padding: 4px 12px 6px;
-    overflow-x: auto;
-    overflow-y: hidden;
-    scrollbar-width: thin;
-    scrollbar-color: rgba(255,255,255,0.15) transparent;
-}
-.import-thumb {
-    width: 68px;
-    height: 68px;
-    flex-shrink: 0;
-    border-radius: 4px;
-    overflow: hidden;
-    cursor: grab;
-    border: 2px solid transparent;
-    position: relative;
+    gap: 10px;
+    font-size: 0.82rem;
+    cursor: pointer;
+    padding: 8px 10px;
+    border-radius: 6px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
     transition: border-color 0.15s;
+    user-select: none;
 }
-.import-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
-.import-thumb:hover { border-color: rgba(255,255,255,0.3); }
-.import-thumb.placed { border-color: var(--primary); }
-.import-thumb.placed::after {
-    content: '✓';
-    position: absolute;
-    top: 3px;
-    right: 3px;
-    width: 16px;
-    height: 16px;
-    background: var(--primary);
-    border-radius: 50%;
-    color: white;
-    font-size: 9px;
+.share-folder-item:hover { border-color: rgba(243,128,32,0.4); }
+.share-folder-item input[type="checkbox"] { accent-color: var(--primary); width: 15px; height: 15px; cursor: pointer; flex-shrink: 0; }
+
+/* ─── Library Filter Bar ─── */
+.lib-filter-select {
+    flex: 1;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text-primary);
+    font-size: 0.7rem;
+    padding: 3px 6px;
+    cursor: pointer;
+    outline: none;
+}
+.lib-filter-select:focus { border-color: var(--primary); }
+
+/* ─── Library Folder ─── */
+.lib-folder {
+    aspect-ratio: 1;
     display: flex;
+    flex-direction: column;
     align-items: center;
     justify-content: center;
-    line-height: 16px;
+    gap: 3px;
+    background: var(--bg-card);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    border: 2px solid transparent;
+    transition: border-color 0.15s;
+}
+.lib-folder-name {
+    font-size: 0.6rem;
+    color: var(--text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    width: 100%;
     text-align: center;
+    padding: 0 4px;
+}
+
+/* ─── Library Photo Rating ─── */
+.lib-photo { position: relative; }
+.lib-photo-rating {
+    position: absolute;
+    bottom: 2px;
+    left: 2px;
+    font-size: 8px;
+    color: #ffc107;
+    line-height: 1;
+    text-shadow: 0 1px 2px rgba(0,0,0,0.8);
+    pointer-events: none;
 }
 
 /* ─── Toast (copied from styles.css) ─── */

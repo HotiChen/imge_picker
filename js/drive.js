@@ -154,7 +154,6 @@ class DriveManager {
             action: 'saveResults',
             folderId: this.currentFolderId,
             folderName: this.currentFolderName,
-            targetFolderId: CONFIG.GOOGLE_SHEETS_CONFIG.TARGET_DRIVE_FOLDER_ID,
             photos: this.photos.map(p => ({
                 name: p.name,
                 rating: p.rating,

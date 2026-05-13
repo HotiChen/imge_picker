@@ -108,6 +108,14 @@
                     <button id="libBackBtn" class="btn btn-secondary" style="padding:2px 8px;font-size:0.72rem;">← 返回</button>
                     <span id="libCurrentPath" style="font-size:0.7rem;color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"></span>
                 </div>
+                <div id="libFilterBar" style="display:none;align-items:center;gap:6px;margin-bottom:6px;">
+                    <select id="libFilterRating" class="lib-filter-select">
+                        <option value="0">全部評分</option>
+                        <option value="3">⭐ 3星以上</option>
+                        <option value="4">⭐ 4星以上</option>
+                        <option value="5">⭐ 只看5星</option>
+                    </select>
+                </div>
                 <div id="libraryGrid" class="library-grid">
                     <div class="lib-empty">輸入路徑後點載入</div>
                 </div>
@@ -201,14 +209,6 @@
         </aside>
     </main>
 
-    <!-- Import Strip (帶入照片列) -->
-    <div id="importStrip" class="import-strip" style="display:none;">
-        <div class="import-strip-header">
-            <span id="importStripLabel">匯入 0 張</span>
-            <button id="importStripToggle" class="btn btn-icon" title="收合">▼</button>
-        </div>
-        <div id="importStripPhotos" class="import-strip-photos"></div>
-    </div>
 </div>
 
 <!-- Photo Picker Modal -->
@@ -231,13 +231,23 @@
             <h3>分享給客戶</h3>
             <button id="closeShareModalBtn" class="btn btn-icon">×</button>
         </div>
-        <div style="padding:20px 18px;">
-            <p style="font-size:0.82rem;color:var(--text-secondary);margin-bottom:14px;">已儲存到雲端。將以下連結傳送給客戶，客戶可翻頁預覽並批准相本。</p>
+
+        <!-- Step 1: 選擇開放資料夾 -->
+        <div id="shareFolderStep" style="padding:20px 18px;">
+            <p style="font-size:0.82rem;color:var(--text-secondary);margin-bottom:4px;">選擇客人可以換圖的資料夾：</p>
+            <p style="font-size:0.72rem;color:var(--text-muted);margin-bottom:14px;">只有勾選的資料夾，客人才能瀏覽並換圖。</p>
+            <div id="shareFolderList" class="share-folder-list"></div>
+            <button id="shareConfirmBtn" class="btn btn-primary btn-block" style="margin-top:16px;">儲存並產生分享連結 →</button>
+        </div>
+
+        <!-- Step 2: 複製連結 -->
+        <div id="shareUrlStep" style="padding:20px 18px;display:none;">
+            <p style="font-size:0.82rem;color:var(--text-secondary);margin-bottom:14px;">已儲存到雲端。將以下連結傳送給客戶：</p>
             <div style="display:flex;gap:6px;margin-bottom:10px;">
                 <input id="shareUrl" type="text" readonly style="flex:1;background:var(--bg-input);border:1px solid var(--border);border-radius:4px;color:var(--text-primary);padding:7px 10px;font-size:0.8rem;outline:none;">
                 <button id="copyShareUrlBtn" class="btn btn-primary">複製</button>
             </div>
-            <p style="font-size:0.72rem;color:var(--text-muted);">再次點「分享」會更新雲端版本。客戶批准後，頂部會顯示通知。</p>
+            <p style="font-size:0.72rem;color:var(--text-muted);">客人可在開放資料夾中換照片，並在最後批准相本。再次點「分享」可更新設定。</p>
         </div>
     </div>
 </div>

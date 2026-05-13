@@ -1,0 +1,11 @@
+name = "imagepicker"
+main = "worker.js"
+compatibility_date = "2024-01-01"
+
+[[r2_buckets]]
+binding = "imagepicker"
+bucket_name = "imagepicker"
+
+# 部署後在 Cloudflare Dashboard 設定 Secret：
+# PHOTOGRAPHER_TOKEN = "你的秘密 token"
+# 指令：wrangler secret put PHOTOGRAPHER_TOKEN
