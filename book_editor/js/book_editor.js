@@ -322,6 +322,33 @@ class BookEditor {
         this.libraryPhotos = minRating > 0
             ? this.libAllPhotos.filter(p => (p.rating || 0) >= minRating)
             : [...this.libAllPhotos];
+        this.renderPhotoStrip();
+    }
+
+    renderPhotoStrip() {
+        const strip = document.getElementById('photoStrip');
+        const grid = document.getElementById('photoStripGrid');
+        const countEl = document.getElementById('photoStripCount');
+        if (!grid) return;
+        if (this.libraryPhotos.length === 0) {
+            if (strip) strip.style.display = 'none';
+            return;
+        }
+        if (strip) strip.style.display = 'flex';
+        if (countEl) countEl.textContent = `${this.libraryPhotos.length} 張`;
+        grid.innerHTML = this.libraryPhotos.map(photo => {
+            const stars = photo.rating > 0 ? `<div class="strip-photo-rating">${'★'.repeat(photo.rating)}</div>` : '';
+            return `<div class="strip-photo" data-photo-id="${photo.id}" draggable="true" title="${photo.name}">
+                <img src="${driveManager.getImageUrl(photo, true)}" loading="lazy">
+                ${stars}
+            </div>`;
+        }).join('');
+        grid.querySelectorAll('.strip-photo').forEach(el => {
+            el.addEventListener('dragstart', e => e.dataTransfer.setData('text/plain', el.dataset.photoId));
+            el.addEventListener('click', () => {
+                if (this.pendingSlotIdx >= 0) this.setSlotPhoto(this.pendingSlotIdx, el.dataset.photoId);
+            });
+        });
     }
 
     async loadLibrary(folderPath) {
@@ -333,17 +360,17 @@ class BookEditor {
             this.libFolderStack = [folderPath];
             this._updateLibNav(folderPath);
             if (folders.length > 0) {
-                // 根目錄：只顯示資料夾清單
                 this.libAllPhotos = [];
                 this.libraryPhotos = [];
+                const strip = document.getElementById('photoStrip');
+                if (strip) strip.style.display = 'none';
                 this.renderLibrary(null, folders);
                 toast.success(`找到 ${folders.length} 個資料夾`);
             } else {
-                // 沒有子資料夾，直接顯示照片
                 this.libAllPhotos = photos;
                 this._applyLibFilter();
-                this.renderLibrary();
-                toast.success(`載入 ${this.libraryPhotos.length} 張照片`);
+                this.renderLibrary(null, []);
+                toast.success(`共 ${this.libraryPhotos.length} 張照片`);
             }
         } catch (e) {
             toast.error('載入失敗');
@@ -365,7 +392,6 @@ class BookEditor {
             if (ratingEl) ratingEl.value = '0';
             this._applyLibFilter();
             this._updateLibNav(folderPath);
-            this.renderLibrary();
             toast.success(`共 ${allPhotos.length} 張照片`);
         } catch (e) {
             toast.error('載入失敗');
@@ -384,6 +410,8 @@ class BookEditor {
             const { folders } = await this._fetchFolderDirect(prev);
             this.libAllPhotos = [];
             this.libraryPhotos = [];
+            const strip = document.getElementById('photoStrip');
+            if (strip) strip.style.display = 'none';
             this._updateLibNav(prev);
             this.renderLibrary(null, folders);
         } catch (e) {
@@ -401,50 +429,23 @@ class BookEditor {
     }
 
     renderLibrary(targetEl, folders = []) {
-        const filterBar = document.getElementById('libFilterBar');
         const grid = targetEl || document.getElementById('libraryGrid');
         if (!grid) return;
-
-        // 資料夾清單模式（根目錄）
-        if (folders.length > 0) {
-            if (filterBar) filterBar.style.display = 'none';
-            const folderHTML = folders.map(f => {
-                const name = f.replace(/\/$/, '').split('/').pop();
-                return `<div class="lib-folder" data-folder-path="${f}" title="${name}">
-                    <span style="font-size:1.4rem;">📁</span>
-                    <span class="lib-folder-name">${name}</span>
-                </div>`;
-            }).join('');
-            grid.innerHTML = folderHTML;
-            grid.querySelectorAll('.lib-folder').forEach(el => {
-                el.addEventListener('click', () => this.navigateLibraryTo(el.dataset.folderPath));
-                el.addEventListener('mouseenter', () => el.style.borderColor = 'rgba(243,128,32,0.5)');
-                el.addEventListener('mouseleave', () => el.style.borderColor = 'transparent');
-            });
+        if (folders.length === 0) {
+            grid.innerHTML = `<div class="lib-empty">輸入路徑後點載入</div>`;
             return;
         }
-
-        // 照片模式
-        if (filterBar) filterBar.style.display = this.libAllPhotos.length > 0 ? 'flex' : 'none';
-
-        if (this.libraryPhotos.length === 0) {
-            grid.innerHTML = `<div class="lib-empty">${this.libAllPhotos.length > 0 ? '無符合條件的照片' : '輸入路徑後點載入'}</div>`;
-            return;
-        }
-
-        grid.innerHTML = this.libraryPhotos.map(photo => {
-            const stars = photo.rating > 0 ? `<div class="lib-photo-rating">${'★'.repeat(photo.rating)}</div>` : '';
-            return `<div class="lib-photo" data-photo-id="${photo.id}" draggable="true" title="${photo.name}">
-                <img src="${driveManager.getImageUrl(photo, true)}" loading="lazy">
-                ${stars}
+        grid.innerHTML = folders.map(f => {
+            const name = f.replace(/\/$/, '').split('/').pop();
+            return `<div class="lib-folder" data-folder-path="${f}" title="${name}">
+                <span style="font-size:1.2rem;">📁</span>
+                <span class="lib-folder-name">${name}</span>
             </div>`;
         }).join('');
-
-        grid.querySelectorAll('.lib-photo').forEach(el => {
-            el.addEventListener('dragstart', e => e.dataTransfer.setData('text/plain', el.dataset.photoId));
-            el.addEventListener('click', () => {
-                if (this.pendingSlotIdx >= 0) this.setSlotPhoto(this.pendingSlotIdx, el.dataset.photoId);
-            });
+        grid.querySelectorAll('.lib-folder').forEach(el => {
+            el.addEventListener('click', () => this.navigateLibraryTo(el.dataset.folderPath));
+            el.addEventListener('mouseenter', () => el.style.borderColor = 'rgba(243,128,32,0.5)');
+            el.addEventListener('mouseleave', () => el.style.borderColor = 'transparent');
         });
     }
 
@@ -752,7 +753,7 @@ class BookEditor {
 
             const crop = page.slots[this.cropSlotIdx].crop;
             const scale = crop.scale || 1;
-            const maxPan = (scale - 1) / 2;
+            const maxPan = Math.max(0.5, (scale - 1) / 2);
             crop.x = Math.max(-maxPan, Math.min(maxPan, (crop.x || 0) + dx));
             crop.y = Math.max(-maxPan, Math.min(maxPan, (crop.y || 0) + dy));
             this.cropDragState = { lastX: e.clientX, lastY: e.clientY };

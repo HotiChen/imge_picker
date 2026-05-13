@@ -258,6 +258,54 @@ html, body {
 .pos-se { bottom: -5px; right: -5px; cursor: se-resize; }
 .pos-sw { bottom: -5px; left: -5px; cursor: sw-resize; }
 
+/* ─── Photo Strip (bottom of center panel) ─── */
+.photo-strip {
+    height: 108px;
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    background: rgba(0,0,0,0.3);
+    border-top: 1px solid var(--border);
+}
+.photo-strip-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 10px;
+    flex-shrink: 0;
+}
+.photo-strip-grid {
+    flex: 1;
+    display: flex;
+    gap: 4px;
+    padding: 2px 8px 6px;
+    overflow-x: auto;
+    overflow-y: hidden;
+}
+.strip-photo {
+    flex-shrink: 0;
+    width: 68px;
+    height: 68px;
+    border-radius: 3px;
+    overflow: hidden;
+    cursor: grab;
+    border: 2px solid transparent;
+    position: relative;
+    transition: border-color 0.12s, transform 0.1s;
+}
+.strip-photo:hover { border-color: var(--primary); transform: scale(1.04); }
+.strip-photo img { width: 100%; height: 100%; object-fit: cover; display: block; pointer-events: none; }
+.strip-photo-rating {
+    position: absolute;
+    bottom: 2px; left: 2px;
+    font-size: 7px;
+    color: gold;
+    background: rgba(0,0,0,0.55);
+    padding: 0 2px;
+    border-radius: 2px;
+    line-height: 1.4;
+}
+
 .page-nav-bar {
     display: flex;
     align-items: center;
@@ -377,11 +425,11 @@ html, body {
 .library-grid {
     flex: 1;
     overflow-y: auto;
-    display: grid;
-    grid-template-columns: 1fr 1fr 1fr;
-    gap: 4px;
-    padding: 4px;
-    max-height: 220px;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    padding: 2px;
+    max-height: 200px;
 }
 
 .lib-photo {
@@ -695,7 +743,6 @@ html, body {
 
 /* ─── Library Filter Bar ─── */
 .lib-filter-select {
-    flex: 1;
     background: var(--bg-input);
     border: 1px solid var(--border);
     border-radius: 4px;
@@ -709,12 +756,11 @@ html, body {
 
 /* ─── Library Folder ─── */
 .lib-folder {
-    aspect-ratio: 1;
     display: flex;
-    flex-direction: column;
+    flex-direction: row;
     align-items: center;
-    justify-content: center;
-    gap: 3px;
+    gap: 6px;
+    padding: 5px 8px;
     background: var(--bg-card);
     border-radius: var(--radius-sm);
     cursor: pointer;
@@ -722,14 +768,11 @@ html, body {
     transition: border-color 0.15s;
 }
 .lib-folder-name {
-    font-size: 0.6rem;
-    color: var(--text-muted);
+    font-size: 0.75rem;
+    color: var(--text-primary);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    width: 100%;
-    text-align: center;
-    padding: 0 4px;
 }
 
 /* ─── Library Photo Rating ─── */
