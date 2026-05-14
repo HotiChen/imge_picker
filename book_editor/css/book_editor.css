@@ -227,6 +227,14 @@ html, body {
     border-bottom: 1px solid rgba(243,128,32,0.3);
     font-size: 0.85rem;
     color: var(--primary);
+    transition: background 0.3s;
+}
+.crop-mode-bar.bar-flash {
+    animation: barFlash 0.5s ease;
+}
+@keyframes barFlash {
+    0%   { background: rgba(243,128,32,0.5); }
+    100% { background: rgba(243,128,32,0.15); }
 }
 
 .page-preview-area {
@@ -288,6 +296,13 @@ html, body {
     padding: 2px 8px 6px;
     overflow-x: auto;
     overflow-y: hidden;
+    align-items: center;
+}
+.strip-empty-hint {
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    padding: 0 8px;
+    white-space: nowrap;
 }
 .strip-photo {
     flex-shrink: 0;
@@ -362,11 +377,11 @@ html, body {
     align-items: center;
     justify-content: center;
     gap: 4px;
-    color: rgba(255,255,255,0.2);
+    color: rgba(255,255,255,0.38);
     pointer-events: none;
 }
-.slot-empty-hint span { font-size: 1.5rem; }
-.slot-empty-hint small { font-size: 0.65rem; }
+.slot-empty-hint span { font-size: 1.8rem; }
+.slot-empty-hint small { font-size: 0.75rem; }
 
 .slot-clear-btn {
     position: absolute;
@@ -489,18 +504,20 @@ html, body {
 .layout-btn-wrapper:hover .layout-btn-del { display: flex; }
 
 .layout-btn {
-    aspect-ratio: 0.75;
+    aspect-ratio: unset;
+    height: 58px;
     background: var(--bg-input);
     border: 2px solid var(--border);
     border-radius: var(--radius-sm);
     cursor: pointer;
     display: flex;
+    flex-direction: column;
     align-items: center;
-    justify-content: center;
+    justify-content: flex-start;
     font-size: 0.6rem;
     color: var(--text-muted);
     transition: border-color 0.15s, background 0.15s;
-    padding: 2px;
+    padding: 3px 3px 0;
     overflow: hidden;
     position: relative;
 }
@@ -508,12 +525,24 @@ html, body {
 .layout-btn.active { border-color: var(--primary); background: rgba(243,128,32,0.1); }
 
 .layout-btn-preview {
-    position: absolute;
-    inset: 3px;
+    position: relative;
+    width: 100%;
+    flex: 1;
     display: flex;
     flex-wrap: wrap;
     gap: 2px;
+    min-height: 0;
 }
+.layout-btn-label {
+    font-size: 0.6rem;
+    color: var(--text-muted);
+    padding: 2px 0 3px;
+    line-height: 1;
+    flex-shrink: 0;
+    letter-spacing: 0.02em;
+}
+.layout-btn:hover .layout-btn-label { color: var(--text-primary); }
+.layout-btn.active .layout-btn-label { color: var(--primary); }
 .layout-slot-preview {
     background: rgba(255,255,255,0.15);
     border-radius: 1px;
@@ -817,6 +846,19 @@ html, body {
 .toast-icon { flex-shrink: 0; }
 .toast-content { flex: 1; }
 .toast-message { font-size: 0.8rem; color: #c5cae9; }
+.toast-action-btn {
+    background: rgba(255,255,255,0.12);
+    border: 1px solid rgba(255,255,255,0.2);
+    border-radius: 4px;
+    color: #fff;
+    font-size: 0.75rem;
+    font-weight: 600;
+    padding: 3px 10px;
+    cursor: pointer;
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+.toast-action-btn:hover { background: rgba(255,255,255,0.2); }
 @keyframes slideInRight {
     from { opacity: 0; transform: translateX(60px); }
     to   { opacity: 1; transform: translateX(0); }

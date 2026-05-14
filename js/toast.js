@@ -45,6 +45,32 @@ class Toast {
     info(message, duration) {
         this.show(message, 'info', duration);
     }
+
+    withAction(message, type = 'success', actionLabel, actionFn, duration = 7000) {
+        const toastEl = document.createElement('div');
+        toastEl.className = `toast ${type}`;
+        const icons = {
+            success: '<svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M16.25 5L7.5 13.75L3.75 10" stroke="#2ed573" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+            info: '<svg width="20" height="20" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="8" stroke="#1e90ff" stroke-width="2"/><path d="M10 10V14M10 7H10.01" stroke="#1e90ff" stroke-width="2" stroke-linecap="round"/></svg>'
+        };
+        toastEl.innerHTML = `
+            <div class="toast-icon">${icons[type] || icons.info}</div>
+            <div class="toast-content">
+                <div class="toast-message">${message}</div>
+            </div>
+            <button class="toast-action-btn">${actionLabel}</button>
+        `;
+        toastEl.querySelector('.toast-action-btn').addEventListener('click', () => {
+            actionFn();
+            toastEl.remove();
+        });
+        this.container.appendChild(toastEl);
+        setTimeout(() => {
+            if (!toastEl.parentNode) return;
+            toastEl.style.animation = 'slideInRight 250ms ease reverse';
+            setTimeout(() => toastEl.remove(), 250);
+        }, duration);
+    }
 }
 
 // 建立全域 toast 實例

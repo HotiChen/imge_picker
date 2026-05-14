@@ -141,7 +141,11 @@ class BookEditor {
         this.cropSlotIdx = slotIdx;
         this.renderCurrentPage(slotIdx);
         const bar = document.getElementById('cropModeBar');
-        if (bar) bar.style.display = 'flex';
+        if (bar) { bar.style.display = 'flex'; bar.classList.add('bar-flash'); setTimeout(() => bar.classList.remove('bar-flash'), 600); }
+        if (!localStorage.getItem('book_editor_crop_hinted')) {
+            localStorage.setItem('book_editor_crop_hinted', '1');
+            toast.info('裁切模式：拖移平移 · 滾輪縮放 · ESC 完成');
+        }
     }
 
     exitCropMode() {
@@ -334,15 +338,14 @@ class BookEditor {
     }
 
     renderPhotoStrip() {
-        const strip = document.getElementById('photoStrip');
         const grid = document.getElementById('photoStripGrid');
         const countEl = document.getElementById('photoStripCount');
         if (!grid) return;
         if (this.libraryPhotos.length === 0) {
-            if (strip) strip.style.display = 'none';
+            grid.innerHTML = '<div class="strip-empty-hint">請在右側選擇資料夾以載入照片 →</div>';
+            if (countEl) countEl.textContent = '';
             return;
         }
-        if (strip) strip.style.display = 'flex';
         if (countEl) countEl.textContent = `${this.libraryPhotos.length} 張`;
         grid.innerHTML = this.libraryPhotos.map(photo => {
             const stars = photo.rating > 0 ? `<div class="strip-photo-rating">${'★'.repeat(photo.rating)}</div>` : '';
@@ -370,8 +373,7 @@ class BookEditor {
             if (folders.length > 0) {
                 this.libAllPhotos = [];
                 this.libraryPhotos = [];
-                const strip = document.getElementById('photoStrip');
-                if (strip) strip.style.display = 'none';
+                this.renderPhotoStrip();
                 this.renderLibrary(null, folders);
                 toast.success(`找到 ${folders.length} 個資料夾`);
             } else {
@@ -418,8 +420,7 @@ class BookEditor {
             const { folders } = await this._fetchFolderDirect(prev);
             this.libAllPhotos = [];
             this.libraryPhotos = [];
-            const strip = document.getElementById('photoStrip');
-            if (strip) strip.style.display = 'none';
+            this.renderPhotoStrip();
             this._updateLibNav(prev);
             this.renderLibrary(null, folders);
         } catch (e) {
@@ -512,9 +513,11 @@ class BookEditor {
         const list = document.getElementById('pageList');
         if (!list) return;
 
+        const innerPages = this.book.pages.filter(p => p.type === 'inner');
         list.innerHTML = this.book.pages.map((page, idx) => {
             const isActive = idx === this.currentPageIndex;
-            const label = { cover: '封面', 'back-cover': '封底' }[page.type] || `第 ${idx} 頁`;
+            const innerNum = page.type === 'inner' ? innerPages.indexOf(page) + 1 : 0;
+            const label = { cover: '封面', 'back-cover': '封底' }[page.type] || `第 ${innerNum} 頁`;
             return `
                 <div class="page-thumb ${isActive ? 'active' : ''} ${page.locked ? 'locked' : ''}" data-page-idx="${idx}">
                     <div class="page-thumb-preview">${renderPageThumbnailHTML(page)}</div>
@@ -845,6 +848,8 @@ class BookEditor {
         if (btn) btn.disabled = true;
         toast.info('正在分析照片方向並自動排版...');
 
+        const snapshot = JSON.parse(JSON.stringify(this.book.pages));
+
         try {
             const innerPages = await AutoLayout.run(this.libraryPhotos, style);
 
@@ -858,12 +863,26 @@ class BookEditor {
 
             this.book.pages = [cover, ...innerPages, back];
             this.currentPageIndex = 0;
+            this._autoLayoutSnapshot = snapshot;
             this.renderAll();
             this.saveToStorage();
-            toast.success(`自動排版完成！共 ${this.book.pages.length} 頁（含封面封底）`);
+            toast.withAction(
+                `自動排版完成！共 ${this.book.pages.length} 頁`,
+                'success', '復原', () => this._undoAutoLayout()
+            );
         } finally {
             if (btn) btn.disabled = false;
         }
+    }
+
+    _undoAutoLayout() {
+        if (!this._autoLayoutSnapshot) return;
+        this.book.pages = this._autoLayoutSnapshot;
+        this._autoLayoutSnapshot = null;
+        this.currentPageIndex = 0;
+        this.renderAll();
+        this.saveToStorage();
+        toast.info('已復原自動排版');
     }
 
     // ─── 儲存 / 讀取 ─────────────────────────

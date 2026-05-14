@@ -30,8 +30,7 @@
             <button id="runAutoLayoutTopBtn" class="btn btn-secondary" title="自動排版（風格在右側面板選取）">✨ 自動排版</button>
             <button id="slotEditBtn" class="btn btn-secondary" title="拖移格子改變位置；拖角落調整大小；ESC 退出">⊡ 調整版面</button>
             <button id="guideToggleBtn" class="btn btn-secondary" title="顯示出血／安全邊距／書脊參考線">⊞ 參考線</button>
-            <button id="shortcutsBtn" class="btn btn-icon" title="鍵盤快速鍵">?</button>
-            <button id="clearBookBtn" class="btn btn-danger" title="清除相本">🗑 重置</button>
+            <button id="shortcutsBtn" class="btn btn-icon" title="使用導覽 / 功能說明">?</button>
             <button id="shareBtn" class="btn btn-secondary">☁ 分享</button>
             <button id="exportBtn" class="btn btn-primary">⬇ 匯出 JPG</button>
         </div>
@@ -81,6 +80,9 @@
             </div>
 
             <div id="pageList" class="page-list-area"></div>
+            <div style="padding:8px 12px;border-top:1px solid var(--border);flex-shrink:0;">
+                <button id="clearBookBtn" class="btn btn-danger" style="width:100%;font-size:0.75rem;padding:5px;" title="清除所有頁面，重新開始">🗑 重置相本</button>
+            </div>
         </aside>
 
         <!-- Center Panel: Page Preview -->
@@ -97,7 +99,7 @@
             <div id="pagePreviewArea" class="page-preview-area"></div>
 
             <!-- Photo strip: photos from selected folder -->
-            <div id="photoStrip" class="photo-strip" style="display:none;">
+            <div id="photoStrip" class="photo-strip">
                 <div class="photo-strip-header">
                     <span style="font-size:0.68rem;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--text-muted);">照片</span>
                     <span style="font-size:0.65rem;color:var(--text-muted);" title="星數評分請在主選圖頁面設定">⭐ 在選圖頁評分</span>
@@ -125,10 +127,11 @@
             <!-- Photo Library -->
             <div class="panel-section">
                 <div class="panel-title">照片素材庫</div>
-                <div class="lib-folder-row" style="margin-bottom:6px;">
-                    <input type="text" id="libFolderInput" placeholder="資料夾路徑">
+                <div class="lib-folder-row" style="margin-bottom:4px;">
+                    <input type="text" id="libFolderInput" placeholder="例：clients/wedding-2024">
                     <button id="libLoadBtn" class="btn btn-secondary" style="padding:4px 10px;white-space:nowrap;">載入</button>
                 </div>
+                <p style="font-size:0.65rem;color:var(--text-muted);margin-bottom:6px;line-height:1.5;">輸入 R2 資料夾路徑後點「載入」，再點資料夾展開照片。</p>
                 <div id="libNavRow" style="display:none;align-items:center;gap:6px;margin-bottom:6px;">
                     <button id="libBackBtn" class="btn btn-secondary" style="padding:2px 8px;font-size:0.72rem;">← 返回</button>
                     <span id="libCurrentPath" style="font-size:0.7rem;color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"></span>
@@ -147,16 +150,18 @@
                 </div>
                 <div class="layout-grid" id="layoutGrid">
                     <!-- Full Bleed -->
-                    <button class="layout-btn" data-layout="full-bleed" title="全出血">
+                    <button class="layout-btn" data-layout="full-bleed" title="全出血：照片填滿整頁">
                         <div class="layout-btn-preview">
                             <div class="layout-slot-preview" style="width:100%;height:100%;"></div>
                         </div>
+                        <span class="layout-btn-label">全版</span>
                     </button>
                     <!-- 1-up -->
-                    <button class="layout-btn" data-layout="1-up" title="單張留白">
+                    <button class="layout-btn" data-layout="1-up" title="單張留白：照片置中留邊框">
                         <div class="layout-btn-preview" style="padding:10%;">
                             <div class="layout-slot-preview" style="width:100%;height:100%;"></div>
                         </div>
+                        <span class="layout-btn-label">留白</span>
                     </button>
                     <!-- 2-up-h -->
                     <button class="layout-btn" data-layout="2-up-h" title="左右兩張">
@@ -164,6 +169,7 @@
                             <div class="layout-slot-preview" style="width:calc(50% - 1px);height:100%;"></div>
                             <div class="layout-slot-preview" style="width:calc(50% - 1px);height:100%;"></div>
                         </div>
+                        <span class="layout-btn-label">左右</span>
                     </button>
                     <!-- 2-up-v -->
                     <button class="layout-btn" data-layout="2-up-v" title="上下兩張">
@@ -171,9 +177,10 @@
                             <div class="layout-slot-preview" style="width:100%;height:calc(50% - 1px);"></div>
                             <div class="layout-slot-preview" style="width:100%;height:calc(50% - 1px);"></div>
                         </div>
+                        <span class="layout-btn-label">上下</span>
                     </button>
                     <!-- 3-up -->
-                    <button class="layout-btn" data-layout="3-up" title="三格">
+                    <button class="layout-btn" data-layout="3-up" title="三格：一大兩小">
                         <div class="layout-btn-preview" style="gap:2px;">
                             <div class="layout-slot-preview" style="width:56%;height:100%;"></div>
                             <div style="width:calc(44% - 2px);height:100%;display:flex;flex-direction:column;gap:2px;">
@@ -181,19 +188,22 @@
                                 <div class="layout-slot-preview" style="width:100%;height:calc(50% - 1px);"></div>
                             </div>
                         </div>
+                        <span class="layout-btn-label">三格</span>
                     </button>
                     <!-- 4-grid -->
-                    <button class="layout-btn" data-layout="4-grid" title="四格">
+                    <button class="layout-btn" data-layout="4-grid" title="四格均等">
                         <div class="layout-btn-preview" style="flex-wrap:wrap;gap:2px;">
                             <div class="layout-slot-preview" style="width:calc(50% - 1px);height:calc(50% - 1px);"></div>
                             <div class="layout-slot-preview" style="width:calc(50% - 1px);height:calc(50% - 1px);"></div>
                             <div class="layout-slot-preview" style="width:calc(50% - 1px);height:calc(50% - 1px);"></div>
                             <div class="layout-slot-preview" style="width:calc(50% - 1px);height:calc(50% - 1px);"></div>
                         </div>
+                        <span class="layout-btn-label">四格</span>
                     </button>
                     <!-- blank -->
-                    <button class="layout-btn" data-layout="blank" title="空白頁">
+                    <button class="layout-btn" data-layout="blank" title="空白頁（無照片）">
                         <div class="layout-btn-preview" style="border:1px dashed rgba(255,255,255,0.1);border-radius:2px;"></div>
+                        <span class="layout-btn-label">空白</span>
                     </button>
                 </div>
                 <div style="display:flex;align-items:center;gap:8px;margin-top:10px;">
