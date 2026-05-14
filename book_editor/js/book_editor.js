@@ -39,6 +39,9 @@ class BookEditor {
         this.bindEvents();
         this.renderAll();
         this.checkCloudStatus();
+        if (!localStorage.getItem('book_editor_tour_done')) {
+            setTimeout(() => TourGuide.start(), 800);
+        }
     }
 
     // ─── 頁面管理 ─────────────────────────────
@@ -1064,7 +1067,7 @@ class BookEditor {
         // 自動排版
         this._on('runAutoLayoutBtn', 'click', () => this.runAutoLayout());
         this._on('runAutoLayoutTopBtn', 'click', () => this.runAutoLayout());
-        this._on('shortcutsBtn', 'click', () => toast.info('快速鍵：← → 翻頁 · ESC 退出模式 · Delete 清除格子照片 · 滾輪 縮放裁切 · ? 顯示此提示'));
+        this._on('shortcutsBtn', 'click', () => TourGuide.start());
 
         // 參考線 toggle
         this._on('guideToggleBtn', 'click', () => {
