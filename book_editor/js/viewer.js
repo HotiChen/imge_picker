@@ -65,7 +65,8 @@ const Viewer = {
         const counter = document.getElementById('pageCounter');
         if (counter) {
             const labels = { cover: '封面', 'back-cover': '封底' };
-            const label = labels[page.type] || `第 ${this.currentPageIndex} 頁`;
+            const innerNum = this.book.pages.slice(0, this.currentPageIndex + 1).filter(p => p.type === 'inner').length;
+            const label = labels[page.type] || `第 ${innerNum} 頁`;
             const lockMark = page.locked ? ' 🔒' : ' 🔓';
             counter.textContent = `${label}${lockMark}（${this.currentPageIndex + 1} / ${this.book.pages.length}）`;
         }

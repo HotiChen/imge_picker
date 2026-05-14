@@ -681,6 +681,7 @@ class App {
         this.filteredPhotos.sort((a, b) => {
             if (this.filters.sortBy === 'rating') return b.rating - a.rating;
             if (this.filters.sortBy === 'name') return a.name.localeCompare(b.name);
+            if (this.filters.sortBy === 'date') return new Date(b.uploaded) - new Date(a.uploaded);
             return 0;
         });
     }

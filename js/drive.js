@@ -140,7 +140,7 @@ class DriveManager {
 
     // 儲存到 Google GAS (整合雲端與 Sheets)
     async saveToGAS(isAutoSave = false) {
-        if (!API_CONFIG.GAS_WEB_APP_URL) {
+        if (!API_CONFIG.GAS_WEB_APP_URL || API_CONFIG.GAS_WEB_APP_URL.startsWith('YOUR_')) {
             if (!isAutoSave) toast.error('未設定 GAS URL');
             return;
         }
@@ -189,7 +189,7 @@ class DriveManager {
 
     // [New] 發送 Email 通知給攝影師 (方案 B)
     async notifyPhotographer(selectedPhotosIds, stats) {
-        if (!API_CONFIG.GAS_WEB_APP_URL) return;
+        if (!API_CONFIG.GAS_WEB_APP_URL || API_CONFIG.GAS_WEB_APP_URL.startsWith('YOUR_')) return;
 
         // 篩選出已經選取或有被打星號的照片
         const finalPhotos = this.photos.filter(p => selectedPhotosIds.has(p.id) || p.rating > 0);
@@ -219,7 +219,7 @@ class DriveManager {
 
     // 偵測雲端是否存在資料
     async checkIfDataExistsOnCloud() {
-        if (!API_CONFIG.GAS_WEB_APP_URL) return false;
+        if (!API_CONFIG.GAS_WEB_APP_URL || API_CONFIG.GAS_WEB_APP_URL.startsWith('YOUR_')) return false;
         try {
             const url = `${API_CONFIG.GAS_WEB_APP_URL}?action=getResults&folderId=${encodeURIComponent(this.currentFolderId)}`;
             const response = await fetch(url);
@@ -235,7 +235,7 @@ class DriveManager {
 
     // 從 Google Sheets 載入資料並套用
     async loadFromGAS() {
-        if (!API_CONFIG.GAS_WEB_APP_URL) return;
+        if (!API_CONFIG.GAS_WEB_APP_URL || API_CONFIG.GAS_WEB_APP_URL.startsWith('YOUR_')) return;
 
         toast.info('正在從 Google Sheets 同步資料...');
         try {

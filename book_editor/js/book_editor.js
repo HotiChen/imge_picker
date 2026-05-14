@@ -39,6 +39,22 @@ class BookEditor {
         this.bindEvents();
         this.renderAll();
         this.checkCloudStatus();
+
+        // Import photos handed over from main picker
+        const importRaw = localStorage.getItem('book_editor_import');
+        if (importRaw) {
+            localStorage.removeItem('book_editor_import');
+            try {
+                const { folderPath } = JSON.parse(importRaw);
+                if (folderPath) {
+                    const input = document.getElementById('libFolderInput');
+                    if (input) input.value = folderPath;
+                    toast.info('正在從選圖頁匯入照片庫...');
+                    setTimeout(() => this.loadLibrary(folderPath), 400);
+                }
+            } catch (e) {}
+        }
+
         if (!localStorage.getItem('book_editor_tour_done')) {
             setTimeout(() => TourGuide.start(), 800);
         }
@@ -477,7 +493,7 @@ class BookEditor {
         if (!grid) return;
 
         if (this.libraryPhotos.length === 0) {
-            grid.innerHTML = '<div class="lib-empty" style="padding:24px;text-align:center;">請先在左側載入照片庫</div>';
+            grid.innerHTML = '<div class="lib-empty" style="padding:24px;text-align:center;">請先在右側素材庫選擇資料夾載入照片</div>';
             return;
         }
 
@@ -1033,7 +1049,7 @@ class BookEditor {
         this._on('libFilterRating', 'change', e => {
             this.libFilter.minRating = parseInt(e.target.value) || 0;
             this._applyLibFilter();
-            this.renderLibrary();
+            // do NOT call renderLibrary() here — it would wipe the folder list
         });
 
         // 頁面導航（頂欄 + 底部）
