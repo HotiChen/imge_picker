@@ -73,35 +73,38 @@ const BookExporter = {
             const img = images[idx];
             if (!img) return;
 
-            const slotX = slotDef.x / 100 * pxW;
-            const slotY = slotDef.y / 100 * pxH;
-            const slotW = slotDef.w / 100 * pxW;
-            const slotH = slotDef.h / 100 * pxH;
-            const crop = page.slots[idx]?.crop || { x: 0, y: 0, scale: 1 };
+            const slot = page.slots[idx] || {};
+            const sx = slot.override?.x ?? slotDef.x;
+            const sy = slot.override?.y ?? slotDef.y;
+            const sw = slot.override?.w ?? slotDef.w;
+            const sh = slot.override?.h ?? slotDef.h;
+
+            const slotX = sx / 100 * pxW;
+            const slotY = sy / 100 * pxH;
+            const slotW = sw / 100 * pxW;
+            const slotH = sh / 100 * pxH;
+            const crop = slot.crop || { x: 0, y: 0, scale: 1 };
 
             ctx.save();
             ctx.beginPath();
             ctx.rect(slotX, slotY, slotW, slotH);
             ctx.clip();
 
-            // 計算 cover 尺寸
-            const imgAspect = img.naturalWidth / img.naturalHeight;
-            const slotAspect = slotW / slotH;
-            const scale = crop.scale || 1;
+            // 對應 object-position 的 canvas 裁切公式
+            const cropScale = crop.scale || 1;
+            const wW = cropScale * slotW;
+            const wH = cropScale * slotH;
+            const s = Math.max(wW / img.naturalWidth, wH / img.naturalHeight);
+            const ox = img.naturalWidth * s - wW;
+            const oy = img.naturalHeight * s - wH;
+            const cx = 0.5 + (crop.x || 0);
+            const cy = 0.5 + (crop.y || 0);
+            const srcX = (ox * cx + (wW - slotW) / 2) / s;
+            const srcY = (oy * cy + (wH - slotH) / 2) / s;
+            const srcW = slotW / s;
+            const srcH = slotH / s;
 
-            let drawW, drawH;
-            if (imgAspect > slotAspect) {
-                drawH = slotH * scale;
-                drawW = drawH * imgAspect;
-            } else {
-                drawW = slotW * scale;
-                drawH = drawW / imgAspect;
-            }
-
-            const drawX = slotX + (slotW - drawW) / 2 + (crop.x || 0) * slotW;
-            const drawY = slotY + (slotH - drawH) / 2 + (crop.y || 0) * slotH;
-
-            ctx.drawImage(img, drawX, drawY, drawW, drawH);
+            ctx.drawImage(img, srcX, srcY, srcW, srcH, slotX, slotY, slotW, slotH);
             ctx.restore();
         });
 
