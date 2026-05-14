@@ -131,6 +131,26 @@ export default {
       return new Response('Not found', { status: 404, headers: corsHeaders });
     }
 
+    // ─── 素材上傳 (PUT /_assets/...) ─────────────────────────────
+    if (request.method === 'PUT' && pathParts[0] === '_assets') {
+      if (env.PHOTOGRAPHER_TOKEN) {
+        const auth = request.headers.get('Authorization') || '';
+        const token = auth.replace(/^Bearer\s+/i, '').trim();
+        if (token !== env.PHOTOGRAPHER_TOKEN) {
+          return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+            status: 401,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+          });
+        }
+      }
+      const key = decodeURIComponent(url.pathname.slice(1));
+      const contentType = request.headers.get('Content-Type') || 'image/jpeg';
+      await env.imagepicker.put(key, request.body, { httpMetadata: { contentType } });
+      return new Response(JSON.stringify({ ok: true, key }), {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+      });
+    }
+
     // ─── 列出檔案清單 (?list=路徑) ───────────────────────────────
     const listPrefix = params.get("list");
     if (listPrefix !== null) {

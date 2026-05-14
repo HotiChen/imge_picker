@@ -7,6 +7,9 @@ const BookExporter = {
             return;
         }
 
+        // Wait for all fonts to be ready before canvas rendering
+        await document.fonts.ready;
+
         toast.info(`正在渲染 ${book.pages.length} 頁，請稍候...`);
 
         const zip = new JSZip();
@@ -51,16 +54,45 @@ const BookExporter = {
         canvas.height = pxH;
         const ctx = canvas.getContext('2d');
 
-        // 背景
+        // ① 背景色
         ctx.fillStyle = page.bg || '#ffffff';
         ctx.fillRect(0, 0, pxW, pxH);
 
+        // ② 底圖
+        if (page.bgImage?.photoId) {
+            const bgImg = await this._loadImage(`${CONFIG.WORKER_URL}/${page.bgImage.photoId}`).catch(() => null);
+            if (bgImg) {
+                const opacity = page.bgImage.opacity ?? 1;
+                const fit = page.bgImage.fit || 'cover';
+                ctx.save();
+                ctx.globalAlpha = opacity;
+                if (fit === 'repeat') {
+                    const pattern = ctx.createPattern(bgImg, 'repeat');
+                    if (pattern) { ctx.fillStyle = pattern; ctx.fillRect(0, 0, pxW, pxH); }
+                } else if (fit === 'contain') {
+                    const s = Math.min(pxW / bgImg.naturalWidth, pxH / bgImg.naturalHeight);
+                    const dw = bgImg.naturalWidth * s, dh = bgImg.naturalHeight * s;
+                    ctx.drawImage(bgImg, (pxW - dw) / 2, (pxH - dh) / 2, dw, dh);
+                } else { // cover
+                    const s = Math.max(pxW / bgImg.naturalWidth, pxH / bgImg.naturalHeight);
+                    const dw = bgImg.naturalWidth * s, dh = bgImg.naturalHeight * s;
+                    ctx.drawImage(bgImg, (pxW - dw) / 2, (pxH - dh) / 2, dw, dh);
+                }
+                ctx.restore();
+            }
+        }
+
+        // ③ 文字層（照片下方）
+        this._drawTextLayers(ctx, (page.textLayers || []).filter(t => t.layer === 'below'), pxW, pxH);
+
         const layout = LAYOUTS[page.layout];
         if (!layout || layout.slots.length === 0) {
+            // ⑤ 文字層（照片上方）even on blank pages
+            this._drawTextLayers(ctx, (page.textLayers || []).filter(t => t.layer !== 'below'), pxW, pxH);
             return canvas.toDataURL('image/jpeg', 0.95);
         }
 
-        // 預載所有照片
+        // ④ 預載所有照片
         const images = await Promise.all(
             page.slots.map(slot => {
                 if (!slot?.photoId) return Promise.resolve(null);
@@ -68,7 +100,7 @@ const BookExporter = {
             })
         );
 
-        // 繪製每個 slot
+        // ④ 繪製每個 slot
         layout.slots.forEach((slotDef, idx) => {
             const img = images[idx];
             if (!img) return;
@@ -91,7 +123,6 @@ const BookExporter = {
             ctx.clip();
 
             if (slot.fit === 'contain') {
-                // Fit longest edge — letterbox/pillarbox, no cropping
                 const s = Math.min(slotW / img.naturalWidth, slotH / img.naturalHeight);
                 const drawW = img.naturalWidth * s;
                 const drawH = img.naturalHeight * s;
@@ -99,7 +130,6 @@ const BookExporter = {
                 const drawY = slotY + (slotH - drawH) / 2;
                 ctx.drawImage(img, 0, 0, img.naturalWidth, img.naturalHeight, drawX, drawY, drawW, drawH);
             } else {
-                // Cover — crop to fill slot (object-position formula)
                 const cropScale = crop.scale || 1;
                 const wW = cropScale * slotW;
                 const wH = cropScale * slotH;
@@ -117,7 +147,44 @@ const BookExporter = {
             ctx.restore();
         });
 
+        // ⑤ 文字層（照片上方）
+        this._drawTextLayers(ctx, (page.textLayers || []).filter(t => t.layer !== 'below'), pxW, pxH);
+
         return canvas.toDataURL('image/jpeg', 0.95);
+    },
+
+    _drawTextLayers(ctx, layers, pxW, pxH) {
+        for (const t of layers) {
+            if (!t.text?.trim()) continue;
+            const fontSize = Math.max(8, Math.round(t.size / 100 * pxW));
+            const fw = t.bold ? 'bold' : 'normal';
+            const fs = t.italic ? 'italic' : 'normal';
+            ctx.save();
+            ctx.font = `${fs} ${fw} ${fontSize}px ${t.font}`.replace(/\s+/g, ' ').trim();
+            ctx.fillStyle = t.color || '#ffffff';
+            ctx.textAlign = t.align || 'center';
+            ctx.textBaseline = 'middle';
+            ctx.shadowColor = 'rgba(0,0,0,0.55)';
+            ctx.shadowBlur = Math.max(4, fontSize * 0.06);
+            ctx.shadowOffsetX = 0;
+            ctx.shadowOffsetY = Math.max(1, fontSize * 0.02);
+
+            const boxW = t.w / 100 * pxW;
+            const centerX = t.x / 100 * pxW;
+            let textX;
+            if (t.align === 'center') textX = centerX;
+            else if (t.align === 'left') textX = centerX - boxW / 2;
+            else textX = centerX + boxW / 2; // right
+
+            const lines = t.text.split('\n');
+            const lineH = fontSize * 1.35;
+            const totalH = lines.length * lineH;
+            const startY = t.y / 100 * pxH - totalH / 2 + lineH / 2;
+            lines.forEach((line, li) => {
+                ctx.fillText(line, textX, startY + li * lineH);
+            });
+            ctx.restore();
+        }
     },
 
     _loadImage(src) {

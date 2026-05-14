@@ -16,6 +16,10 @@ class BookEditor {
         this.slotPosDragState = null;
         this._slotPosMoveHandler = null;
         this._slotPosUpHandler = null;
+        this.selectedTextLayerId = null;
+        this._textDragState = null;
+        this._textMoveHandler = null;
+        this._textUpHandler = null;
         this.libraryPhotos = [];
         this.libAllPhotos = [];
         this.libFolderStack = [];
@@ -72,6 +76,8 @@ class BookEditor {
             layout,
             slots: layoutDef.slots.map(() => ({ photoId: null, crop: { x: 0, y: 0, scale: 1 } })),
             bg: '#ffffff',
+            bgImage: null,
+            textLayers: [],
             locked: false
         };
 
@@ -508,6 +514,292 @@ class BookEditor {
         return ids;
     }
 
+    // ─── 底圖功能 ─────────────────────────────
+
+    setBgImage(photoId) {
+        const page = this.book.pages[this.currentPageIndex];
+        if (!page) return;
+        if (!page.bgImage) page.bgImage = { photoId: null, fit: 'cover', opacity: 1 };
+        page.bgImage.photoId = photoId;
+        document.getElementById('bgPickerModal')?.classList.remove('active');
+        this.renderCurrentPage(this.cropMode ? this.cropSlotIdx : -1);
+        this.renderPageList();
+        this.updateBgImageUI();
+        this.saveToStorage();
+    }
+
+    setBgImageOpacity(opacity) {
+        const page = this.book.pages[this.currentPageIndex];
+        if (!page) return;
+        if (!page.bgImage) page.bgImage = { photoId: null, fit: 'cover', opacity: 1 };
+        page.bgImage.opacity = opacity;
+        // direct DOM update — avoid full re-render while dragging
+        const bgEl = document.querySelector('.page-bgimage');
+        if (bgEl) bgEl.style.opacity = opacity;
+        this.saveToStorage();
+    }
+
+    setBgImageFit(fit) {
+        const page = this.book.pages[this.currentPageIndex];
+        if (!page?.bgImage?.photoId) return;
+        page.bgImage.fit = fit;
+        this.renderCurrentPage(this.cropMode ? this.cropSlotIdx : -1);
+        this.updateBgFitButtons(fit);
+        this.saveToStorage();
+    }
+
+    removeBgImage() {
+        const page = this.book.pages[this.currentPageIndex];
+        if (!page) return;
+        page.bgImage = null;
+        this.renderCurrentPage(this.cropMode ? this.cropSlotIdx : -1);
+        this.renderPageList();
+        this.updateBgImageUI();
+        this.saveToStorage();
+    }
+
+    updateBgImageUI() {
+        const page = this.book.pages[this.currentPageIndex];
+        const bgImage = page?.bgImage;
+        const preview = document.getElementById('bgImagePreview');
+        const slider = document.getElementById('bgOpacitySlider');
+        const sliderVal = document.getElementById('bgOpacityVal');
+
+        if (!bgImage?.photoId) {
+            if (preview) preview.innerHTML = '<span style="font-size:0.7rem;color:var(--text-muted);">未設定底圖</span>';
+            if (slider) slider.value = 100;
+            if (sliderVal) sliderVal.textContent = '100%';
+            this.updateBgFitButtons('cover');
+            return;
+        }
+
+        const src = `https://images.weserv.nl/?url=${CONFIG.WORKER_URL.replace(/^https?:\/\//, '')}/${bgImage.photoId}&w=200&q=60`;
+        if (preview) preview.innerHTML = `<img src="${src}" style="width:100%;height:100%;object-fit:cover;display:block;">`;
+        const opPct = Math.round((bgImage.opacity ?? 1) * 100);
+        if (slider) slider.value = opPct;
+        if (sliderVal) sliderVal.textContent = `${opPct}%`;
+        this.updateBgFitButtons(bgImage.fit || 'cover');
+    }
+
+    updateBgFitButtons(activeFit) {
+        document.querySelectorAll('.bg-fit-btn').forEach(btn => {
+            const on = btn.dataset.fit === activeFit;
+            btn.style.borderColor = on ? 'var(--primary)' : '';
+            btn.style.color = on ? 'var(--primary)' : '';
+        });
+    }
+
+    async openBgPicker(tab) {
+        this._bgPickerTab = tab || 'assets';
+        const modal = document.getElementById('bgPickerModal');
+        if (!modal) return;
+        modal.classList.add('active');
+        modal.querySelectorAll('.bg-picker-tab').forEach(t => {
+            const active = t.dataset.tab === this._bgPickerTab;
+            t.style.color = active ? 'var(--primary)' : 'var(--text-muted)';
+            t.style.borderBottomColor = active ? 'var(--primary)' : 'transparent';
+        });
+        await this._loadBgPickerGrid(this._bgPickerTab);
+    }
+
+    async _loadBgPickerGrid(tab) {
+        const grid = document.getElementById('bgPickerGrid');
+        if (!grid) return;
+        grid.innerHTML = '<div style="color:var(--text-muted);font-size:0.8rem;padding:24px;text-align:center;grid-column:1/-1;">載入中...</div>';
+
+        let photos = [];
+        if (tab === 'assets') {
+            try { ({ photos } = await this._fetchFolderDirect('_assets/backgrounds/')); } catch (e) {}
+        } else {
+            photos = this.libraryPhotos;
+        }
+
+        if (photos.length === 0) {
+            const msg = tab === 'assets' ? '素材庫無圖片。請先上傳背景圖 (點右側 ⬆ 按鈕)。' : '請先在右側載入照片庫';
+            grid.innerHTML = `<div style="color:var(--text-muted);font-size:0.8rem;padding:24px;text-align:center;grid-column:1/-1;">${msg}</div>`;
+            return;
+        }
+
+        grid.innerHTML = photos.map(p => {
+            const src = `https://images.weserv.nl/?url=${CONFIG.WORKER_URL.replace(/^https?:\/\//, '')}/${p.id}&w=200&q=70`;
+            return `<div class="modal-photo bg-picker-photo" data-photo-id="${p.id}" title="${p.name}"><img src="${src}" loading="lazy"></div>`;
+        }).join('');
+        grid.querySelectorAll('.bg-picker-photo').forEach(el => {
+            el.addEventListener('click', () => this.setBgImage(el.dataset.photoId));
+        });
+    }
+
+    async uploadBgAsset(file) {
+        if (!file) return;
+        const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+        const key = `_assets/backgrounds/${Date.now()}_${safeName}`;
+        try {
+            const headers = { 'Content-Type': file.type || 'image/jpeg' };
+            if (CONFIG.PHOTOGRAPHER_TOKEN) headers['Authorization'] = `Bearer ${CONFIG.PHOTOGRAPHER_TOKEN}`;
+            const r = await fetch(`${CONFIG.WORKER_URL}/${key}`, { method: 'PUT', headers, body: file });
+            if (!r.ok) throw new Error(`上傳失敗 (${r.status})`);
+            toast.success('底圖已上傳！');
+            this.setBgImage(key);
+        } catch (e) {
+            toast.error(e.message || '上傳失敗');
+        }
+    }
+
+    // ─── 文字層功能 ───────────────────────────
+
+    addTextLayer() {
+        const page = this.book.pages[this.currentPageIndex];
+        if (!page) return;
+        if (!page.textLayers) page.textLayers = [];
+        const layer = {
+            id: `txt-${Date.now()}`,
+            text: '文字',
+            font: '"Playfair Display", serif',
+            size: 5,
+            color: '#ffffff',
+            bold: false,
+            italic: false,
+            align: 'center',
+            x: 50, y: 50, w: 80,
+            layer: 'above'
+        };
+        page.textLayers.push(layer);
+        this.selectedTextLayerId = layer.id;
+        this.renderCurrentPage(this.cropMode ? this.cropSlotIdx : -1);
+        this.renderPageList();
+        this.renderTextLayerPanel();
+        this.saveToStorage();
+    }
+
+    deleteTextLayer(id) {
+        const page = this.book.pages[this.currentPageIndex];
+        if (!page?.textLayers) return;
+        page.textLayers = page.textLayers.filter(t => t.id !== id);
+        if (this.selectedTextLayerId === id) this.selectedTextLayerId = null;
+        this.renderCurrentPage(this.cropMode ? this.cropSlotIdx : -1);
+        this.renderPageList();
+        this.renderTextLayerPanel();
+        this.saveToStorage();
+    }
+
+    selectTextLayer(id) {
+        this.selectedTextLayerId = id;
+        this.renderTextLayerPanel();
+        document.querySelectorAll('.page-text-layer').forEach(el => {
+            el.classList.toggle('text-layer-selected', el.dataset.textLayerId === id);
+        });
+    }
+
+    updateSelectedTextLayer(props) {
+        const page = this.book.pages[this.currentPageIndex];
+        const layer = page?.textLayers?.find(t => t.id === this.selectedTextLayerId);
+        if (!layer) return;
+        Object.assign(layer, props);
+        this.renderCurrentPage(this.cropMode ? this.cropSlotIdx : -1);
+        this.renderTextLayerPanel();
+        this.saveToStorage();
+    }
+
+    renderTextLayerPanel() {
+        const page = this.book.pages[this.currentPageIndex];
+        const layers = page?.textLayers || [];
+        const list = document.getElementById('textLayerList');
+        if (!list) return;
+
+        if (layers.length === 0) {
+            list.innerHTML = '<div style="font-size:0.72rem;color:var(--text-muted);padding:2px 0;">尚無文字層</div>';
+        } else {
+            list.innerHTML = layers.map(t => {
+                const sel = t.id === this.selectedTextLayerId;
+                return `<div class="text-layer-item${sel ? ' selected' : ''}" data-layer-id="${t.id}">
+                    <span class="text-layer-preview">${t.text || '(空白)'}</span>
+                    <span class="text-layer-tag">${t.layer === 'below' ? '照片下↓' : '照片上↑'}</span>
+                    <button class="text-layer-del-btn" data-layer-id="${t.id}" title="刪除">×</button>
+                </div>`;
+            }).join('');
+            list.querySelectorAll('.text-layer-item').forEach(el => {
+                el.addEventListener('click', e => {
+                    if (e.target.classList.contains('text-layer-del-btn')) return;
+                    this.selectTextLayer(el.dataset.layerId);
+                });
+            });
+            list.querySelectorAll('.text-layer-del-btn').forEach(el => {
+                el.addEventListener('click', e => { e.stopPropagation(); this.deleteTextLayer(el.dataset.layerId); });
+            });
+        }
+
+        const editor = document.getElementById('textLayerEditor');
+        if (!editor) return;
+        const layer = layers.find(t => t.id === this.selectedTextLayerId);
+        if (!layer) { editor.style.display = 'none'; return; }
+        editor.style.display = '';
+
+        const textInput = document.getElementById('textLayerInput');
+        if (textInput && document.activeElement !== textInput) textInput.value = layer.text;
+
+        const fontSel = document.getElementById('textLayerFont');
+        if (fontSel) fontSel.value = layer.font;
+
+        const colorInput = document.getElementById('textLayerColor');
+        if (colorInput) colorInput.value = layer.color;
+
+        const sizeSlider = document.getElementById('textLayerSize');
+        const sizeVal = document.getElementById('textLayerSizeVal');
+        if (sizeSlider) sizeSlider.value = layer.size;
+        if (sizeVal) sizeVal.textContent = `${layer.size}%`;
+
+        const setActive = (id, on) => {
+            const el = document.getElementById(id);
+            if (el) { el.style.borderColor = on ? 'var(--primary)' : ''; el.style.color = on ? 'var(--primary)' : ''; }
+        };
+        setActive('textLayerBoldBtn', layer.bold);
+        setActive('textLayerItalicBtn', layer.italic);
+        setActive('textLayerAlignLeftBtn', layer.align === 'left');
+        setActive('textLayerAlignCenterBtn', layer.align === 'center');
+        setActive('textLayerAlignRightBtn', layer.align === 'right');
+        setActive('textLayerLayerAboveBtn', layer.layer !== 'below');
+        setActive('textLayerLayerBelowBtn', layer.layer === 'below');
+    }
+
+    _bindTextLayerDrag() {
+        const page = this.book.pages[this.currentPageIndex];
+        if (!page?.textLayers?.length) return;
+        const area = document.getElementById('pagePreviewArea');
+        const canvas = area?.querySelector('.page-canvas');
+        if (!canvas) return;
+
+        document.querySelectorAll('.page-text-layer').forEach(el => {
+            const layerId = el.dataset.textLayerId;
+            el.addEventListener('mousedown', e => {
+                if (e.button !== 0) return;
+                e.preventDefault();
+                e.stopPropagation();
+                this.selectTextLayer(layerId);
+                const cr = canvas.getBoundingClientRect();
+                const layer = page.textLayers?.find(t => t.id === layerId);
+                if (!layer) return;
+                this._textDragState = { id: layerId, startX: e.clientX, startY: e.clientY, cW: cr.width, cH: cr.height, origX: layer.x, origY: layer.y };
+            });
+        });
+
+        this._textMoveHandler = e => {
+            if (!this._textDragState) return;
+            const d = this._textDragState;
+            const dx = (e.clientX - d.startX) / d.cW * 100;
+            const dy = (e.clientY - d.startY) / d.cH * 100;
+            const pg = this.book.pages[this.currentPageIndex];
+            const layer = pg?.textLayers?.find(t => t.id === d.id);
+            if (!layer) return;
+            layer.x = Math.max(5, Math.min(95, d.origX + dx));
+            layer.y = Math.max(3, Math.min(97, d.origY + dy));
+            const el = document.querySelector(`[data-text-layer-id="${d.id}"]`);
+            if (el) { el.style.left = layer.x + '%'; el.style.top = layer.y + '%'; }
+        };
+        this._textUpHandler = () => { if (this._textDragState) this.saveToStorage(); this._textDragState = null; };
+        document.addEventListener('mousemove', this._textMoveHandler);
+        document.addEventListener('mouseup', this._textUpHandler);
+    }
+
     // ─── 照片選取 Modal ──────────────────────
 
     openPhotoModal(slotIdx) {
@@ -551,6 +843,8 @@ class BookEditor {
         this.renderCurrentPage();
         this.updateLayoutSelector();
         this.updatePageNav();
+        this.updateBgImageUI();
+        this.renderTextLayerPanel();
     }
 
     renderPageList() {
@@ -580,6 +874,7 @@ class BookEditor {
                 if (e.target.classList.contains('page-delete-btn')) return;
                 if (e.target.classList.contains('page-lock-btn')) return;
                 this.exitCropMode();
+                this.selectedTextLayerId = null;
                 this.currentPageIndex = idx;
                 this.renderAll();
             });
@@ -689,6 +984,7 @@ class BookEditor {
         if (bgInput) bgInput.value = page.bg || '#ffffff';
 
         this._bindSlotInteractions(displayW, displayH);
+        this._bindTextLayerDrag();
 
         // 攔截整個預覽區的 dragover/drop，防止瀏覽器顯示原生「拖放檔案」UI
         const area2 = document.getElementById('pagePreviewArea');
@@ -737,6 +1033,13 @@ class BookEditor {
             this._slotPosMoveHandler = null;
             this._slotPosUpHandler = null;
         }
+        if (this._textMoveHandler) {
+            document.removeEventListener('mousemove', this._textMoveHandler);
+            document.removeEventListener('mouseup', this._textUpHandler);
+            this._textMoveHandler = null;
+            this._textUpHandler = null;
+        }
+        this._textDragState = null;
 
         if (this.slotEditMode) {
             this._bindSlotPositionEdit();
@@ -1083,10 +1386,10 @@ class BookEditor {
 
         // 頁面導航（頂欄 + 底部）
         const goPrev = () => {
-            if (this.currentPageIndex > 0) { this.exitCropMode(); this.currentPageIndex--; this.renderAll(); }
+            if (this.currentPageIndex > 0) { this.exitCropMode(); this.selectedTextLayerId = null; this.currentPageIndex--; this.renderAll(); }
         };
         const goNext = () => {
-            if (this.currentPageIndex < this.book.pages.length - 1) { this.exitCropMode(); this.currentPageIndex++; this.renderAll(); }
+            if (this.currentPageIndex < this.book.pages.length - 1) { this.exitCropMode(); this.selectedTextLayerId = null; this.currentPageIndex++; this.renderAll(); }
         };
         this._on('prevPageBtn', 'click', goPrev);
         this._on('nextPageBtn', 'click', goNext);
@@ -1106,6 +1409,62 @@ class BookEditor {
         this._on('pageBgColor', 'input', e => applyBg(e.target.value));
         this._on('pageBgWhiteBtn', 'click', () => { applyBg('#ffffff'); const i = document.getElementById('pageBgColor'); if (i) i.value = '#ffffff'; });
         this._on('pageBgBlackBtn', 'click', () => { applyBg('#000000'); const i = document.getElementById('pageBgColor'); if (i) i.value = '#000000'; });
+
+        // ─── 底圖事件 ─────────────────────────────────────────────
+        this._on('bgPickFromAssetsBtn', 'click', () => this.openBgPicker('assets'));
+        this._on('bgPickFromLibBtn', 'click', () => this.openBgPicker('library'));
+        this._on('bgRemoveBtn', 'click', () => this.removeBgImage());
+        this._on('bgUploadBtn', 'click', () => document.getElementById('bgUploadInput')?.click());
+        this._on('bgUploadInput', 'change', e => { const f = e.target.files?.[0]; if (f) { this.uploadBgAsset(f); e.target.value = ''; } });
+        this._on('bgOpacitySlider', 'input', e => {
+            const v = parseInt(e.target.value) / 100;
+            document.getElementById('bgOpacityVal').textContent = `${Math.round(v * 100)}%`;
+            this.setBgImageOpacity(v);
+        });
+        document.querySelectorAll('.bg-fit-btn').forEach(btn => {
+            btn.addEventListener('click', () => this.setBgImageFit(btn.dataset.fit));
+        });
+        // bgPickerModal
+        this._on('closeBgPickerBtn', 'click', () => document.getElementById('bgPickerModal')?.classList.remove('active'));
+        this._on('bgPickerModal', 'click', e => { if (e.target.id === 'bgPickerModal') e.target.classList.remove('active'); });
+        document.querySelectorAll('.bg-picker-tab').forEach(tab => {
+            tab.addEventListener('click', () => {
+                const t = tab.dataset.tab;
+                document.querySelectorAll('.bg-picker-tab').forEach(bt => {
+                    const on = bt.dataset.tab === t;
+                    bt.style.color = on ? 'var(--primary)' : 'var(--text-muted)';
+                    bt.style.borderBottomColor = on ? 'var(--primary)' : 'transparent';
+                });
+                this._bgPickerTab = t;
+                this._loadBgPickerGrid(t);
+            });
+        });
+
+        // ─── 文字層事件 ───────────────────────────────────────────
+        this._on('addTextLayerBtn', 'click', () => this.addTextLayer());
+        this._on('textLayerInput', 'input', e => this.updateSelectedTextLayer({ text: e.target.value }));
+        this._on('textLayerFont', 'change', e => this.updateSelectedTextLayer({ font: e.target.value }));
+        this._on('textLayerColor', 'input', e => this.updateSelectedTextLayer({ color: e.target.value }));
+        this._on('textLayerSize', 'input', e => {
+            const v = parseFloat(e.target.value);
+            document.getElementById('textLayerSizeVal').textContent = `${v}%`;
+            this.updateSelectedTextLayer({ size: v });
+        });
+        this._on('textLayerBoldBtn', 'click', () => {
+            const page = this.book.pages[this.currentPageIndex];
+            const layer = page?.textLayers?.find(t => t.id === this.selectedTextLayerId);
+            if (layer) this.updateSelectedTextLayer({ bold: !layer.bold });
+        });
+        this._on('textLayerItalicBtn', 'click', () => {
+            const page = this.book.pages[this.currentPageIndex];
+            const layer = page?.textLayers?.find(t => t.id === this.selectedTextLayerId);
+            if (layer) this.updateSelectedTextLayer({ italic: !layer.italic });
+        });
+        this._on('textLayerAlignLeftBtn', 'click', () => this.updateSelectedTextLayer({ align: 'left' }));
+        this._on('textLayerAlignCenterBtn', 'click', () => this.updateSelectedTextLayer({ align: 'center' }));
+        this._on('textLayerAlignRightBtn', 'click', () => this.updateSelectedTextLayer({ align: 'right' }));
+        this._on('textLayerLayerAboveBtn', 'click', () => this.updateSelectedTextLayer({ layer: 'above' }));
+        this._on('textLayerLayerBelowBtn', 'click', () => this.updateSelectedTextLayer({ layer: 'below' }));
 
         // 新增頁面
         this._on('addPageBtn', 'click', () => this.addInnerPage());

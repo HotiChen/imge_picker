@@ -1,5 +1,4 @@
 // 版型定義 — 每個 slot 用百分比座標 {x, y, w, h}
-// 可任意新增版型，只需加一個物件即可
 const LAYOUTS = {
     'full-bleed': {
         name: '全出血',
@@ -53,11 +52,49 @@ const LAYOUTS = {
     }
 };
 
+function _escapeHtml(s) {
+    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+// 產生文字層 HTML
+function _renderTextLayerHTML(t, displayW, selectedId) {
+    const fontSize = Math.max(8, Math.round(t.size / 100 * displayW));
+    const fw = t.bold ? '700' : '400';
+    const fs = t.italic ? 'italic' : 'normal';
+    const isSelected = t.id === selectedId;
+    const zIndex = t.layer === 'below' ? 1 : 5;
+    const lines = _escapeHtml(t.text || '').split('\n').join('<br>');
+    return `<div class="page-text-layer${isSelected ? ' text-layer-selected' : ''}" data-text-layer-id="${t.id}"
+        style="position:absolute;left:${t.x}%;top:${t.y}%;width:${t.w}%;transform:translate(-50%,-50%);text-align:${t.align};cursor:move;user-select:none;z-index:${zIndex};pointer-events:auto;">
+        <span style="font-family:${t.font};font-size:${fontSize}px;font-weight:${fw};font-style:${fs};color:${t.color};line-height:1.35;white-space:pre-wrap;display:block;text-shadow:0 1px 4px rgba(0,0,0,0.55);">${lines || '&#8203;'}</span>
+    </div>`;
+}
+
 // 產生頁面預覽 HTML（用於中欄編輯區）
 function renderPageHTML(page, displayW, displayH, cropSlotIdx = -1) {
     const layout = LAYOUTS[page.layout] || LAYOUTS['blank'];
     const bg = page.bg || '#ffffff';
 
+    // ─── 底圖層 ───────────────────────────────────────────────────
+    let bgImageHTML = '';
+    if (page.bgImage?.photoId) {
+        const src = `https://images.weserv.nl/?url=${CONFIG.WORKER_URL.replace(/^https?:\/\//, '')}/${page.bgImage.photoId}&w=1400&q=75`;
+        const fit = page.bgImage.fit || 'cover';
+        const opacity = page.bgImage.opacity ?? 1;
+        if (fit === 'repeat') {
+            bgImageHTML = `<div class="page-bgimage" style="position:absolute;inset:0;z-index:0;opacity:${opacity};pointer-events:none;background-image:url('${src}');background-size:150px;background-repeat:repeat;"></div>`;
+        } else {
+            bgImageHTML = `<div class="page-bgimage" style="position:absolute;inset:0;z-index:0;opacity:${opacity};pointer-events:none;overflow:hidden;"><img src="${src}" draggable="false" style="width:100%;height:100%;object-fit:${fit};display:block;pointer-events:none;"></div>`;
+        }
+    }
+
+    // ─── 文字層 ───────────────────────────────────────────────────
+    const selectedId = window.bookEditor?.selectedTextLayerId;
+    const textLayers = page.textLayers || [];
+    const textBelow = textLayers.filter(t => t.layer === 'below').map(t => _renderTextLayerHTML(t, displayW, selectedId)).join('');
+    const textAbove = textLayers.filter(t => t.layer !== 'below').map(t => _renderTextLayerHTML(t, displayW, selectedId)).join('');
+
+    // ─── 照片格子層 ───────────────────────────────────────────────
     const slotsHTML = layout.slots.map((slotDef, idx) => {
         const slot = page.slots[idx] || { photoId: null, crop: { x: 0, y: 0, scale: 1 } };
         const isCropActive = idx === cropSlotIdx;
@@ -101,7 +138,7 @@ function renderPageHTML(page, displayW, displayH, cropSlotIdx = -1) {
         return `
             <div class="page-slot ${slot.photoId ? 'has-photo' : 'empty'} ${isCropActive ? 'crop-active' : ''}"
                  data-slot-idx="${idx}"
-                 style="position:absolute; left:${sx}%; top:${sy}%; width:${sw}%; height:${sh}%; overflow:hidden; box-sizing:border-box;">
+                 style="position:absolute; left:${sx}%; top:${sy}%; width:${sw}%; height:${sh}%; overflow:hidden; box-sizing:border-box; z-index:2;">
                 ${innerHTML}
             </div>
         `;
@@ -109,7 +146,10 @@ function renderPageHTML(page, displayW, displayH, cropSlotIdx = -1) {
 
     return `
         <div class="page-canvas" style="width:${displayW}px; height:${displayH}px; background:${bg}; position:relative; flex-shrink:0; box-shadow:0 4px 24px rgba(0,0,0,0.4);">
+            ${bgImageHTML}
+            ${textBelow}
             ${slotsHTML}
+            ${textAbove}
         </div>
     `;
 }
@@ -119,6 +159,15 @@ function renderPageThumbnailHTML(page) {
     const layout = LAYOUTS[page.layout] || LAYOUTS['blank'];
     const bg = page.bg || '#ffffff';
 
+    // 底圖縮圖
+    let bgThumbHTML = '';
+    if (page.bgImage?.photoId) {
+        const src = `https://images.weserv.nl/?url=${CONFIG.WORKER_URL.replace(/^https?:\/\//, '')}/${page.bgImage.photoId}&w=120&q=60`;
+        const fit = page.bgImage.fit || 'cover';
+        const opacity = page.bgImage.opacity ?? 1;
+        bgThumbHTML = `<div style="position:absolute;inset:0;opacity:${opacity};pointer-events:none;overflow:hidden;z-index:0;"><img src="${src}" style="width:100%;height:100%;object-fit:${fit};display:block;"></div>`;
+    }
+
     const slotsHTML = layout.slots.map((slotDef, idx) => {
         const slot = page.slots[idx] || { photoId: null, crop: { x: 0, y: 0, scale: 1 } };
         const tsx = slot.override?.x ?? slotDef.x;
@@ -126,14 +175,14 @@ function renderPageThumbnailHTML(page) {
         const tsw = slot.override?.w ?? slotDef.w;
         const tsh = slot.override?.h ?? slotDef.h;
         if (!slot.photoId) {
-            return `<div style="position:absolute;left:${tsx}%;top:${tsy}%;width:${tsw}%;height:${tsh}%;background:rgba(255,255,255,0.08);box-sizing:border-box;"></div>`;
+            return `<div style="position:absolute;left:${tsx}%;top:${tsy}%;width:${tsw}%;height:${tsh}%;background:rgba(255,255,255,0.08);box-sizing:border-box;z-index:2;"></div>`;
         }
         const scale = slot.crop?.scale || 1;
         const cropX = (slot.crop?.x || 0) * 100;
         const cropY = (slot.crop?.y || 0) * 100;
         const src = `https://images.weserv.nl/?url=${CONFIG.WORKER_URL.replace(/^https?:\/\//, '')}/${slot.photoId}&w=120&q=60`;
         return `
-            <div style="position:absolute;left:${tsx}%;top:${tsy}%;width:${tsw}%;height:${tsh}%;overflow:hidden;box-sizing:border-box;">
+            <div style="position:absolute;left:${tsx}%;top:${tsy}%;width:${tsw}%;height:${tsh}%;overflow:hidden;box-sizing:border-box;z-index:2;">
                 <div style="position:absolute;overflow:hidden;width:${100*scale}%;height:${100*scale}%;top:50%;left:50%;transform:translate(-50%,-50%);">
                     <img src="${src}" style="width:100%;height:100%;object-fit:cover;object-position:${50+cropX}% ${50+cropY}%;display:block;">
                 </div>
@@ -141,5 +190,5 @@ function renderPageThumbnailHTML(page) {
         `;
     }).join('');
 
-    return `<div style="position:relative;width:100%;height:100%;background:${bg};overflow:hidden;">${slotsHTML}</div>`;
+    return `<div style="position:relative;width:100%;height:100%;background:${bg};overflow:hidden;">${bgThumbHTML}${slotsHTML}</div>`;
 }

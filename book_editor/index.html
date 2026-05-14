@@ -6,7 +6,7 @@
     <title>相本書編輯器</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;700&family=Noto+Serif+TC:wght@400;700&family=Playfair+Display:ital,wght@0,400;0,700;1,400&family=Cormorant+Garamond:ital,wght@0,400;0,700;1,400&family=Dancing+Script:wght@400;700&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
     <link rel="stylesheet" href="css/book_editor.css">
 </head>
@@ -215,8 +215,76 @@
                 </div>
             </div>
 
+            <!-- Background Image -->
+            <div class="panel-section">
+                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+                    <div class="panel-title" style="margin:0;">底圖</div>
+                    <div style="display:flex;gap:4px;">
+                        <button id="bgPickFromAssetsBtn" class="btn btn-secondary" style="padding:2px 8px;font-size:0.7rem;" title="從素材庫選取底圖">素材庫</button>
+                        <button id="bgPickFromLibBtn" class="btn btn-secondary" style="padding:2px 8px;font-size:0.7rem;" title="從照片庫選取底圖">照片</button>
+                        <button id="bgUploadBtn" class="btn btn-secondary" style="padding:2px 8px;font-size:0.7rem;" title="上傳圖片至 _assets/backgrounds/">⬆</button>
+                        <input type="file" id="bgUploadInput" accept="image/*" style="display:none">
+                        <button id="bgRemoveBtn" class="btn btn-secondary" style="padding:2px 8px;font-size:0.7rem;color:var(--text-muted);" title="移除底圖">×</button>
+                    </div>
+                </div>
+                <div id="bgImagePreview" style="height:48px;border-radius:4px;overflow:hidden;background:var(--bg-card);display:flex;align-items:center;justify-content:center;margin-bottom:8px;">
+                    <span style="font-size:0.7rem;color:var(--text-muted);">未設定底圖</span>
+                </div>
+                <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+                    <label style="font-size:0.7rem;color:var(--text-muted);white-space:nowrap;min-width:32px;">透明度</label>
+                    <input type="range" id="bgOpacitySlider" min="0" max="100" step="5" value="100" style="flex:1;accent-color:var(--primary);">
+                    <span id="bgOpacityVal" style="font-size:0.7rem;color:var(--text-muted);min-width:28px;text-align:right;">100%</span>
+                </div>
+                <div style="display:flex;gap:4px;">
+                    <button class="btn btn-secondary bg-fit-btn" data-fit="cover" style="flex:1;padding:3px 0;font-size:0.7rem;">填滿</button>
+                    <button class="btn btn-secondary bg-fit-btn" data-fit="contain" style="flex:1;padding:3px 0;font-size:0.7rem;">完整</button>
+                    <button class="btn btn-secondary bg-fit-btn" data-fit="repeat" style="flex:1;padding:3px 0;font-size:0.7rem;">重複</button>
+                </div>
+            </div>
+
+            <!-- Text Layers -->
+            <div class="panel-section">
+                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+                    <div class="panel-title" style="margin:0;">文字層</div>
+                    <button id="addTextLayerBtn" class="btn btn-secondary" style="padding:2px 8px;font-size:0.7rem;">＋ 新增</button>
+                </div>
+                <div id="textLayerList" style="display:flex;flex-direction:column;gap:4px;"></div>
+                <!-- Inline editor: shown when a layer is selected -->
+                <div id="textLayerEditor" style="display:none;margin-top:8px;padding-top:8px;border-top:1px solid var(--border);">
+                    <textarea id="textLayerInput" rows="2" placeholder="輸入文字..." style="width:100%;background:var(--bg-input);border:1px solid var(--border);border-radius:4px;color:var(--text-primary);padding:6px 8px;font-size:0.8rem;resize:vertical;outline:none;margin-bottom:6px;font-family:inherit;"></textarea>
+                    <div style="display:flex;gap:4px;margin-bottom:6px;">
+                        <select id="textLayerFont" style="flex:1;background:var(--bg-input);border:1px solid var(--border);border-radius:4px;color:var(--text-primary);padding:4px 6px;font-size:0.75rem;outline:none;">
+                            <option value='"Noto Sans TC", sans-serif'>黑體</option>
+                            <option value='"Noto Serif TC", serif'>明體</option>
+                            <option value='"Playfair Display", serif' selected>Playfair</option>
+                            <option value='"Cormorant Garamond", serif'>Cormorant</option>
+                            <option value='"Dancing Script", cursive'>Dancing</option>
+                            <option value='Inter, sans-serif'>Inter</option>
+                        </select>
+                        <input type="color" id="textLayerColor" value="#ffffff" title="文字顏色" style="width:32px;height:28px;border:none;border-radius:4px;padding:1px;cursor:pointer;background:var(--bg-input);flex-shrink:0;">
+                    </div>
+                    <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;">
+                        <label style="font-size:0.7rem;color:var(--text-muted);white-space:nowrap;">大小</label>
+                        <input type="range" id="textLayerSize" min="1" max="20" step="0.5" value="5" style="flex:1;accent-color:var(--primary);">
+                        <span id="textLayerSizeVal" style="font-size:0.7rem;color:var(--text-muted);min-width:28px;text-align:right;">5%</span>
+                    </div>
+                    <div style="display:flex;gap:4px;margin-bottom:6px;">
+                        <button id="textLayerBoldBtn" class="btn btn-secondary" style="flex:1;padding:3px 0;font-size:0.8rem;font-weight:700;" title="粗體">B</button>
+                        <button id="textLayerItalicBtn" class="btn btn-secondary" style="flex:1;padding:3px 0;font-size:0.8rem;font-style:italic;" title="斜體">I</button>
+                        <button id="textLayerAlignLeftBtn" class="btn btn-secondary" style="flex:1;padding:3px 0;font-size:0.75rem;" title="靠左">≡</button>
+                        <button id="textLayerAlignCenterBtn" class="btn btn-secondary" style="flex:1;padding:3px 0;font-size:0.75rem;" title="置中">≡</button>
+                        <button id="textLayerAlignRightBtn" class="btn btn-secondary" style="flex:1;padding:3px 0;font-size:0.75rem;" title="靠右">≡</button>
+                    </div>
+                    <div style="display:flex;align-items:center;gap:4px;">
+                        <label style="font-size:0.7rem;color:var(--text-muted);white-space:nowrap;flex-shrink:0;">層位</label>
+                        <button id="textLayerLayerAboveBtn" class="btn btn-secondary" style="flex:1;padding:3px 0;font-size:0.7rem;" title="照片上方">照片上 ↑</button>
+                        <button id="textLayerLayerBelowBtn" class="btn btn-secondary" style="flex:1;padding:3px 0;font-size:0.7rem;" title="照片下方">照片下 ↓</button>
+                    </div>
+                </div>
+            </div>
+
             <!-- Auto Layout -->
-            <div class="panel-section" style="flex:1;">
+            <div class="panel-section">
                 <div class="panel-title">自動排版</div>
                 <div class="auto-layout-section">
                     <select id="autoLayoutStyle" class="auto-style-select">
@@ -312,6 +380,23 @@
                 <button id="confirmCancelBtn" class="btn btn-secondary">取消</button>
                 <button id="confirmOkBtn" class="btn btn-danger">確定</button>
             </div>
+        </div>
+    </div>
+</div>
+
+<!-- Background Picker Modal -->
+<div id="bgPickerModal" class="modal-overlay">
+    <div class="modal-box" style="width:min(540px,92vw);">
+        <div class="modal-header">
+            <h3>選擇底圖</h3>
+            <button id="closeBgPickerBtn" class="btn btn-icon">×</button>
+        </div>
+        <div style="display:flex;border-bottom:1px solid var(--border);">
+            <button class="bg-picker-tab" data-tab="assets" style="color:var(--primary);border-bottom-color:var(--primary);">素材庫 (_assets/backgrounds/)</button>
+            <button class="bg-picker-tab" data-tab="library" style="color:var(--text-muted);">照片庫</button>
+        </div>
+        <div id="bgPickerGrid" class="modal-library-grid" style="max-height:340px;overflow-y:auto;padding:12px;">
+            <div style="color:var(--text-muted);font-size:0.8rem;padding:24px;text-align:center;grid-column:1/-1;">載入中...</div>
         </div>
     </div>
 </div>
