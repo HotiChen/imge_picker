@@ -72,18 +72,28 @@ function renderPageHTML(page, displayW, displayH, cropSlotIdx = -1) {
         let innerHTML = '';
         if (slot.photoId) {
             const src = `https://images.weserv.nl/?url=${CONFIG.WORKER_URL.replace(/^https?:\/\//, '')}/${slot.photoId}&w=800&q=80`;
-            innerHTML = `
-                <div class="slot-crop-wrapper" style="
-                    position:absolute; overflow:hidden;
-                    width:${100 * scale}%; height:${100 * scale}%;
-                    top:50%; left:50%;
-                    transform:translate(-50%,-50%);
-                ">
-                    <img src="${src}" draggable="false" style="width:100%;height:100%;object-fit:cover;object-position:${50+cropX}% ${50+cropY}%;display:block;pointer-events:none;">
-                </div>
-                <button class="slot-clear-btn" data-slot-idx="${idx}" title="移除照片">×</button>
-                ${isCropActive ? '<div class="crop-hint">拖移平移 · 滾輪縮放</div>' : ''}
-            `;
+            const isContain = slot.fit === 'contain';
+            if (isContain) {
+                innerHTML = `
+                    <div class="slot-crop-wrapper" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;">
+                        <img src="${src}" draggable="false" style="max-width:100%;max-height:100%;object-fit:contain;display:block;pointer-events:none;">
+                    </div>
+                    <button class="slot-clear-btn" data-slot-idx="${idx}" title="移除照片">×</button>
+                `;
+            } else {
+                innerHTML = `
+                    <div class="slot-crop-wrapper" style="
+                        position:absolute; overflow:hidden;
+                        width:${100 * scale}%; height:${100 * scale}%;
+                        top:50%; left:50%;
+                        transform:translate(-50%,-50%);
+                    ">
+                        <img src="${src}" draggable="false" style="width:100%;height:100%;object-fit:cover;object-position:${50+cropX}% ${50+cropY}%;display:block;pointer-events:none;">
+                    </div>
+                    <button class="slot-clear-btn" data-slot-idx="${idx}" title="移除照片">×</button>
+                    ${isCropActive ? '<div class="crop-hint">拖移平移 · 滾輪縮放</div>' : ''}
+                `;
+            }
         } else {
             innerHTML = `<div class="slot-empty-hint"><span>+</span><small>點擊放入照片</small></div>`;
         }

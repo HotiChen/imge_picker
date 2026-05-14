@@ -90,21 +90,30 @@ const BookExporter = {
             ctx.rect(slotX, slotY, slotW, slotH);
             ctx.clip();
 
-            // 對應 object-position 的 canvas 裁切公式
-            const cropScale = crop.scale || 1;
-            const wW = cropScale * slotW;
-            const wH = cropScale * slotH;
-            const s = Math.max(wW / img.naturalWidth, wH / img.naturalHeight);
-            const ox = img.naturalWidth * s - wW;
-            const oy = img.naturalHeight * s - wH;
-            const cx = 0.5 + (crop.x || 0);
-            const cy = 0.5 + (crop.y || 0);
-            const srcX = (ox * cx + (wW - slotW) / 2) / s;
-            const srcY = (oy * cy + (wH - slotH) / 2) / s;
-            const srcW = slotW / s;
-            const srcH = slotH / s;
-
-            ctx.drawImage(img, srcX, srcY, srcW, srcH, slotX, slotY, slotW, slotH);
+            if (slot.fit === 'contain') {
+                // Fit longest edge — letterbox/pillarbox, no cropping
+                const s = Math.min(slotW / img.naturalWidth, slotH / img.naturalHeight);
+                const drawW = img.naturalWidth * s;
+                const drawH = img.naturalHeight * s;
+                const drawX = slotX + (slotW - drawW) / 2;
+                const drawY = slotY + (slotH - drawH) / 2;
+                ctx.drawImage(img, 0, 0, img.naturalWidth, img.naturalHeight, drawX, drawY, drawW, drawH);
+            } else {
+                // Cover — crop to fill slot (object-position formula)
+                const cropScale = crop.scale || 1;
+                const wW = cropScale * slotW;
+                const wH = cropScale * slotH;
+                const s = Math.max(wW / img.naturalWidth, wH / img.naturalHeight);
+                const ox = img.naturalWidth * s - wW;
+                const oy = img.naturalHeight * s - wH;
+                const cx = 0.5 + (crop.x || 0);
+                const cy = 0.5 + (crop.y || 0);
+                const srcX = (ox * cx + (wW - slotW) / 2) / s;
+                const srcY = (oy * cy + (wH - slotH) / 2) / s;
+                const srcW = slotW / s;
+                const srcH = slotH / s;
+                ctx.drawImage(img, srcX, srcY, srcW, srcH, slotX, slotY, slotW, slotH);
+            }
             ctx.restore();
         });
 

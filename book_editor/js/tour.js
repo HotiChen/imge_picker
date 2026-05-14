@@ -166,19 +166,18 @@ const TourGuide = (() => {
         if (targetEl) {
             const r = targetEl.getBoundingClientRect();
             const pad = 6;
+            overlay.style.background = 'transparent';
+            overlay.style.pointerEvents = 'auto';
             spotlight.style.display = 'block';
             spotlight.style.top = (r.top - pad) + 'px';
             spotlight.style.left = (r.left - pad) + 'px';
             spotlight.style.width = (r.width + pad * 2) + 'px';
             spotlight.style.height = (r.height + pad * 2) + 'px';
-            spotlight.style.pointerEvents = 'none';
-            overlay.style.pointerEvents = 'auto';
         } else {
+            // Welcome step: full-screen dark background, no spotlight cutout
+            overlay.style.background = 'rgba(0,0,0,0.65)';
+            overlay.style.pointerEvents = 'auto';
             spotlight.style.display = 'none';
-            spotlight.style.top = '50%';
-            spotlight.style.left = '50%';
-            spotlight.style.width = '0px';
-            spotlight.style.height = '0px';
         }
 
         _renderCard(step);

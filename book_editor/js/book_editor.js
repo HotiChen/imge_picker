@@ -110,11 +110,20 @@ class BookEditor {
     setLayout(layoutId) {
         const page = this.book.pages[this.currentPageIndex];
         if (!page || !LAYOUTS[layoutId]) return;
+
+        // Cache all photo assignments so they survive switching through blank or fewer-slot layouts
+        page._photoCache = page._photoCache || {};
+        (page.slots || []).forEach((slot, i) => {
+            if (slot.photoId) page._photoCache[i] = { photoId: slot.photoId, crop: slot.crop, fit: slot.fit };
+        });
+
         const existing = page.slots || [];
         page.layout = layoutId;
         page.slots = LAYOUTS[layoutId].slots.map((_, idx) => {
-            const old = existing[idx] || {};
-            return { photoId: old.photoId || null, crop: old.crop || { x: 0, y: 0, scale: 1 } };
+            const old = existing[idx] || page._photoCache[idx] || {};
+            const s = { photoId: old.photoId || null, crop: old.crop || { x: 0, y: 0, scale: 1 } };
+            if (old.fit) s.fit = old.fit;
+            return s;
         });
         this.renderCurrentPage();
         this.renderPageList();
@@ -158,9 +167,28 @@ class BookEditor {
         this.renderCurrentPage(slotIdx);
         const bar = document.getElementById('cropModeBar');
         if (bar) { bar.style.display = 'flex'; bar.classList.add('bar-flash'); setTimeout(() => bar.classList.remove('bar-flash'), 600); }
+        const page = this.book.pages[this.currentPageIndex];
+        this._updateFitToggleBtn(page?.slots[slotIdx]?.fit || 'cover');
         if (!localStorage.getItem('book_editor_crop_hinted')) {
             localStorage.setItem('book_editor_crop_hinted', '1');
-            toast.info('裁切模式：拖移平移 · 滾輪縮放 · ESC 完成');
+            toast.info('裁切模式：拖移平移 · 滾輪縮放 · 點「完整顯示」可切換顯示方式');
+        }
+    }
+
+    _updateFitToggleBtn(fit) {
+        const btn = document.getElementById('fitToggleBtn');
+        const hint = document.getElementById('cropModeHint');
+        if (!btn) return;
+        if (fit === 'contain') {
+            btn.textContent = '⊟ 裁切填滿';
+            btn.style.borderColor = 'var(--primary)';
+            btn.style.color = 'var(--primary)';
+            if (hint) hint.textContent = '完整顯示模式（照片不裁切）';
+        } else {
+            btn.textContent = '⊞ 完整顯示';
+            btn.style.borderColor = '';
+            btn.style.color = '';
+            if (hint) hint.textContent = '✂ 裁切模式：拖移平移 · 滾輪縮放';
         }
     }
 
@@ -747,6 +775,7 @@ class BookEditor {
             // 有照片的格子：mousedown 直接進入裁切 + 開始拖移（單一手勢）
             if (hasPhoto) {
                 slotEl.addEventListener('mousedown', e => {
+                    if (e.button !== 0) return; // ignore right-click / middle-click
                     if (e.target.classList.contains('slot-clear-btn')) return;
                     e.preventDefault();
                     if (!this.cropMode || this.cropSlotIdx !== slotIdx) {
@@ -855,7 +884,7 @@ class BookEditor {
         }
         const innerCount = this.book.pages.filter(p => p.type === 'inner').length;
         if (innerCount > 0) {
-            if (!confirm(`自動排版將取代目前所有 ${innerCount} 張內頁（封面與封底保留）。確定繼續？`)) return;
+            if (!await this._confirm(`自動排版將取代目前所有 ${innerCount} 張內頁（封面與封底保留）。確定繼續？`, '確定排版', 'btn-primary')) return;
         }
         const styleEl = document.getElementById('autoLayoutStyle');
         const style = styleEl?.value || 'magazine';
@@ -1088,6 +1117,16 @@ class BookEditor {
 
         // 裁切完成
         this._on('cropDoneBtn', 'click', () => this.exitCropMode());
+        this._on('fitToggleBtn', 'click', () => {
+            const page = this.book.pages[this.currentPageIndex];
+            if (!page || this.cropSlotIdx < 0 || !page.slots[this.cropSlotIdx]) return;
+            const slot = page.slots[this.cropSlotIdx];
+            slot.fit = slot.fit === 'contain' ? 'cover' : 'contain';
+            if (slot.fit === 'cover') { slot.crop = { x: 0, y: 0, scale: 1 }; }
+            this._updateFitToggleBtn(slot.fit);
+            this.renderCurrentPage(this.cropSlotIdx);
+            this.saveToStorage();
+        });
 
         // 格位調整
         this._on('slotEditBtn', 'click', () => { if (this.slotEditMode) this.exitSlotEditMode(); else this.enterSlotEditMode(); });
@@ -1150,8 +1189,8 @@ class BookEditor {
         this._on('exportBtn', 'click', () => BookExporter.exportAll(this.book));
 
         // 清除所有資料
-        this._on('clearBookBtn', 'click', () => {
-            if (confirm('確定要清除相本並重新開始？')) {
+        this._on('clearBookBtn', 'click', async () => {
+            if (await this._confirm('確定要清除相本並重新開始？所有頁面都會消失。', '清除重設')) {
                 localStorage.removeItem('book_editor_state');
                 this.book = { name: '未命名相本', clientFolders: [], settings: { width: 20, height: 20, unit: 'cm', dpi: 300 }, coverSettings: { width: 20, height: 20, unit: 'cm', dpi: 300 }, pages: [] };
                 this._addPage('cover', 'full-bleed');
@@ -1191,6 +1230,28 @@ class BookEditor {
     _on(id, event, cb) {
         const el = document.getElementById(id);
         if (el) el.addEventListener(event, cb);
+    }
+
+    _confirm(message, okLabel = '確定', okClass = 'btn-danger') {
+        return new Promise(resolve => {
+            const modal = document.getElementById('confirmModal');
+            if (!modal) { resolve(window.confirm(message)); return; }
+            document.getElementById('confirmMessage').textContent = message;
+            const okBtn = document.getElementById('confirmOkBtn');
+            okBtn.textContent = okLabel;
+            okBtn.className = `btn ${okClass}`;
+            modal.classList.add('active');
+            const done = (result) => {
+                modal.classList.remove('active');
+                okBtn.removeEventListener('click', onOk);
+                document.getElementById('confirmCancelBtn').removeEventListener('click', onCancel);
+                resolve(result);
+            };
+            const onOk = () => done(true);
+            const onCancel = () => done(false);
+            okBtn.addEventListener('click', onOk);
+            document.getElementById('confirmCancelBtn').addEventListener('click', onCancel);
+        });
     }
 }
 
