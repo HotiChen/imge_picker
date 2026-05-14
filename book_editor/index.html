@@ -27,8 +27,10 @@
             <button id="nextPageBtn" class="btn btn-icon" title="下一頁">▶</button>
         </div>
         <div class="top-bar-right">
-            <button id="slotEditBtn" class="btn btn-secondary" title="調整格子位置與大小">⊡ 調格位</button>
+            <button id="runAutoLayoutTopBtn" class="btn btn-secondary" title="自動排版（風格在右側面板選取）">✨ 自動排版</button>
+            <button id="slotEditBtn" class="btn btn-secondary" title="拖移格子改變位置；拖角落調整大小；ESC 退出">⊡ 調整版面</button>
             <button id="guideToggleBtn" class="btn btn-secondary" title="顯示出血／安全邊距／書脊參考線">⊞ 參考線</button>
+            <button id="shortcutsBtn" class="btn btn-icon" title="鍵盤快速鍵">?</button>
             <button id="clearBookBtn" class="btn btn-danger" title="清除相本">🗑 重置</button>
             <button id="shareBtn" class="btn btn-secondary">☁ 分享</button>
             <button id="exportBtn" class="btn btn-primary">⬇ 匯出 JPG</button>
@@ -88,8 +90,9 @@
                 <button id="cropDoneBtn" class="btn btn-primary" style="padding:4px 12px;font-size:0.8rem;">完成</button>
             </div>
             <div id="slotEditModeBar" class="crop-mode-bar" style="background:rgba(100,180,255,0.12);border-color:rgba(100,180,255,0.3);color:#64b4ff;">
-                <span>⊡ 格位調整：拖移格子移動位置 · 拖角調整大小</span>
-                <button id="slotEditDoneBtn" class="btn btn-primary" style="padding:4px 12px;font-size:0.8rem;">完成</button>
+                <span>⊡ 版面調整：拖移格子移動位置 · 拖角調整大小</span>
+                <span id="slotSizeLabel" style="display:none;font-size:0.75rem;font-variant-numeric:tabular-nums;background:rgba(0,0,0,0.3);padding:2px 8px;border-radius:4px;"></span>
+                <button id="slotEditDoneBtn" class="btn btn-primary" style="padding:4px 12px;font-size:0.8rem;">完成 (ESC)</button>
             </div>
             <div id="pagePreviewArea" class="page-preview-area"></div>
 
@@ -97,6 +100,7 @@
             <div id="photoStrip" class="photo-strip" style="display:none;">
                 <div class="photo-strip-header">
                     <span style="font-size:0.68rem;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--text-muted);">照片</span>
+                    <span style="font-size:0.65rem;color:var(--text-muted);" title="星數評分請在主選圖頁面設定">⭐ 在選圖頁評分</span>
                     <select id="libFilterRating" class="lib-filter-select" style="padding:2px 6px;font-size:0.72rem;">
                         <option value="0">全部評分</option>
                         <option value="3">3★以上</option>

@@ -239,6 +239,13 @@ html, body {
     position: relative;
 }
 
+/* ─── Crop Active Slot ─── */
+.page-slot.crop-active {
+    outline: 2px solid var(--primary) !important;
+    box-shadow: inset 0 0 0 2px rgba(243,128,32,0.4), 0 0 18px rgba(243,128,32,0.3) !important;
+    z-index: 2;
+}
+
 /* ─── Slot Position Edit Mode ─── */
 .slot-edit-active {
     outline: 2px dashed rgba(100,180,255,0.7) !important;

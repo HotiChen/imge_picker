@@ -251,6 +251,8 @@ class BookEditor {
                 slotEl.style.top = g.y + '%';
                 slotEl.style.width = g.w + '%';
                 slotEl.style.height = g.h + '%';
+                const lbl = document.getElementById('slotSizeLabel');
+                if (lbl) { lbl.textContent = `W ${Math.round(g.w)}% × H ${Math.round(g.h)}%`; lbl.style.display = ''; }
             }
         };
 
@@ -260,6 +262,8 @@ class BookEditor {
                 this.saveToStorage();
             }
             this.slotPosDragState = null;
+            const lbl = document.getElementById('slotSizeLabel');
+            if (lbl) lbl.style.display = 'none';
         };
 
         document.addEventListener('mousemove', this._slotPosMoveHandler);
@@ -827,6 +831,10 @@ class BookEditor {
             toast.warning('請先載入照片庫');
             return;
         }
+        const innerCount = this.book.pages.filter(p => p.type === 'inner').length;
+        if (innerCount > 0) {
+            if (!confirm(`自動排版將取代目前所有 ${innerCount} 張內頁（封面與封底保留）。確定繼續？`)) return;
+        }
         const styleEl = document.getElementById('autoLayoutStyle');
         const style = styleEl?.value || 'magazine';
 
@@ -1055,6 +1063,8 @@ class BookEditor {
 
         // 自動排版
         this._on('runAutoLayoutBtn', 'click', () => this.runAutoLayout());
+        this._on('runAutoLayoutTopBtn', 'click', () => this.runAutoLayout());
+        this._on('shortcutsBtn', 'click', () => toast.info('快速鍵：← → 翻頁 · ESC 退出模式 · Delete 清除格子照片 · 滾輪 縮放裁切 · ? 顯示此提示'));
 
         // 參考線 toggle
         this._on('guideToggleBtn', 'click', () => {
@@ -1118,9 +1128,18 @@ class BookEditor {
         // 鍵盤
         document.addEventListener('keydown', e => {
             if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
-            if (e.key === 'Escape' && this.cropMode) this.exitCropMode();
+            if (e.key === 'Escape') {
+                if (this.cropMode) this.exitCropMode();
+                else if (this.slotEditMode) this.exitSlotEditMode();
+            }
             if (e.key === 'ArrowLeft' && this.currentPageIndex > 0) { this.exitCropMode(); this.currentPageIndex--; this.renderAll(); }
             if (e.key === 'ArrowRight' && this.currentPageIndex < this.book.pages.length - 1) { this.exitCropMode(); this.currentPageIndex++; this.renderAll(); }
+            if ((e.key === 'Delete' || e.key === 'Backspace') && this.cropMode && this.cropSlotIdx >= 0) {
+                this.clearSlot(this.cropSlotIdx);
+            }
+            if (e.key === '?') {
+                toast.info('快速鍵：← → 翻頁 · ESC 退出模式 · Delete 清除格子照片 · 滾輪 縮放裁切');
+            }
         });
 
         // Window resize
