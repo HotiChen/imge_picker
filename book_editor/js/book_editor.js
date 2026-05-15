@@ -3,6 +3,7 @@ class BookEditor {
         this.book = {
             name: '未命名相本',
             clientFolders: [],
+            notifyUrl: '',
             settings: { width: 20, height: 20, unit: 'cm', dpi: 300 },
             coverSettings: { width: 20, height: 20, unit: 'cm', dpi: 300 },
             pages: []
@@ -1263,6 +1264,9 @@ class BookEditor {
         document.getElementById('shareFolderStep').style.display = '';
         document.getElementById('shareUrlStep').style.display = 'none';
         document.getElementById('shareModal')?.classList.add('active');
+        // 帶入已儲存的 notify URL
+        const notifyInput = document.getElementById('notifyUrlInput');
+        if (notifyInput) notifyInput.value = this.book.notifyUrl || '';
         await this._renderShareFolders();
     }
 
@@ -1304,6 +1308,7 @@ class BookEditor {
     async saveToCloud() {
         const clientFolders = [...document.querySelectorAll('.share-folder-cb:checked')].map(el => el.value);
         this.book.clientFolders = clientFolders;
+        this.book.notifyUrl = (document.getElementById('notifyUrlInput')?.value || '').trim();
 
         const btn = document.getElementById('shareConfirmBtn');
         if (btn) { btn.disabled = true; btn.textContent = '儲存中...'; }
@@ -1551,7 +1556,7 @@ class BookEditor {
         this._on('clearBookBtn', 'click', async () => {
             if (await this._confirm('確定要清除相本並重新開始？所有頁面都會消失。', '清除重設')) {
                 localStorage.removeItem('book_editor_state');
-                this.book = { name: '未命名相本', clientFolders: [], settings: { width: 20, height: 20, unit: 'cm', dpi: 300 }, coverSettings: { width: 20, height: 20, unit: 'cm', dpi: 300 }, pages: [] };
+                this.book = { name: '未命名相本', clientFolders: [], notifyUrl: '', settings: { width: 20, height: 20, unit: 'cm', dpi: 300 }, coverSettings: { width: 20, height: 20, unit: 'cm', dpi: 300 }, pages: [] };
                 this._addPage('cover', 'full-bleed');
                 this._addPage('inner', '2-up-h');
                 this._addPage('inner', '2-up-h');

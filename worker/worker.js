@@ -123,6 +123,28 @@ export default {
         await env.imagepicker.put(`_books/${bookId}_status.json`, JSON.stringify(status), {
           httpMetadata: { contentType: 'application/json' }
         });
+
+        // Webhook 通知攝影師
+        const bookObj = await env.imagepicker.get(`_books/${bookId}.json`);
+        if (bookObj) {
+          try {
+            const book = JSON.parse(await bookObj.text());
+            if (book.notifyUrl) {
+              await fetch(book.notifyUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  event: 'book_approved',
+                  bookId,
+                  bookName: book.name || '相本',
+                  timestamp: status.timestamp,
+                  message: `📸 客人已批准相本「${book.name || '相本'}」！`
+                })
+              });
+            }
+          } catch (e) { /* webhook 失敗不影響批准流程 */ }
+        }
+
         return new Response(JSON.stringify({ ok: true }), {
           headers: { ...corsHeaders, 'Content-Type': 'application/json' }
         });

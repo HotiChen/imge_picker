@@ -334,7 +334,12 @@
             <p style="font-size:0.82rem;color:var(--text-secondary);margin-bottom:4px;">選擇客人可以換圖的資料夾：</p>
             <p style="font-size:0.72rem;color:var(--text-muted);margin-bottom:14px;">只有勾選的資料夾，客人才能瀏覽並換圖。</p>
             <div id="shareFolderList" class="share-folder-list"></div>
-            <button id="shareConfirmBtn" class="btn btn-primary btn-block" style="margin-top:16px;">儲存並產生分享連結 →</button>
+            <div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--border);">
+                <p style="font-size:0.78rem;color:var(--text-secondary);margin-bottom:4px;">批准通知 Webhook <span style="font-size:0.68rem;color:var(--text-muted);font-weight:400;">（選填）</span></p>
+                <input type="url" id="notifyUrlInput" placeholder="https://... 客人批准後自動 POST" style="width:100%;background:var(--bg-input);border:1px solid var(--border);border-radius:4px;color:var(--text-primary);padding:6px 10px;font-size:0.8rem;outline:none;margin-bottom:5px;">
+                <p style="font-size:0.68rem;color:var(--text-muted);line-height:1.5;">支援 make.com、n8n、Discord webhook、Zapier 等。<br>Payload：<code style="font-size:0.65rem;background:rgba(255,255,255,0.06);padding:1px 4px;border-radius:2px;">{ event, bookId, bookName, timestamp, message }</code></p>
+            </div>
+            <button id="shareConfirmBtn" class="btn btn-primary btn-block" style="margin-top:14px;">儲存並產生分享連結 →</button>
         </div>
 
         <!-- Step 2: 複製連結 -->
