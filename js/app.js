@@ -611,7 +611,7 @@ class App {
                 stars.forEach((star, idx) => {
                     star.onmouseenter = () => {
                         stars.forEach((s, sIdx) => {
-                            s.style.color = sIdx <= idx ? 'var(--warning)' : '';
+                            s.style.color = sIdx <= idx ? 'var(--accent)' : '';
                         });
                     };
                 });
@@ -712,7 +712,7 @@ class App {
             <div class="photo-image-container">
                 <img src="${imageUrl}" class="photo-image" loading="lazy">
                 <div class="photo-overlay">
-                    ${photo.hasAnnotations ? '<span class="photo-badge">已標註</span>' : ''}
+                    ${photo.hasAnnotations ? '<span class="photo-badge">✎</span>' : ''}
                 </div>
                 <div class="select-toggle-btn" title="選取此照片"></div>
             </div>
@@ -732,6 +732,10 @@ class App {
             this.toggleSelection(photo.id, index, e.shiftKey, true);
         });
 
+        card.addEventListener('mouseenter', () => {
+            this.updatePreviewPane(photo);
+        });
+
         card.addEventListener('click', (e) => {
             if (e.target.closest('.star-rating')) return; // 點星星不開彈窗
 
@@ -747,10 +751,50 @@ class App {
         return card;
     }
 
+    updatePreviewPane(photo) {
+        const empty   = document.getElementById('previewEmpty');
+        const content = document.getElementById('previewContent');
+        if (!empty || !content) return;
+
+        if (!photo) {
+            empty.style.display = 'flex';
+            content.style.display = 'none';
+            return;
+        }
+
+        empty.style.display = 'none';
+        content.style.display = 'flex';
+
+        const img = document.getElementById('previewImg');
+        if (img) img.src = driveManager.getImageUrl(photo, true);
+
+        const nameEl = document.getElementById('previewName');
+        if (nameEl) nameEl.textContent = photo.name;
+
+        const metaEl = document.getElementById('previewMeta');
+        if (metaEl) metaEl.textContent = photo.date || '';
+
+        const starsEl = document.getElementById('previewStars');
+        if (starsEl) {
+            starsEl.innerHTML = '';
+            starsEl.appendChild(ratingManager.createStarRating(photo.rating, photo.id, true));
+        }
+
+        const detailBtn = document.getElementById('previewDetailBtn');
+        if (detailBtn) {
+            detailBtn.onclick = () => {
+                const idx = this.filteredPhotos.findIndex(p => p.id === photo.id);
+                if (idx >= 0) this.openModal(idx);
+            };
+        }
+    }
+
     async openModal(index) {
         if (index < 0 || index >= this.filteredPhotos.length) return;
         this.currentPhotoIndex = index;
         const photo = this.filteredPhotos[index];
+
+        this.updatePreviewPane(photo);
 
         document.getElementById('photoModal').classList.add('active');
         document.getElementById('modalPhotoName').textContent = photo.name;
