@@ -1,234 +1,251 @@
-# Drive Photo Picker - 專業照片選擇與標注系統
+# Image Picker Studio — 攝影師選圖與相本工具
 
-一個現代化的 Web 應用程式，可以從 Google Drive 載入照片，進行星級評分、篩選和圖片標注。
-
-## ✨ 功能特色
-
-- 🔐 **Google Drive 整合** - 安全登入並存取 Drive 資料夾
-- ⭐ **星級評分系統** - 為每張照片設定 1-5 星評分
-- 🔍 **強大的篩選功能** - 依據星級、標注狀態排序和篩選
-- 🎨 **圖片標注** - 在照片上畫圈標記，支援多種顏色和筆刷大小
-- 📊 **統計資訊** - 即時顯示照片數量、評分和標注狀態
-- 💾 **本地儲存** - 評分和標注資料自動儲存在瀏覽器中
-- 📤 **資料匯出** - 匯出所有評分和標注資料為 JSON 檔案
-- 🌙 **深色主題** - 現代化的深色介面設計
-- 📱 **響應式設計** - 支援桌面和行動裝置
-
-## 🚀 快速開始
-
-### 1. Google Cloud Platform 設定
-
-#### 建立專案
-1. 前往 [Google Cloud Console](https://console.cloud.google.com/)
-2. 建立新專案或選擇現有專案（你的專案：focused-premise-451917-c2）
-
-#### 啟用 API
-1. 在左側選單中，進入「API 和服務」→「程式庫」
-2. 搜尋並啟用以下 API：
-   - **Google Drive API**
-   - **Google Picker API**（選用）
-
-#### 建立憑證
-
-##### OAuth 2.0 用戶端 ID
-1. 進入「API 和服務」→「憑證」
-2. 點擊「建立憑證」→「OAuth 用戶端 ID」
-3. 應用程式類型選擇「網頁應用程式」
-4. 設定以下資訊：
-   - 名稱：Drive Photo Picker
-   - 已授權的 JavaScript 來源：
-     - `http://localhost:8000`
-     - `http://127.0.0.1:8000`
-     - （如果有正式網域，也要加入）
-   - 已授權的重新導向 URI：
-     - `http://localhost:8000`
-5. 建立後，複製「用戶端 ID」
-
-##### API 金鑰
-1. 點擊「建立憑證」→「API 金鑰」
-2. 建立後，複製「API 金鑰」
-3. （建議）點擊「限制金鑰」：
-   - 應用程式限制：選擇「網站」
-   - 加入你的網站網址
-   - API 限制：選擇「Google Drive API」
-
-### 2. 設定應用程式
-
-開啟 `js/config.js` 檔案，填入你的憑證：
-
-```javascript
-const CONFIG = {
-    CLIENT_ID: 'YOUR_CLIENT_ID.apps.googleusercontent.com',  // 替換為你的 OAuth 用戶端 ID
-    API_KEY: 'YOUR_API_KEY',  // 替換為你的 API 金鑰
-    // ... 其他設定保持不變
-};
-```
-
-### 3. 執行應用程式
-
-#### 使用 Python 啟動本地伺服器
-
-```bash
-# Python 3
-python3 -m http.server 8000
-
-# 或 Python 2
-python -m SimpleHTTPServer 8000
-```
-
-#### 使用 Node.js 啟動本地伺服器
-
-```bash
-# 安裝 http-server（只需執行一次）
-npm install -g http-server
-
-# 啟動伺服器
-http-server -p 8000
-```
-
-#### 使用 PHP 啟動本地伺服器
-
-```bash
-php -S localhost:8000
-```
-
-### 4. 開啟應用程式
-
-在瀏覽器中開啟：`http://localhost:8000`
-
-## 📖 使用說明
-
-### 載入照片
-
-1. 點擊右上角的「登入 Google」按鈕
-2. 選擇你的 Google 帳戶並授權應用程式
-3. 在 Google Drive 中找到你想要處理的照片資料夾
-4. 複製資料夾的分享連結（開啟資料夾 → 右上角「分享」→ 複製連結）
-5. 將連結貼到左側「Drive 資料夾連結」欄位
-6. 點擊「載入照片」按鈕
-
-### 評分功能
-
-- 在照片卡片上直接點擊星星來評分
-- 或在照片詳細檢視中評分
-- 評分會自動儲存
-
-### 篩選照片
-
-- **星級篩選**：選擇要顯示的星級（全部、5★、4★ 等）
-- **標注狀態**：篩選已標注或未標注的照片
-- **排序方式**：依檔名、評分或日期排序
-
-### 標注照片
-
-1. 點擊照片卡片開啟詳細檢視
-2. 在左側選擇工具：
-   - **畫圈**：在照片上畫圈標記
-   - **清除**：清除所有標注
-3. 選擇顏色（紅、橙、藍、綠、白）
-4. 調整筆刷大小
-5. 在照片上拖曳滑鼠來畫圈
-6. 點擊「儲存標注」按鈕
-
-### 導航照片
-
-- 點擊「上一張」/「下一張」按鈕
-- 或使用鍵盤方向鍵（← →）
-- 按 ESC 關閉照片檢視
-
-### 匯出資料
-
-點擊左側的「匯出資料」按鈕，會下載包含以下資訊的 JSON 檔案：
-- 照片清單
-- 每張照片的評分
-- 標注狀態
-- 建立/修改時間
-
-## 🎨 功能展示
-
-### 主要介面
-- 深色主題設計
-- 響應式照片網格
-- 即時篩選和排序
-
-### 照片檢視
-- 全螢幕照片顯示
-- 互動式標注工具
-- 流暢的導航體驗
-
-### 評分系統
-- 直覺的星級評分
-- 即時更新統計
-- 持久化儲存
-
-## 🔧 技術架構
-
-- **前端框架**：純 JavaScript（無框架依賴）
-- **樣式**：原生 CSS with CSS Variables
-- **API 整合**：Google Drive API v3
-- **認證**：Google Identity Services
-- **儲存**：LocalStorage
-- **畫布**：HTML5 Canvas API
-
-## 📂 專案結構
-
-```
-/image_picker
-├── index.html              # 主要 HTML 檔案
-├── css/
-│   └── styles.css         # 所有樣式和設計系統
-├── js/
-│   ├── config.js          # API 憑證設定
-│   ├── app.js             # 主要應用程式邏輯
-│   ├── drive.js           # Google Drive API 整合
-│   ├── rating.js          # 星級評分系統
-│   ├── annotation.js      # 圖片標注功能
-│   └── toast.js           # 通知系統
-└── README.md              # 說明文件
-```
-
-## 🔒 隱私與安全
-
-- 所有資料儲存在你的瀏覽器本地端
-- 不會上傳照片到任何伺服器
-- 只讀取 Google Drive 資料（不會修改你的 Drive 檔案）
-- 可隨時撤銷應用程式的 Google 帳戶存取權限
-
-## 🐛 疑難排解
-
-### 無法載入照片
-- 確認資料夾連結正確
-- 確認資料夾權限設定（至少要有檢視權限）
-- 檢查 Console 是否有錯誤訊息
-
-### 認證失敗
-- 確認 `config.js` 中的憑證正確
-- 確認 OAuth 設定中有加入正確的來源網址
-- 清除瀏覽器快取並重新整理
-
-### 評分或標注沒有儲存
-- 檢查瀏覽器的 LocalStorage 是否啟用
-- 確認沒有使用無痕模式
-- 檢查瀏覽器 Console 是否有錯誤
-
-## 🚀 進階功能（未來規劃）
-
-- [ ] 匯出標注的圖片
-- [ ] 支援更多標注工具（箭頭、文字、矩形）
-- [ ] 整合 Google Sheets 匯出
-- [ ] 批次操作功能
-- [ ] 自訂評分標準
-- [ ] 照片比較模式
-- [ ] 協作功能
-
-## 📝 授權
-
-MIT License
-
-## 👨‍💻 開發者
-
-Built with ❤️ by Antigravity AI
+一個專為攝影師設計的工作流程工具，從 Cloudflare R2 載入照片、評分標注、快速篩選交付，並支援相本排版與 JPG 匯出。
 
 ---
 
-需要協助？歡迎提出問題或建議！
+## 功能概覽
+
+- **R2 照片庫** — 直接從 Cloudflare R2 載入資料夾，無需 Google 帳號
+- **評分系統** — 每張照片 1–5 星，支援批次評分
+- **旗標（Flags）** — Pick / Review / Reject 三種狀態標記
+- **圖片標注** — 在照片上手繪圈記，多色 + 可調筆刷
+- **備註** — 每張照片可附文字備註
+- **即時預覽窗格** — 滑鼠懸停立即大圖預覽，無需開啟 Modal
+- **篩選 + 排序** — 依星級、旗標、標注狀態、檔名快速過濾
+- **相本排版編輯器** — 多頁版型、自動排版、匯出每頁 JPG（ZIP）
+- **相簿排版工具** — 基於 Fabric.js 的自由排版畫布
+- **本地儲存** — 評分、標注、備註全存 localStorage，換機不丟失
+- **資料匯出** — 下載含評分 + 標注資料的 JSON
+
+---
+
+## 技術架構
+
+| 層次 | 技術 |
+|------|------|
+| 前端 | 純 JavaScript（無框架） |
+| 樣式 | 原生 CSS + CSS Variables（Studio Dark 設計系統） |
+| 字型 | IBM Plex Sans + IBM Plex Mono |
+| 照片儲存 | Cloudflare R2 |
+| 後端 API | Cloudflare Worker（`imagepicker.hotichen.workers.dev`）|
+| 本地資料 | localStorage |
+| 畫布 | HTML5 Canvas API + Fabric.js（r2_designer）|
+| 打包匯出 | JSZip |
+
+---
+
+## 專案結構
+
+```
+imge_picker/
+├── index.html              # 主選圖介面
+├── tutorial.html           # 使用說明頁
+├── css/
+│   └── styles.css          # Studio Dark 設計系統
+├── js/
+│   ├── config.js           # Worker URL + Token 設定
+│   ├── app.js              # 主應用邏輯
+│   ├── drive.js            # R2 資料載入（舊名保留）
+│   ├── rating.js           # 星級評分系統
+│   ├── annotation.js       # 圖片標注工具
+│   ├── logger.js           # 開發除錯 Logger
+│   ├── diagnostics.js      # 診斷工具
+│   └── toast.js            # 通知系統
+├── book_editor/            # 相本書編輯器（Phase 1 完成）
+│   ├── index.html
+│   ├── view.html           # 客戶預覽頁
+│   ├── css/
+│   └── js/
+│       ├── layouts.js      # 版型定義
+│       ├── auto_layout.js  # 自動排版演算法
+│       ├── book_editor.js  # 主狀態管理
+│       ├── exporter.js     # Canvas 渲染 + ZIP 匯出
+│       ├── layout_editor.js
+│       ├── viewer.js
+│       └── tour.js
+├── r2_designer/            # 自由排版工具（Fabric.js）
+│   ├── index.html
+│   ├── css/
+│   └── js/
+│       └── designer_core.js
+├── worker/                 # Cloudflare Worker
+│   ├── worker.js
+│   └── wrangler.toml
+├── design_handoff_studio_dark/  # 設計規格文件
+└── .claude/
+    └── settings.json       # PreToolUse 程式碼審查 Hook
+```
+
+---
+
+## 快速開始
+
+### 1. 設定 Worker URL 與 Token
+
+開啟 `js/config.js`：
+
+```javascript
+const CONFIG = {
+    WORKER_URL: 'https://imagepicker.hotichen.workers.dev',
+    PHOTOGRAPHER_TOKEN: 'YOUR_TOKEN',  // 與 Worker 的 PHOTOGRAPHER_TOKEN secret 相同
+    // ...
+};
+```
+
+### 2. 部署 Cloudflare Worker
+
+```bash
+cd worker
+npx wrangler login
+npx wrangler deploy
+
+# 設定 secret（需與 config.js 中的 token 一致）
+npx wrangler secret put PHOTOGRAPHER_TOKEN
+```
+
+Worker 提供以下端點：
+- `GET /api/list?prefix=FOLDER/` — 列出 R2 物件
+- `GET /api/photo?key=PATH` — 取得照片（帶授權快取）
+- `PUT /_assets/PATH` — 上傳素材（需 Bearer Token）
+- `POST /api/books/:id/approve` — 核准相本，觸發 Webhook
+
+### 3. 本地執行
+
+```bash
+# Python
+python3 -m http.server 8000
+
+# Node.js
+npx http-server -p 8000
+```
+
+開啟瀏覽器：`http://localhost:8000`
+
+---
+
+## 使用說明
+
+### 載入照片
+
+1. 在左側欄「SOURCE」區輸入 R2 資料夾路徑（例如 `2026/wedding/`）
+2. 點擊「LOAD」
+3. 照片以網格方式顯示，支援子資料夾導航
+
+### 評分
+
+- 在照片卡片上直接點擊星星
+- 或在預覽窗格（右側）評分
+- 支援鍵盤 1–5 快速評分（待實作）
+
+### 旗標
+
+- **PICK** — 選取交付
+- **REVIEW** — 待確認
+- **REJECT** — 淘汰
+
+### 標注
+
+1. 點擊照片開啟 Modal
+2. 選擇顏色 + 調整筆刷大小
+3. 在照片上拖曳畫圈
+4. 點「儲存標注」
+
+### 預覽窗格
+
+滑鼠懸停照片卡片即可在右側窗格預覽大圖，無需開啟 Modal。
+寬度不足 1200px 時窗格自動隱藏。
+
+### 相本排版
+
+點擊頁首「相本排版」進入 `book_editor/`：
+
+1. 設定書本尺寸（cm）與 DPI
+2. 選取照片 → 執行「自動排版」
+3. 手動調整頁面版型（全出血、單張、左右兩張、四格等）
+4. 雙擊格子進入裁切模式
+5. 「匯出 JPG」→ 下載 ZIP
+
+### 匯出資料
+
+點擊側欄「SYNC」區的匯出按鈕，下載含評分 + 標注的 JSON 檔。
+
+---
+
+## 設計系統：Studio Dark
+
+本專案採用 Studio Dark 設計語言：
+
+| Token | 值 | 用途 |
+|-------|----|------|
+| `--bg` | `#15120d` | 頁面背景 |
+| `--surface` | `#1d1a14` | 卡片背景 |
+| `--card` | `#221f18` | 元件背景 |
+| `--accent` | `#e5a448` | 主強調色（琥珀）|
+| `--ink-90` | `#e8e3da` | 主文字 |
+| `--ink-55` | `#8c8375` | 次要文字 |
+| `--rule` | `#2e2a22` | 分隔線 |
+| `--border` | `#3a3528` | 元件邊框 |
+
+字型：IBM Plex Sans（內文）+ IBM Plex Mono（標籤、badge）
+
+---
+
+## 開發工具
+
+### Claude Code Hook（自動程式碼審查）
+
+每次 `git commit` / `git push` 前，Hook 會自動執行四軸審查：
+
+1. **SCOPE** — 是否只改了本次任務相關的程式碼？
+2. **CORRECTNESS** — 邏輯是否正確？有無邊界條件漏洞？
+3. **STYLE** — 是否符合現有程式碼風格？
+4. **MINIMALITY** — 變動是否可以更精簡？
+
+發現問題自動用繁體中文說明並阻止 commit。
+
+設定檔：`.claude/settings.json`
+
+---
+
+## Cloudflare 部署
+
+### Worker 部署
+
+```bash
+cd worker
+npx wrangler deploy
+npx wrangler secret put PHOTOGRAPHER_TOKEN
+```
+
+### 靜態檔案
+
+整個根目錄可部署到任何靜態主機：
+- Cloudflare Pages
+- Cloudways（FTP 上傳即可）
+- GitHub Pages
+- 任意 HTTP 伺服器
+
+---
+
+## 版本路線圖
+
+| 階段 | 狀態 | 內容 |
+|------|------|------|
+| P1 視覺翻新 | ✅ 完成 | Studio Dark 設計系統、預覽窗格 |
+| P2 旗標系統 | 🔲 規劃中 | Pick/Review/Reject 持久化儲存 |
+| P3 鍵盤快捷鍵 | 🔲 規劃中 | 數字鍵評分、方向鍵導航 |
+| P4 批次操作 | 🔲 規劃中 | 多選 + 批次評分 / 旗標 |
+| P5 比較模式 | 🔲 規劃中 | 並排比較兩張照片 |
+| P6 相本 Phase 2 | 🔲 規劃中 | R2 儲存、客戶預覽連結 |
+| P7 協作 | 🔲 規劃中 | 多人同時標注 |
+
+---
+
+## 授權
+
+MIT License
+
+## 開發者
+
+Built by Antigravity AI
