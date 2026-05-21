@@ -139,6 +139,8 @@ body {
   display: flex;
   align-items: center;
   gap: 10px;
+  overflow: hidden;
+  min-width: 0;
 }
 
 .sidebar-toggle-btn {
@@ -172,6 +174,7 @@ body {
   font-weight: 600;
   color: var(--ink);
   white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .logo-label {
@@ -179,6 +182,7 @@ body {
   font-size: 9px;
   color: var(--ink-55);
   letter-spacing: 0.12em;
+  flex-shrink: 0;
 }
 
 .expiry-badge {
@@ -190,9 +194,14 @@ body {
   color: var(--reject);
   border: 1px solid var(--reject);
   padding: 2px 7px;
+  white-space: nowrap;
+  overflow: hidden;
+  max-height: 24px;
+  flex-shrink: 1;
+  min-width: 0;
 }
 
-.expiry-badge .icon { font-size: 10px; }
+.expiry-badge .icon { font-size: 10px; flex-shrink: 0; }
 .expiry-badge .label { opacity: .7; font-size: 9px; }
 
 .header-center {
@@ -895,12 +904,16 @@ body {
 
 .select-toggle-btn::after {
   content: '✓';
-  color: var(--ink-35);
+  color: transparent;
   font-size: 10px;
   font-weight: 700;
 }
 
-.photo-card:hover .select-toggle-btn { border-color: rgba(255,255,255,.5); }
+.photo-card:hover .select-toggle-btn {
+  border-color: rgba(255,255,255,.5);
+}
+
+.photo-card:hover .select-toggle-btn::after { color: var(--ink-35); }
 
 .photo-card.selected .select-toggle-btn {
   background: var(--accent);
