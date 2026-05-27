@@ -109,11 +109,25 @@ function renderPageHTML(page, displayW, displayH, cropSlotIdx = -1) {
         let innerHTML = '';
         if (slot.photoId) {
             const src = `https://images.weserv.nl/?url=${CONFIG.WORKER_URL.replace(/^https?:\/\//, '')}/${slot.photoId}&w=800&q=80`;
-            const isContain = slot.fit === 'contain';
-            if (isContain) {
+            const fitMode = slot.fit || 'cover';
+            if (fitMode === 'contain') {
                 innerHTML = `
                     <div class="slot-crop-wrapper" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;">
                         <img src="${src}" draggable="false" style="max-width:100%;max-height:100%;object-fit:contain;display:block;pointer-events:none;">
+                    </div>
+                    <button class="slot-clear-btn" data-slot-idx="${idx}" title="移除照片">×</button>
+                `;
+            } else if (fitMode === 'fit-width') {
+                innerHTML = `
+                    <div class="slot-crop-wrapper" style="position:absolute;inset:0;overflow:hidden;display:flex;align-items:center;justify-content:center;">
+                        <img src="${src}" draggable="false" style="width:100%;height:auto;flex-shrink:0;display:block;pointer-events:none;">
+                    </div>
+                    <button class="slot-clear-btn" data-slot-idx="${idx}" title="移除照片">×</button>
+                `;
+            } else if (fitMode === 'fit-height') {
+                innerHTML = `
+                    <div class="slot-crop-wrapper" style="position:absolute;inset:0;overflow:hidden;display:flex;align-items:center;justify-content:center;">
+                        <img src="${src}" draggable="false" style="height:100%;width:auto;flex-shrink:0;display:block;pointer-events:none;">
                     </div>
                     <button class="slot-clear-btn" data-slot-idx="${idx}" title="移除照片">×</button>
                 `;

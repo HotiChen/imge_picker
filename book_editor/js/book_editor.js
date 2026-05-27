@@ -190,6 +190,83 @@ class BookEditor {
         }
     }
 
+    _showSlotContextMenu(slotIdx, clientX, clientY) {
+        document.getElementById('slotCtxMenu')?.remove();
+
+        const page = this.book.pages[this.currentPageIndex];
+        const slot = page?.slots[slotIdx];
+        const hasPhoto = !!slot?.photoId;
+        const currentFit = slot?.fit || 'cover';
+
+        const menu = document.createElement('div');
+        menu.id = 'slotCtxMenu';
+        menu.className = 'slot-ctx-menu';
+
+        const fitItems = [
+            { label: '填滿',     fit: 'cover',      icon: '⊞' },
+            { label: '完整顯示', fit: 'contain',    icon: '⊟' },
+            { label: '適合寬度', fit: 'fit-width',  icon: '↔' },
+            { label: '適合高度', fit: 'fit-height', icon: '↕' },
+        ];
+
+        if (hasPhoto) {
+            menu.innerHTML =
+                fitItems.map(it =>
+                    `<button class="ctx-item${it.fit === currentFit ? ' ctx-item--active' : ''}" data-fit="${it.fit}">
+                        <span class="ctx-icon">${it.icon}</span>${it.label}
+                    </button>`
+                ).join('') +
+                `<div class="ctx-sep"></div>
+                 <button class="ctx-item" data-action="reset"><span class="ctx-icon">⊙</span>置中重置</button>
+                 <div class="ctx-sep"></div>
+                 <button class="ctx-item ctx-item--danger" data-action="clear"><span class="ctx-icon">✕</span>清除照片</button>`;
+        } else {
+            menu.innerHTML = `<button class="ctx-item" data-action="pick"><span class="ctx-icon">+</span>放入照片</button>`;
+        }
+
+        document.body.appendChild(menu);
+        const mRect = menu.getBoundingClientRect();
+        menu.style.left = Math.min(clientX, window.innerWidth  - mRect.width  - 8) + 'px';
+        menu.style.top  = Math.min(clientY, window.innerHeight - mRect.height - 8) + 'px';
+
+        menu.querySelectorAll('.ctx-item').forEach(btn => {
+            btn.addEventListener('click', e => {
+                e.stopPropagation();
+                menu.remove();
+                const fit    = btn.dataset.fit;
+                const action = btn.dataset.action;
+                if (fit) {
+                    this._applyFitPreset(slotIdx, fit);
+                } else if (action === 'reset') {
+                    const s = page?.slots[slotIdx];
+                    if (s) { s.crop = { x: 0, y: 0, scale: 1 }; s.fit = 'cover'; }
+                    this.renderCurrentPage(this.cropMode ? this.cropSlotIdx : -1);
+                    this.saveToStorage();
+                } else if (action === 'clear') {
+                    this.clearSlot(slotIdx);
+                } else if (action === 'pick') {
+                    this.openPhotoModal(slotIdx);
+                }
+            });
+        });
+
+        const dismiss = ev => {
+            if (!menu.contains(ev.target)) { menu.remove(); document.removeEventListener('mousedown', dismiss); }
+        };
+        setTimeout(() => document.addEventListener('mousedown', dismiss), 0);
+    }
+
+    _applyFitPreset(slotIdx, fit) {
+        const page = this.book.pages[this.currentPageIndex];
+        const slot = page?.slots[slotIdx];
+        if (!slot) return;
+        slot.fit = fit;
+        if (fit === 'cover') slot.crop = { x: 0, y: 0, scale: 1 };
+        this.renderCurrentPage(this.cropMode ? this.cropSlotIdx : -1);
+        this._updateFitToggleBtn(fit);
+        this.saveToStorage();
+    }
+
     _updateFitToggleBtn(fit) {
         const btn = document.getElementById('fitToggleBtn');
         const hint = document.getElementById('cropModeHint');
@@ -1082,6 +1159,13 @@ class BookEditor {
                 e.preventDefault();
                 const photoId = e.dataTransfer.getData('text/plain');
                 if (photoId) this.setSlotPhoto(slotIdx, photoId);
+            });
+
+            // 右鍵選單
+            slotEl.addEventListener('contextmenu', e => {
+                e.preventDefault();
+                e.stopPropagation();
+                this._showSlotContextMenu(slotIdx, e.clientX, e.clientY);
             });
 
             // 有照片的格子：mousedown 直接進入裁切 + 開始拖移（單一手勢）

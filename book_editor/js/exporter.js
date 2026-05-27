@@ -129,6 +129,20 @@ const BookExporter = {
                 const drawX = slotX + (slotW - drawW) / 2;
                 const drawY = slotY + (slotH - drawH) / 2;
                 ctx.drawImage(img, 0, 0, img.naturalWidth, img.naturalHeight, drawX, drawY, drawW, drawH);
+            } else if (slot.fit === 'fit-width') {
+                const s = slotW / img.naturalWidth;
+                const drawW = slotW;
+                const drawH = img.naturalHeight * s;
+                const drawX = slotX;
+                const drawY = slotY + (slotH - drawH) / 2;
+                ctx.drawImage(img, 0, 0, img.naturalWidth, img.naturalHeight, drawX, drawY, drawW, drawH);
+            } else if (slot.fit === 'fit-height') {
+                const s = slotH / img.naturalHeight;
+                const drawH = slotH;
+                const drawW = img.naturalWidth * s;
+                const drawX = slotX + (slotW - drawW) / 2;
+                const drawY = slotY;
+                ctx.drawImage(img, 0, 0, img.naturalWidth, img.naturalHeight, drawX, drawY, drawW, drawH);
             } else {
                 const cropScale = crop.scale || 1;
                 const wW = cropScale * slotW;

@@ -1107,3 +1107,47 @@ html, body {
     transition: width 0.3s;
 }
 .storage-bar-fill--warn { background: #e57373; }
+
+/* ─── Slot Context Menu ─── */
+.slot-ctx-menu {
+    position: fixed;
+    z-index: 9999;
+    background: var(--panel-bg, #1e1e2e);
+    border: 1px solid var(--border, #333);
+    border-radius: 6px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+    padding: 4px 0;
+    min-width: 148px;
+    font-size: 0.82rem;
+}
+.ctx-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 7px 14px;
+    background: none;
+    border: none;
+    color: var(--text-primary, #e0e0e0);
+    cursor: pointer;
+    text-align: left;
+    transition: background 0.1s;
+    white-space: nowrap;
+}
+.ctx-item:hover { background: var(--border, #333); }
+.ctx-item--active { color: var(--primary, #6378f3); }
+.ctx-item--active .ctx-icon { color: var(--primary, #6378f3); }
+.ctx-item--danger { color: #e57373; }
+.ctx-item--danger:hover { background: rgba(229,115,115,0.12); }
+.ctx-icon {
+    width: 16px;
+    text-align: center;
+    flex-shrink: 0;
+    color: var(--text-muted, #888);
+    font-size: 0.9rem;
+}
+.ctx-sep {
+    height: 1px;
+    background: var(--border, #333);
+    margin: 3px 0;
+}
