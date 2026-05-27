@@ -1304,11 +1304,21 @@ class BookEditor {
     _updateBooksList() {
         const list = this._getBooksList();
         const idx = list.findIndex(b => b.id === this.currentBookId);
-        const entry = { id: this.currentBookId, name: this.book.name, updatedAt: Date.now() };
+        const existing = idx >= 0 ? list[idx] : {};
+        const coverPage = this.book.pages.find(p => p.type === 'cover') || this.book.pages[0];
+        const coverPhotoId = coverPage?.slots?.[0]?.photoId || null;
+        const entry = {
+            id: this.currentBookId,
+            name: this.book.name,
+            updatedAt: Date.now(),
+            pageCount: this.book.pages.length,
+            clientFolder: this.book.clientFolders?.[0] || existing.clientFolder || '',
+            status: existing.status || 'draft',
+            coverPhotoId,
+        };
         if (idx >= 0) list[idx] = entry;
         else list.unshift(entry);
         localStorage.setItem('book_editor_books', JSON.stringify(list));
-        // refresh badge in modal if open
         if (document.getElementById('booksModal')?.classList.contains('active')) {
             this._renderBooksModalList();
         }
@@ -1325,33 +1335,223 @@ class BookEditor {
         const books = this._getBooksList();
         if (books.length === 0) {
             container.innerHTML = '<div class="books-empty">還沒有相本，點擊「新增相本」開始！</div>';
+            this._renderStorageBar();
             return;
         }
-        container.innerHTML = books.map(b => {
+        const statusMap = {
+            draft:       ['草稿',  'status-draft'],
+            'in-progress': ['製作中', 'status-inprogress'],
+            delivered:   ['已交付', 'status-delivered'],
+        };
+        container.innerHTML = books.map((b, i) => {
             const date = new Date(b.updatedAt).toLocaleDateString('zh-TW');
             const isCurrent = b.id === this.currentBookId;
-            return `<div class="books-row${isCurrent ? ' books-row--current' : ''}" data-id="${b.id}">
+            const [statusLabel, statusClass] = statusMap[b.status || 'draft'] || statusMap.draft;
+            const thumbUrl = b.coverPhotoId ? `${CONFIG.WORKER_URL}/${encodeURIComponent(b.coverPhotoId)}` : '';
+            const folder = b.clientFolder || '';
+            const folderShort = folder.length > 22 ? '…' + folder.slice(-20) : folder;
+            return `<div class="books-row${isCurrent ? ' books-row--current' : ''}" data-id="${b.id}" data-idx="${i}" draggable="true">
+                <span class="books-drag-handle" title="拖曳排序">⠿</span>
+                ${thumbUrl
+                    ? `<img class="books-thumb" src="${thumbUrl}" alt="" loading="lazy">`
+                    : '<div class="books-thumb books-thumb--empty"></div>'}
                 <div class="books-row-info">
-                    <span class="books-row-name">${this._escHtml(b.name)}</span>
-                    <span class="books-row-date">${date}</span>
+                    <div class="books-row-top">
+                        <span class="books-row-name">${this._escHtml(b.name)}</span>
+                        <button class="btn btn-icon books-rename-btn" data-id="${b.id}" title="重新命名">✎</button>
+                    </div>
+                    <div class="books-row-meta">
+                        ${b.pageCount ? `<span class="books-meta-chip">${b.pageCount} 頁</span>` : ''}
+                        ${folder ? `<span class="books-meta-chip books-meta-folder" title="${this._escHtml(folder)}">${this._escHtml(folderShort)}</span>` : ''}
+                        <span class="books-row-date">${date}</span>
+                    </div>
                 </div>
                 <div class="books-row-actions">
-                    ${isCurrent ? '<span class="books-current-badge">編輯中</span>' : `<button class="btn btn-secondary books-open-btn" data-id="${b.id}">開啟</button>`}
-                    <button class="btn btn-icon books-dup-btn" data-id="${b.id}" title="複製此相本">⿻</button>
+                    <button class="books-status-btn ${statusClass}" data-id="${b.id}" title="點擊切換狀態">${statusLabel}</button>
+                    ${isCurrent
+                        ? '<span class="books-current-badge">編輯中</span>'
+                        : `<button class="btn btn-secondary books-open-btn" data-id="${b.id}">開啟</button>`}
+                    <button class="btn btn-icon books-dup-btn" data-id="${b.id}" title="複製">⿻</button>
+                    <button class="btn btn-icon books-export-btn" data-id="${b.id}" title="匯出 JSON">⬇</button>
                     <button class="btn btn-icon books-del-btn" data-id="${b.id}" title="刪除">✕</button>
                 </div>
             </div>`;
         }).join('');
 
-        container.querySelectorAll('.books-open-btn').forEach(btn => {
-            btn.addEventListener('click', () => this._openBook(btn.dataset.id));
+        container.querySelectorAll('.books-open-btn').forEach(btn =>
+            btn.addEventListener('click', () => this._openBook(btn.dataset.id)));
+        container.querySelectorAll('.books-dup-btn').forEach(btn =>
+            btn.addEventListener('click', () => this._duplicateBook(btn.dataset.id)));
+        container.querySelectorAll('.books-del-btn').forEach(btn =>
+            btn.addEventListener('click', () => this._deleteBook(btn.dataset.id)));
+        container.querySelectorAll('.books-rename-btn').forEach(btn =>
+            btn.addEventListener('click', () => this._startRename(btn.dataset.id)));
+        container.querySelectorAll('.books-status-btn').forEach(btn =>
+            btn.addEventListener('click', () => this._cycleStatus(btn.dataset.id)));
+        container.querySelectorAll('.books-export-btn').forEach(btn =>
+            btn.addEventListener('click', () => this._exportBook(btn.dataset.id)));
+
+        this._bindDragReorder(container);
+        this._renderStorageBar();
+    }
+
+    _startRename(id) {
+        const row = document.querySelector(`.books-row[data-id="${id}"]`);
+        if (!row) return;
+        const nameSpan = row.querySelector('.books-row-name');
+        if (!nameSpan) return;
+        const orig = nameSpan.textContent;
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.value = orig;
+        input.className = 'books-rename-input';
+        nameSpan.replaceWith(input);
+        input.focus();
+        input.select();
+        const finish = () => {
+            const newName = input.value.trim() || orig;
+            const span = document.createElement('span');
+            span.className = 'books-row-name';
+            span.textContent = newName;
+            input.replaceWith(span);
+            if (newName !== orig) this._saveBookName(id, newName);
+        };
+        input.addEventListener('blur', finish);
+        input.addEventListener('keydown', e => {
+            if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
+            if (e.key === 'Escape') { input.value = orig; input.blur(); }
         });
-        container.querySelectorAll('.books-dup-btn').forEach(btn => {
-            btn.addEventListener('click', () => this._duplicateBook(btn.dataset.id));
+    }
+
+    _saveBookName(id, name) {
+        const list = this._getBooksList();
+        const entry = list.find(b => b.id === id);
+        if (entry) { entry.name = name; localStorage.setItem('book_editor_books', JSON.stringify(list)); }
+        try {
+            const raw = localStorage.getItem(`book_editor_${id}`);
+            if (raw) {
+                const book = JSON.parse(raw);
+                book.name = name;
+                localStorage.setItem(`book_editor_${id}`, JSON.stringify(book));
+            }
+        } catch (e) {}
+        if (id === this.currentBookId) {
+            this.book.name = name;
+            const inp = document.getElementById('bookName');
+            if (inp) inp.value = name;
+        }
+    }
+
+    _cycleStatus(id) {
+        const order = ['draft', 'in-progress', 'delivered'];
+        const list = this._getBooksList();
+        const entry = list.find(b => b.id === id);
+        if (!entry) return;
+        const next = order[(order.indexOf(entry.status || 'draft') + 1) % order.length];
+        entry.status = next;
+        localStorage.setItem('book_editor_books', JSON.stringify(list));
+        this._renderBooksModalList();
+    }
+
+    _exportBook(id) {
+        const raw = localStorage.getItem(`book_editor_${id}`);
+        if (!raw) return;
+        const book = JSON.parse(raw);
+        const list = this._getBooksList();
+        const meta = list.find(b => b.id === id) || {};
+        const payload = { ...book, _meta: { id, status: meta.status, exportedAt: new Date().toISOString() } };
+        const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = `${(book.name || 'book').replace(/[/\\:*?"<>|]/g, '_')}.photobook.json`;
+        a.click();
+        URL.revokeObjectURL(a.href);
+    }
+
+    _importBook(file) {
+        const reader = new FileReader();
+        reader.onload = e => {
+            try {
+                const data = JSON.parse(e.target.result);
+                if (!data.pages || !Array.isArray(data.pages)) throw new Error('invalid');
+                const importedMeta = data._meta || {};
+                delete data._meta;
+                data.name = data.name || '匯入的相本';
+                const newId = this._generateId();
+                localStorage.setItem(`book_editor_${newId}`, JSON.stringify(data));
+                const list = this._getBooksList();
+                list.unshift({
+                    id: newId, name: data.name, updatedAt: Date.now(),
+                    pageCount: data.pages.length, status: importedMeta.status || 'draft',
+                    clientFolder: data.clientFolders?.[0] || '',
+                    coverPhotoId: data.pages[0]?.slots?.[0]?.photoId || null,
+                });
+                localStorage.setItem('book_editor_books', JSON.stringify(list));
+                toast.success(`已匯入「${data.name}」`);
+                this._renderBooksModalList();
+            } catch (err) {
+                toast.error('匯入失敗：格式錯誤');
+            }
+        };
+        reader.readAsText(file);
+    }
+
+    _bindDragReorder(container) {
+        let dragId = null;
+        container.querySelectorAll('.books-row').forEach(row => {
+            row.addEventListener('dragstart', e => {
+                dragId = row.dataset.id;
+                row.classList.add('books-row--dragging');
+                e.dataTransfer.effectAllowed = 'move';
+            });
+            row.addEventListener('dragend', () => {
+                row.classList.remove('books-row--dragging');
+                container.querySelectorAll('.books-row--drag-over').forEach(r => r.classList.remove('books-row--drag-over'));
+            });
+            row.addEventListener('dragover', e => {
+                e.preventDefault();
+                if (row.dataset.id === dragId) return;
+                container.querySelectorAll('.books-row--drag-over').forEach(r => r.classList.remove('books-row--drag-over'));
+                row.classList.add('books-row--drag-over');
+            });
+            row.addEventListener('drop', e => {
+                e.preventDefault();
+                if (!dragId || row.dataset.id === dragId) return;
+                const list = this._getBooksList();
+                const from = list.findIndex(b => b.id === dragId);
+                const to = list.findIndex(b => b.id === row.dataset.id);
+                if (from < 0 || to < 0) return;
+                const [moved] = list.splice(from, 1);
+                list.splice(to, 0, moved);
+                localStorage.setItem('book_editor_books', JSON.stringify(list));
+                this._renderBooksModalList();
+            });
         });
-        container.querySelectorAll('.books-del-btn').forEach(btn => {
-            btn.addEventListener('click', () => this._deleteBook(btn.dataset.id));
-        });
+    }
+
+    _getStorageUsage() {
+        let used = 0;
+        for (let i = 0; i < localStorage.length; i++) {
+            const k = localStorage.key(i);
+            used += (k.length + (localStorage.getItem(k) || '').length) * 2;
+        }
+        const max = 5 * 1024 * 1024;
+        return { used, max, pct: Math.min(100, Math.round(used / max * 100)) };
+    }
+
+    _renderStorageBar() {
+        const el = document.getElementById('booksStorageBar');
+        if (!el) return;
+        const { used, pct } = this._getStorageUsage();
+        const usedKB = (used / 1024).toFixed(0);
+        const warn = pct > 80;
+        el.innerHTML = `<div class="storage-bar-label">
+            儲存空間：${usedKB} KB / 5120 KB（${pct}%）
+            ${warn ? '<span class="storage-warn">⚠ 空間不足，請匯出並刪除舊相本</span>' : ''}
+        </div>
+        <div class="storage-bar-track">
+            <div class="storage-bar-fill${warn ? ' storage-bar-fill--warn' : ''}" style="width:${pct}%"></div>
+        </div>`;
     }
 
     _openBook(id) {
@@ -1362,14 +1562,18 @@ class BookEditor {
     async _duplicateBook(srcId) {
         const raw = localStorage.getItem(`book_editor_${srcId}`);
         if (!raw) return;
-        const src = JSON.parse(raw);
-        const newId = this._generateId();
-        const copy = JSON.parse(JSON.stringify(src));
+        const copy = JSON.parse(raw);
         copy.name = copy.name + ' (複本)';
+        const newId = this._generateId();
         localStorage.setItem(`book_editor_${newId}`, JSON.stringify(copy));
         const list = this._getBooksList();
+        const srcMeta = list.find(b => b.id === srcId) || {};
         const srcIdx = list.findIndex(b => b.id === srcId);
-        const entry = { id: newId, name: copy.name, updatedAt: Date.now() };
+        const entry = {
+            id: newId, name: copy.name, updatedAt: Date.now(),
+            pageCount: copy.pages?.length || 0, status: srcMeta.status || 'draft',
+            clientFolder: srcMeta.clientFolder || '', coverPhotoId: srcMeta.coverPhotoId || null,
+        };
         list.splice(srcIdx + 1, 0, entry);
         localStorage.setItem('book_editor_books', JSON.stringify(list));
         toast.success('已複製相本');
@@ -1385,13 +1589,8 @@ class BookEditor {
         const newList = list.filter(b => b.id !== id);
         localStorage.setItem('book_editor_books', JSON.stringify(newList));
         if (id === this.currentBookId) {
-            if (newList.length > 0) {
-                location.href = `?id=${newList[0].id}`;
-            } else {
-                const newId = this._generateId();
-                history.replaceState(null, '', `?id=${newId}`);
-                location.reload();
-            }
+            if (newList.length > 0) { location.href = `?id=${newList[0].id}`; }
+            else { const nid = this._generateId(); history.replaceState(null, '', `?id=${nid}`); location.reload(); }
             return;
         }
         this._renderBooksModalList();
@@ -1399,12 +1598,11 @@ class BookEditor {
 
     _createNewBook() {
         this.saveToStorage();
-        const newId = this._generateId();
-        location.href = `?id=${newId}`;
+        location.href = `?id=${this._generateId()}`;
     }
 
     _escHtml(s) {
-        return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+        return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
     }
 
     // ─── 雲端分享 ────────────────────────────
@@ -1710,6 +1908,11 @@ class BookEditor {
         this._on('booksBtn', 'click', () => this.openBooksModal());
         this._on('closeBooksModalBtn', 'click', () => document.getElementById('booksModal')?.classList.remove('active'));
         this._on('newBookBtn', 'click', () => this._createNewBook());
+        this._on('importBookBtn', 'click', () => document.getElementById('importBookInput')?.click());
+        this._on('importBookInput', 'change', e => {
+            const f = e.target.files?.[0];
+            if (f) { this._importBook(f); e.target.value = ''; }
+        });
         document.getElementById('booksModal')?.addEventListener('click', e => {
             if (e.target.id === 'booksModal') document.getElementById('booksModal').classList.remove('active');
         });

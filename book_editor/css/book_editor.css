@@ -943,44 +943,124 @@ html, body {
 .books-row {
     display: flex;
     align-items: center;
-    gap: 10px;
-    padding: 10px 16px;
+    gap: 8px;
+    padding: 8px 12px;
     border-bottom: 1px solid var(--border);
     transition: background 0.15s;
+    cursor: default;
 }
 .books-row:hover { background: var(--panel-bg); }
 .books-row--current { background: rgba(99,120,243,0.08); }
+.books-row--dragging { opacity: 0.4; }
+.books-row--drag-over { outline: 2px solid var(--primary); outline-offset: -2px; }
+
+.books-drag-handle {
+    color: var(--text-muted);
+    font-size: 1rem;
+    cursor: grab;
+    padding: 0 2px;
+    flex-shrink: 0;
+    line-height: 1;
+}
+.books-drag-handle:active { cursor: grabbing; }
+
+.books-thumb {
+    width: 48px;
+    height: 48px;
+    object-fit: cover;
+    flex-shrink: 0;
+    border-radius: 3px;
+    background: var(--border);
+}
+.books-thumb--empty {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.2rem;
+    color: var(--text-muted);
+    border: 1px dashed var(--border);
+}
+
 .books-row-info {
     flex: 1;
     min-width: 0;
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: 4px;
+}
+.books-row-top {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    min-width: 0;
 }
 .books-row-name {
-    font-size: 0.9rem;
+    font-size: 0.88rem;
     font-weight: 500;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
     color: var(--text-primary);
+    flex: 1;
+    min-width: 0;
 }
-.books-row-date {
-    font-size: 0.72rem;
-    color: var(--text-muted);
+.books-rename-input {
+    flex: 1;
+    min-width: 0;
+    font-size: 0.88rem;
+    font-weight: 500;
+    background: var(--input-bg, var(--panel-bg));
+    border: 1px solid var(--primary);
+    color: var(--text-primary);
+    border-radius: 3px;
+    padding: 1px 5px;
+    outline: none;
 }
-.books-row-actions {
+.books-rename-btn {
+    opacity: 0;
+    transition: opacity 0.15s;
+    font-size: 0.8rem;
+    padding: 1px 4px;
+    flex-shrink: 0;
+}
+.books-row:hover .books-rename-btn { opacity: 1; }
+
+.books-row-meta {
     display: flex;
     align-items: center;
     gap: 6px;
+    flex-wrap: wrap;
+}
+.books-meta-chip {
+    font-size: 0.68rem;
+    background: var(--border);
+    color: var(--text-muted);
+    padding: 1px 5px;
+    border-radius: 3px;
+    white-space: nowrap;
+    max-width: 140px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.books-meta-folder { font-family: monospace; }
+.books-row-date {
+    font-size: 0.7rem;
+    color: var(--text-muted);
+}
+
+.books-row-actions {
+    display: flex;
+    align-items: center;
+    gap: 4px;
     flex-shrink: 0;
 }
 .books-current-badge {
-    font-size: 0.7rem;
+    font-size: 0.68rem;
     color: var(--primary);
     padding: 2px 7px;
     border: 1px solid var(--primary);
     border-radius: 4px;
+    white-space: nowrap;
 }
 .books-empty {
     padding: 32px;
@@ -988,3 +1068,42 @@ html, body {
     color: var(--text-muted);
     font-size: 0.85rem;
 }
+
+/* Status badges */
+.books-status-btn {
+    font-size: 0.68rem;
+    padding: 2px 7px;
+    border-radius: 4px;
+    border: 1px solid;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: opacity 0.15s;
+    background: transparent;
+}
+.books-status-btn:hover { opacity: 0.75; }
+.status-draft        { color: #8a8a8a; border-color: #8a8a8a; }
+.status-inprogress   { color: #e5a448; border-color: #e5a448; }
+.status-delivered    { color: #4caf7d; border-color: #4caf7d; }
+
+/* Storage bar */
+.storage-bar-label {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 5px;
+    color: var(--text-muted);
+}
+.storage-warn { color: #e57373; font-weight: 500; }
+.storage-bar-track {
+    height: 4px;
+    background: var(--border);
+    border-radius: 2px;
+    overflow: hidden;
+}
+.storage-bar-fill {
+    height: 100%;
+    background: var(--primary);
+    border-radius: 2px;
+    transition: width 0.3s;
+}
+.storage-bar-fill--warn { background: #e57373; }
