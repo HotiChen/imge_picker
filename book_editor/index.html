@@ -17,6 +17,7 @@
     <header class="top-bar">
         <div class="top-bar-left">
             <a href="../index.html" class="btn btn-icon" title="回到選圖">←</a>
+            <button id="booksBtn" class="btn btn-secondary" title="切換 / 管理所有相本">📚 書單</button>
             <span style="font-size:1.1rem;">📖</span>
             <input type="text" id="bookName" class="book-title-input" value="未命名相本" placeholder="相本名稱">
             <span id="cloudStatusIndicator" style="font-size:0.72rem;color:#9fa8da;white-space:nowrap;"></span>
@@ -402,6 +403,21 @@
         </div>
         <div id="bgPickerGrid" class="modal-library-grid" style="max-height:340px;overflow-y:auto;padding:12px;">
             <div style="color:var(--text-muted);font-size:0.8rem;padding:24px;text-align:center;grid-column:1/-1;">載入中...</div>
+        </div>
+    </div>
+</div>
+
+<!-- Books Modal -->
+<div id="booksModal" class="modal-overlay">
+    <div class="modal-box" style="width:min(500px,94vw);">
+        <div class="modal-header">
+            <h3>📚 我的相本</h3>
+            <button id="closeBooksModalBtn" class="btn btn-icon">×</button>
+        </div>
+        <div style="padding:12px 16px;border-bottom:1px solid var(--border);">
+            <button id="newBookBtn" class="btn btn-primary" style="width:100%;">+ 新增相本</button>
+        </div>
+        <div id="booksModalList" style="max-height:420px;overflow-y:auto;padding:8px 0;">
         </div>
     </div>
 </div>

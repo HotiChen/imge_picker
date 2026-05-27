@@ -1,5 +1,6 @@
 class BookEditor {
     constructor() {
+        this.currentBookId = null;
         this.book = {
             name: '未命名相本',
             clientFolders: [],
@@ -35,6 +36,9 @@ class BookEditor {
         const customIds = LayoutEditor.loadSaved();
         customIds.forEach(id => this.addCustomLayoutBtn(id, LAYOUTS[id].name));
 
+        const { id, showModal } = this._initBookId();
+        this.currentBookId = id;
+
         if (!this.loadFromStorage()) {
             this._addPage('cover', 'full-bleed');
             this._addPage('inner', '2-up-h');
@@ -44,6 +48,10 @@ class BookEditor {
         this.bindEvents();
         this.renderAll();
         this.checkCloudStatus();
+
+        if (showModal) {
+            setTimeout(() => this.openBooksModal(), 300);
+        }
 
         // Import photos handed over from main picker
         const importRaw = localStorage.getItem('book_editor_import');
@@ -1238,16 +1246,165 @@ class BookEditor {
 
     saveToStorage() {
         try {
-            localStorage.setItem('book_editor_state', JSON.stringify(this.book));
+            localStorage.setItem(`book_editor_${this.currentBookId}`, JSON.stringify(this.book));
+            this._updateBooksList();
         } catch (e) { /* quota exceeded */ }
     }
 
     loadFromStorage() {
         try {
-            const saved = localStorage.getItem('book_editor_state');
+            const saved = localStorage.getItem(`book_editor_${this.currentBookId}`);
             if (saved) { this.book = JSON.parse(saved); return true; }
         } catch (e) {}
         return false;
+    }
+
+    // ─── 書本管理 ────────────────────────────
+
+    _initBookId() {
+        const params = new URLSearchParams(location.search);
+        let id = params.get('id');
+
+        if (id) return { id, showModal: false };
+
+        const books = this._getBooksList();
+
+        // 遷移舊單一書本資料
+        const oldData = localStorage.getItem('book_editor_state');
+        if (oldData) {
+            try {
+                const parsed = JSON.parse(oldData);
+                const newId = this._generateId();
+                localStorage.setItem(`book_editor_${newId}`, oldData);
+                const entry = { id: newId, name: parsed.name || '相本', updatedAt: Date.now() };
+                const newList = books.length ? [entry, ...books] : [entry];
+                localStorage.setItem('book_editor_books', JSON.stringify(newList));
+                localStorage.removeItem('book_editor_state');
+                history.replaceState(null, '', `?id=${newId}`);
+                return { id: newId, showModal: newList.length > 1 };
+            } catch (e) {}
+        }
+
+        if (books.length > 0) {
+            const recent = books[0];
+            history.replaceState(null, '', `?id=${recent.id}`);
+            return { id: recent.id, showModal: books.length > 1 };
+        }
+
+        const newId = this._generateId();
+        history.replaceState(null, '', `?id=${newId}`);
+        return { id: newId, showModal: false };
+    }
+
+    _getBooksList() {
+        try { return JSON.parse(localStorage.getItem('book_editor_books') || '[]'); }
+        catch (e) { return []; }
+    }
+
+    _updateBooksList() {
+        const list = this._getBooksList();
+        const idx = list.findIndex(b => b.id === this.currentBookId);
+        const entry = { id: this.currentBookId, name: this.book.name, updatedAt: Date.now() };
+        if (idx >= 0) list[idx] = entry;
+        else list.unshift(entry);
+        localStorage.setItem('book_editor_books', JSON.stringify(list));
+        // refresh badge in modal if open
+        if (document.getElementById('booksModal')?.classList.contains('active')) {
+            this._renderBooksModalList();
+        }
+    }
+
+    openBooksModal() {
+        this._renderBooksModalList();
+        document.getElementById('booksModal')?.classList.add('active');
+    }
+
+    _renderBooksModalList() {
+        const container = document.getElementById('booksModalList');
+        if (!container) return;
+        const books = this._getBooksList();
+        if (books.length === 0) {
+            container.innerHTML = '<div class="books-empty">還沒有相本，點擊「新增相本」開始！</div>';
+            return;
+        }
+        container.innerHTML = books.map(b => {
+            const date = new Date(b.updatedAt).toLocaleDateString('zh-TW');
+            const isCurrent = b.id === this.currentBookId;
+            return `<div class="books-row${isCurrent ? ' books-row--current' : ''}" data-id="${b.id}">
+                <div class="books-row-info">
+                    <span class="books-row-name">${this._escHtml(b.name)}</span>
+                    <span class="books-row-date">${date}</span>
+                </div>
+                <div class="books-row-actions">
+                    ${isCurrent ? '<span class="books-current-badge">編輯中</span>' : `<button class="btn btn-secondary books-open-btn" data-id="${b.id}">開啟</button>`}
+                    <button class="btn btn-icon books-dup-btn" data-id="${b.id}" title="複製此相本">⿻</button>
+                    <button class="btn btn-icon books-del-btn" data-id="${b.id}" title="刪除">✕</button>
+                </div>
+            </div>`;
+        }).join('');
+
+        container.querySelectorAll('.books-open-btn').forEach(btn => {
+            btn.addEventListener('click', () => this._openBook(btn.dataset.id));
+        });
+        container.querySelectorAll('.books-dup-btn').forEach(btn => {
+            btn.addEventListener('click', () => this._duplicateBook(btn.dataset.id));
+        });
+        container.querySelectorAll('.books-del-btn').forEach(btn => {
+            btn.addEventListener('click', () => this._deleteBook(btn.dataset.id));
+        });
+    }
+
+    _openBook(id) {
+        this.saveToStorage();
+        location.href = `?id=${id}`;
+    }
+
+    async _duplicateBook(srcId) {
+        const raw = localStorage.getItem(`book_editor_${srcId}`);
+        if (!raw) return;
+        const src = JSON.parse(raw);
+        const newId = this._generateId();
+        const copy = JSON.parse(JSON.stringify(src));
+        copy.name = copy.name + ' (複本)';
+        localStorage.setItem(`book_editor_${newId}`, JSON.stringify(copy));
+        const list = this._getBooksList();
+        const srcIdx = list.findIndex(b => b.id === srcId);
+        const entry = { id: newId, name: copy.name, updatedAt: Date.now() };
+        list.splice(srcIdx + 1, 0, entry);
+        localStorage.setItem('book_editor_books', JSON.stringify(list));
+        toast.success('已複製相本');
+        this._renderBooksModalList();
+    }
+
+    async _deleteBook(id) {
+        const list = this._getBooksList();
+        const target = list.find(b => b.id === id);
+        if (!target) return;
+        if (!await this._confirm(`確定刪除「${target.name}」？此操作無法還原。`, '刪除', 'btn-danger')) return;
+        localStorage.removeItem(`book_editor_${id}`);
+        const newList = list.filter(b => b.id !== id);
+        localStorage.setItem('book_editor_books', JSON.stringify(newList));
+        if (id === this.currentBookId) {
+            if (newList.length > 0) {
+                location.href = `?id=${newList[0].id}`;
+            } else {
+                const newId = this._generateId();
+                history.replaceState(null, '', `?id=${newId}`);
+                location.reload();
+            }
+            return;
+        }
+        this._renderBooksModalList();
+    }
+
+    _createNewBook() {
+        this.saveToStorage();
+        const newId = this._generateId();
+        location.href = `?id=${newId}`;
+    }
+
+    _escHtml(s) {
+        return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
     }
 
     // ─── 雲端分享 ────────────────────────────
@@ -1549,13 +1706,21 @@ class BookEditor {
             if (e.target.id === 'layoutEditorModal') LayoutEditor.close();
         });
 
+        // 書單
+        this._on('booksBtn', 'click', () => this.openBooksModal());
+        this._on('closeBooksModalBtn', 'click', () => document.getElementById('booksModal')?.classList.remove('active'));
+        this._on('newBookBtn', 'click', () => this._createNewBook());
+        document.getElementById('booksModal')?.addEventListener('click', e => {
+            if (e.target.id === 'booksModal') document.getElementById('booksModal').classList.remove('active');
+        });
+
         // 匯出
         this._on('exportBtn', 'click', () => BookExporter.exportAll(this.book));
 
         // 清除所有資料
         this._on('clearBookBtn', 'click', async () => {
             if (await this._confirm('確定要清除相本並重新開始？所有頁面都會消失。', '清除重設')) {
-                localStorage.removeItem('book_editor_state');
+                localStorage.removeItem(`book_editor_${this.currentBookId}`);
                 this.book = { name: '未命名相本', clientFolders: [], notifyUrl: '', settings: { width: 20, height: 20, unit: 'cm', dpi: 300 }, coverSettings: { width: 20, height: 20, unit: 'cm', dpi: 300 }, pages: [] };
                 this._addPage('cover', 'full-bleed');
                 this._addPage('inner', '2-up-h');
