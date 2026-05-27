@@ -201,6 +201,14 @@ class App {
         // 相本書
         this.addListener('openBookEditorBtn', 'click', () => this.openBookEditor());
 
+        // 上傳頁
+        this.addListener('uploadPageBtn', 'click', e => {
+            e.preventDefault();
+            const folder = driveManager.currentFolderId || '';
+            const url = 'upload.html' + (folder ? `?folder=${encodeURIComponent(folder)}` : '');
+            window.open(url, '_blank');
+        });
+
         // 載入按鈕
         this.addListener('loadPhotosBtn', 'click', () => {
             const path = document.getElementById('driveUrl').value.trim();
