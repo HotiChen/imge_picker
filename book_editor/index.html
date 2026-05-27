@@ -91,6 +91,12 @@
             <div id="cropModeBar" class="crop-mode-bar">
                 <span id="cropModeHint">✂ 裁切模式：拖移平移 · 滾輪縮放</span>
                 <button id="fitToggleBtn" class="btn btn-secondary" style="padding:4px 12px;font-size:0.78rem;" title="切換完整顯示 / 裁切填滿">⊞ 完整顯示</button>
+                <span style="display:flex;align-items:center;gap:6px;margin-left:4px;">
+                    <span style="font-size:0.75rem;color:var(--text-muted);">旋轉</span>
+                    <input type="range" id="rotationSlider" min="-180" max="180" value="0" step="1" style="width:80px;cursor:pointer;accent-color:var(--primary);">
+                    <span id="rotationVal" style="font-size:0.75rem;min-width:32px;font-variant-numeric:tabular-nums;">0°</span>
+                    <button id="resetRotBtn" class="btn btn-icon" title="重置旋轉" style="font-size:1rem;">↺</button>
+                </span>
                 <button id="cropDoneBtn" class="btn btn-primary" style="padding:4px 12px;font-size:0.8rem;">完成</button>
             </div>
             <div id="slotEditModeBar" class="crop-mode-bar" style="background:rgba(100,180,255,0.12);border-color:rgba(100,180,255,0.3);color:#64b4ff;">

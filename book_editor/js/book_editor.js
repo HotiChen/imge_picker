@@ -184,6 +184,7 @@ class BookEditor {
         if (bar) { bar.style.display = 'flex'; bar.classList.add('bar-flash'); setTimeout(() => bar.classList.remove('bar-flash'), 600); }
         const page = this.book.pages[this.currentPageIndex];
         this._updateFitToggleBtn(page?.slots[slotIdx]?.fit || 'cover');
+        this._updateRotationUI(slotIdx);
         if (!localStorage.getItem('book_editor_crop_hinted')) {
             localStorage.setItem('book_editor_crop_hinted', '1');
             toast.info('裁切模式：拖移平移 · 滾輪縮放 · 點「完整顯示」可切換顯示方式');
@@ -210,6 +211,7 @@ class BookEditor {
         ];
 
         if (hasPhoto) {
+            const currentRot = Math.round(slot?.crop?.rotation || 0);
             menu.innerHTML =
                 fitItems.map(it =>
                     `<button class="ctx-item${it.fit === currentFit ? ' ctx-item--active' : ''}" data-fit="${it.fit}">
@@ -218,6 +220,11 @@ class BookEditor {
                 ).join('') +
                 `<div class="ctx-sep"></div>
                  <button class="ctx-item" data-action="reset"><span class="ctx-icon">⊙</span>置中重置</button>
+                 <div class="ctx-sep"></div>
+                 <button class="ctx-item" data-action="rot90"><span class="ctx-icon">↻</span>旋轉 +90°</button>
+                 <button class="ctx-item" data-action="rot-90"><span class="ctx-icon">↺</span>旋轉 -90°</button>
+                 <button class="ctx-item" data-action="rot180"><span class="ctx-icon">🔃</span>旋轉 180°</button>
+                 <button class="ctx-item${currentRot !== 0 ? '' : ' ctx-item--disabled'}" data-action="rot0"><span class="ctx-icon">⊘</span>重置旋轉 (${currentRot}°→0°)</button>
                  <div class="ctx-sep"></div>
                  <button class="ctx-item ctx-item--danger" data-action="clear"><span class="ctx-icon">✕</span>清除照片</button>`;
         } else {
@@ -239,8 +246,21 @@ class BookEditor {
                     this._applyFitPreset(slotIdx, fit);
                 } else if (action === 'reset') {
                     const s = page?.slots[slotIdx];
-                    if (s) { s.crop = { x: 0, y: 0, scale: 1 }; s.fit = 'cover'; }
+                    if (s) { s.crop = { x: 0, y: 0, scale: 1, rotation: 0 }; s.fit = 'cover'; }
                     this.renderCurrentPage(this.cropMode ? this.cropSlotIdx : -1);
+                    this._updateRotationUI(slotIdx);
+                    this.saveToStorage();
+                } else if (action === 'rot90' || action === 'rot-90' || action === 'rot180' || action === 'rot0') {
+                    const s = page?.slots[slotIdx];
+                    if (!s) return;
+                    if (!s.crop) s.crop = { x: 0, y: 0, scale: 1, rotation: 0 };
+                    const cur = s.crop.rotation || 0;
+                    s.crop.rotation = action === 'rot90' ? cur + 90
+                                    : action === 'rot-90' ? cur - 90
+                                    : action === 'rot180' ? cur + 180
+                                    : 0;
+                    this._updateSlotTransform(slotIdx);
+                    this._updateRotationUI(slotIdx);
                     this.saveToStorage();
                 } else if (action === 'clear') {
                     this.clearSlot(slotIdx);
@@ -432,10 +452,21 @@ class BookEditor {
         const scale = crop.scale || 1;
         const cropX = (crop.x || 0) * 100;
         const cropY = (crop.y || 0) * 100;
+        const rotation = crop.rotation || 0;
         wrapper.style.width = `${100 * scale}%`;
         wrapper.style.height = `${100 * scale}%`;
+        wrapper.style.transform = `translate(-50%,-50%) rotate(${rotation}deg)`;
         const img = wrapper.querySelector('img');
         if (img) img.style.objectPosition = `${50 + cropX}% ${50 + cropY}%`;
+    }
+
+    _updateRotationUI(slotIdx) {
+        const page = this.book.pages[this.currentPageIndex];
+        const rot = Math.round(page?.slots[slotIdx]?.crop?.rotation || 0);
+        const slider = document.getElementById('rotationSlider');
+        const val = document.getElementById('rotationVal');
+        if (slider) slider.value = rot;
+        if (val) val.textContent = rot + '°';
     }
 
     // ─── 照片庫 ──────────────────────────────
@@ -1188,6 +1219,42 @@ class BookEditor {
                     crop.scale = Math.max(1, Math.min(4, (crop.scale || 1) + (e.deltaY < 0 ? 0.1 : -0.1)));
                     this._updateSlotTransform(slotIdx);
                 }, { passive: false });
+
+                // 旋轉 handle（在 crop 模式下顯示）
+                if (this.cropMode && this.cropSlotIdx === slotIdx) {
+                    const handle = document.createElement('div');
+                    handle.className = 'slot-rotate-handle';
+                    handle.title = '拖曳自由旋轉';
+                    handle.textContent = '↻';
+                    slotEl.appendChild(handle);
+
+                    handle.addEventListener('mousedown', e => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        const rect = slotEl.getBoundingClientRect();
+                        const cx = rect.left + rect.width / 2;
+                        const cy = rect.top + rect.height / 2;
+                        const startAngle = Math.atan2(e.clientY - cy, e.clientX - cx) * 180 / Math.PI;
+                        const pg = this.book.pages[this.currentPageIndex];
+                        const startRotation = pg?.slots[slotIdx]?.crop?.rotation || 0;
+
+                        const onMove = ev => {
+                            const angle = Math.atan2(ev.clientY - cy, ev.clientX - cx) * 180 / Math.PI;
+                            const p = this.book.pages[this.currentPageIndex];
+                            if (!p?.slots[slotIdx]) return;
+                            p.slots[slotIdx].crop.rotation = startRotation + (angle - startAngle);
+                            this._updateSlotTransform(slotIdx);
+                            this._updateRotationUI(slotIdx);
+                        };
+                        const onUp = () => {
+                            document.removeEventListener('mousemove', onMove);
+                            document.removeEventListener('mouseup', onUp);
+                            this.saveToStorage();
+                        };
+                        document.addEventListener('mousemove', onMove);
+                        document.addEventListener('mouseup', onUp);
+                    });
+                }
             }
         });
 
@@ -1986,6 +2053,30 @@ class BookEditor {
         this._on('saveLayoutEditorBtn', 'click', () => LayoutEditor.save());
         this._on('layoutEditorModal', 'click', e => {
             if (e.target.id === 'layoutEditorModal') LayoutEditor.close();
+        });
+
+        // 旋轉 slider
+        this._on('rotationSlider', 'input', e => {
+            const page = this.book.pages[this.currentPageIndex];
+            if (!page || this.cropSlotIdx < 0) return;
+            const rot = parseInt(e.target.value);
+            if (!page.slots[this.cropSlotIdx].crop) page.slots[this.cropSlotIdx].crop = { x: 0, y: 0, scale: 1 };
+            page.slots[this.cropSlotIdx].crop.rotation = rot;
+            const val = document.getElementById('rotationVal');
+            if (val) val.textContent = rot + '°';
+            this._updateSlotTransform(this.cropSlotIdx);
+        });
+        this._on('rotationSlider', 'change', () => this.saveToStorage());
+        this._on('resetRotBtn', 'click', () => {
+            const page = this.book.pages[this.currentPageIndex];
+            if (!page || this.cropSlotIdx < 0) return;
+            page.slots[this.cropSlotIdx].crop.rotation = 0;
+            const slider = document.getElementById('rotationSlider');
+            if (slider) slider.value = 0;
+            const val = document.getElementById('rotationVal');
+            if (val) val.textContent = '0°';
+            this._updateSlotTransform(this.cropSlotIdx);
+            this.saveToStorage();
         });
 
         // 書單

@@ -122,6 +122,15 @@ const BookExporter = {
             ctx.rect(slotX, slotY, slotW, slotH);
             ctx.clip();
 
+            const rotationDeg = crop.rotation || 0;
+            if (rotationDeg !== 0) {
+                const cx = slotX + slotW / 2;
+                const cy = slotY + slotH / 2;
+                ctx.translate(cx, cy);
+                ctx.rotate(rotationDeg * Math.PI / 180);
+                ctx.translate(-cx, -cy);
+            }
+
             if (slot.fit === 'contain') {
                 const s = Math.min(slotW / img.naturalWidth, slotH / img.naturalHeight);
                 const drawW = img.naturalWidth * s;

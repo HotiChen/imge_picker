@@ -1151,3 +1151,26 @@ html, body {
     background: var(--border, #333);
     margin: 3px 0;
 }
+
+/* ─── Rotation Handle ─── */
+.slot-rotate-handle {
+    position: absolute;
+    top: 6px;
+    left: 6px;
+    width: 24px;
+    height: 24px;
+    background: var(--primary);
+    border-radius: 50%;
+    cursor: grab;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: white;
+    font-size: 14px;
+    z-index: 10;
+    user-select: none;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.4);
+    transition: transform 0.1s;
+}
+.slot-rotate-handle:hover { transform: scale(1.15); }
+.slot-rotate-handle:active { cursor: grabbing; }

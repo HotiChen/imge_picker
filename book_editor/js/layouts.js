@@ -132,17 +132,18 @@ function renderPageHTML(page, displayW, displayH, cropSlotIdx = -1) {
                     <button class="slot-clear-btn" data-slot-idx="${idx}" title="移除照片">×</button>
                 `;
             } else {
+                const rotation = crop.rotation || 0;
                 innerHTML = `
                     <div class="slot-crop-wrapper" style="
                         position:absolute; overflow:hidden;
                         width:${100 * scale}%; height:${100 * scale}%;
                         top:50%; left:50%;
-                        transform:translate(-50%,-50%);
+                        transform:translate(-50%,-50%) rotate(${rotation}deg);
                     ">
                         <img src="${src}" draggable="false" style="width:100%;height:100%;object-fit:cover;object-position:${50+cropX}% ${50+cropY}%;display:block;pointer-events:none;">
                     </div>
                     <button class="slot-clear-btn" data-slot-idx="${idx}" title="移除照片">×</button>
-                    ${isCropActive ? '<div class="crop-hint">拖移平移 · 滾輪縮放</div>' : ''}
+                    ${isCropActive ? '<div class="crop-hint">拖移平移 · 滾輪縮放 · ↻ 拖旋轉鈕</div>' : ''}
                 `;
             }
         } else {
