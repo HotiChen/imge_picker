@@ -153,8 +153,8 @@ export default {
       return new Response('Not found', { status: 404, headers: corsHeaders });
     }
 
-    // ─── 素材上傳 (PUT /_assets/...) ─────────────────────────────
-    if (request.method === 'PUT' && pathParts[0] === '_assets') {
+    // ─── 圖片上傳 (PUT /:key, 需 Bearer Token) ───────────────────
+    if (request.method === 'PUT') {
       if (env.PHOTOGRAPHER_TOKEN) {
         const auth = request.headers.get('Authorization') || '';
         const token = auth.replace(/^Bearer\s+/i, '').trim();
@@ -165,7 +165,9 @@ export default {
           });
         }
       }
-      const key = decodeURIComponent(url.pathname.slice(1));
+      // Support both /_assets/path (legacy) and /path directly
+      let key = decodeURIComponent(url.pathname.slice(1));
+      if (key.startsWith('_assets/')) key = key.slice('_assets/'.length);
       const contentType = request.headers.get('Content-Type') || 'image/jpeg';
       await env.imagepicker.put(key, request.body, { httpMetadata: { contentType } });
       return new Response(JSON.stringify({ ok: true, key }), {
