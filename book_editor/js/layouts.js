@@ -102,6 +102,7 @@ function renderPageHTML(page, displayW, displayH, cropSlotIdx = -1) {
         const scale = crop.scale || 1;
         const cropX = (crop.x || 0) * 100;
         const cropY = (crop.y || 0) * 100;
+        const rotation = crop.rotation || 0;
         const sx = slot.override?.x ?? slotDef.x;
         const sy = slot.override?.y ?? slotDef.y;
         const sw = slot.override?.w ?? slotDef.w;
@@ -133,13 +134,12 @@ function renderPageHTML(page, displayW, displayH, cropSlotIdx = -1) {
                     <button class="slot-clear-btn" data-slot-idx="${idx}" title="移除照片">×</button>
                 `;
             } else {
-                const rotation = crop.rotation || 0;
                 innerHTML = `
                     <div class="slot-crop-wrapper" style="
                         position:absolute; overflow:hidden;
                         width:${100 * scale}%; height:${100 * scale}%;
                         top:50%; left:50%;
-                        transform:translate(-50%,-50%) rotate(${rotation}deg);
+                        transform:translate(-50%,-50%);
                     ">
                         <img src="${src}" draggable="false" style="width:100%;height:100%;object-fit:cover;object-position:${50+cropX}% ${50+cropY}%;display:block;pointer-events:none;">
                     </div>
@@ -154,7 +154,8 @@ function renderPageHTML(page, displayW, displayH, cropSlotIdx = -1) {
         return `
             <div class="page-slot ${slot.photoId ? 'has-photo' : 'empty'} ${isCropActive ? 'crop-active' : ''}"
                  data-slot-idx="${idx}"
-                 style="position:absolute; left:${sx}%; top:${sy}%; width:${sw}%; height:${sh}%; overflow:hidden; box-sizing:border-box; z-index:2;">
+                 data-slot-w="${sw}" data-slot-h="${sh}"
+                 style="position:absolute; left:${sx}%; top:${sy}%; width:${sw}%; height:${sh}%; overflow:hidden; box-sizing:border-box; z-index:2; transform:rotate(${rotation}deg); transform-origin:center center;">
                 ${innerHTML}
             </div>
         `;
