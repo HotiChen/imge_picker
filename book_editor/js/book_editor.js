@@ -448,18 +448,19 @@ class BookEditor {
         if (!page || !page.slots[slotIdx]) return;
         const crop = page.slots[slotIdx].crop;
         const slotEl = document.querySelector(`[data-slot-idx="${slotIdx}"]`);
-        const wrapper = slotEl?.querySelector('.slot-crop-wrapper');
-        if (!wrapper) return;
+        if (!slotEl) return;
         const scale = crop.scale || 1;
         const cropX = (crop.x || 0) * 100;
         const cropY = (crop.y || 0) * 100;
         const rotation = crop.rotation || 0;
-        wrapper.style.width = `${100 * scale}%`;
-        wrapper.style.height = `${100 * scale}%`;
-        wrapper.style.transform = `translate(-50%,-50%)`;
         slotEl.style.transform = `rotate(${rotation}deg)`;
-        const img = wrapper.querySelector('img');
-        if (img) img.style.objectPosition = `${50 + cropX}% ${50 + cropY}%`;
+        const img = slotEl.querySelector('.slot-crop-wrapper img');
+        if (img) {
+            img.style.width = `${100 * scale}%`;
+            img.style.height = `${100 * scale}%`;
+            img.style.left = `${50 + cropX}%`;
+            img.style.top = `${50 + cropY}%`;
+        }
     }
 
     _updateRotationUI(slotIdx) {
@@ -1235,7 +1236,13 @@ class BookEditor {
                     const page = this.book.pages[this.currentPageIndex];
                     if (!page?.slots[slotIdx]) return;
                     const crop = page.slots[slotIdx].crop;
-                    crop.scale = Math.max(1, Math.min(4, (crop.scale || 1) + (e.deltaY < 0 ? 0.1 : -0.1)));
+                    const factor = e.deltaY < 0 ? 1.04 : 0.96;
+                    const newScale = Math.max(1, Math.min(4, (crop.scale || 1) * factor));
+                    crop.scale = newScale;
+                    // Re-clamp pan offset so image still covers slot at new scale
+                    const maxPan = (newScale - 1) * 0.5;
+                    crop.x = Math.max(-maxPan, Math.min(maxPan, crop.x || 0));
+                    crop.y = Math.max(-maxPan, Math.min(maxPan, crop.y || 0));
                     this._updateSlotTransform(slotIdx);
                 }, { passive: false });
 
@@ -1296,8 +1303,9 @@ class BookEditor {
             const dy = dx_raw * Math.sin(rad) + dy_raw * Math.cos(rad);
 
             const crop = page.slots[this.cropSlotIdx].crop;
-            crop.x = Math.max(-0.5, Math.min(0.5, (crop.x || 0) + dx));
-            crop.y = Math.max(-0.5, Math.min(0.5, (crop.y || 0) + dy));
+            const maxPan = ((crop.scale || 1) - 1) * 0.5;
+            crop.x = Math.max(-maxPan, Math.min(maxPan, (crop.x || 0) + dx));
+            crop.y = Math.max(-maxPan, Math.min(maxPan, (crop.y || 0) + dy));
             this.cropDragState = { lastX: e.clientX, lastY: e.clientY };
             this._updateSlotTransform(this.cropSlotIdx);
         };
