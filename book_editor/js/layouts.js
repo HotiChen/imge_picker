@@ -98,9 +98,10 @@ function renderPageHTML(page, displayW, displayH, cropSlotIdx = -1) {
     const slotsHTML = layout.slots.map((slotDef, idx) => {
         const slot = page.slots[idx] || { photoId: null, crop: { x: 0, y: 0, scale: 1 } };
         const isCropActive = idx === cropSlotIdx;
-        const scale = slot.crop?.scale || 1;
-        const cropX = (slot.crop?.x || 0) * 100;
-        const cropY = (slot.crop?.y || 0) * 100;
+        const crop = slot.crop || { x: 0, y: 0, scale: 1 };
+        const scale = crop.scale || 1;
+        const cropX = (crop.x || 0) * 100;
+        const cropY = (crop.y || 0) * 100;
         const sx = slot.override?.x ?? slotDef.x;
         const sy = slot.override?.y ?? slotDef.y;
         const sw = slot.override?.w ?? slotDef.w;
