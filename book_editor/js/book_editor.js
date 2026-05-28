@@ -775,7 +775,7 @@ class BookEditor {
             text: '文字',
             font: '"Playfair Display", serif',
             size: 5,
-            color: '#ffffff',
+            color: '#222222',
             bold: false,
             italic: false,
             align: 'center',
@@ -1991,12 +1991,17 @@ class BookEditor {
         this._on('addTextLayerBtn', 'click', () => this.addTextLayer());
         this._on('textLayerInput', 'input', e => this.updateSelectedTextLayer({ text: e.target.value }));
         this._on('textLayerFont', 'change', e => this.updateSelectedTextLayer({ font: e.target.value }));
-        this._on('textLayerColor', 'input', e => this.updateSelectedTextLayer({ color: e.target.value }));
-        this._on('textLayerSize', 'input', e => {
+        const onColorChange = e => this.updateSelectedTextLayer({ color: e.target.value });
+        this._on('textLayerColor', 'input', onColorChange);
+        this._on('textLayerColor', 'change', onColorChange);
+        const onSizeChange = e => {
             const v = parseFloat(e.target.value);
-            document.getElementById('textLayerSizeVal').textContent = `${v}%`;
+            const el = document.getElementById('textLayerSizeVal');
+            if (el) el.textContent = `${v}%`;
             this.updateSelectedTextLayer({ size: v });
-        });
+        };
+        this._on('textLayerSize', 'input', onSizeChange);
+        this._on('textLayerSize', 'change', onSizeChange);
         this._on('textLayerBoldBtn', 'click', () => {
             const page = this.book.pages[this.currentPageIndex];
             const layer = page?.textLayers?.find(t => t.id === this.selectedTextLayerId);
