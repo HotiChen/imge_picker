@@ -447,7 +447,8 @@ class BookEditor {
         const page = this.book.pages[this.currentPageIndex];
         if (!page || !page.slots[slotIdx]) return;
         const crop = page.slots[slotIdx].crop;
-        const wrapper = document.querySelector(`[data-slot-idx="${slotIdx}"] .slot-crop-wrapper`);
+        const slotEl = document.querySelector(`[data-slot-idx="${slotIdx}"]`);
+        const wrapper = slotEl?.querySelector('.slot-crop-wrapper');
         if (!wrapper) return;
         const scale = crop.scale || 1;
         const cropX = (crop.x || 0) * 100;
@@ -455,7 +456,8 @@ class BookEditor {
         const rotation = crop.rotation || 0;
         wrapper.style.width = `${100 * scale}%`;
         wrapper.style.height = `${100 * scale}%`;
-        wrapper.style.transform = `translate(-50%,-50%) rotate(${rotation}deg)`;
+        wrapper.style.transform = `translate(-50%,-50%)`;
+        if (slotEl) slotEl.style.transform = `rotate(${rotation}deg)`;
         const img = wrapper.querySelector('img');
         if (img) img.style.objectPosition = `${50 + cropX}% ${50 + cropY}%`;
     }
@@ -967,6 +969,19 @@ class BookEditor {
         this.updatePageNav();
         this.updateBgImageUI();
         this.renderTextLayerPanel();
+        this._populateSettingsUI();
+    }
+
+    _populateSettingsUI() {
+        const s = this.book.settings || {};
+        const nameEl = document.getElementById('bookName');
+        const wEl = document.getElementById('bookWidth');
+        const hEl = document.getElementById('bookHeight');
+        const dpiEl = document.getElementById('bookDpi');
+        if (nameEl && nameEl !== document.activeElement) nameEl.value = this.book.name || '';
+        if (wEl && wEl !== document.activeElement) wEl.value = s.width ?? 20;
+        if (hEl && hEl !== document.activeElement) hEl.value = s.height ?? 20;
+        if (dpiEl && dpiEl !== document.activeElement) dpiEl.value = s.dpi ?? 300;
     }
 
     renderPageList() {
@@ -1271,8 +1286,14 @@ class BookEditor {
             const slotEl = document.querySelector(`[data-slot-idx="${this.cropSlotIdx}"]`);
             if (!slotEl) return;
             const rect = slotEl.getBoundingClientRect();
-            const dx = (e.clientX - this.cropDragState.lastX) / rect.width;
-            const dy = (e.clientY - this.cropDragState.lastY) / rect.height;
+            const dx_raw = (e.clientX - this.cropDragState.lastX) / rect.width;
+            const dy_raw = (e.clientY - this.cropDragState.lastY) / rect.height;
+
+            // Rotate delta back to slot's local coordinate space
+            const rotation = page.slots[this.cropSlotIdx].crop?.rotation || 0;
+            const rad = -rotation * Math.PI / 180;
+            const dx = dx_raw * Math.cos(rad) - dy_raw * Math.sin(rad);
+            const dy = dx_raw * Math.sin(rad) + dy_raw * Math.cos(rad);
 
             const crop = page.slots[this.cropSlotIdx].crop;
             crop.x = Math.max(-0.5, Math.min(0.5, (crop.x || 0) + dx));
