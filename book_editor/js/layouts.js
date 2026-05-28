@@ -78,7 +78,7 @@ function renderPageHTML(page, displayW, displayH, cropSlotIdx = -1) {
     // ─── 底圖層 ───────────────────────────────────────────────────
     let bgImageHTML = '';
     if (page.bgImage?.photoId) {
-        const src = `https://images.weserv.nl/?url=${CONFIG.WORKER_URL.replace(/^https?:\/\//, '')}/${page.bgImage.photoId}&w=1400&q=75`;
+        const src = `https://images.weserv.nl/?url=${CONFIG.WORKER_URL.replace(/^https?:\/\//, '')}/${page.bgImage.photoId}&w=800&q=75`;
         const fit = page.bgImage.fit || 'cover';
         const opacity = page.bgImage.opacity ?? 1;
         if (fit === 'repeat') {
@@ -108,7 +108,7 @@ function renderPageHTML(page, displayW, displayH, cropSlotIdx = -1) {
 
         let innerHTML = '';
         if (slot.photoId) {
-            const src = `https://images.weserv.nl/?url=${CONFIG.WORKER_URL.replace(/^https?:\/\//, '')}/${slot.photoId}&w=800&q=80`;
+            const src = `https://images.weserv.nl/?url=${CONFIG.WORKER_URL.replace(/^https?:\/\//, '')}/${slot.photoId}&w=500&q=75`;
             const fitMode = slot.fit || 'cover';
             if (fitMode === 'contain') {
                 innerHTML = `

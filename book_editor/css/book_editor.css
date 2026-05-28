@@ -371,6 +371,7 @@ html, body {
     background: rgba(243,128,32,0.04);
 }
 .page-slot.has-photo { outline: none; }
+.page-slot.drag-over { outline: 3px solid var(--primary) !important; background: rgba(243,128,32,0.15) !important; }
 .page-slot.crop-active {
     outline: 2px solid var(--primary);
     cursor: move;

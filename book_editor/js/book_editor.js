@@ -935,7 +935,7 @@ class BookEditor {
         }
 
         grid.innerHTML = this.libraryPhotos.map(photo => `
-            <div class="modal-photo" data-photo-id="${photo.id}">
+            <div class="modal-photo" data-photo-id="${photo.id}" draggable="true" title="點擊放入 · 或拖曳到格子">
                 <img src="${driveManager.getImageUrl(photo, true)}" loading="lazy">
                 <div class="modal-photo-name">${photo.name}</div>
             </div>
@@ -944,6 +944,11 @@ class BookEditor {
         grid.querySelectorAll('.modal-photo').forEach(el => {
             el.addEventListener('click', () => {
                 this.setSlotPhoto(this.pendingSlotIdx, el.dataset.photoId);
+            });
+            el.addEventListener('dragstart', e => {
+                e.dataTransfer.setData('text/plain', el.dataset.photoId);
+                // close modal so slot becomes droppable
+                setTimeout(() => this.closePhotoModal(), 50);
             });
         });
     }
@@ -1102,13 +1107,6 @@ class BookEditor {
 
         this._bindSlotInteractions(displayW, displayH);
         this._bindTextLayerDrag();
-
-        // 攔截整個預覽區的 dragover/drop，防止瀏覽器顯示原生「拖放檔案」UI
-        const area2 = document.getElementById('pagePreviewArea');
-        if (area2) {
-            area2.addEventListener('dragover', e => e.preventDefault(), { capture: true });
-            area2.addEventListener('drop',     e => e.preventDefault(), { capture: true });
-        }
     }
 
     _appendGuides(canvas, displayW, displayH, settings) {
@@ -1185,9 +1183,15 @@ class BookEditor {
             }
 
             // 拖放
-            slotEl.addEventListener('dragover', e => e.preventDefault());
+            slotEl.addEventListener('dragover', e => {
+                if (!e.dataTransfer.types.includes('text/plain')) return;
+                e.preventDefault();
+                slotEl.classList.add('drag-over');
+            });
+            slotEl.addEventListener('dragleave', () => slotEl.classList.remove('drag-over'));
             slotEl.addEventListener('drop', e => {
                 e.preventDefault();
+                slotEl.classList.remove('drag-over');
                 const photoId = e.dataTransfer.getData('text/plain');
                 if (photoId) this.setSlotPhoto(slotIdx, photoId);
             });
@@ -1870,6 +1874,17 @@ class BookEditor {
     // ─── 事件綁定 ────────────────────────────
 
     bindEvents() {
+        // 攔截預覽區的原生檔案拖放 UI（只綁一次）
+        const previewArea = document.getElementById('pagePreviewArea');
+        if (previewArea) {
+            previewArea.addEventListener('dragover', e => {
+                if (e.dataTransfer.types.includes('text/plain')) e.preventDefault();
+            }, { capture: true });
+            previewArea.addEventListener('drop', e => {
+                if (!e.dataTransfer.types.includes('text/plain')) e.preventDefault();
+            }, { capture: true });
+        }
+
         // 書本名稱
         this._on('bookName', 'change', e => { this.book.name = e.target.value; this.saveToStorage(); });
 
