@@ -17,12 +17,7 @@ class DriveManager {
     // 取得圖片的完整 URL (混合機制：縮圖用代理，大圖直連)
     getImageUrl(photo, isThumbnail = false) {
         if (!photo || !photo.id) return '';
-        const directUrl = `${CONFIG.WORKER_URL}/${photo.id}`;
-        if (isThumbnail) {
-            const cleanUrl = directUrl.replace(/^https?:\/\//, '');
-            return `https://images.weserv.nl/?url=${cleanUrl}&w=400&q=80`;
-        }
-        return directUrl;
+        return `${CONFIG.WORKER_URL}/${photo.id}`;
     }
 
     // 載入資料庫中的照片清單
