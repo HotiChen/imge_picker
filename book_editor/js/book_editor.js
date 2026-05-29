@@ -185,6 +185,7 @@ class BookEditor {
         const page = this.book.pages[this.currentPageIndex];
         this._updateFitToggleBtn(page?.slots[slotIdx]?.fit || 'cover');
         this._updateRotationUI(slotIdx);
+        this._updateZoomUI(slotIdx);
         if (!localStorage.getItem('book_editor_crop_hinted')) {
             localStorage.setItem('book_editor_crop_hinted', '1');
             toast.info('裁切模式：拖移平移 · 滾輪縮放 · 點「完整顯示」可切換顯示方式');
@@ -470,6 +471,15 @@ class BookEditor {
         const val = document.getElementById('rotationVal');
         if (slider) slider.value = rot;
         if (val) val.textContent = rot + '°';
+    }
+
+    _updateZoomUI(slotIdx) {
+        const page = this.book.pages[this.currentPageIndex];
+        const scale = page?.slots[slotIdx]?.crop?.scale || 1;
+        const slider = document.getElementById('zoomSlider');
+        const val = document.getElementById('zoomVal');
+        if (slider) slider.value = Math.round(scale * 100);
+        if (val) val.textContent = scale.toFixed(1) + '×';
     }
 
     // ─── 照片庫 ──────────────────────────────
@@ -1244,6 +1254,7 @@ class BookEditor {
                     crop.x = Math.max(-maxPan, Math.min(maxPan, crop.x || 0));
                     crop.y = Math.max(-maxPan, Math.min(maxPan, crop.y || 0));
                     this._updateSlotTransform(slotIdx);
+                    this._updateZoomUI(slotIdx);
                 }, { passive: false });
 
                 // 旋轉 handle（在 crop 模式下顯示）
@@ -2103,6 +2114,23 @@ class BookEditor {
         this._on('layoutEditorModal', 'click', e => {
             if (e.target.id === 'layoutEditorModal') LayoutEditor.close();
         });
+
+        // 縮放 slider
+        this._on('zoomSlider', 'input', e => {
+            const page = this.book.pages[this.currentPageIndex];
+            if (!page || this.cropSlotIdx < 0) return;
+            const scale = parseInt(e.target.value) / 100;
+            if (!page.slots[this.cropSlotIdx].crop) page.slots[this.cropSlotIdx].crop = { x: 0, y: 0, scale: 1 };
+            const crop = page.slots[this.cropSlotIdx].crop;
+            crop.scale = scale;
+            const maxPan = (scale - 1) * 0.5;
+            crop.x = Math.max(-maxPan, Math.min(maxPan, crop.x || 0));
+            crop.y = Math.max(-maxPan, Math.min(maxPan, crop.y || 0));
+            const val = document.getElementById('zoomVal');
+            if (val) val.textContent = scale.toFixed(1) + '×';
+            this._updateSlotTransform(this.cropSlotIdx);
+        });
+        this._on('zoomSlider', 'change', () => this.saveToStorage());
 
         // 旋轉 slider
         this._on('rotationSlider', 'input', e => {
