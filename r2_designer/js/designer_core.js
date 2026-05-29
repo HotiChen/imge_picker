@@ -102,7 +102,7 @@ class Designer {
                 item.dataset.photoId = photo.id;
 
                 const img = document.createElement('img');
-                img.src = driveManager.getImageUrl(photo, true); // 使用縮圖
+                img.src = driveManager.getImageUrl(photo);
                 img.loading = 'lazy';
 
                 item.appendChild(img);
@@ -159,7 +159,7 @@ class Designer {
     }
 
     addImageToCanvas(photo, x, y) {
-        const url = driveManager.getImageUrl(photo, false); // 載入原圖
+        const url = driveManager.getImageUrl(photo);
 
         fabric.Image.fromURL(url, (img) => {
             // 縮放並放置

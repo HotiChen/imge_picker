@@ -715,7 +715,7 @@ class App {
         card.className = `photo-card ${isSelected ? 'selected' : ''}`;
         card.dataset.photoId = photo.id;
 
-        const imageUrl = driveManager.getImageUrl(photo, true);
+        const imageUrl = driveManager.getImageUrl(photo);
         card.innerHTML = `
             <div class="photo-image-container">
                 <img src="${imageUrl}" class="photo-image" loading="lazy">
@@ -774,7 +774,7 @@ class App {
         content.style.display = 'flex';
 
         const img = document.getElementById('previewImg');
-        if (img) img.src = driveManager.getImageUrl(photo, true);
+        if (img) img.src = driveManager.getImageUrl(photo);
 
         const nameEl = document.getElementById('previewName');
         if (nameEl) nameEl.textContent = photo.name;

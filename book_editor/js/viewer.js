@@ -117,7 +117,7 @@ const Viewer = {
 
             grid.innerHTML = allPhotos.map(photo => `
                 <div class="viewer-picker-photo" data-photo-id="${photo.id}" title="${photo.name}">
-                    <img src="https://images.weserv.nl/?url=${CONFIG.WORKER_URL.replace(/^https?:\/\//, '')}/${photo.id}&w=200&q=75" loading="lazy">
+                    <img src="${CONFIG.WORKER_URL}/${photo.id}" loading="lazy">
                 </div>
             `).join('');
 

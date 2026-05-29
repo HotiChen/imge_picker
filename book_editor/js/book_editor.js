@@ -457,7 +457,7 @@ class BookEditor {
         wrapper.style.width = `${100 * scale}%`;
         wrapper.style.height = `${100 * scale}%`;
         wrapper.style.transform = `translate(-50%,-50%)`;
-        if (slotEl) slotEl.style.transform = `rotate(${rotation}deg)`;
+        slotEl.style.transform = `rotate(${rotation}deg)`;
         const img = wrapper.querySelector('img');
         if (img) img.style.objectPosition = `${50 + cropX}% ${50 + cropY}%`;
     }
@@ -519,7 +519,7 @@ class BookEditor {
         grid.innerHTML = this.libraryPhotos.map(photo => {
             const stars = photo.rating > 0 ? `<div class="strip-photo-rating">${'★'.repeat(photo.rating)}</div>` : '';
             return `<div class="strip-photo" data-photo-id="${photo.id}" draggable="true" title="${photo.name}">
-                <img src="${driveManager.getImageUrl(photo, true)}" loading="lazy">
+                <img src="${driveManager.getImageUrl(photo)}" loading="lazy">
                 ${stars}
             </div>`;
         }).join('');
@@ -692,7 +692,7 @@ class BookEditor {
             return;
         }
 
-        const src = `https://images.weserv.nl/?url=${CONFIG.WORKER_URL.replace(/^https?:\/\//, '')}/${bgImage.photoId}&w=200&q=60`;
+        const src = `${CONFIG.WORKER_URL}/${bgImage.photoId}`;
         if (preview) preview.innerHTML = `<img src="${src}" style="width:100%;height:100%;object-fit:cover;display:block;">`;
         const opPct = Math.round((bgImage.opacity ?? 1) * 100);
         if (slider) slider.value = opPct;
@@ -740,7 +740,7 @@ class BookEditor {
         }
 
         grid.innerHTML = photos.map(p => {
-            const src = `https://images.weserv.nl/?url=${CONFIG.WORKER_URL.replace(/^https?:\/\//, '')}/${p.id}&w=200&q=70`;
+            const src = `${CONFIG.WORKER_URL}/${p.id}`;
             return `<div class="modal-photo bg-picker-photo" data-photo-id="${p.id}" title="${p.name}"><img src="${src}" loading="lazy"></div>`;
         }).join('');
         grid.querySelectorAll('.bg-picker-photo').forEach(el => {
@@ -938,7 +938,7 @@ class BookEditor {
 
         grid.innerHTML = this.libraryPhotos.map(photo => `
             <div class="modal-photo" data-photo-id="${photo.id}" draggable="true" title="點擊放入 · 或拖曳到格子">
-                <img src="${driveManager.getImageUrl(photo, true)}" loading="lazy">
+                <img src="${driveManager.getImageUrl(photo)}" loading="lazy">
                 <div class="modal-photo-name">${photo.name}</div>
             </div>
         `).join('');
@@ -1227,7 +1227,7 @@ class BookEditor {
                     if (!this.cropMode || this.cropSlotIdx !== slotIdx) {
                         this.enterCropMode(slotIdx);
                     }
-                    this.cropDragState = { lastX: e.clientX, lastY: e.clientY };
+                    this.cropDragState = { lastX: e.clientX, lastY: e.clientY, slotEl: document.querySelector(`[data-slot-idx="${slotIdx}"]`) };
                 });
 
                 slotEl.addEventListener('wheel', e => {
@@ -1283,7 +1283,7 @@ class BookEditor {
             const page = this.book.pages[this.currentPageIndex];
             if (!page?.slots[this.cropSlotIdx]) return;
 
-            const slotEl = document.querySelector(`[data-slot-idx="${this.cropSlotIdx}"]`);
+            const slotEl = this.cropDragState.slotEl;
             if (!slotEl) return;
             const rect = slotEl.getBoundingClientRect();
             const dx_raw = (e.clientX - this.cropDragState.lastX) / rect.width;

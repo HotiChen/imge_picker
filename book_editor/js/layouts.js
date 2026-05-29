@@ -114,34 +114,42 @@ function renderPageHTML(page, displayW, displayH, cropSlotIdx = -1) {
             const fitMode = slot.fit || 'cover';
             if (fitMode === 'contain') {
                 innerHTML = `
-                    <div class="slot-crop-wrapper" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;">
-                        <img src="${src}" draggable="false" style="max-width:100%;max-height:100%;object-fit:contain;display:block;pointer-events:none;">
+                    <div style="position:absolute;inset:0;overflow:hidden;">
+                        <div class="slot-crop-wrapper" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;">
+                            <img src="${src}" draggable="false" style="max-width:100%;max-height:100%;object-fit:contain;display:block;pointer-events:none;">
+                        </div>
                     </div>
                     <button class="slot-clear-btn" data-slot-idx="${idx}" title="移除照片">×</button>
                 `;
             } else if (fitMode === 'fit-width') {
                 innerHTML = `
-                    <div class="slot-crop-wrapper" style="position:absolute;inset:0;overflow:hidden;display:flex;align-items:center;justify-content:center;">
-                        <img src="${src}" draggable="false" style="width:100%;height:auto;flex-shrink:0;display:block;pointer-events:none;">
+                    <div style="position:absolute;inset:0;overflow:hidden;">
+                        <div class="slot-crop-wrapper" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;">
+                            <img src="${src}" draggable="false" style="width:100%;height:auto;flex-shrink:0;display:block;pointer-events:none;">
+                        </div>
                     </div>
                     <button class="slot-clear-btn" data-slot-idx="${idx}" title="移除照片">×</button>
                 `;
             } else if (fitMode === 'fit-height') {
                 innerHTML = `
-                    <div class="slot-crop-wrapper" style="position:absolute;inset:0;overflow:hidden;display:flex;align-items:center;justify-content:center;">
-                        <img src="${src}" draggable="false" style="height:100%;width:auto;flex-shrink:0;display:block;pointer-events:none;">
+                    <div style="position:absolute;inset:0;overflow:hidden;">
+                        <div class="slot-crop-wrapper" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;">
+                            <img src="${src}" draggable="false" style="height:100%;width:auto;flex-shrink:0;display:block;pointer-events:none;">
+                        </div>
                     </div>
                     <button class="slot-clear-btn" data-slot-idx="${idx}" title="移除照片">×</button>
                 `;
             } else {
                 innerHTML = `
-                    <div class="slot-crop-wrapper" style="
-                        position:absolute; overflow:hidden;
-                        width:${100 * scale}%; height:${100 * scale}%;
-                        top:50%; left:50%;
-                        transform:translate(-50%,-50%);
-                    ">
-                        <img src="${src}" draggable="false" style="width:100%;height:100%;object-fit:cover;object-position:${50+cropX}% ${50+cropY}%;display:block;pointer-events:none;">
+                    <div style="position:absolute;inset:0;overflow:hidden;">
+                        <div class="slot-crop-wrapper" style="
+                            position:absolute; overflow:hidden;
+                            width:${100 * scale}%; height:${100 * scale}%;
+                            top:50%; left:50%;
+                            transform:translate(-50%,-50%);
+                        ">
+                            <img src="${src}" draggable="false" style="width:100%;height:100%;object-fit:cover;object-position:${50+cropX}% ${50+cropY}%;display:block;pointer-events:none;">
+                        </div>
                     </div>
                     <button class="slot-clear-btn" data-slot-idx="${idx}" title="移除照片">×</button>
                     ${isCropActive ? '<div class="crop-hint">拖移平移 · 滾輪縮放 · ↻ 拖旋轉鈕</div>' : ''}
@@ -155,7 +163,7 @@ function renderPageHTML(page, displayW, displayH, cropSlotIdx = -1) {
             <div class="page-slot ${slot.photoId ? 'has-photo' : 'empty'} ${isCropActive ? 'crop-active' : ''}"
                  data-slot-idx="${idx}"
                  data-slot-w="${sw}" data-slot-h="${sh}"
-                 style="position:absolute; left:${sx}%; top:${sy}%; width:${sw}%; height:${sh}%; overflow:hidden; box-sizing:border-box; z-index:2; transform:rotate(${rotation}deg); transform-origin:center center;">
+                 style="position:absolute; left:${sx}%; top:${sy}%; width:${sw}%; height:${sh}%; box-sizing:border-box; z-index:2; transform:rotate(${rotation}deg); transform-origin:center center;">
                 ${innerHTML}
             </div>
         `;
@@ -179,7 +187,7 @@ function renderPageThumbnailHTML(page) {
     // 底圖縮圖
     let bgThumbHTML = '';
     if (page.bgImage?.photoId) {
-        const src = `https://images.weserv.nl/?url=${CONFIG.WORKER_URL.replace(/^https?:\/\//, '')}/${page.bgImage.photoId}&w=120&q=60`;
+        const src = `${CONFIG.WORKER_URL}/${page.bgImage.photoId}`;
         const fit = page.bgImage.fit || 'cover';
         const opacity = page.bgImage.opacity ?? 1;
         bgThumbHTML = `<div style="position:absolute;inset:0;opacity:${opacity};pointer-events:none;overflow:hidden;z-index:0;"><img src="${src}" style="width:100%;height:100%;object-fit:${fit};display:block;"></div>`;
@@ -197,7 +205,7 @@ function renderPageThumbnailHTML(page) {
         const scale = slot.crop?.scale || 1;
         const cropX = (slot.crop?.x || 0) * 100;
         const cropY = (slot.crop?.y || 0) * 100;
-        const src = `https://images.weserv.nl/?url=${CONFIG.WORKER_URL.replace(/^https?:\/\//, '')}/${slot.photoId}&w=120&q=60`;
+        const src = `${CONFIG.WORKER_URL}/${slot.photoId}`;
         return `
             <div style="position:absolute;left:${tsx}%;top:${tsy}%;width:${tsw}%;height:${tsh}%;overflow:hidden;box-sizing:border-box;z-index:2;">
                 <div style="position:absolute;overflow:hidden;width:${100*scale}%;height:${100*scale}%;top:50%;left:50%;transform:translate(-50%,-50%);">

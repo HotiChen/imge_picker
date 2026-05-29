@@ -14,8 +14,7 @@ class DriveManager {
         return Promise.resolve();
     }
 
-    // 取得圖片的完整 URL (混合機制：縮圖用代理，大圖直連)
-    getImageUrl(photo, isThumbnail = false) {
+    getImageUrl(photo) {
         if (!photo || !photo.id) return '';
         return `${CONFIG.WORKER_URL}/${photo.id}`;
     }
@@ -53,7 +52,7 @@ class DriveManager {
                         name: file.name,
                         size: file.size,
                         uploaded: file.uploaded,
-                        thumbnailLink: this.getImageUrl({ id: file.id }, true),
+                        thumbnailLink: this.getImageUrl({ id: file.id }),
                         rating: 0,
                         note: '',
                         annotations: [],
@@ -291,7 +290,7 @@ class DriveManager {
             for (let i = 0; i < photoList.length; i += batchSize) {
                 const batch = photoList.slice(i, i + batchSize);
                 await Promise.all(batch.map(async (photo) => {
-                    const url = this.getImageUrl(photo, false); // 取得 R2 原圖
+                    const url = this.getImageUrl(photo);
                     const response = await fetch(url);
                     const blob = await response.blob();
                     zip.file(photo.name, blob);

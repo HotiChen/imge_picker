@@ -25,7 +25,7 @@ const AutoLayout = {
                 resolve({ ...photo, orientation: orient });
             };
             img.onerror = () => resolve({ ...photo, orientation: 'landscape' });
-            img.src = driveManager.getImageUrl(photo, true);
+            img.src = driveManager.getImageUrl(photo);
         });
     },
 
