@@ -141,7 +141,7 @@ class BookEditor {
             return s;
         });
         this.renderCurrentPage();
-        this.renderPageList();
+        this._updatePageThumbnail(this.currentPageIndex);
         this.saveToStorage();
     }
 
@@ -154,7 +154,7 @@ class BookEditor {
         this.pendingSlotIdx = -1;
         this.closePhotoModal();
         this.renderCurrentPage();
-        this.renderPageList();
+        this._updatePageThumbnail(this.currentPageIndex);
         this.saveToStorage();
     }
 
@@ -170,7 +170,7 @@ class BookEditor {
             if (bar) bar.style.display = 'none';
         }
         this.renderCurrentPage();
-        this.renderPageList();
+        this._updatePageThumbnail(this.currentPageIndex);
         this.saveToStorage();
     }
 
@@ -422,7 +422,7 @@ class BookEditor {
 
         this._slotPosUpHandler = () => {
             if (this.slotPosDragState) {
-                this.renderPageList();
+                this._updatePageThumbnail(this.currentPageIndex);
                 this.saveToStorage();
             }
             this.slotPosDragState = null;
@@ -653,7 +653,7 @@ class BookEditor {
         page.bgImage.photoId = photoId;
         document.getElementById('bgPickerModal')?.classList.remove('active');
         this.renderCurrentPage(this.cropMode ? this.cropSlotIdx : -1);
-        this.renderPageList();
+        this._updatePageThumbnail(this.currentPageIndex);
         this.updateBgImageUI();
         this.saveToStorage();
     }
@@ -683,7 +683,7 @@ class BookEditor {
         if (!page) return;
         page.bgImage = null;
         this.renderCurrentPage(this.cropMode ? this.cropSlotIdx : -1);
-        this.renderPageList();
+        this._updatePageThumbnail(this.currentPageIndex);
         this.updateBgImageUI();
         this.saveToStorage();
     }
@@ -796,7 +796,7 @@ class BookEditor {
         page.textLayers.push(layer);
         this.selectedTextLayerId = layer.id;
         this.renderCurrentPage(this.cropMode ? this.cropSlotIdx : -1);
-        this.renderPageList();
+        this._updatePageThumbnail(this.currentPageIndex);
         this.renderTextLayerPanel();
         this.saveToStorage();
     }
@@ -807,7 +807,7 @@ class BookEditor {
         page.textLayers = page.textLayers.filter(t => t.id !== id);
         if (this.selectedTextLayerId === id) this.selectedTextLayerId = null;
         this.renderCurrentPage(this.cropMode ? this.cropSlotIdx : -1);
-        this.renderPageList();
+        this._updatePageThumbnail(this.currentPageIndex);
         this.renderTextLayerPanel();
         this.saveToStorage();
     }
@@ -825,9 +825,45 @@ class BookEditor {
         const layer = page?.textLayers?.find(t => t.id === this.selectedTextLayerId);
         if (!layer) return;
         Object.assign(layer, props);
-        this.renderCurrentPage(this.cropMode ? this.cropSlotIdx : -1);
+        this._patchTextLayerDOM(layer.id);
+        this._updatePageThumbnail(this.currentPageIndex);
         this.renderTextLayerPanel();
         this.saveToStorage();
+    }
+
+    _patchTextLayerDOM(layerId) {
+        const page = this.book.pages[this.currentPageIndex];
+        const layer = page?.textLayers?.find(t => t.id === layerId);
+        if (!layer) return;
+        const el = document.querySelector(`[data-text-layer-id="${layerId}"]`);
+        if (!el) return;
+        const area = document.getElementById('pageEditArea');
+        const canvas = area?.querySelector('.page-canvas');
+        const displayW = canvas?.clientWidth || 600;
+        const fontSize = Math.max(8, Math.round(layer.size / 100 * displayW));
+        el.style.left = `${layer.x}%`;
+        el.style.top = `${layer.y}%`;
+        el.style.width = `${layer.w}%`;
+        el.style.textAlign = layer.align;
+        el.style.zIndex = layer.layer === 'below' ? 1 : 5;
+        const span = el.querySelector('span');
+        if (span) {
+            span.style.fontFamily = layer.font;
+            span.style.fontSize = `${fontSize}px`;
+            span.style.fontWeight = layer.bold ? '700' : '400';
+            span.style.fontStyle = layer.italic ? 'italic' : 'normal';
+            span.style.color = layer.color;
+            const lines = _escapeHtml(layer.text || '').split('\n').join('<br>');
+            span.innerHTML = lines || '&#8203;';
+        }
+    }
+
+    _updatePageThumbnail(pageIdx) {
+        const page = this.book.pages[pageIdx];
+        if (!page) return;
+        const thumbEl = document.querySelector(`.page-thumb[data-page-idx="${pageIdx}"] .page-thumb-preview`);
+        if (!thumbEl) return;
+        thumbEl.innerHTML = renderPageThumbnailHTML(page);
     }
 
     renderTextLayerPanel() {
