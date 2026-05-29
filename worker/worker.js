@@ -202,6 +202,28 @@ export default {
     // ─── 取得單張照片內容 (GET /:key) ────────────────────────────
     const key = decodeURIComponent(url.pathname.slice(1));
     if (key) {
+      // ?w=<px> → Cloudflare Image Resizing（需 Images 方案）
+      // ?_r=1   → 內部標記，直接從 R2 回傳原圖（避免遞迴）
+      const w = params.get('w');
+      const isRaw = params.get('_r') === '1';
+
+      if (w && !isRaw) {
+        const rawUrl = new URL(url);
+        rawUrl.searchParams.delete('w');
+        rawUrl.searchParams.set('_r', '1');
+        try {
+          const resized = await fetch(rawUrl.toString(), {
+            cf: { image: { width: parseInt(w), quality: 75, fit: 'scale-down' } }
+          });
+          if (resized.ok) {
+            const resHeaders = new Headers(resized.headers);
+            resHeaders.set('Access-Control-Allow-Origin', '*');
+            resHeaders.set('Cache-Control', 'public, max-age=31536000');
+            return new Response(resized.body, { status: 200, headers: resHeaders });
+          }
+        } catch (_) { /* fallback 到原圖 */ }
+      }
+
       const object = await env.imagepicker.get(key);
       if (!object) return new Response("Object Not Found", { status: 404, headers: corsHeaders });
       const headers = new Headers();

@@ -52,6 +52,11 @@ const LAYOUTS = {
     }
 };
 
+// 產生縮圖用 URL（?w=240，不支援 CF Image Resizing 時回傳原圖）
+function _thumbUrl(photoId, w = 240) {
+    return `${CONFIG.WORKER_URL}/${photoId}?w=${w}`;
+}
+
 function _escapeHtml(s) {
     return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
@@ -78,7 +83,7 @@ function renderPageHTML(page, displayW, displayH, cropSlotIdx = -1) {
     // ─── 底圖層 ───────────────────────────────────────────────────
     let bgImageHTML = '';
     if (page.bgImage?.photoId) {
-        const src = `${CONFIG.WORKER_URL}/${page.bgImage.photoId}`;
+        const src = _thumbUrl(page.bgImage.photoId, 1200);
         const fit = page.bgImage.fit || 'cover';
         const opacity = page.bgImage.opacity ?? 1;
         if (fit === 'repeat') {
@@ -110,7 +115,7 @@ function renderPageHTML(page, displayW, displayH, cropSlotIdx = -1) {
 
         let innerHTML = '';
         if (slot.photoId) {
-            const src = `${CONFIG.WORKER_URL}/${slot.photoId}`;
+            const src = _thumbUrl(slot.photoId, 1200);
             const fitMode = slot.fit || 'cover';
             if (fitMode === 'contain') {
                 innerHTML = `
@@ -185,7 +190,7 @@ function renderPageThumbnailHTML(page) {
     // 底圖縮圖
     let bgThumbHTML = '';
     if (page.bgImage?.photoId) {
-        const src = `${CONFIG.WORKER_URL}/${page.bgImage.photoId}`;
+        const src = _thumbUrl(page.bgImage.photoId, 240);
         const fit = page.bgImage.fit || 'cover';
         const opacity = page.bgImage.opacity ?? 1;
         bgThumbHTML = `<div style="position:absolute;inset:0;opacity:${opacity};pointer-events:none;overflow:hidden;z-index:0;"><img src="${src}" style="width:100%;height:100%;object-fit:${fit};display:block;"></div>`;
@@ -203,7 +208,7 @@ function renderPageThumbnailHTML(page) {
         const scale = slot.crop?.scale || 1;
         const cropX = (slot.crop?.x || 0) * 100;
         const cropY = (slot.crop?.y || 0) * 100;
-        const src = `${CONFIG.WORKER_URL}/${slot.photoId}`;
+        const src = _thumbUrl(slot.photoId, 240);
         return `
             <div style="position:absolute;left:${tsx}%;top:${tsy}%;width:${tsw}%;height:${tsh}%;overflow:hidden;box-sizing:border-box;z-index:2;">
                 <img src="${src}" style="
