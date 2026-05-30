@@ -1,4 +1,4 @@
-name: Deploy to imhoti.tw/studio
+name: Deploy to imhoti.tw studio
 
   on:
     push:
