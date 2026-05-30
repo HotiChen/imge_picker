@@ -1,32 +1,32 @@
 name: Deploy to imhoti.tw studio
 
-  on:
-    push:
-      branches: [main]
+on:
+  push:
+    branches: [main]
 
-  jobs:
-    deploy:
-      runs-on: ubuntu-latest
-      steps:
-        - uses: actions/checkout@v4
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
 
-        - name: Deploy via SFTP
-          uses: wlixcc/SFTP-Deploy-Action@v1.2.4
-          with:
-            server: ${{ secrets.SFTP_HOST }}
-            port: ${{ secrets.SFTP_PORT }}
-            username: ${{ secrets.SFTP_USER }}
-            password: ${{ secrets.SFTP_PASS }}
-            local_path: ./
-            remote_path: /public_html/studio/
-            sftp_only: true
-            delete_remote_files: false
-            exclude: |
-              .git
-              .github
-              .claude
-              worker
-              ai_stock
-              node_modules
-              *.md
-              .gitignore
+      - name: Deploy via SFTP
+        uses: wlixcc/SFTP-Deploy-Action@v1.2.4
+        with:
+          server: ${{ secrets.SFTP_HOST }}
+          port: ${{ secrets.SFTP_PORT }}
+          username: ${{ secrets.SFTP_USER }}
+          password: ${{ secrets.SFTP_PASS }}
+          local_path: ./
+          remote_path: /public_html/studio/
+          sftp_only: true
+          delete_remote_files: false
+          exclude: |
+            .git
+            .github
+            .claude
+            worker
+            ai_stock
+            node_modules
+            *.md
+            .gitignore
