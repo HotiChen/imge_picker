@@ -52,6 +52,11 @@ const LAYOUTS = {
     }
 };
 
+// 產生縮圖用 URL（?w=240，不支援 CF Image Resizing 時回傳原圖）
+function _thumbUrl(photoId, w = 240) {
+    return `${CONFIG.WORKER_URL}/${photoId}?w=${w}`;
+}
+
 function _escapeHtml(s) {
     return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
@@ -78,7 +83,7 @@ function renderPageHTML(page, displayW, displayH, cropSlotIdx = -1) {
     // ─── 底圖層 ───────────────────────────────────────────────────
     let bgImageHTML = '';
     if (page.bgImage?.photoId) {
-        const src = `${CONFIG.WORKER_URL}/${page.bgImage.photoId}`;
+        const src = _thumbUrl(page.bgImage.photoId, 1200);
         const fit = page.bgImage.fit || 'cover';
         const opacity = page.bgImage.opacity ?? 1;
         if (fit === 'repeat') {
@@ -110,7 +115,7 @@ function renderPageHTML(page, displayW, displayH, cropSlotIdx = -1) {
 
         let innerHTML = '';
         if (slot.photoId) {
-            const src = `${CONFIG.WORKER_URL}/${slot.photoId}`;
+            const src = _thumbUrl(slot.photoId, 1200);
             const fitMode = slot.fit || 'cover';
             if (fitMode === 'contain') {
                 innerHTML = `
@@ -141,15 +146,13 @@ function renderPageHTML(page, displayW, displayH, cropSlotIdx = -1) {
                 `;
             } else {
                 innerHTML = `
-                    <div style="position:absolute;inset:0;overflow:hidden;">
-                        <div class="slot-crop-wrapper" style="
-                            position:absolute; overflow:hidden;
+                    <div class="slot-crop-wrapper" style="position:absolute;inset:0;overflow:hidden;">
+                        <img src="${src}" draggable="false" style="
+                            position:absolute;
                             width:${100 * scale}%; height:${100 * scale}%;
-                            top:50%; left:50%;
+                            left:${50 + cropX}%; top:${50 + cropY}%;
                             transform:translate(-50%,-50%);
-                        ">
-                            <img src="${src}" draggable="false" style="width:100%;height:100%;object-fit:cover;object-position:${50+cropX}% ${50+cropY}%;display:block;pointer-events:none;">
-                        </div>
+                            object-fit:cover; display:block; pointer-events:none;">
                     </div>
                     <button class="slot-clear-btn" data-slot-idx="${idx}" title="移除照片">×</button>
                     ${isCropActive ? '<div class="crop-hint">拖移平移 · 滾輪縮放 · ↻ 拖旋轉鈕</div>' : ''}
@@ -187,7 +190,7 @@ function renderPageThumbnailHTML(page) {
     // 底圖縮圖
     let bgThumbHTML = '';
     if (page.bgImage?.photoId) {
-        const src = `${CONFIG.WORKER_URL}/${page.bgImage.photoId}`;
+        const src = _thumbUrl(page.bgImage.photoId, 240);
         const fit = page.bgImage.fit || 'cover';
         const opacity = page.bgImage.opacity ?? 1;
         bgThumbHTML = `<div style="position:absolute;inset:0;opacity:${opacity};pointer-events:none;overflow:hidden;z-index:0;"><img src="${src}" style="width:100%;height:100%;object-fit:${fit};display:block;"></div>`;
@@ -205,12 +208,15 @@ function renderPageThumbnailHTML(page) {
         const scale = slot.crop?.scale || 1;
         const cropX = (slot.crop?.x || 0) * 100;
         const cropY = (slot.crop?.y || 0) * 100;
-        const src = `${CONFIG.WORKER_URL}/${slot.photoId}`;
+        const src = _thumbUrl(slot.photoId, 240);
         return `
             <div style="position:absolute;left:${tsx}%;top:${tsy}%;width:${tsw}%;height:${tsh}%;overflow:hidden;box-sizing:border-box;z-index:2;">
-                <div style="position:absolute;overflow:hidden;width:${100*scale}%;height:${100*scale}%;top:50%;left:50%;transform:translate(-50%,-50%);">
-                    <img src="${src}" style="width:100%;height:100%;object-fit:cover;object-position:${50+cropX}% ${50+cropY}%;display:block;">
-                </div>
+                <img src="${src}" style="
+                    position:absolute;
+                    width:${100*scale}%;height:${100*scale}%;
+                    left:${50+cropX}%;top:${50+cropY}%;
+                    transform:translate(-50%,-50%);
+                    object-fit:cover;display:block;">
             </div>
         `;
     }).join('');

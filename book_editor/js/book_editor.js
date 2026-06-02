@@ -141,7 +141,7 @@ class BookEditor {
             return s;
         });
         this.renderCurrentPage();
-        this.renderPageList();
+        this._updatePageThumbnail(this.currentPageIndex);
         this.saveToStorage();
     }
 
@@ -154,7 +154,7 @@ class BookEditor {
         this.pendingSlotIdx = -1;
         this.closePhotoModal();
         this.renderCurrentPage();
-        this.renderPageList();
+        this._updatePageThumbnail(this.currentPageIndex);
         this.saveToStorage();
     }
 
@@ -170,7 +170,7 @@ class BookEditor {
             if (bar) bar.style.display = 'none';
         }
         this.renderCurrentPage();
-        this.renderPageList();
+        this._updatePageThumbnail(this.currentPageIndex);
         this.saveToStorage();
     }
 
@@ -185,6 +185,7 @@ class BookEditor {
         const page = this.book.pages[this.currentPageIndex];
         this._updateFitToggleBtn(page?.slots[slotIdx]?.fit || 'cover');
         this._updateRotationUI(slotIdx);
+        this._updateZoomUI(slotIdx);
         if (!localStorage.getItem('book_editor_crop_hinted')) {
             localStorage.setItem('book_editor_crop_hinted', '1');
             toast.info('裁切模式：拖移平移 · 滾輪縮放 · 點「完整顯示」可切換顯示方式');
@@ -421,7 +422,7 @@ class BookEditor {
 
         this._slotPosUpHandler = () => {
             if (this.slotPosDragState) {
-                this.renderPageList();
+                this._updatePageThumbnail(this.currentPageIndex);
                 this.saveToStorage();
             }
             this.slotPosDragState = null;
@@ -448,18 +449,19 @@ class BookEditor {
         if (!page || !page.slots[slotIdx]) return;
         const crop = page.slots[slotIdx].crop;
         const slotEl = document.querySelector(`[data-slot-idx="${slotIdx}"]`);
-        const wrapper = slotEl?.querySelector('.slot-crop-wrapper');
-        if (!wrapper) return;
+        if (!slotEl) return;
         const scale = crop.scale || 1;
         const cropX = (crop.x || 0) * 100;
         const cropY = (crop.y || 0) * 100;
         const rotation = crop.rotation || 0;
-        wrapper.style.width = `${100 * scale}%`;
-        wrapper.style.height = `${100 * scale}%`;
-        wrapper.style.transform = `translate(-50%,-50%)`;
         slotEl.style.transform = `rotate(${rotation}deg)`;
-        const img = wrapper.querySelector('img');
-        if (img) img.style.objectPosition = `${50 + cropX}% ${50 + cropY}%`;
+        const img = slotEl.querySelector('.slot-crop-wrapper img');
+        if (img) {
+            img.style.width = `${100 * scale}%`;
+            img.style.height = `${100 * scale}%`;
+            img.style.left = `${50 + cropX}%`;
+            img.style.top = `${50 + cropY}%`;
+        }
     }
 
     _updateRotationUI(slotIdx) {
@@ -469,6 +471,15 @@ class BookEditor {
         const val = document.getElementById('rotationVal');
         if (slider) slider.value = rot;
         if (val) val.textContent = rot + '°';
+    }
+
+    _updateZoomUI(slotIdx) {
+        const page = this.book.pages[this.currentPageIndex];
+        const scale = page?.slots[slotIdx]?.crop?.scale || 1;
+        const slider = document.getElementById('zoomSlider');
+        const val = document.getElementById('zoomVal');
+        if (slider) slider.value = Math.round(scale * 100);
+        if (val) val.textContent = scale.toFixed(1) + '×';
     }
 
     // ─── 照片庫 ──────────────────────────────
@@ -642,7 +653,7 @@ class BookEditor {
         page.bgImage.photoId = photoId;
         document.getElementById('bgPickerModal')?.classList.remove('active');
         this.renderCurrentPage(this.cropMode ? this.cropSlotIdx : -1);
-        this.renderPageList();
+        this._updatePageThumbnail(this.currentPageIndex);
         this.updateBgImageUI();
         this.saveToStorage();
     }
@@ -672,7 +683,7 @@ class BookEditor {
         if (!page) return;
         page.bgImage = null;
         this.renderCurrentPage(this.cropMode ? this.cropSlotIdx : -1);
-        this.renderPageList();
+        this._updatePageThumbnail(this.currentPageIndex);
         this.updateBgImageUI();
         this.saveToStorage();
     }
@@ -775,7 +786,7 @@ class BookEditor {
             text: '文字',
             font: '"Playfair Display", serif',
             size: 5,
-            color: '#ffffff',
+            color: '#222222',
             bold: false,
             italic: false,
             align: 'center',
@@ -785,7 +796,7 @@ class BookEditor {
         page.textLayers.push(layer);
         this.selectedTextLayerId = layer.id;
         this.renderCurrentPage(this.cropMode ? this.cropSlotIdx : -1);
-        this.renderPageList();
+        this._updatePageThumbnail(this.currentPageIndex);
         this.renderTextLayerPanel();
         this.saveToStorage();
     }
@@ -796,7 +807,7 @@ class BookEditor {
         page.textLayers = page.textLayers.filter(t => t.id !== id);
         if (this.selectedTextLayerId === id) this.selectedTextLayerId = null;
         this.renderCurrentPage(this.cropMode ? this.cropSlotIdx : -1);
-        this.renderPageList();
+        this._updatePageThumbnail(this.currentPageIndex);
         this.renderTextLayerPanel();
         this.saveToStorage();
     }
@@ -814,9 +825,49 @@ class BookEditor {
         const layer = page?.textLayers?.find(t => t.id === this.selectedTextLayerId);
         if (!layer) return;
         Object.assign(layer, props);
-        this.renderCurrentPage(this.cropMode ? this.cropSlotIdx : -1);
+        this._patchTextLayerDOM(layer.id);
+        this._updatePageThumbnail(this.currentPageIndex);
         this.renderTextLayerPanel();
         this.saveToStorage();
+    }
+
+    _patchTextLayerDOM(layerId) {
+        const page = this.book.pages[this.currentPageIndex];
+        const layer = page?.textLayers?.find(t => t.id === layerId);
+        if (!layer) return;
+        const el = document.querySelector(`[data-text-layer-id="${layerId}"]`);
+        if (!el) {
+            // element not in DOM yet — fall back to full re-render
+            this.renderCurrentPage(this.cropMode ? this.cropSlotIdx : -1);
+            return;
+        }
+        const area = document.getElementById('pagePreviewArea');
+        const canvas = area?.querySelector('.page-canvas');
+        const displayW = canvas?.clientWidth || 600;
+        const fontSize = Math.max(8, Math.round(layer.size / 100 * displayW));
+        el.style.left = `${layer.x}%`;
+        el.style.top = `${layer.y}%`;
+        el.style.width = `${layer.w}%`;
+        el.style.textAlign = layer.align;
+        el.style.zIndex = layer.layer === 'below' ? 1 : 5;
+        const span = el.querySelector('span');
+        if (span) {
+            span.style.fontFamily = layer.font;
+            span.style.fontSize = `${fontSize}px`;
+            span.style.fontWeight = layer.bold ? '700' : '400';
+            span.style.fontStyle = layer.italic ? 'italic' : 'normal';
+            span.style.color = layer.color;
+            const lines = _escapeHtml(layer.text || '').split('\n').join('<br>');
+            span.innerHTML = lines || '&#8203;';
+        }
+    }
+
+    _updatePageThumbnail(pageIdx) {
+        const page = this.book.pages[pageIdx];
+        if (!page) return;
+        const thumbEl = document.querySelector(`.page-thumb[data-page-idx="${pageIdx}"] .page-thumb-preview`);
+        if (!thumbEl) return;
+        thumbEl.innerHTML = renderPageThumbnailHTML(page);
     }
 
     renderTextLayerPanel() {
@@ -1235,8 +1286,15 @@ class BookEditor {
                     const page = this.book.pages[this.currentPageIndex];
                     if (!page?.slots[slotIdx]) return;
                     const crop = page.slots[slotIdx].crop;
-                    crop.scale = Math.max(1, Math.min(4, (crop.scale || 1) + (e.deltaY < 0 ? 0.1 : -0.1)));
+                    const factor = e.deltaY < 0 ? 1.04 : 0.96;
+                    const newScale = Math.max(1, Math.min(4, (crop.scale || 1) * factor));
+                    crop.scale = newScale;
+                    // Re-clamp pan offset so image still covers slot at new scale
+                    const maxPan = (newScale - 1) * 0.5;
+                    crop.x = Math.max(-maxPan, Math.min(maxPan, crop.x || 0));
+                    crop.y = Math.max(-maxPan, Math.min(maxPan, crop.y || 0));
                     this._updateSlotTransform(slotIdx);
+                    this._updateZoomUI(slotIdx);
                 }, { passive: false });
 
                 // 旋轉 handle（在 crop 模式下顯示）
@@ -1296,8 +1354,9 @@ class BookEditor {
             const dy = dx_raw * Math.sin(rad) + dy_raw * Math.cos(rad);
 
             const crop = page.slots[this.cropSlotIdx].crop;
-            crop.x = Math.max(-0.5, Math.min(0.5, (crop.x || 0) + dx));
-            crop.y = Math.max(-0.5, Math.min(0.5, (crop.y || 0) + dy));
+            const maxPan = ((crop.scale || 1) - 1) * 0.5;
+            crop.x = Math.max(-maxPan, Math.min(maxPan, (crop.x || 0) + dx));
+            crop.y = Math.max(-maxPan, Math.min(maxPan, (crop.y || 0) + dy));
             this.cropDragState = { lastX: e.clientX, lastY: e.clientY };
             this._updateSlotTransform(this.cropSlotIdx);
         };
@@ -1950,7 +2009,7 @@ class BookEditor {
             page.bg = color;
             const canvas = document.querySelector('.page-canvas');
             if (canvas) canvas.style.background = color;
-            this.renderPageList();
+            this._updatePageThumbnail(this.currentPageIndex);
             this.saveToStorage();
         };
         this._on('pageBgColor', 'input', e => applyBg(e.target.value));
@@ -1991,12 +2050,17 @@ class BookEditor {
         this._on('addTextLayerBtn', 'click', () => this.addTextLayer());
         this._on('textLayerInput', 'input', e => this.updateSelectedTextLayer({ text: e.target.value }));
         this._on('textLayerFont', 'change', e => this.updateSelectedTextLayer({ font: e.target.value }));
-        this._on('textLayerColor', 'input', e => this.updateSelectedTextLayer({ color: e.target.value }));
-        this._on('textLayerSize', 'input', e => {
+        const onColorChange = e => this.updateSelectedTextLayer({ color: e.target.value });
+        this._on('textLayerColor', 'input', onColorChange);
+        this._on('textLayerColor', 'change', onColorChange);
+        const onSizeChange = e => {
             const v = parseFloat(e.target.value);
-            document.getElementById('textLayerSizeVal').textContent = `${v}%`;
+            const el = document.getElementById('textLayerSizeVal');
+            if (el) el.textContent = `${v}%`;
             this.updateSelectedTextLayer({ size: v });
-        });
+        };
+        this._on('textLayerSize', 'input', onSizeChange);
+        this._on('textLayerSize', 'change', onSizeChange);
         this._on('textLayerBoldBtn', 'click', () => {
             const page = this.book.pages[this.currentPageIndex];
             const layer = page?.textLayers?.find(t => t.id === this.selectedTextLayerId);
@@ -2090,6 +2154,23 @@ class BookEditor {
         this._on('layoutEditorModal', 'click', e => {
             if (e.target.id === 'layoutEditorModal') LayoutEditor.close();
         });
+
+        // 縮放 slider
+        this._on('zoomSlider', 'input', e => {
+            const page = this.book.pages[this.currentPageIndex];
+            if (!page || this.cropSlotIdx < 0) return;
+            const scale = parseInt(e.target.value) / 100;
+            if (!page.slots[this.cropSlotIdx].crop) page.slots[this.cropSlotIdx].crop = { x: 0, y: 0, scale: 1 };
+            const crop = page.slots[this.cropSlotIdx].crop;
+            crop.scale = scale;
+            const maxPan = (scale - 1) * 0.5;
+            crop.x = Math.max(-maxPan, Math.min(maxPan, crop.x || 0));
+            crop.y = Math.max(-maxPan, Math.min(maxPan, crop.y || 0));
+            const val = document.getElementById('zoomVal');
+            if (val) val.textContent = scale.toFixed(1) + '×';
+            this._updateSlotTransform(this.cropSlotIdx);
+        });
+        this._on('zoomSlider', 'change', () => this.saveToStorage());
 
         // 旋轉 slider
         this._on('rotationSlider', 'input', e => {

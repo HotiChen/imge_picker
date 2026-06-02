@@ -92,6 +92,11 @@
                 <span id="cropModeHint">✂ 裁切模式：拖移平移 · 滾輪縮放</span>
                 <button id="fitToggleBtn" class="btn btn-secondary" style="padding:4px 12px;font-size:0.78rem;" title="切換完整顯示 / 裁切填滿">⊞ 完整顯示</button>
                 <span style="display:flex;align-items:center;gap:6px;margin-left:4px;">
+                    <span style="font-size:0.75rem;color:var(--text-muted);">縮放</span>
+                    <input type="range" id="zoomSlider" min="100" max="400" value="100" step="1" style="width:80px;cursor:pointer;accent-color:var(--primary);">
+                    <span id="zoomVal" style="font-size:0.75rem;min-width:36px;font-variant-numeric:tabular-nums;">1.0×</span>
+                </span>
+                <span style="display:flex;align-items:center;gap:6px;margin-left:4px;">
                     <span style="font-size:0.75rem;color:var(--text-muted);">旋轉</span>
                     <input type="range" id="rotationSlider" min="-180" max="180" value="0" step="1" style="width:80px;cursor:pointer;accent-color:var(--primary);">
                     <span id="rotationVal" style="font-size:0.75rem;min-width:32px;font-variant-numeric:tabular-nums;">0°</span>
@@ -268,11 +273,11 @@
                             <option value='"Dancing Script", cursive'>Dancing</option>
                             <option value='Inter, sans-serif'>Inter</option>
                         </select>
-                        <input type="color" id="textLayerColor" value="#ffffff" title="文字顏色" style="width:32px;height:28px;border:none;border-radius:4px;padding:1px;cursor:pointer;background:var(--bg-input);flex-shrink:0;">
+                        <input type="color" id="textLayerColor" value="#222222" title="文字顏色" style="width:32px;height:28px;border:none;border-radius:4px;padding:1px;cursor:pointer;background:var(--bg-input);flex-shrink:0;">
                     </div>
                     <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;">
                         <label style="font-size:0.7rem;color:var(--text-muted);white-space:nowrap;">大小</label>
-                        <input type="range" id="textLayerSize" min="1" max="20" step="0.5" value="5" style="flex:1;accent-color:var(--primary);">
+                        <input type="range" id="textLayerSize" min="1" max="30" step="0.5" value="5" style="flex:1;accent-color:var(--primary);">
                         <span id="textLayerSizeVal" style="font-size:0.7rem;color:var(--text-muted);min-width:28px;text-align:right;">5%</span>
                     </div>
                     <div style="display:flex;gap:4px;margin-bottom:6px;">
