@@ -836,8 +836,12 @@ class BookEditor {
         const layer = page?.textLayers?.find(t => t.id === layerId);
         if (!layer) return;
         const el = document.querySelector(`[data-text-layer-id="${layerId}"]`);
-        if (!el) return;
-        const area = document.getElementById('pageEditArea');
+        if (!el) {
+            // element not in DOM yet — fall back to full re-render
+            this.renderCurrentPage(this.cropMode ? this.cropSlotIdx : -1);
+            return;
+        }
+        const area = document.getElementById('pagePreviewArea');
         const canvas = area?.querySelector('.page-canvas');
         const displayW = canvas?.clientWidth || 600;
         const fontSize = Math.max(8, Math.round(layer.size / 100 * displayW));
@@ -2005,7 +2009,7 @@ class BookEditor {
             page.bg = color;
             const canvas = document.querySelector('.page-canvas');
             if (canvas) canvas.style.background = color;
-            this.renderPageList();
+            this._updatePageThumbnail(this.currentPageIndex);
             this.saveToStorage();
         };
         this._on('pageBgColor', 'input', e => applyBg(e.target.value));
