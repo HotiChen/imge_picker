@@ -147,6 +147,50 @@ html, body { height: 100%; font-family: 'IBM Plex Sans', sans-serif; background:
 }
 .sb-name:hover { color: var(--ink-90); }
 
+/* Add subfolder button (shown on row hover) */
+.sb-add {
+    display: none;
+    width: 20px;
+    height: 20px;
+    flex-shrink: 0;
+    background: none;
+    border: 1px solid var(--border);
+    color: var(--ink-35);
+    border-radius: 3px;
+    cursor: pointer;
+    font-size: 0.75rem;
+    align-items: center;
+    justify-content: center;
+    margin-right: 4px;
+    line-height: 1;
+    transition: color 0.1s, border-color 0.1s;
+}
+.sb-row:hover .sb-add { display: flex; }
+.sb-add:hover { color: var(--accent); border-color: var(--accent); }
+
+/* Inline new-folder input row */
+.sb-new-row {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    height: 28px;
+    padding-right: 8px;
+}
+.sb-new-icon { font-size: 0.75rem; color: var(--ink-35); flex-shrink: 0; }
+.sb-new-input {
+    flex: 1;
+    min-width: 0;
+    background: var(--card);
+    border: 1px solid var(--accent);
+    color: var(--ink-90);
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.73rem;
+    padding: 2px 6px;
+    border-radius: 3px;
+    outline: none;
+}
+.sb-new-input::placeholder { color: var(--ink-35); }
+
 .sb-children { display: none; }
 
 .sb-loading, .sb-empty {
@@ -155,6 +199,11 @@ html, body { height: 100%; font-family: 'IBM Plex Sans', sans-serif; background:
     color: var(--ink-35);
     font-family: 'IBM Plex Mono', monospace;
 }
+
+.sidebar-header-btns { display: flex; gap: 4px; }
+.sidebar-add-root { font-size: 0.9rem; }
+.sidebar-new-root { display: none; padding: 6px 8px; border-bottom: 1px solid var(--rule); }
+.sb-new-row--root { padding-left: 4px; }
 
 /* ── Main panel ── */
 .main {
@@ -306,7 +355,17 @@ details[open] > .tree-dir-summary .tree-chevron { transform: rotate(90deg); }
     <aside class="sidebar">
         <div class="sidebar-header">
             <span class="sidebar-label">R2 資料夾</span>
-            <button class="sidebar-refresh" id="sidebarRefreshBtn" title="重新整理">↺</button>
+            <div class="sidebar-header-btns">
+                <button class="sidebar-refresh sidebar-add-root" id="sidebarAddRootBtn" title="新增根目錄資料夾">+</button>
+                <button class="sidebar-refresh" id="sidebarRefreshBtn" title="重新整理">↺</button>
+            </div>
+        </div>
+        <!-- inline input for root-level new folder -->
+        <div id="sidebarNewRoot" class="sidebar-new-root">
+            <div class="sb-new-row sb-new-row--root">
+                <span class="sb-new-icon">📁</span>
+                <input class="sb-new-input" id="sidebarNewRootInput" placeholder="資料夾名稱 (可含 /)">
+            </div>
         </div>
         <div class="sidebar-tree" id="sidebarTree">
             <div class="sb-loading">載入中…</div>
@@ -412,15 +471,17 @@ async function initSidebar() {
         tree.innerHTML = '<div class="sb-empty">（無資料夾）</div>';
         return;
     }
-    for (const f of folders) tree.appendChild(makeSbNode(f, tree));
+    for (const f of folders) tree.appendChild(makeSbNode(f));
 }
 
-function makeSbNode(path, siblingContainer) {
+// preloaded=true: skip R2 fetch on first expand (used for newly created virtual folders)
+function makeSbNode(path, preloaded = false) {
     const parts = path.split('/').filter(Boolean);
     const name = parts[parts.length - 1];
 
     const wrap = document.createElement('div');
     wrap.className = 'sb-node';
+    wrap.dataset.path = path;
 
     const row = document.createElement('div');
     row.className = 'sb-row';
@@ -435,8 +496,14 @@ function makeSbNode(path, siblingContainer) {
     nameBtn.textContent = name + '/';
     nameBtn.title = path;
 
+    const addBtn = document.createElement('button');
+    addBtn.className = 'sb-add';
+    addBtn.textContent = '+';
+    addBtn.title = '新增子資料夾';
+
     row.appendChild(toggle);
     row.appendChild(nameBtn);
+    row.appendChild(addBtn);
 
     const childrenDiv = document.createElement('div');
     childrenDiv.className = 'sb-children';
@@ -451,8 +518,19 @@ function makeSbNode(path, siblingContainer) {
         selectFolder(path);
     });
 
+    // + → inline new-subfolder input
+    addBtn.addEventListener('click', e => {
+        e.stopPropagation();
+        // ensure children visible
+        if (childrenDiv.style.display === 'none') {
+            childrenDiv.style.display = '';
+            toggle.classList.add('open');
+        }
+        showNewFolderInput(childrenDiv, path, (parts.length) * 14 + 4);
+    });
+
     // Expand/collapse on toggle click
-    let loaded = false;
+    let loaded = preloaded; // preloaded=true skips R2 fetch (virtual/new folders)
     let open = false;
     toggle.addEventListener('click', async e => {
         e.stopPropagation();
@@ -468,7 +546,7 @@ function makeSbNode(path, siblingContainer) {
                 if (!subs.length) {
                     toggle.classList.add('leaf');
                 } else {
-                    for (const sub of subs) childrenDiv.appendChild(makeSbNode(sub, childrenDiv));
+                    for (const sub of subs) childrenDiv.appendChild(makeSbNode(sub));
                 }
             }
         } else {
@@ -478,6 +556,76 @@ function makeSbNode(path, siblingContainer) {
     });
 
     return wrap;
+}
+
+// ── Inline new-folder input ──
+function showNewFolderInput(container, parentPath, indentPx) {
+    // Only one input at a time
+    container.querySelectorAll('.sb-new-row').forEach(el => el.remove());
+
+    const row = document.createElement('div');
+    row.className = 'sb-new-row';
+    row.style.paddingLeft = indentPx + 'px';
+
+    const icon = document.createElement('span');
+    icon.className = 'sb-new-icon';
+    icon.textContent = '📁';
+
+    const input = document.createElement('input');
+    input.className = 'sb-new-input';
+    input.placeholder = '名稱 (可含 / 多層)';
+
+    row.appendChild(icon);
+    row.appendChild(input);
+    container.prepend(row);
+    input.focus();
+
+    const commit = () => {
+        const raw = input.value.trim().replace(/^\/+|\/+$/g, '');
+        if (raw) addFolderToTree(parentPath + raw + '/');
+        row.remove();
+    };
+    input.addEventListener('keydown', e => {
+        if (e.key === 'Enter') { e.preventDefault(); commit(); }
+        if (e.key === 'Escape') row.remove();
+    });
+    input.addEventListener('blur', () => setTimeout(() => { if (document.contains(row)) row.remove(); }, 200));
+}
+
+// Add a new virtual folder path into the sidebar tree and select it
+function addFolderToTree(fullPath) {
+    const parts = fullPath.split('/').filter(Boolean);
+    let container = $('sidebarTree');
+    let builtPath = '';
+
+    for (let i = 0; i < parts.length; i++) {
+        builtPath += parts[i] + '/';
+        const existing = container.querySelector(`:scope > .sb-node[data-path="${CSS.escape(builtPath)}"]`);
+        if (existing) {
+            // node exists — open it and descend
+            const ch = existing.querySelector('.sb-children');
+            if (ch) {
+                ch.style.display = '';
+                const tog = existing.querySelector('.sb-toggle');
+                if (tog) tog.classList.add('open');
+                if (i < parts.length - 1) { container = ch; continue; }
+            }
+        } else {
+            // create new node — mark as preloaded so expand won't fetch from R2
+            const node = makeSbNode(builtPath, true);
+            container.appendChild(node);
+            const ch = node.querySelector('.sb-children');
+            const tog = node.querySelector('.sb-toggle');
+            if (ch && tog) { ch.style.display = ''; tog.classList.add('open'); }
+            if (i < parts.length - 1) { container = ch || container; continue; }
+        }
+    }
+
+    // Select the final path
+    document.querySelectorAll('.sb-row.selected').forEach(r => r.classList.remove('selected'));
+    const finalNode = $('sidebarTree').querySelector(`.sb-node[data-path="${CSS.escape(fullPath)}"]`);
+    if (finalNode) finalNode.querySelector('.sb-row').classList.add('selected');
+    selectFolder(fullPath);
 }
 
 function selectFolder(path) {
@@ -491,6 +639,28 @@ function selectFolder(path) {
 }
 
 $('sidebarRefreshBtn').addEventListener('click', initSidebar);
+
+// Root-level new folder
+$('sidebarAddRootBtn').addEventListener('click', () => {
+    const wrap = $('sidebarNewRoot');
+    const input = $('sidebarNewRootInput');
+    if (wrap.style.display === 'none') {
+        wrap.style.display = '';
+        input.value = '';
+        input.focus();
+    } else {
+        wrap.style.display = 'none';
+    }
+});
+$('sidebarNewRootInput').addEventListener('keydown', e => {
+    if (e.key === 'Enter') {
+        const raw = e.target.value.trim().replace(/^\/+|\/+$/g, '');
+        if (raw) addFolderToTree(raw + '/');
+        $('sidebarNewRoot').style.display = 'none';
+        e.target.value = '';
+    }
+    if (e.key === 'Escape') { $('sidebarNewRoot').style.display = 'none'; }
+});
 
 // ── File / folder pickers ──
 $('pickFilesBtn').addEventListener('click',  () => $('fileInput').click());
