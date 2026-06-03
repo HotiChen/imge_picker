@@ -11,6 +11,8 @@ class BookEditor {
         };
         this.currentPageIndex = 0;
         this.pendingSlotIdx = -1;
+        this._previewIdx = 0;
+        this._previewPhotoId = null;
         this.cropMode = false;
         this.cropSlotIdx = -1;
         this.cropDragState = null;
@@ -743,14 +745,33 @@ class BookEditor {
     }
 
     _openPhotoPreview(photoId) {
-        const modal = document.getElementById('photoPreviewModal');
-        const img = document.getElementById('photoPreviewImg');
-        const useBtn = document.getElementById('photoPreviewUseBtn');
-        if (!modal || !img) return;
-        this._previewPhotoId = photoId;
-        img.src = `${CONFIG.WORKER_URL}/${photoId}`;
-        useBtn.style.display = this.pendingSlotIdx >= 0 ? '' : 'none';
-        modal.classList.add('open');
+        const idx = this.libraryPhotos.findIndex(p => p.id === photoId);
+        this._previewIdx = idx >= 0 ? idx : 0;
+        this._showPreviewAt(this._previewIdx);
+        document.getElementById('photoPreviewModal').classList.add('open');
+    }
+
+    _showPreviewAt(idx) {
+        const photos = this.libraryPhotos;
+        if (!photos.length) return;
+        idx = Math.max(0, Math.min(idx, photos.length - 1));
+        this._previewIdx = idx;
+        const photo = photos[idx];
+        this._previewPhotoId = photo.id;
+
+        document.getElementById('photoPreviewImg').src = `${CONFIG.WORKER_URL}/${photo.id}`;
+        document.getElementById('photoPreviewCounter').textContent = `${idx + 1} / ${photos.length}`;
+        document.getElementById('photoPreviewUseBtn').style.display = this.pendingSlotIdx >= 0 ? '' : 'none';
+        document.getElementById('photoPreviewPrev').disabled = idx === 0;
+        document.getElementById('photoPreviewNext').disabled = idx === photos.length - 1;
+
+        // sync thumbnail highlight + scroll into view
+        document.querySelectorAll('.strip-photo').forEach(el => el.classList.remove('preview-active'));
+        const thumb = document.querySelector(`.strip-photo[data-photo-id="${CSS.escape(photo.id)}"]`);
+        if (thumb) {
+            thumb.classList.add('preview-active');
+            thumb.scrollIntoView({ block: 'nearest', inline: 'center', behavior: 'smooth' });
+        }
     }
 
     _initPhotoPreviewModal() {
@@ -765,6 +786,8 @@ class BookEditor {
             }
             modal.classList.remove('open');
         });
+        document.getElementById('photoPreviewPrev').addEventListener('click', () => this._showPreviewAt(this._previewIdx - 1));
+        document.getElementById('photoPreviewNext').addEventListener('click', () => this._showPreviewAt(this._previewIdx + 1));
     }
 
     _getPlacedPhotoIds() {
@@ -2479,8 +2502,15 @@ class BookEditor {
                 if (this.cropMode) this.exitCropMode();
                 else if (this.slotEditMode) this.exitSlotEditMode();
             }
-            if (e.key === 'ArrowLeft' && this.currentPageIndex > 0) { this.exitCropMode(); this.currentPageIndex--; this.renderAll(); }
-            if (e.key === 'ArrowRight' && this.currentPageIndex < this.book.pages.length - 1) { this.exitCropMode(); this.currentPageIndex++; this.renderAll(); }
+            const previewOpen = document.getElementById('photoPreviewModal')?.classList.contains('open');
+            if (e.key === 'ArrowLeft') {
+                if (previewOpen) { this._showPreviewAt(this._previewIdx - 1); return; }
+                if (this.currentPageIndex > 0) { this.exitCropMode(); this.currentPageIndex--; this.renderAll(); }
+            }
+            if (e.key === 'ArrowRight') {
+                if (previewOpen) { this._showPreviewAt(this._previewIdx + 1); return; }
+                if (this.currentPageIndex < this.book.pages.length - 1) { this.exitCropMode(); this.currentPageIndex++; this.renderAll(); }
+            }
             if ((e.key === 'Delete' || e.key === 'Backspace') && this.cropMode && this.cropSlotIdx >= 0) {
                 this.clearSlot(this.cropSlotIdx);
             }
