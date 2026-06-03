@@ -1291,10 +1291,6 @@ class BookEditor {
                     const factor = e.deltaY < 0 ? 1.04 : 0.96;
                     const newScale = Math.max(1, Math.min(4, (crop.scale || 1) * factor));
                     crop.scale = newScale;
-                    // Re-clamp pan offset so image still covers slot at new scale
-                    const maxPan = (newScale - 1) * 0.5;
-                    crop.x = Math.max(-maxPan, Math.min(maxPan, crop.x || 0));
-                    crop.y = Math.max(-maxPan, Math.min(maxPan, crop.y || 0));
                     this._updateSlotTransform(slotIdx);
                     this._updateZoomUI(slotIdx);
                     clearTimeout(this._wheelSaveTimer);
@@ -1358,14 +1354,9 @@ class BookEditor {
             const dy = dx_raw * Math.sin(rad) + dy_raw * Math.cos(rad);
 
             const crop = page.slots[this.cropSlotIdx].crop;
-            // Auto-zoom to 1.5× on first drag so there's meaningful pan range
-            if ((crop.scale || 1) < 1.05) {
-                crop.scale = 1.5;
-                this._updateZoomUI(this.cropSlotIdx);
-            }
-            const maxPan = ((crop.scale || 1) - 1) * 0.5;
-            crop.x = Math.max(-maxPan, Math.min(maxPan, (crop.x || 0) + dx));
-            crop.y = Math.max(-maxPan, Math.min(maxPan, (crop.y || 0) + dy));
+            // Free pan — no clamp, user positions freely
+            crop.x = (crop.x || 0) + dx;
+            crop.y = (crop.y || 0) + dy;
             this.cropDragState = { lastX: e.clientX, lastY: e.clientY, slotEl };
             this._updateSlotTransform(this.cropSlotIdx);
         };
@@ -2174,9 +2165,6 @@ class BookEditor {
             if (!page.slots[this.cropSlotIdx].crop) page.slots[this.cropSlotIdx].crop = { x: 0, y: 0, scale: 1 };
             const crop = page.slots[this.cropSlotIdx].crop;
             crop.scale = scale;
-            const maxPan = (scale - 1) * 0.5;
-            crop.x = Math.max(-maxPan, Math.min(maxPan, crop.x || 0));
-            crop.y = Math.max(-maxPan, Math.min(maxPan, crop.y || 0));
             const val = document.getElementById('zoomVal');
             if (val) val.textContent = scale.toFixed(1) + '×';
             this._updateSlotTransform(this.cropSlotIdx);
