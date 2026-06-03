@@ -445,6 +445,19 @@ class BookEditor {
         return { x: slotDef.x, y: slotDef.y, w: slotDef.w, h: slotDef.h };
     }
 
+    /**
+     * 更新指定插槽的照片平移與縮放 Transform 樣式。
+     *
+     * @pre
+     * - `slotIdx` 必須為非負整數，且對應當前頁面 `page.slots` 的有效索引。
+     * - `page.slots[slotIdx]` 必須已載入照片 (photoId 不為空)。
+     * - DOM 中必須存在對應的 `[data-slot-idx="${slotIdx}"] .slot-crop-wrapper` 元素。
+     *
+     * @post
+     * - 將 `wrapper` 元素的 `width` 與 `height` 更新為 `100 * scale %`。
+     * - 將 `wrapper` 元素的 `transform` 屬性更新為 `translate(calc(-50% + cropX/safeScale%), calc(-50% + cropY/safeScale%))`。
+     * - 將 `img` 元素的 `objectPosition` 固定為 `'50% 50%'`，以配合 wrapper 的 transform 平移。
+     */
     _updateSlotTransform(slotIdx) {
         const page = this.book.pages[this.currentPageIndex];
         if (!page || !page.slots[slotIdx]) return;
@@ -452,16 +465,22 @@ class BookEditor {
         const slotEl = document.querySelector(`[data-slot-idx="${slotIdx}"]`);
         if (!slotEl) return;
         const scale = crop.scale || 1;
+        const safeScale = Math.max(0.01, scale); // 防禦除以零與無效值
         const cropX = (crop.x || 0) * 100;
         const cropY = (crop.y || 0) * 100;
         const rotation = crop.rotation || 0;
         slotEl.style.transform = `rotate(${rotation}deg)`;
+        
+        const wrapper = slotEl.querySelector('.slot-crop-wrapper');
+        if (wrapper) {
+            wrapper.style.width = `${100 * scale}%`;
+            wrapper.style.height = `${100 * scale}%`;
+            wrapper.style.transform = `translate(calc(-50% + ${cropX / safeScale}%), calc(-50% + ${cropY / safeScale}%))`;
+        }
+        
         const img = slotEl.querySelector('.slot-crop-wrapper img');
         if (img) {
-            img.style.width = `${100 * scale}%`;
-            img.style.height = `${100 * scale}%`;
-            img.style.left = `${50 + cropX}%`;
-            img.style.top = `${50 + cropY}%`;
+            img.style.objectPosition = '50% 50%';
         }
     }
 
@@ -1291,6 +1310,13 @@ class BookEditor {
                     const factor = e.deltaY < 0 ? 1.04 : 0.96;
                     const newScale = Math.max(1, Math.min(4, (crop.scale || 1) * factor));
                     crop.scale = newScale;
+                    
+                    // 自動 Clamp 平移範圍，防止滾輪縮小圖片時露出空白邊緣
+                    const limitX = Math.max(0.5, (newScale - 1) / 2);
+                    const limitY = Math.max(0.5, (newScale - 1) / 2);
+                    crop.x = Math.max(-limitX, Math.min(limitX, crop.x || 0));
+                    crop.y = Math.max(-limitY, Math.min(limitY, crop.y || 0));
+
                     this._updateSlotTransform(slotIdx);
                     this._updateZoomUI(slotIdx);
                     clearTimeout(this._wheelSaveTimer);
@@ -1354,9 +1380,14 @@ class BookEditor {
             const dy = dx_raw * Math.sin(rad) + dy_raw * Math.cos(rad);
 
             const crop = page.slots[this.cropSlotIdx].crop;
-            // Free pan — no clamp, user positions freely
-            crop.x = (crop.x || 0) + dx;
-            crop.y = (crop.y || 0) + dy;
+            const scale = crop.scale || 1;
+            // 限制平移範圍，以防圖片拉太開露出底部空白邊緣。
+            // 在未放大的情況下 (scale = 1)，我們也允許最多 0.5 (即半個格子) 的平移，以微調不同比例圖片的邊緣。
+            const limitX = Math.max(0.5, (scale - 1) / 2);
+            const limitY = Math.max(0.5, (scale - 1) / 2);
+            crop.x = Math.max(-limitX, Math.min(limitX, (crop.x || 0) + dx));
+            crop.y = Math.max(-limitY, Math.min(limitY, (crop.y || 0) + dy));
+            
             this.cropDragState = { lastX: e.clientX, lastY: e.clientY, slotEl };
             this._updateSlotTransform(this.cropSlotIdx);
         };

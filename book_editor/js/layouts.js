@@ -146,16 +146,16 @@ function renderPageHTML(page, displayW, displayH, cropSlotIdx = -1) {
                 `;
             } else {
                 innerHTML = `
-                    <div class="slot-crop-wrapper" style="position:absolute;inset:0;overflow:hidden;">
-                        <img src="${src}" draggable="false" style="
-                            position:absolute;
-                            width:${100 * scale}%; height:${100 * scale}%;
-                            left:${50 + cropX}%; top:${50 + cropY}%;
-                            transform:translate(-50%,-50%);
-                            object-fit:cover; display:block; pointer-events:none;">
+                    <div class="slot-crop-wrapper" style="
+                        position:absolute; overflow:hidden;
+                        width:${100 * scale}%; height:${100 * scale}%;
+                        top:50%; left:50%;
+                        transform:translate(calc(-50% + ${cropX / scale}%), calc(-50% + ${cropY / scale}%));
+                    ">
+                        <img src="${src}" draggable="false" style="width:100%;height:100%;object-fit:cover;object-position:50% 50%;display:block;pointer-events:none;">
                     </div>
                     <button class="slot-clear-btn" data-slot-idx="${idx}" title="移除照片">×</button>
-                    ${isCropActive ? '<div class="crop-hint">拖移平移 · 滾輪縮放 · ↻ 拖旋轉鈕</div>' : ''}
+                    ${isCropActive ? '<div class="crop-hint">拖移平移 · 滾輪縮放</div>' : ''}
                 `;
             }
         } else {
@@ -211,12 +211,9 @@ function renderPageThumbnailHTML(page) {
         const src = _thumbUrl(slot.photoId, 240);
         return `
             <div style="position:absolute;left:${tsx}%;top:${tsy}%;width:${tsw}%;height:${tsh}%;overflow:hidden;box-sizing:border-box;z-index:2;">
-                <img src="${src}" style="
-                    position:absolute;
-                    width:${100*scale}%;height:${100*scale}%;
-                    left:${50+cropX}%;top:${50+cropY}%;
-                    transform:translate(-50%,-50%);
-                    object-fit:cover;display:block;">
+                <div style="position:absolute;overflow:hidden;width:${100*scale}%;height:${100*scale}%;top:50%;left:50%;transform:translate(calc(-50% + ${cropX / scale}%), calc(-50% + ${cropY / scale}%));">
+                    <img src="${src}" style="width:100%;height:100%;object-fit:cover;object-position:50% 50%;display:block;">
+                </div>
             </div>
         `;
     }).join('');

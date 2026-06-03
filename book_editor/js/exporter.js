@@ -153,18 +153,28 @@ const BookExporter = {
                 const drawY = slotY;
                 ctx.drawImage(img, 0, 0, img.naturalWidth, img.naturalHeight, drawX, drawY, drawW, drawH);
             } else {
+                /**
+                 * 繪製單一相片插槽至 Canvas 上，支援 Cover 縮放與平移擷取。
+                 *
+                 * @pre
+                 * - `img` 必須是已完成載入的 HTMLImageElement。
+                 * - `slot.crop` 必須包含合理的 `scale` (>=1)、`x` (平移比例) 與 `y` (平移比例)。
+                 * - Canvas 2D 上下文 `ctx` 必須處於可用狀態。
+                 *
+                 * @post
+                 * - 根據對齊網頁端的擷取公式計算 `srcX`/`srcY`，並剪裁繪製到目標 slot 區域。
+                 */
                 const cropScale = crop.scale || 1;
                 const wW = cropScale * slotW;
                 const wH = cropScale * slotH;
                 const s = Math.max(wW / img.naturalWidth, wH / img.naturalHeight);
-                const ox = img.naturalWidth * s - wW;
-                const oy = img.naturalHeight * s - wH;
-                const cx = 0.5 + (crop.x || 0);
-                const cy = 0.5 + (crop.y || 0);
-                const srcX = (ox * cx + (wW - slotW) / 2) / s;
-                const srcY = (oy * cy + (wH - slotH) / 2) / s;
                 const srcW = slotW / s;
                 const srcH = slotH / s;
+                // 這裡的 crop.x 和 crop.y 是相對於 slot 寬高的平移比例（向右為正，向下為正）
+                // 圖片在未平移時的置中擷取起點是 (img.naturalWidth - srcW) / 2
+                // 向右平移圖片時，圖片擷取起點 srcX 應該向左移（減去 crop.x * srcW）
+                const srcX = (img.naturalWidth - srcW) / 2 - (crop.x || 0) * srcW;
+                const srcY = (img.naturalHeight - srcH) / 2 - (crop.y || 0) * srcH;
                 ctx.drawImage(img, srcX, srcY, srcW, srcH, slotX, slotY, slotW, slotH);
             }
             ctx.restore();
