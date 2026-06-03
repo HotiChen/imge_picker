@@ -8,7 +8,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;700&family=Noto+Serif+TC:wght@400;700&family=Playfair+Display:ital,wght@0,400;0,700;1,400&family=Cormorant+Garamond:ital,wght@0,400;0,700;1,400&family=Dancing+Script:wght@400;700&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
-    <link rel="stylesheet" href="css/book_editor.css?v=20260603-2">
+    <link rel="stylesheet" href="css/book_editor.css?v=20260604-1">
 </head>
 <body>
 <div class="app-container">
@@ -437,6 +437,17 @@
     </div>
 </div>
 
+<!-- Photo preview modal -->
+<div id="photoPreviewModal">
+    <button class="photo-preview-close" id="photoPreviewClose">✕</button>
+    <div class="photo-preview-box">
+        <img id="photoPreviewImg" src="" alt="">
+        <div class="photo-preview-actions">
+            <button class="photo-preview-use-btn" id="photoPreviewUseBtn" style="display:none;">放入版面</button>
+        </div>
+    </div>
+</div>
+
 <!-- Shared from picker -->
 <div id="toastContainer" class="toast-container"></div>
 
@@ -450,6 +461,6 @@
 <script src="js/exporter.js?v=20260603-4"></script>
 <script src="js/layout_editor.js?v=20260603"></script>
 <script src="js/tour.js?v=20260603"></script>
-<script src="js/book_editor.js?v=20260604-1"></script>
+<script src="js/book_editor.js?v=20260604-2"></script>
 </body>
 </html>

@@ -627,9 +627,7 @@ class BookEditor {
         }).join('');
         grid.querySelectorAll('.strip-photo').forEach(el => {
             el.addEventListener('dragstart', e => e.dataTransfer.setData('text/plain', el.dataset.photoId));
-            el.addEventListener('click', () => {
-                if (this.pendingSlotIdx >= 0) this.setSlotPhoto(this.pendingSlotIdx, el.dataset.photoId);
-            });
+            el.addEventListener('click', () => this._openPhotoPreview(el.dataset.photoId));
         });
     }
 
@@ -741,6 +739,31 @@ class BookEditor {
             el.addEventListener('click', () => this.navigateLibraryTo(el.dataset.folderPath));
             el.addEventListener('mouseenter', () => el.style.borderColor = 'rgba(243,128,32,0.5)');
             el.addEventListener('mouseleave', () => el.style.borderColor = 'transparent');
+        });
+    }
+
+    _openPhotoPreview(photoId) {
+        const modal = document.getElementById('photoPreviewModal');
+        const img = document.getElementById('photoPreviewImg');
+        const useBtn = document.getElementById('photoPreviewUseBtn');
+        if (!modal || !img) return;
+        this._previewPhotoId = photoId;
+        img.src = `${CONFIG.WORKER_URL}/${photoId}`;
+        useBtn.style.display = this.pendingSlotIdx >= 0 ? '' : 'none';
+        modal.classList.add('open');
+    }
+
+    _initPhotoPreviewModal() {
+        const modal = document.getElementById('photoPreviewModal');
+        if (!modal || modal._initialized) return;
+        modal._initialized = true;
+        document.getElementById('photoPreviewClose').addEventListener('click', () => modal.classList.remove('open'));
+        modal.addEventListener('click', e => { if (e.target === modal) modal.classList.remove('open'); });
+        document.getElementById('photoPreviewUseBtn').addEventListener('click', () => {
+            if (this.pendingSlotIdx >= 0 && this._previewPhotoId) {
+                this.setSlotPhoto(this.pendingSlotIdx, this._previewPhotoId);
+            }
+            modal.classList.remove('open');
         });
     }
 
@@ -2174,6 +2197,7 @@ class BookEditor {
     // ─── 事件綁定 ────────────────────────────
 
     bindEvents() {
+        this._initPhotoPreviewModal();
         // 攔截預覽區的原生檔案拖放 UI（只綁一次）
         const previewArea = document.getElementById('pagePreviewArea');
         if (previewArea) {
@@ -2447,6 +2471,11 @@ class BookEditor {
         document.addEventListener('keydown', e => {
             if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
             if (e.key === 'Escape') {
+                const previewModal = document.getElementById('photoPreviewModal');
+                if (previewModal && previewModal.classList.contains('open')) {
+                    previewModal.classList.remove('open');
+                    return;
+                }
                 if (this.cropMode) this.exitCropMode();
                 else if (this.slotEditMode) this.exitSlotEditMode();
             }

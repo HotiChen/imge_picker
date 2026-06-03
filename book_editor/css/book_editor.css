@@ -1182,3 +1182,65 @@ html, body {
 }
 .slot-rotate-handle:hover { transform: scale(1.15); }
 .slot-rotate-handle:active { cursor: grabbing; }
+
+/* ── Photo preview modal ── */
+#photoPreviewModal {
+    display: none;
+    position: fixed;
+    inset: 0;
+    z-index: 9000;
+    background: rgba(0,0,0,0.85);
+    align-items: center;
+    justify-content: center;
+}
+#photoPreviewModal.open { display: flex; }
+.photo-preview-box {
+    position: relative;
+    max-width: 90vw;
+    max-height: 88vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+}
+.photo-preview-box img {
+    max-width: 90vw;
+    max-height: 78vh;
+    object-fit: contain;
+    border-radius: 4px;
+    box-shadow: 0 8px 40px rgba(0,0,0,0.6);
+    display: block;
+}
+.photo-preview-actions {
+    display: flex;
+    gap: 10px;
+}
+.photo-preview-close {
+    position: fixed;
+    top: 18px;
+    right: 22px;
+    background: rgba(255,255,255,0.12);
+    border: none;
+    color: #fff;
+    font-size: 24px;
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.15s;
+}
+.photo-preview-close:hover { background: rgba(255,255,255,0.25); }
+.photo-preview-use-btn {
+    background: var(--primary);
+    color: #fff;
+    border: none;
+    padding: 8px 22px;
+    border-radius: 4px;
+    font-size: 14px;
+    cursor: pointer;
+    font-weight: 600;
+}
+.photo-preview-use-btn:hover { background: var(--primary-hover); }
