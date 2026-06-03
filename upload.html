@@ -523,7 +523,7 @@ function makeSbNode(path, preloaded = false) {
         e.stopPropagation();
         // ensure children visible
         if (childrenDiv.style.display === 'none') {
-            childrenDiv.style.display = '';
+            childrenDiv.style.display = 'block';
             toggle.classList.add('open');
         }
         showNewFolderInput(childrenDiv, path, (parts.length) * 14 + 4);
@@ -537,7 +537,7 @@ function makeSbNode(path, preloaded = false) {
         open = !open;
         if (open) {
             toggle.classList.add('open');
-            childrenDiv.style.display = '';
+            childrenDiv.style.display = 'block';
             if (!loaded) {
                 loaded = true;
                 toggle.textContent = '…';
@@ -605,7 +605,7 @@ function addFolderToTree(fullPath) {
             // node exists — open it and descend
             const ch = existing.querySelector('.sb-children');
             if (ch) {
-                ch.style.display = '';
+                ch.style.display = 'block';
                 const tog = existing.querySelector('.sb-toggle');
                 if (tog) tog.classList.add('open');
                 if (i < parts.length - 1) { container = ch; continue; }
@@ -616,7 +616,7 @@ function addFolderToTree(fullPath) {
             container.appendChild(node);
             const ch = node.querySelector('.sb-children');
             const tog = node.querySelector('.sb-toggle');
-            if (ch && tog) { ch.style.display = ''; tog.classList.add('open'); }
+            if (ch && tog) { ch.style.display = 'block'; tog.classList.add('open'); }
             if (i < parts.length - 1) { container = ch || container; continue; }
         }
     }
@@ -644,8 +644,8 @@ $('sidebarRefreshBtn').addEventListener('click', initSidebar);
 $('sidebarAddRootBtn').addEventListener('click', () => {
     const wrap = $('sidebarNewRoot');
     const input = $('sidebarNewRootInput');
-    if (wrap.style.display === 'none') {
-        wrap.style.display = '';
+    if (wrap.style.display !== 'block') {
+        wrap.style.display = 'block';
         input.value = '';
         input.focus();
     } else {
