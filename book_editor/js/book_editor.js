@@ -516,13 +516,13 @@ class BookEditor {
         const cropX = (crop.x || 0) * 100;
         const cropY = (crop.y || 0) * 100;
         const rotation = crop.rotation || 0;
-        slotEl.style.transform = `rotate(${rotation}deg)`;
+        slotEl.style.transform = ''; // 格子本身不旋轉，保持正正方方
         
         const wrapper = slotEl.querySelector('.slot-crop-wrapper');
         if (wrapper) {
             wrapper.style.width = `${100 * scale}%`;
             wrapper.style.height = `${100 * scale}%`;
-            wrapper.style.transform = `translate(calc(-50% + ${cropX / safeScale}%), calc(-50% + ${cropY / safeScale}%))`;
+            wrapper.style.transform = `translate(calc(-50% + ${cropX / safeScale}%), calc(-50% + ${cropY / safeScale}%)) rotate(${rotation}deg)`;
         }
         
         const img = slotEl.querySelector('.slot-crop-wrapper img');

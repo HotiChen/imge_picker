@@ -150,7 +150,7 @@ function renderPageHTML(page, displayW, displayH, cropSlotIdx = -1) {
                         position:absolute; overflow:hidden;
                         width:${100 * scale}%; height:${100 * scale}%;
                         top:50%; left:50%;
-                        transform:translate(calc(-50% + ${cropX / scale}%), calc(-50% + ${cropY / scale}%));
+                        transform:translate(calc(-50% + ${cropX / scale}%), calc(-50% + ${cropY / scale}%)) rotate(${rotation}deg);
                     ">
                         <img src="${src}" draggable="false" style="width:100%;height:100%;object-fit:cover;object-position:50% 50%;display:block;pointer-events:none;">
                     </div>
@@ -183,7 +183,7 @@ function renderPageHTML(page, displayW, displayH, cropSlotIdx = -1) {
             <div class="page-slot ${slot.photoId ? 'has-photo' : 'empty'} ${isCropActive ? 'crop-active' : ''}"
                  data-slot-idx="${idx}"
                  data-slot-w="${sw}" data-slot-h="${sh}"
-                 style="position:absolute; left:${sx}%; top:${sy}%; width:${sw}%; height:${sh}%; overflow:hidden; box-sizing:border-box; z-index:2; transform:rotate(${rotation}deg); transform-origin:center center;">
+                 style="position:absolute; left:${sx}%; top:${sy}%; width:${sw}%; height:${sh}%; overflow:hidden; box-sizing:border-box; z-index:2;">
                 ${innerHTML}
             </div>
         `;
@@ -226,9 +226,10 @@ function renderPageThumbnailHTML(page) {
         const cropX = (slot.crop?.x || 0) * 100;
         const cropY = (slot.crop?.y || 0) * 100;
         const src = _thumbUrl(slot.photoId, 240);
+        const rotation = slot.crop?.rotation || 0;
         return `
             <div style="position:absolute;left:${tsx}%;top:${tsy}%;width:${tsw}%;height:${tsh}%;overflow:hidden;box-sizing:border-box;z-index:2;">
-                <div style="position:absolute;overflow:hidden;width:${100*scale}%;height:${100*scale}%;top:50%;left:50%;transform:translate(calc(-50% + ${cropX / scale}%), calc(-50% + ${cropY / scale}%));">
+                <div style="position:absolute;overflow:hidden;width:${100*scale}%;height:${100*scale}%;top:50%;left:50%;transform:translate(calc(-50% + ${cropX / scale}%), calc(-50% + ${cropY / scale}%)) rotate(${rotation}deg);">
                     <img src="${src}" style="width:100%;height:100%;object-fit:cover;object-position:50% 50%;display:block;">
                 </div>
             </div>
