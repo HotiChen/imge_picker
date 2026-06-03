@@ -733,6 +733,13 @@ function pump() {
 }
 
 async function startUpload(item) {
+    if (!CONFIG.PHOTOGRAPHER_TOKEN) {
+        item.state = 'error';
+        item.error = '未登入，請重新整理頁面';
+        updateItemEl(item);
+        updateOverall();
+        return;
+    }
     item.state = 'uploading';
     activeCount++;
     updateItemEl(item);
@@ -765,7 +772,15 @@ function uploadWithProgress(item, key) {
                 updateOverall();
             }
         });
-        xhr.addEventListener('load', () => { xhr.status >= 200 && xhr.status < 300 ? resolve() : reject(new Error(`HTTP ${xhr.status}`)); });
+        xhr.addEventListener('load', () => {
+            if (xhr.status === 401) {
+                sessionStorage.removeItem('studio_token');
+                CONFIG.PHOTOGRAPHER_TOKEN = '';
+                reject(new Error('HTTP 401 (token 錯誤，請重新整理頁面並輸入正確密碼)'));
+            } else {
+                xhr.status >= 200 && xhr.status < 300 ? resolve() : reject(new Error(`HTTP ${xhr.status}`));
+            }
+        });
         xhr.addEventListener('error', () => reject(new Error('網路錯誤')));
         xhr.send(item.file);
     });
