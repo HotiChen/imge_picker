@@ -154,7 +154,7 @@ const BookExporter = {
                 ctx.drawImage(img, 0, 0, img.naturalWidth, img.naturalHeight, drawX, drawY, drawW, drawH);
             } else {
                 /**
-                 * 繪製單一相片插槽至 Canvas 上，支援 Cover 縮放與平移擷取。
+                 * 繪製單一相片插槽至 Canvas 上，支援 Cover 縮放與平移擷取（使用目標座標繪製以完美支援超出邊界的自由平移）。
                  *
                  * @pre
                  * - `img` 必須是已完成載入的 HTMLImageElement。
@@ -162,20 +162,17 @@ const BookExporter = {
                  * - Canvas 2D 上下文 `ctx` 必須處於可用狀態。
                  *
                  * @post
-                 * - 根據對齊網頁端的擷取公式計算 `srcX`/`srcY`，並剪裁繪製到目標 slot 區域。
+                 * - 計算影像在插槽內的目標繪製寬高及位置，在剪裁區域內進行繪製，保證平移超出邊界時亦不會發生拉伸或截斷。
                  */
                 const cropScale = crop.scale || 1;
                 const wW = cropScale * slotW;
                 const wH = cropScale * slotH;
                 const s = Math.max(wW / img.naturalWidth, wH / img.naturalHeight);
-                const srcW = slotW / s;
-                const srcH = slotH / s;
-                // 這裡的 crop.x 和 crop.y 是相對於 slot 寬高的平移比例（向右為正，向下為正）
-                // 圖片在未平移時的置中擷取起點是 (img.naturalWidth - srcW) / 2
-                // 向右平移圖片時，圖片擷取起點 srcX 應該向左移（減去 crop.x * srcW）
-                const srcX = (img.naturalWidth - srcW) / 2 - (crop.x || 0) * srcW;
-                const srcY = (img.naturalHeight - srcH) / 2 - (crop.y || 0) * srcH;
-                ctx.drawImage(img, srcX, srcY, srcW, srcH, slotX, slotY, slotW, slotH);
+                const drawW = img.naturalWidth * s;
+                const drawH = img.naturalHeight * s;
+                const destImgX = slotX + (slotW - drawW) / 2 + (crop.x || 0) * slotW;
+                const destImgY = slotY + (slotH - drawH) / 2 + (crop.y || 0) * slotH;
+                ctx.drawImage(img, 0, 0, img.naturalWidth, img.naturalHeight, destImgX, destImgY, drawW, drawH);
             }
             ctx.restore();
         });

@@ -1371,12 +1371,6 @@ class BookEditor {
                     const factor = e.deltaY < 0 ? 1.04 : 0.96;
                     const newScale = Math.max(1, Math.min(4, (crop.scale || 1) * factor));
                     crop.scale = newScale;
-                    
-                    // 自動 Clamp 平移範圍，防止滾輪縮小圖片時露出空白邊緣
-                    const limitX = Math.max(0.5, (newScale - 1) / 2);
-                    const limitY = Math.max(0.5, (newScale - 1) / 2);
-                    crop.x = Math.max(-limitX, Math.min(limitX, crop.x || 0));
-                    crop.y = Math.max(-limitY, Math.min(limitY, crop.y || 0));
 
                     this._updateSlotTransform(slotIdx);
                     this._updateZoomUI(slotIdx);
@@ -1422,7 +1416,17 @@ class BookEditor {
             }
         });
 
-        // 全域 mousemove / mouseup（只保留一組）
+        /**
+         * Crop movement handler for mouse dragging.
+         * Pre-conditions:
+         *   - `this.cropDragState` is active (contains start client coordinates and target slot element).
+         *   - `this.cropMode` is true.
+         *   - Valid slot index (`this.cropSlotIdx`) with a slot existing.
+         * Post-conditions:
+         *   - Updates crop offset coordinates `crop.x` and `crop.y` without clamping constraints to allow free pan.
+         *   - Updates `this.cropDragState` with the latest client coordinates.
+         *   - Applies transformation by calling `_updateSlotTransform`.
+         */
         this._cropMoveHandler = e => {
             if (!this.cropDragState || !this.cropMode) return;
             const page = this.book.pages[this.currentPageIndex];
@@ -1441,13 +1445,9 @@ class BookEditor {
             const dy = dx_raw * Math.sin(rad) + dy_raw * Math.cos(rad);
 
             const crop = page.slots[this.cropSlotIdx].crop;
-            const scale = crop.scale || 1;
-            // 限制平移範圍，以防圖片拉太開露出底部空白邊緣。
-            // 在未放大的情況下 (scale = 1)，我們也允許最多 0.5 (即半個格子) 的平移，以微調不同比例圖片的邊緣。
-            const limitX = Math.max(0.5, (scale - 1) / 2);
-            const limitY = Math.max(0.5, (scale - 1) / 2);
-            crop.x = Math.max(-limitX, Math.min(limitX, (crop.x || 0) + dx));
-            crop.y = Math.max(-limitY, Math.min(limitY, (crop.y || 0) + dy));
+            // Remove clamp to allow free panning (past the boundaries)
+            crop.x = (crop.x || 0) + dx;
+            crop.y = (crop.y || 0) + dy;
             
             // 儲存 debug 資訊用的暫存狀態
             this.lastMoveX = e.clientX;
