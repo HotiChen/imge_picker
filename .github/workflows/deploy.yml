@@ -11,22 +11,36 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Deploy via SFTP
-        uses: wlixcc/SFTP-Deploy-Action@v1.2.4
-        with:
-          server: ${{ secrets.SFTP_HOST }}
-          port: ${{ secrets.SFTP_PORT }}
-          username: ${{ secrets.SFTP_USER }}
-          password: ${{ secrets.SFTP_PASS }}
-          local_path: ./
-          remote_path: /public_html/studio/
-          sftp_only: true
-          delete_remote_files: false
-          exclude: |
-            .git
-            .github
-            .claude
-            worker
-            ai_stock
-            node_modules
-            *.md
-            .gitignore
+        env:
+          SFTP_HOST: ${{ secrets.SFTP_HOST }}
+          SFTP_PORT: ${{ secrets.SFTP_PORT }}
+          SFTP_USER: ${{ secrets.SFTP_USER }}
+          SFTP_PASS: ${{ secrets.SFTP_PASS }}
+        run: |
+          set -e
+          sudo apt-get install -y lftp
+
+          # Store credentials safely (avoids shell-escaping issues with special chars)
+          printf 'machine %s login %s password %s\n' \
+            "$SFTP_HOST" "$SFTP_USER" "$SFTP_PASS" > ~/.netrc
+          chmod 600 ~/.netrc
+
+          lftp << LFTP_SCRIPT
+          set sftp:auto-confirm yes
+          set net:max-retries 3
+          set error:fatal yes
+          open sftp://${SFTP_HOST}:${SFTP_PORT}
+          mirror -R \
+            --exclude-glob .git/ \
+            --exclude-glob .github/ \
+            --exclude-glob .claude/ \
+            --exclude-glob worker/ \
+            --exclude-glob ai_stock/ \
+            --exclude-glob node_modules/ \
+            --exclude-glob *.md \
+            --exclude-glob .gitignore \
+            . /public_html/studio/
+          bye
+          LFTP_SCRIPT
+
+          rm -f ~/.netrc
