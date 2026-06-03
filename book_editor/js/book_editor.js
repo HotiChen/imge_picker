@@ -1550,10 +1550,43 @@ class BookEditor {
         } catch (e) { /* quota exceeded */ }
     }
 
+    /**
+     * Loads the active photobook state from local storage.
+     * Pre-conditions:
+     *   - `this.currentBookId` must be a valid ID string.
+     *   - `localStorage` must be accessible.
+     * Post-conditions:
+     *   - If the key exists, parses and loads the book state into `this.book`.
+     *   - Performs structure sanitization to guarantee backward compatibility by applying default settings
+     *     and coverSettings objects (preventing TypeError crashes on properties like settings.width).
+     *   - Returns true if successful, false otherwise.
+     */
     loadFromStorage() {
         try {
             const saved = localStorage.getItem(`book_editor_${this.currentBookId}`);
-            if (saved) { this.book = JSON.parse(saved); return true; }
+            if (saved) {
+                const parsed = JSON.parse(saved);
+                // Ensure default structure and backward compatibility
+                this.book = {
+                    name: '未命名相本',
+                    clientFolders: [],
+                    notifyUrl: '',
+                    settings: { width: 20, height: 20, unit: 'cm', dpi: 300 },
+                    coverSettings: { width: 20, height: 20, unit: 'cm', dpi: 300 },
+                    pages: [],
+                    ...parsed
+                };
+                // Ensure nested settings objects are also fully initialized
+                this.book.settings = {
+                    width: 20, height: 20, unit: 'cm', dpi: 300,
+                    ...(parsed.settings || {})
+                };
+                this.book.coverSettings = {
+                    width: 20, height: 20, unit: 'cm', dpi: 300,
+                    ...(parsed.coverSettings || {})
+                };
+                return true;
+            }
         } catch (e) {}
         return false;
     }
@@ -1670,7 +1703,7 @@ class BookEditor {
                     ${isCurrent
                         ? '<span class="books-current-badge">編輯中</span>'
                         : `<button class="btn btn-secondary books-open-btn" data-id="${b.id}">開啟</button>`}
-                    <button class="btn btn-icon books-dup-btn" data-id="${b.id}" title="複製">⿻</button>
+                    <button class="btn btn-icon books-dup-btn" data-id="${b.id}" title="建立副本">⿻</button>
                     <button class="btn btn-icon books-export-btn" data-id="${b.id}" title="匯出 JSON">⬇</button>
                     <button class="btn btn-icon books-del-btn" data-id="${b.id}" title="刪除">✕</button>
                 </div>
@@ -1875,7 +1908,7 @@ class BookEditor {
         };
         list.splice(srcIdx + 1, 0, entry);
         localStorage.setItem('book_editor_books', JSON.stringify(list));
-        toast.success('已複製相本');
+        toast.success('已建立相本副本，並新增至列表');
         this._renderBooksModalList();
     }
 
