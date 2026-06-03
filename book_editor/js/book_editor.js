@@ -67,6 +67,11 @@ class BookEditor {
                 console.error("Error reading book from storage, falling back to new book:", loadErr);
             }
 
+            // If not in localStorage, try loading from cloud (enables cross-device editing)
+            if (!isLoaded) {
+                try { isLoaded = await this._loadFromCloud(); } catch (e) {}
+            }
+
             if (!isLoaded) {
                 const hasBooksList = this._getBooksList().some(b => b.id === this.currentBookId);
                 if (hasBooksList) toast.error('找不到此相本的儲存資料，已建立空白相本。');
@@ -1661,6 +1666,59 @@ class BookEditor {
             localStorage.setItem(`book_editor_${this.currentBookId}`, JSON.stringify(this.book));
             this._updateBooksList();
         } catch (e) { /* quota exceeded */ }
+        this._scheduleCloudSync();
+    }
+
+    _scheduleCloudSync() {
+        if (!CONFIG.PHOTOGRAPHER_TOKEN) return;
+        clearTimeout(this._cloudSyncTimer);
+        this._cloudSyncTimer = setTimeout(() => this._autoSyncToCloud(), 3000);
+    }
+
+    async _autoSyncToCloud() {
+        if (!CONFIG.PHOTOGRAPHER_TOKEN) return;
+        const id = this.currentBookId;
+        try {
+            this._setCloudSyncStatus('saving');
+            await fetch(`${CONFIG.WORKER_URL}/api/books/${id}`, {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${CONFIG.PHOTOGRAPHER_TOKEN}`
+                },
+                body: JSON.stringify(this.book)
+            });
+            if (!this.book.cloudId) { this.book.cloudId = id; }
+            this._setCloudSyncStatus('saved');
+        } catch (e) {
+            this._setCloudSyncStatus('error');
+        }
+    }
+
+    _setCloudSyncStatus(status) {
+        const el = document.getElementById('cloudSyncStatus');
+        if (!el) return;
+        const map = { saving: '☁ 同步中…', saved: '✓ 已同步', error: '⚠ 同步失敗' };
+        const color = { saving: '#9fa8da', saved: '#27ae60', error: '#ff6b6b' };
+        el.textContent = map[status] || '';
+        el.style.color = color[status] || '';
+    }
+
+    async _loadFromCloud() {
+        const r = await fetch(`${CONFIG.WORKER_URL}/api/books/${this.currentBookId}`);
+        if (!r.ok) return false;
+        const data = await r.json();
+        if (!data || !Array.isArray(data.pages)) return false;
+        this.book = {
+            name: '未命名相本', clientFolders: [], notifyUrl: '',
+            settings: { width: 20, height: 20, unit: 'cm', dpi: 300 },
+            coverSettings: { width: 20, height: 20, unit: 'cm', dpi: 300 },
+            pages: [], ...data,
+            settings: { width: 20, height: 20, unit: 'cm', dpi: 300, ...(data.settings || {}) },
+            coverSettings: { width: 20, height: 20, unit: 'cm', dpi: 300, ...(data.coverSettings || {}) }
+        };
+        toast.info('已從雲端載入相本');
+        return true;
     }
 
     /**
@@ -2181,8 +2239,8 @@ class BookEditor {
         const btn = document.getElementById('shareConfirmBtn');
         if (btn) { btn.disabled = true; btn.textContent = '儲存中...'; }
         try {
-            if (!this.book.cloudId) this.book.cloudId = this._generateId();
-            const id = this.book.cloudId;
+            this.book.cloudId = this.currentBookId;
+            const id = this.currentBookId;
 
             const headers = { 'Content-Type': 'application/json' };
             if (CONFIG.PHOTOGRAPHER_TOKEN) headers['Authorization'] = `Bearer ${CONFIG.PHOTOGRAPHER_TOKEN}`;
@@ -2197,8 +2255,11 @@ class BookEditor {
             this.saveToStorage();
 
             const viewUrl = new URL(`view.html?id=${id}`, window.location.href).href;
+            const editUrl = new URL(`index.html?id=${id}`, window.location.href).href;
             const urlInput = document.getElementById('shareUrl');
             if (urlInput) urlInput.value = viewUrl;
+            const editUrlInput = document.getElementById('editUrl');
+            if (editUrlInput) editUrlInput.value = editUrl;
 
             document.getElementById('shareFolderStep').style.display = 'none';
             document.getElementById('shareUrlStep').style.display = '';
@@ -2419,6 +2480,18 @@ class BookEditor {
                     el.select();
                     document.execCommand('copy');
                     toast.success('已複製連結');
+                });
+        });
+        this._on('copyEditUrlBtn', 'click', () => {
+            const url = document.getElementById('editUrl')?.value;
+            if (!url) return;
+            navigator.clipboard?.writeText(url)
+                .then(() => toast.success('已複製編輯連結'))
+                .catch(() => {
+                    const el = document.getElementById('editUrl');
+                    el.select();
+                    document.execCommand('copy');
+                    toast.success('已複製編輯連結');
                 });
         });
 

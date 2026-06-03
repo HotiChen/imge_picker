@@ -21,6 +21,7 @@
             <span style="font-size:1.1rem;">📖</span>
             <input type="text" id="bookName" class="book-title-input" value="未命名相本" placeholder="相本名稱">
             <span id="cloudStatusIndicator" style="font-size:0.72rem;color:#9fa8da;white-space:nowrap;"></span>
+            <span id="cloudSyncStatus" style="font-size:0.72rem;white-space:nowrap;"></span>
         </div>
         <div class="top-bar-center">
             <button id="prevPageBtn" class="btn btn-icon" title="上一頁">◀</button>
@@ -356,12 +357,19 @@
 
         <!-- Step 2: 複製連結 -->
         <div id="shareUrlStep" style="padding:20px 18px;display:none;">
-            <p style="font-size:0.82rem;color:var(--text-secondary);margin-bottom:14px;">已儲存到雲端。將以下連結傳送給客戶：</p>
-            <div style="display:flex;gap:6px;margin-bottom:10px;">
+            <p style="font-size:0.82rem;color:var(--text-secondary);margin-bottom:10px;">已儲存到雲端。將以下連結傳送給客戶：</p>
+            <div style="display:flex;gap:6px;margin-bottom:14px;">
                 <input id="shareUrl" type="text" readonly style="flex:1;background:var(--bg-input);border:1px solid var(--border);border-radius:4px;color:var(--text-primary);padding:7px 10px;font-size:0.8rem;outline:none;">
                 <button id="copyShareUrlBtn" class="btn btn-primary">複製</button>
             </div>
-            <p style="font-size:0.72rem;color:var(--text-muted);">客人可在開放資料夾中換照片，並在最後批准相本。再次點「分享」可更新設定。</p>
+            <p style="font-size:0.72rem;color:var(--text-muted);margin-bottom:10px;">客人可在開放資料夾中換照片，並在最後批准相本。再次點「分享」可更新設定。</p>
+            <div style="border-top:1px solid var(--border);padding-top:12px;">
+                <p style="font-size:0.8rem;color:var(--text-secondary);margin-bottom:8px;">跨裝置編輯連結（攝影師用）：</p>
+                <div style="display:flex;gap:6px;">
+                    <input id="editUrl" type="text" readonly style="flex:1;background:var(--bg-input);border:1px solid var(--border);border-radius:4px;color:var(--text-primary);padding:7px 10px;font-size:0.8rem;outline:none;">
+                    <button id="copyEditUrlBtn" class="btn btn-secondary">複製</button>
+                </div>
+            </div>
         </div>
     </div>
 </div>
@@ -464,6 +472,6 @@
 <script src="js/exporter.js?v=20260603-4"></script>
 <script src="js/layout_editor.js?v=20260603"></script>
 <script src="js/tour.js?v=20260603"></script>
-<script src="js/book_editor.js?v=20260604-3"></script>
+<script src="js/book_editor.js?v=20260604-4"></script>
 </body>
 </html>
