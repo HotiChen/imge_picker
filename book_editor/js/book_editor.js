@@ -180,7 +180,25 @@ class BookEditor {
     enterCropMode(slotIdx) {
         this.cropMode = true;
         this.cropSlotIdx = slotIdx;
-        this.renderCurrentPage(slotIdx);
+        
+        // 1. 動態更新 DOM 狀態，避免 renderCurrentPage() 重新產生 DOM 導致滑鼠捕獲 (Mouse Capture) 中斷
+        document.querySelectorAll('.page-slot').forEach(el => {
+            el.classList.remove('crop-active');
+            el.querySelector('.crop-hint')?.remove();
+        });
+        
+        const slotEl = document.querySelector(`[data-slot-idx="${slotIdx}"]`);
+        if (slotEl) {
+            slotEl.classList.add('crop-active');
+            // 補上裁切提示文字
+            if (!slotEl.querySelector('.crop-hint')) {
+                const hint = document.createElement('div');
+                hint.className = 'crop-hint';
+                hint.textContent = '拖移平移 · 滾輪縮放';
+                slotEl.appendChild(hint);
+            }
+        }
+        
         const bar = document.getElementById('cropModeBar');
         if (bar) { bar.style.display = 'flex'; bar.classList.add('bar-flash'); setTimeout(() => bar.classList.remove('bar-flash'), 600); }
         const page = this.book.pages[this.currentPageIndex];
