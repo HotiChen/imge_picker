@@ -66,6 +66,8 @@ class BookEditor {
             }
 
             if (!isLoaded) {
+                const hasBooksList = this._getBooksList().some(b => b.id === this.currentBookId);
+                if (hasBooksList) toast.error('找不到此相本的儲存資料，已建立空白相本。');
                 this._addPage('cover', 'full-bleed');
                 this._addPage('inner', '2-up-h');
                 this._addPage('inner', '2-up-h');
@@ -1991,6 +1993,10 @@ class BookEditor {
     }
 
     _openBook(id) {
+        if (!localStorage.getItem(`book_editor_${id}`)) {
+            toast.error('找不到此相本的資料，可能已遺失或在其他裝置上建立。');
+            return;
+        }
         this.saveToStorage();
         location.href = `?id=${id}`;
     }
