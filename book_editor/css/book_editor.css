@@ -616,6 +616,9 @@ html, body {
 }
 .modal-overlay.active { display: flex; }
 
+/* confirmModal must always appear above other modals (same z-index, but later in DOM) */
+#confirmModal { z-index: 1100; }
+
 .modal-box {
     background: var(--bg-panel);
     border: 1px solid var(--border);

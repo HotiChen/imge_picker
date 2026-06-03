@@ -1736,6 +1736,14 @@ class BookEditor {
     _bindDragReorder(container) {
         let dragId = null;
         container.querySelectorAll('.books-row').forEach(row => {
+            // Only allow drag when the grab handle is used, not action buttons
+            row.addEventListener('mousedown', e => {
+                if (!e.target.closest('.books-drag-handle')) {
+                    row.removeAttribute('draggable');
+                    const restore = () => { row.setAttribute('draggable', 'true'); document.removeEventListener('mouseup', restore); };
+                    document.addEventListener('mouseup', restore);
+                }
+            });
             row.addEventListener('dragstart', e => {
                 dragId = row.dataset.id;
                 row.classList.add('books-row--dragging');
