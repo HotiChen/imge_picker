@@ -22,6 +22,7 @@ class BookEditor {
         this._textDragState = null;
         this._textMoveHandler = null;
         this._textUpHandler = null;
+        this._wheelSaveTimer = null;
         this.libraryPhotos = [];
         this.libAllPhotos = [];
         this.libFolderStack = [];
@@ -1221,6 +1222,7 @@ class BookEditor {
             this._textUpHandler = null;
         }
         this._textDragState = null;
+        clearTimeout(this._wheelSaveTimer);
 
         if (this.slotEditMode) {
             this._bindSlotPositionEdit();
@@ -1295,6 +1297,8 @@ class BookEditor {
                     crop.y = Math.max(-maxPan, Math.min(maxPan, crop.y || 0));
                     this._updateSlotTransform(slotIdx);
                     this._updateZoomUI(slotIdx);
+                    clearTimeout(this._wheelSaveTimer);
+                    this._wheelSaveTimer = setTimeout(() => this.saveToStorage(), 500);
                 }, { passive: false });
 
                 // 旋轉 handle（在 crop 模式下顯示）
@@ -1354,14 +1358,21 @@ class BookEditor {
             const dy = dx_raw * Math.sin(rad) + dy_raw * Math.cos(rad);
 
             const crop = page.slots[this.cropSlotIdx].crop;
+            // Auto-zoom to 1.1× on first drag so there's always room to pan
+            if ((crop.scale || 1) < 1.05) {
+                crop.scale = 1.1;
+                this._updateZoomUI(this.cropSlotIdx);
+            }
             const maxPan = ((crop.scale || 1) - 1) * 0.5;
             crop.x = Math.max(-maxPan, Math.min(maxPan, (crop.x || 0) + dx));
             crop.y = Math.max(-maxPan, Math.min(maxPan, (crop.y || 0) + dy));
             this.cropDragState = { lastX: e.clientX, lastY: e.clientY, slotEl };
             this._updateSlotTransform(this.cropSlotIdx);
         };
-        this._cropUpHandler = () => { this.cropDragState = null; };
+        this._cropUpHandler = () => { this.cropDragState = null; this.saveToStorage(); };
 
+        document.removeEventListener('mousemove', this._cropMoveHandler);
+        document.removeEventListener('mouseup', this._cropUpHandler);
         document.addEventListener('mousemove', this._cropMoveHandler);
         document.addEventListener('mouseup', this._cropUpHandler);
     }
