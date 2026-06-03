@@ -1358,9 +1358,9 @@ class BookEditor {
             const dy = dx_raw * Math.sin(rad) + dy_raw * Math.cos(rad);
 
             const crop = page.slots[this.cropSlotIdx].crop;
-            // Auto-zoom to 1.1× on first drag so there's always room to pan
+            // Auto-zoom to 1.5× on first drag so there's meaningful pan range
             if ((crop.scale || 1) < 1.05) {
-                crop.scale = 1.1;
+                crop.scale = 1.5;
                 this._updateZoomUI(this.cropSlotIdx);
             }
             const maxPan = ((crop.scale || 1) - 1) * 0.5;
