@@ -183,7 +183,7 @@ function renderPageHTML(page, displayW, displayH, cropSlotIdx = -1) {
             <div class="page-slot ${slot.photoId ? 'has-photo' : 'empty'} ${isCropActive ? 'crop-active' : ''}"
                  data-slot-idx="${idx}"
                  data-slot-w="${sw}" data-slot-h="${sh}"
-                 style="position:absolute; left:${sx}%; top:${sy}%; width:${sw}%; height:${sh}%; box-sizing:border-box; z-index:2; transform:rotate(${rotation}deg); transform-origin:center center;">
+                 style="position:absolute; left:${sx}%; top:${sy}%; width:${sw}%; height:${sh}%; overflow:hidden; box-sizing:border-box; z-index:2; transform:rotate(${rotation}deg); transform-origin:center center;">
                 ${innerHTML}
             </div>
         `;
