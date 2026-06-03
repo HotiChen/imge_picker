@@ -19,17 +19,9 @@ jobs:
         run: |
           set -e
           sudo apt-get install -y lftp
-
-          # Store credentials safely (avoids shell-escaping issues with special chars)
-          printf 'machine %s login %s password %s\n' \
-            "$SFTP_HOST" "$SFTP_USER" "$SFTP_PASS" > ~/.netrc
-          chmod 600 ~/.netrc
-
-          lftp << LFTP_SCRIPT
+          lftp -u "$SFTP_USER","$SFTP_PASS" "sftp://$SFTP_HOST:$SFTP_PORT" << 'LFTP_SCRIPT'
           set sftp:auto-confirm yes
           set net:max-retries 3
-          set error:fatal yes
-          open sftp://${SFTP_HOST}:${SFTP_PORT}
           mirror -R \
             --exclude-glob .git/ \
             --exclude-glob .github/ \
@@ -42,5 +34,3 @@ jobs:
             . /public_html/studio/
           bye
           LFTP_SCRIPT
-
-          rm -f ~/.netrc
