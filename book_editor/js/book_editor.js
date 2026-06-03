@@ -1775,7 +1775,7 @@ class BookEditor {
             const thumbUrl = b.coverPhotoId ? `${CONFIG.WORKER_URL}/${encodeURIComponent(b.coverPhotoId)}` : '';
             const folder = b.clientFolder || '';
             const folderShort = folder.length > 22 ? '…' + folder.slice(-20) : folder;
-            return `<div class="books-row${isCurrent ? ' books-row--current' : ''}" data-id="${b.id}" data-idx="${i}" draggable="true">
+            return `<div class="books-row${isCurrent ? ' books-row--current' : ''}" data-id="${b.id}" data-idx="${i}">
                 <span class="books-drag-handle" title="拖曳排序">⠿</span>
                 ${thumbUrl
                     ? `<img class="books-thumb" src="${thumbUrl}" alt="" loading="lazy">`
@@ -1924,25 +1924,17 @@ class BookEditor {
     _bindDragReorder(container) {
         let dragId = null;
         container.querySelectorAll('.books-row').forEach(row => {
-            // Only allow drag when the grab handle is used, not action buttons
-            row.addEventListener('mousedown', e => {
-                if (!e.target.closest('.books-drag-handle')) {
-                    row.removeAttribute('draggable');
-                    if (row._restoreDrag) document.removeEventListener('mouseup', row._restoreDrag);
-                    row._restoreDrag = () => {
-                        row.setAttribute('draggable', 'true');
-                        document.removeEventListener('mouseup', row._restoreDrag);
-                        row._restoreDrag = null;
-                    };
-                    document.addEventListener('mouseup', row._restoreDrag);
-                }
-            });
+            const handle = row.querySelector('.books-drag-handle');
+            if (handle) {
+                handle.addEventListener('mousedown', () => row.setAttribute('draggable', 'true'));
+            }
             row.addEventListener('dragstart', e => {
                 dragId = row.dataset.id;
                 row.classList.add('books-row--dragging');
                 e.dataTransfer.effectAllowed = 'move';
             });
             row.addEventListener('dragend', () => {
+                row.removeAttribute('draggable');
                 row.classList.remove('books-row--dragging');
                 container.querySelectorAll('.books-row--drag-over').forEach(r => r.classList.remove('books-row--drag-over'));
             });
