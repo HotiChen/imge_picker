@@ -1740,8 +1740,13 @@ class BookEditor {
             row.addEventListener('mousedown', e => {
                 if (!e.target.closest('.books-drag-handle')) {
                     row.removeAttribute('draggable');
-                    const restore = () => { row.setAttribute('draggable', 'true'); document.removeEventListener('mouseup', restore); };
-                    document.addEventListener('mouseup', restore);
+                    if (row._restoreDrag) document.removeEventListener('mouseup', row._restoreDrag);
+                    row._restoreDrag = () => {
+                        row.setAttribute('draggable', 'true');
+                        document.removeEventListener('mouseup', row._restoreDrag);
+                        row._restoreDrag = null;
+                    };
+                    document.addEventListener('mouseup', row._restoreDrag);
                 }
             });
             row.addEventListener('dragstart', e => {
