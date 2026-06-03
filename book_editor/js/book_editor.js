@@ -746,8 +746,20 @@ class BookEditor {
 
     _openPhotoPreview(photoId) {
         const idx = this.libraryPhotos.findIndex(p => p.id === photoId);
-        this._previewIdx = idx >= 0 ? idx : 0;
-        this._showPreviewAt(this._previewIdx);
+        if (idx < 0) {
+            // photo not in current strip (e.g. placed from a different session) — show without navigation
+            this._previewPhotoId = photoId;
+            this._previewIdx = 0;
+            document.getElementById('photoPreviewImg').src = `${CONFIG.WORKER_URL}/${photoId}`;
+            document.getElementById('photoPreviewCounter').textContent = '';
+            document.getElementById('photoPreviewUseBtn').style.display = this.pendingSlotIdx >= 0 ? '' : 'none';
+            document.getElementById('photoPreviewPrev').disabled = true;
+            document.getElementById('photoPreviewNext').disabled = true;
+            document.getElementById('photoPreviewModal').classList.add('open');
+            return;
+        }
+        this._previewIdx = idx;
+        this._showPreviewAt(idx);
         document.getElementById('photoPreviewModal').classList.add('open');
     }
 
