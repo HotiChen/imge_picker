@@ -1357,7 +1357,7 @@ class BookEditor {
             const maxPan = ((crop.scale || 1) - 1) * 0.5;
             crop.x = Math.max(-maxPan, Math.min(maxPan, (crop.x || 0) + dx));
             crop.y = Math.max(-maxPan, Math.min(maxPan, (crop.y || 0) + dy));
-            this.cropDragState = { lastX: e.clientX, lastY: e.clientY };
+            this.cropDragState = { lastX: e.clientX, lastY: e.clientY, slotEl };
             this._updateSlotTransform(this.cropSlotIdx);
         };
         this._cropUpHandler = () => { this.cropDragState = null; };
