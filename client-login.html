@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Studio — 客戶登入</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #15120d;
+    --surface: #1d1a14;
+    --card: #221f18;
+    --accent: #e5a448;
+    --ink-90: #e8e3da;
+    --ink-55: #8c8375;
+    --rule: #2e2a22;
+    --border: #3a3528;
+    --danger: #e05c5c;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--ink-90); font-family: 'IBM Plex Sans', sans-serif; font-size: 14px; min-height: 100vh; display: flex; align-items: center; justify-content: center; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 40px 32px; width: 340px; }
+  .brand { color: var(--accent); font-family: 'IBM Plex Mono', monospace; font-size: 13px; letter-spacing: 0.15em; text-align: center; margin-bottom: 4px; }
+  .subtitle { color: var(--ink-55); font-size: 12px; text-align: center; margin-bottom: 28px; }
+  .label { display: block; color: var(--ink-55); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 6px; font-family: 'IBM Plex Mono', monospace; }
+  .field { background: var(--card); border: 1px solid var(--border); color: var(--ink-90); padding: 10px 12px; border-radius: 4px; font-size: 14px; font-family: inherit; outline: none; width: 100%; }
+  .field:focus { border-color: var(--accent); }
+  .field-group { margin-bottom: 16px; }
+  .btn-primary { width: 100%; background: var(--accent); color: var(--bg); border: none; padding: 11px; border-radius: 4px; font-size: 14px; cursor: pointer; font-weight: 600; letter-spacing: 0.05em; font-family: inherit; margin-top: 8px; }
+  .btn-primary:hover { opacity: 0.9; }
+  .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+  .err { color: var(--danger); font-size: 12px; margin-top: 10px; min-height: 16px; text-align: center; }
+  .divider { border: none; border-top: 1px solid var(--rule); margin: 20px 0; }
+  .alt-link { text-align: center; color: var(--ink-55); font-size: 12px; }
+  .alt-link a { color: var(--accent); text-decoration: none; }
+  .alt-link a:hover { text-decoration: underline; }
+  .register-toggle { text-align: center; color: var(--ink-55); font-size: 12px; margin-top: 12px; cursor: pointer; }
+  .register-toggle span { color: var(--accent); }
+  #register-section { display: none; margin-top: 0; }
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="brand">STUDIO</div>
+  <div class="subtitle" id="form-subtitle">客戶登入</div>
+
+  <!-- Login form -->
+  <div id="login-section">
+    <div class="field-group">
+      <label class="label" for="login-email">Email</label>
+      <input id="login-email" type="email" class="field" placeholder="your@email.com" autocomplete="email">
+    </div>
+    <div class="field-group">
+      <label class="label" for="login-password">密碼</label>
+      <input id="login-password" type="password" class="field" placeholder="••••••••" autocomplete="current-password">
+    </div>
+    <button id="login-btn" class="btn-primary">登入</button>
+    <div id="login-err" class="err"></div>
+    <div class="register-toggle" onclick="switchToRegister()">
+      還沒有帳號？<span>立即註冊</span>
+    </div>
+    <hr class="divider">
+    <div class="alt-link">攝影師？<a href="index.html" id="photographer-link">使用密碼登入</a></div>
+  </div>
+
+  <!-- Register form -->
+  <div id="register-section">
+    <div class="field-group">
+      <label class="label" for="reg-name">姓名</label>
+      <input id="reg-name" type="text" class="field" placeholder="王小明">
+    </div>
+    <div class="field-group">
+      <label class="label" for="reg-email">Email</label>
+      <input id="reg-email" type="email" class="field" placeholder="your@email.com">
+    </div>
+    <div class="field-group">
+      <label class="label" for="reg-password">密碼</label>
+      <input id="reg-password" type="password" class="field" placeholder="至少 6 個字元">
+    </div>
+    <button id="reg-btn" class="btn-primary">申請帳號</button>
+    <div id="reg-err" class="err"></div>
+    <div class="register-toggle" onclick="switchToLogin()">
+      已有帳號？<span>返回登入</span>
+    </div>
+  </div>
+</div>
+
+<script>
+(function() {
+  const WORKER_URL = 'https://imagepicker.hotichen.workers.dev';
+
+  // Check if already logged in
+  const existing = sessionStorage.getItem('client_session');
+  if (existing) {
+    try {
+      const s = JSON.parse(existing);
+      if (s.token) { window.location.href = 'index.html'; }
+    } catch(e) { sessionStorage.removeItem('client_session'); }
+  }
+
+  // Detect redirect from index.html with ?error=
+  const urlParams = new URLSearchParams(window.location.search);
+  const redirectErr = urlParams.get('error');
+  if (redirectErr) {
+    document.getElementById('login-err').textContent = decodeURIComponent(redirectErr);
+  }
+
+  // ── Login ─────────────────────────────────────────────────────────────────
+  async function doLogin() {
+    const email = document.getElementById('login-email').value.trim();
+    const password = document.getElementById('login-password').value;
+    const errEl = document.getElementById('login-err');
+    const btn = document.getElementById('login-btn');
+    if (!email || !password) { errEl.textContent = '請填寫 Email 和密碼'; return; }
+    errEl.textContent = '';
+    btn.disabled = true;
+    btn.textContent = '登入中…';
+    try {
+      const r = await fetch(`${WORKER_URL}/api/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password })
+      });
+      const data = await r.json();
+      if (!r.ok) { errEl.textContent = data.error || '登入失敗'; btn.disabled = false; btn.textContent = '登入'; return; }
+      sessionStorage.setItem('client_session', JSON.stringify(data));
+      window.location.href = 'index.html';
+    } catch(e) {
+      errEl.textContent = '無法連線，請稍後再試';
+      btn.disabled = false;
+      btn.textContent = '登入';
+    }
+  }
+
+  document.getElementById('login-btn').addEventListener('click', doLogin);
+  document.getElementById('login-password').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
+
+  // ── Register ──────────────────────────────────────────────────────────────
+  async function doRegister() {
+    const name = document.getElementById('reg-name').value.trim();
+    const email = document.getElementById('reg-email').value.trim();
+    const password = document.getElementById('reg-password').value;
+    const errEl = document.getElementById('reg-err');
+    const btn = document.getElementById('reg-btn');
+    if (!name || !email || !password) { errEl.textContent = '請填寫所有欄位'; return; }
+    if (password.length < 6) { errEl.textContent = '密碼至少 6 個字元'; return; }
+    errEl.textContent = '';
+    btn.disabled = true;
+    btn.textContent = '申請中…';
+    try {
+      const r = await fetch(`${WORKER_URL}/api/auth/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, email, password })
+      });
+      const data = await r.json();
+      if (!r.ok) { errEl.textContent = data.error || '申請失敗'; btn.disabled = false; btn.textContent = '申請帳號'; return; }
+      errEl.style.color = '#4caf7d';
+      errEl.textContent = '申請成功！請等待攝影師審核後再登入。';
+      btn.textContent = '已送出';
+      setTimeout(() => switchToLogin(), 3000);
+    } catch(e) {
+      errEl.textContent = '無法連線，請稍後再試';
+      btn.disabled = false;
+      btn.textContent = '申請帳號';
+    }
+  }
+
+  document.getElementById('reg-btn').addEventListener('click', doRegister);
+  document.getElementById('reg-password').addEventListener('keydown', e => { if (e.key === 'Enter') doRegister(); });
+
+  // ── Toggle between login / register ──────────────────────────────────────
+  window.switchToRegister = function() {
+    document.getElementById('login-section').style.display = 'none';
+    document.getElementById('register-section').style.display = 'block';
+    document.getElementById('form-subtitle').textContent = '申請客戶帳號';
+    document.getElementById('reg-name').focus();
+  };
+  window.switchToLogin = function() {
+    document.getElementById('register-section').style.display = 'none';
+    document.getElementById('login-section').style.display = 'block';
+    document.getElementById('form-subtitle').textContent = '客戶登入';
+    document.getElementById('login-email').focus();
+  };
+})();
+</script>
+</body>
+</html>

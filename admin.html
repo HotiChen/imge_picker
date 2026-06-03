@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Studio Admin — 客戶管理</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #15120d;
+    --surface: #1d1a14;
+    --card: #221f18;
+    --accent: #e5a448;
+    --ink-90: #e8e3da;
+    --ink-55: #8c8375;
+    --rule: #2e2a22;
+    --border: #3a3528;
+    --danger: #e05c5c;
+    --success: #4caf7d;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--ink-90); font-family: 'IBM Plex Sans', sans-serif; font-size: 14px; min-height: 100vh; }
+  
+  /* Login */
+  #login-view { display: flex; align-items: center; justify-content: center; min-height: 100vh; }
+  .login-card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 40px 32px; width: 320px; text-align: center; }
+  .login-card .brand { color: var(--accent); font-family: 'IBM Plex Mono', monospace; font-size: 13px; letter-spacing: 0.15em; margin-bottom: 4px; }
+  .login-card .subtitle { color: var(--ink-55); font-size: 12px; margin-bottom: 28px; }
+  
+  /* Admin layout */
+  #admin-view { display: none; }
+  header { background: var(--surface); border-bottom: 1px solid var(--rule); padding: 0 24px; display: flex; align-items: center; gap: 16px; height: 52px; }
+  header .brand { color: var(--accent); font-family: 'IBM Plex Mono', monospace; font-size: 13px; letter-spacing: 0.15em; }
+  header .subtitle { color: var(--ink-55); font-size: 12px; }
+  header .spacer { flex: 1; }
+  header .refresh-info { color: var(--ink-55); font-size: 11px; font-family: 'IBM Plex Mono', monospace; }
+  
+  main { padding: 24px; max-width: 1100px; }
+  
+  h2 { font-size: 16px; font-weight: 600; margin-bottom: 16px; }
+  
+  /* Table */
+  .table-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; background: var(--surface); border-radius: 8px; overflow: hidden; }
+  thead { background: var(--card); }
+  th { padding: 10px 14px; text-align: left; color: var(--ink-55); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; font-weight: 500; font-family: 'IBM Plex Mono', monospace; white-space: nowrap; }
+  td { padding: 10px 14px; border-top: 1px solid var(--rule); vertical-align: middle; }
+  tr:hover td { background: rgba(255,255,255,0.02); }
+  
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-family: 'IBM Plex Mono', monospace; }
+  .badge-pending { background: rgba(229,164,72,0.15); color: var(--accent); }
+  .badge-approved { background: rgba(76,175,125,0.15); color: var(--success); }
+  
+  /* Toggle switch */
+  .toggle { position: relative; display: inline-block; width: 36px; height: 20px; }
+  .toggle input { opacity: 0; width: 0; height: 0; }
+  .toggle-slider { position: absolute; cursor: pointer; inset: 0; background: var(--border); border-radius: 20px; transition: 0.2s; }
+  .toggle-slider:before { position: absolute; content: ''; height: 14px; width: 14px; left: 3px; bottom: 3px; background: var(--ink-55); border-radius: 50%; transition: 0.2s; }
+  .toggle input:checked + .toggle-slider { background: var(--accent); }
+  .toggle input:checked + .toggle-slider:before { transform: translateX(16px); background: var(--bg); }
+  
+  /* Folder path input */
+  .folder-input { background: var(--card); border: 1px solid var(--border); color: var(--ink-90); padding: 4px 8px; border-radius: 4px; font-size: 12px; font-family: 'IBM Plex Mono', monospace; width: 160px; outline: none; }
+  .folder-input:focus { border-color: var(--accent); }
+  
+  /* Buttons */
+  .btn { padding: 5px 12px; border-radius: 4px; border: none; cursor: pointer; font-size: 12px; font-weight: 500; font-family: inherit; transition: opacity 0.15s; }
+  .btn:hover { opacity: 0.85; }
+  .btn-accent { background: var(--accent); color: var(--bg); }
+  .btn-danger { background: rgba(224,92,92,0.15); color: var(--danger); border: 1px solid rgba(224,92,92,0.3); }
+  .btn-ghost { background: transparent; color: var(--ink-55); border: 1px solid var(--border); }
+  
+  /* Form fields (shared) */
+  .field { background: var(--card); border: 1px solid var(--border); color: var(--ink-90); padding: 9px 12px; border-radius: 4px; font-size: 14px; font-family: inherit; outline: none; width: 100%; }
+  .field:focus { border-color: var(--accent); }
+  
+  /* Error */
+  .err { color: var(--danger); font-size: 12px; min-height: 16px; margin-top: 8px; }
+  
+  /* Empty state */
+  .empty { text-align: center; padding: 48px 0; color: var(--ink-55); }
+  
+  /* Logout btn */
+  .btn-logout { background: transparent; border: 1px solid var(--border); color: var(--ink-55); padding: 5px 12px; border-radius: 4px; cursor: pointer; font-size: 12px; font-family: inherit; }
+  .btn-logout:hover { border-color: var(--danger); color: var(--danger); }
+  
+  .actions { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+</style>
+</head>
+<body>
+
+<!-- LOGIN VIEW -->
+<div id="login-view">
+  <div class="login-card">
+    <div class="brand">STUDIO ADMIN</div>
+    <div class="subtitle">輸入攝影師密碼以繼續</div>
+    <input id="admin-token-input" type="password" placeholder="攝影師密碼" class="field" style="margin-bottom:10px;">
+    <button id="admin-login-btn" class="btn btn-accent" style="width:100%;padding:10px;">進入管理後台</button>
+    <div id="admin-login-err" class="err"></div>
+  </div>
+</div>
+
+<!-- ADMIN VIEW -->
+<div id="admin-view">
+  <header>
+    <span class="brand">STUDIO ADMIN</span>
+    <span class="subtitle">客戶管理</span>
+    <span class="spacer"></span>
+    <span class="refresh-info" id="refresh-info"></span>
+    <button class="btn-logout" id="logout-btn">登出</button>
+  </header>
+  <main>
+    <h2>客戶列表</h2>
+    <div class="table-wrap">
+      <table id="clients-table">
+        <thead>
+          <tr>
+            <th>姓名</th>
+            <th>Email</th>
+            <th>資料夾路徑</th>
+            <th>相本書</th>
+            <th>上傳</th>
+            <th>審核狀態</th>
+            <th>操作</th>
+          </tr>
+        </thead>
+        <tbody id="clients-tbody">
+          <tr><td colspan="7" class="empty">載入中…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </main>
+</div>
+
+<script>
+(function() {
+  const WORKER_URL = 'https://imagepicker.hotichen.workers.dev';
+  const TOKEN_KEY = 'studio_token';
+  let autoRefreshTimer = null;
+  let refreshCountdown = 30;
+
+  // ── Auth ──────────────────────────────────────────────────────────────────
+  const loginView = document.getElementById('login-view');
+  const adminView = document.getElementById('admin-view');
+
+  function getToken() { return sessionStorage.getItem(TOKEN_KEY) || ''; }
+
+  async function tryAdminLogin() {
+    const token = document.getElementById('admin-token-input').value.trim();
+    const errEl = document.getElementById('admin-login-err');
+    if (!token) { errEl.textContent = '請輸入密碼'; return; }
+    errEl.textContent = '';
+    // Verify by calling /api/admin/clients
+    try {
+      const r = await fetch(`${WORKER_URL}/api/admin/clients`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (r.status === 401) { errEl.textContent = '密碼錯誤'; return; }
+      if (!r.ok) { errEl.textContent = `錯誤 ${r.status}`; return; }
+      sessionStorage.setItem(TOKEN_KEY, token);
+      showAdmin();
+    } catch(e) {
+      errEl.textContent = '無法連線到 Worker';
+    }
+  }
+
+  function showAdmin() {
+    loginView.style.display = 'none';
+    adminView.style.display = 'block';
+    loadClients();
+    startAutoRefresh();
+  }
+
+  document.getElementById('admin-login-btn').addEventListener('click', tryAdminLogin);
+  document.getElementById('admin-token-input').addEventListener('keydown', e => { if (e.key === 'Enter') tryAdminLogin(); });
+  document.getElementById('logout-btn').addEventListener('click', () => {
+    sessionStorage.removeItem(TOKEN_KEY);
+    clearInterval(autoRefreshTimer);
+    adminView.style.display = 'none';
+    loginView.style.display = 'flex';
+  });
+
+  // Check if already logged in
+  if (getToken()) {
+    showAdmin();
+  }
+
+  // ── Auto-refresh ──────────────────────────────────────────────────────────
+  function startAutoRefresh() {
+    clearInterval(autoRefreshTimer);
+    refreshCountdown = 30;
+    updateRefreshInfo();
+    autoRefreshTimer = setInterval(() => {
+      refreshCountdown--;
+      updateRefreshInfo();
+      if (refreshCountdown <= 0) {
+        loadClients();
+        refreshCountdown = 30;
+      }
+    }, 1000);
+  }
+
+  function updateRefreshInfo() {
+    const el = document.getElementById('refresh-info');
+    if (el) el.textContent = `${refreshCountdown}s 後自動更新`;
+  }
+
+  // ── Load clients ──────────────────────────────────────────────────────────
+  async function loadClients() {
+    const token = getToken();
+    if (!token) return;
+    try {
+      const r = await fetch(`${WORKER_URL}/api/admin/clients`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (r.status === 401) {
+        sessionStorage.removeItem(TOKEN_KEY);
+        adminView.style.display = 'none';
+        loginView.style.display = 'flex';
+        return;
+      }
+      const clients = await r.json();
+      renderClients(clients);
+    } catch(e) {
+      document.getElementById('clients-tbody').innerHTML =
+        `<tr><td colspan="7" class="empty">載入失敗：${e.message}</td></tr>`;
+    }
+  }
+
+  function renderClients(clients) {
+    const tbody = document.getElementById('clients-tbody');
+    if (!clients || clients.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="7" class="empty">尚無客戶</td></tr>';
+      return;
+    }
+    tbody.innerHTML = clients.map(c => `
+      <tr data-id="${c.id}">
+        <td>${escHtml(c.name)}</td>
+        <td style="font-family:'IBM Plex Mono',monospace;font-size:12px;">${escHtml(c.email)}</td>
+        <td>
+          <input class="folder-input" data-field="folder" value="${escHtml(c.folder_path || '')}"
+            placeholder="例: 2026/客戶名/" title="按 Enter 儲存">
+        </td>
+        <td>
+          <label class="toggle">
+            <input type="checkbox" data-perm="can_book" ${c.can_book ? 'checked' : ''}>
+            <span class="toggle-slider"></span>
+          </label>
+        </td>
+        <td>
+          <label class="toggle">
+            <input type="checkbox" data-perm="can_upload" ${c.can_upload ? 'checked' : ''}>
+            <span class="toggle-slider"></span>
+          </label>
+        </td>
+        <td>
+          ${c.approved
+            ? '<span class="badge badge-approved">已審核</span>'
+            : `<span class="badge badge-pending">待審核</span>`}
+        </td>
+        <td>
+          <div class="actions">
+            ${!c.approved ? `<button class="btn btn-accent approve-btn" data-id="${c.id}">審核通過</button>` : ''}
+            <button class="btn btn-danger delete-btn" data-id="${c.id}">刪除</button>
+          </div>
+        </td>
+      </tr>
+    `).join('');
+
+    // Bind events
+    tbody.querySelectorAll('input[data-perm]').forEach(input => {
+      input.addEventListener('change', async function() {
+        const row = this.closest('tr');
+        const userId = row.dataset.id;
+        const perm = this.dataset.perm;
+        const checked = this.checked;
+        const folderInput = row.querySelector('input[data-field="folder"]');
+        const folder_path = folderInput ? folderInput.value : '';
+        const otherPerm = perm === 'can_book' ? 'can_upload' : 'can_book';
+        const otherInput = row.querySelector(`input[data-perm="${otherPerm}"]`);
+        const otherChecked = otherInput ? otherInput.checked : false;
+        const body = {
+          can_book: perm === 'can_book' ? checked : otherChecked,
+          can_upload: perm === 'can_upload' ? checked : otherChecked,
+          folder_path
+        };
+        await patchPermissions(userId, body);
+      });
+    });
+
+    tbody.querySelectorAll('input[data-field="folder"]').forEach(input => {
+      input.addEventListener('keydown', async function(e) {
+        if (e.key !== 'Enter') return;
+        const row = this.closest('tr');
+        const userId = row.dataset.id;
+        const canBook = row.querySelector('input[data-perm="can_book"]').checked;
+        const canUpload = row.querySelector('input[data-perm="can_upload"]').checked;
+        await patchPermissions(userId, { can_book: canBook, can_upload: canUpload, folder_path: this.value });
+        this.blur();
+        flashGreen(this);
+      });
+    });
+
+    tbody.querySelectorAll('.approve-btn').forEach(btn => {
+      btn.addEventListener('click', async function() {
+        const userId = this.dataset.id;
+        this.disabled = true;
+        this.textContent = '處理中…';
+        try {
+          const r = await fetch(`${WORKER_URL}/api/admin/clients/${userId}/approve`, {
+            method: 'PUT',
+            headers: { 'Authorization': `Bearer ${getToken()}` }
+          });
+          if (r.ok) loadClients();
+          else this.textContent = '失敗';
+        } catch(e) { this.textContent = '失敗'; }
+      });
+    });
+
+    tbody.querySelectorAll('.delete-btn').forEach(btn => {
+      btn.addEventListener('click', async function() {
+        const userId = this.dataset.id;
+        const row = this.closest('tr');
+        const name = row.querySelector('td').textContent;
+        if (!confirm(`確定要刪除客戶「${name}」？此操作無法復原。`)) return;
+        this.disabled = true;
+        try {
+          const r = await fetch(`${WORKER_URL}/api/admin/clients/${userId}`, {
+            method: 'DELETE',
+            headers: { 'Authorization': `Bearer ${getToken()}` }
+          });
+          if (r.ok) row.remove();
+          else alert('刪除失敗');
+        } catch(e) { alert('刪除失敗：' + e.message); }
+      });
+    });
+  }
+
+  async function patchPermissions(userId, body) {
+    const token = getToken();
+    await fetch(`${WORKER_URL}/api/admin/clients/${userId}/permissions`, {
+      method: 'PUT',
+      headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+  }
+
+  function flashGreen(el) {
+    el.style.borderColor = 'var(--success)';
+    setTimeout(() => { el.style.borderColor = ''; }, 1500);
+  }
+
+  function escHtml(str) {
+    return String(str || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+})();
+</script>
+</body>
+</html>

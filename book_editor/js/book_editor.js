@@ -177,15 +177,20 @@ class BookEditor {
 
     // ─── 裁切模式 ─────────────────────────────
 
+    /**
+     * Enters the crop mode for a specific slot.
+     * Pre-conditions:
+     *   - `slotIdx` must be a valid, non-negative integer index within current page slots.
+     *   - The slot must have a photo assigned.
+     * Post-conditions:
+     *   - `this.cropMode` is set to true.
+     *   - `this.cropSlotIdx` is set to `slotIdx`.
+     *   - Dynamically updates slot DOM classes and appends helper hints without rebuilding the DOM.
+     *   - Displays crop mode control bar and updates corresponding crop/scale parameters.
+     */
     enterCropMode(slotIdx) {
         this.cropMode = true;
         this.cropSlotIdx = slotIdx;
-        
-        // 重置 debug move 與 dx/dy
-        this.lastMoveX = null;
-        this.lastMoveY = null;
-        this.lastDx = null;
-        this.lastDy = null;
         
         // 1. 動態更新 DOM 狀態，避免 renderCurrentPage() 重新產生 DOM 導致滑鼠捕獲 (Mouse Capture) 中斷
         document.querySelectorAll('.page-slot').forEach(el => {
@@ -204,27 +209,6 @@ class BookEditor {
                 hint.textContent = '拖移平移 · 滾輪縮放';
                 slotEl.appendChild(hint);
             }
-            // 補上 debug overlay 容器
-            if (!slotEl.querySelector('.slot-debug-overlay')) {
-                const dbg = document.createElement('div');
-                dbg.className = 'slot-debug-overlay';
-                dbg.style.cssText = `
-                    position: absolute;
-                    bottom: 4px;
-                    left: 4px;
-                    background: rgba(0, 0, 0, 0.75);
-                    color: #00ff00;
-                    font-family: monospace;
-                    font-size: 10px;
-                    padding: 6px 8px;
-                    border-radius: 4px;
-                    pointer-events: none;
-                    z-index: 10;
-                    line-height: 1.4;
-                    text-align: left;
-                `;
-                slotEl.appendChild(dbg);
-            }
         }
         
         const bar = document.getElementById('cropModeBar');
@@ -233,7 +217,7 @@ class BookEditor {
         this._updateFitToggleBtn(page?.slots[slotIdx]?.fit || 'cover');
         this._updateRotationUI(slotIdx);
         this._updateZoomUI(slotIdx);
-        this._updateSlotTransform(slotIdx); // 即刻寫入初始 debug 資訊
+        this._updateSlotTransform(slotIdx);
         if (!localStorage.getItem('book_editor_crop_hinted')) {
             localStorage.setItem('book_editor_crop_hinted', '1');
             toast.info('裁切模式：拖移平移 · 滾輪縮放 · 點「完整顯示」可切換顯示方式');
@@ -528,20 +512,6 @@ class BookEditor {
         const img = slotEl.querySelector('.slot-crop-wrapper img');
         if (img) {
             img.style.objectPosition = '50% 50%';
-        }
-        
-        // 更新除錯資訊面板
-        const dbgOverlay = slotEl.querySelector('.slot-debug-overlay');
-        if (dbgOverlay) {
-            const downStr = this.cropDragState ? `${Math.round(this.cropDragState.lastX)}, ${Math.round(this.cropDragState.lastY)}` : 'null';
-            const moveStr = (this.cropDragState && this.lastMoveX) ? `${Math.round(this.lastMoveX)}, ${Math.round(this.lastMoveY)} (dx:${(this.lastDx || 0).toFixed(3)}, dy:${(this.lastDy || 0).toFixed(3)})` : 'null';
-            dbgOverlay.innerHTML = `
-                [DEBUG CONSOLE]<br>
-                SLOT ID: ${slotIdx}<br>
-                MOUSE DOWN: ${downStr}<br>
-                MOUSE MOVE: ${moveStr}<br>
-                IMAGE COOR: X=${(crop.x || 0).toFixed(3)}, Y=${(crop.y || 0).toFixed(3)}, S=${scale.toFixed(2)}
-            `;
         }
     }
 
@@ -1448,12 +1418,6 @@ class BookEditor {
             // Remove clamp to allow free panning (past the boundaries)
             crop.x = (crop.x || 0) + dx;
             crop.y = (crop.y || 0) + dy;
-            
-            // 儲存 debug 資訊用的暫存狀態
-            this.lastMoveX = e.clientX;
-            this.lastMoveY = e.clientY;
-            this.lastDx = dx;
-            this.lastDy = dy;
             
             this.cropDragState = { lastX: e.clientX, lastY: e.clientY, slotEl };
             this._updateSlotTransform(this.cropSlotIdx);

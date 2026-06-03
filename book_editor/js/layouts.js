@@ -157,21 +157,6 @@ function renderPageHTML(page, displayW, displayH, cropSlotIdx = -1) {
                     <button class="slot-clear-btn" data-slot-idx="${idx}" title="移除照片">×</button>
                     ${isCropActive ? `
                         <div class="crop-hint">拖移平移 · 滾輪縮放</div>
-                        <div class="slot-debug-overlay" style="
-                            position: absolute;
-                            bottom: 4px;
-                            left: 4px;
-                            background: rgba(0, 0, 0, 0.75);
-                            color: #00ff00;
-                            font-family: monospace;
-                            font-size: 10px;
-                            padding: 6px 8px;
-                            border-radius: 4px;
-                            pointer-events: none;
-                            z-index: 10;
-                            line-height: 1.4;
-                            text-align: left;
-                        "></div>
                     ` : ''}
                 `;
             }
