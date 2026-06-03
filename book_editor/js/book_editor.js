@@ -1661,9 +1661,36 @@ class BookEditor {
 
     // ─── 儲存 / 讀取 ─────────────────────────
 
+    _bookDataForSave() {
+        const usedLayouts = {};
+        this.book.pages.forEach(p => {
+            if (p.layout?.startsWith('custom-') && LAYOUTS[p.layout]) {
+                usedLayouts[p.layout] = LAYOUTS[p.layout];
+            }
+        });
+        return Object.keys(usedLayouts).length > 0
+            ? { ...this.book, _customLayouts: usedLayouts }
+            : this.book;
+    }
+
+    _restoreCustomLayouts(data) {
+        if (!data._customLayouts) return;
+        const stored = JSON.parse(localStorage.getItem('custom_layouts') || '{}');
+        let changed = false;
+        Object.entries(data._customLayouts).forEach(([id, layout]) => {
+            if (!LAYOUTS[id] && layout?.name) {
+                LAYOUTS[id] = layout;
+                stored[id] = layout;
+                changed = true;
+                this.addCustomLayoutBtn(id, layout.name);
+            }
+        });
+        if (changed) localStorage.setItem('custom_layouts', JSON.stringify(stored));
+    }
+
     saveToStorage() {
         try {
-            localStorage.setItem(`book_editor_${this.currentBookId}`, JSON.stringify(this.book));
+            localStorage.setItem(`book_editor_${this.currentBookId}`, JSON.stringify(this._bookDataForSave()));
             this._updateBooksList();
         } catch (e) { /* quota exceeded */ }
         this._scheduleCloudSync();
@@ -1686,7 +1713,7 @@ class BookEditor {
                     'Content-Type': 'application/json',
                     'Authorization': `Bearer ${CONFIG.PHOTOGRAPHER_TOKEN}`
                 },
-                body: JSON.stringify(this.book)
+                body: JSON.stringify(this._bookDataForSave())
             });
             if (!this.book.cloudId) { this.book.cloudId = id; }
             this._setCloudSyncStatus('saved');
@@ -1717,6 +1744,7 @@ class BookEditor {
             settings: { width: 20, height: 20, unit: 'cm', dpi: 300, ...(data.settings || {}) },
             coverSettings: { width: 20, height: 20, unit: 'cm', dpi: 300, ...(data.coverSettings || {}) }
         };
+        this._restoreCustomLayouts(data);
         toast.info('已從雲端載入相本');
         return true;
     }
@@ -1807,6 +1835,7 @@ class BookEditor {
                     this.book.pages = [];
                 }
 
+                this._restoreCustomLayouts(parsed);
                 return true;
             }
         } catch (e) {
@@ -2248,7 +2277,7 @@ class BookEditor {
             const r = await fetch(`${CONFIG.WORKER_URL}/api/books/${id}`, {
                 method: 'PUT',
                 headers,
-                body: JSON.stringify(this.book)
+                body: JSON.stringify(this._bookDataForSave())
             });
             if (!r.ok) throw new Error('雲端儲存失敗（' + r.status + '）');
 
