@@ -76,6 +76,15 @@ function _renderTextLayerHTML(t, displayW, selectedId) {
 }
 
 // 產生頁面預覽 HTML（用於中欄編輯區）
+/**
+ * Renders the HTML representation of a page for the main workspace edit area.
+ * Pre-conditions:
+ *   - `page` must be a valid page object.
+ *   - `displayW` and `displayH` must be valid positive pixel dimensions.
+ * Post-conditions:
+ *   - Returns a complete HTML string of the page container.
+ *   - Handles missing `page.slots` array gracefully via a safe fallback array.
+ */
 function renderPageHTML(page, displayW, displayH, cropSlotIdx = -1) {
     const layout = LAYOUTS[page.layout] || LAYOUTS['blank'];
     const bg = page.bg || '#ffffff';
@@ -100,8 +109,9 @@ function renderPageHTML(page, displayW, displayH, cropSlotIdx = -1) {
     const textAbove = textLayers.filter(t => t.layer !== 'below').map(t => _renderTextLayerHTML(t, displayW, selectedId)).join('');
 
     // ─── 照片格子層 ───────────────────────────────────────────────
+    const slotsArray = Array.isArray(page.slots) ? page.slots : [];
     const slotsHTML = layout.slots.map((slotDef, idx) => {
-        const slot = page.slots[idx] || { photoId: null, crop: { x: 0, y: 0, scale: 1 } };
+        const slot = slotsArray[idx] || { photoId: null, crop: { x: 0, y: 0, scale: 1 } };
         const isCropActive = idx === cropSlotIdx;
         const crop = slot.crop || { x: 0, y: 0, scale: 1 };
         const scale = crop.scale || 1;
@@ -185,6 +195,14 @@ function renderPageHTML(page, displayW, displayH, cropSlotIdx = -1) {
 }
 
 // 產生縮圖 HTML（用於左欄頁面清單）
+/**
+ * Renders the HTML representation of a page thumbnail for the page listing sidebar.
+ * Pre-conditions:
+ *   - `page` must be a valid page object.
+ * Post-conditions:
+ *   - Returns a complete HTML string of the thumbnail canvas.
+ *   - Handles missing `page.slots` array gracefully via a safe fallback array.
+ */
 function renderPageThumbnailHTML(page) {
     const layout = LAYOUTS[page.layout] || LAYOUTS['blank'];
     const bg = page.bg || '#ffffff';
@@ -198,8 +216,9 @@ function renderPageThumbnailHTML(page) {
         bgThumbHTML = `<div style="position:absolute;inset:0;opacity:${opacity};pointer-events:none;overflow:hidden;z-index:0;"><img src="${src}" style="width:100%;height:100%;object-fit:${fit};display:block;"></div>`;
     }
 
+    const slotsArray = Array.isArray(page.slots) ? page.slots : [];
     const slotsHTML = layout.slots.map((slotDef, idx) => {
-        const slot = page.slots[idx] || { photoId: null, crop: { x: 0, y: 0, scale: 1 } };
+        const slot = slotsArray[idx] || { photoId: null, crop: { x: 0, y: 0, scale: 1 } };
         const tsx = slot.override?.x ?? slotDef.x;
         const tsy = slot.override?.y ?? slotDef.y;
         const tsw = slot.override?.w ?? slotDef.w;

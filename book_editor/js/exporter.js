@@ -44,6 +44,15 @@ const BookExporter = {
         toast.success('匯出完成！');
     },
 
+    /**
+     * Renders a single book page onto a canvas and exports it as a JPEG data URL.
+     * Pre-conditions:
+     *   - `page` must be a valid page object.
+     *   - `settings` must be a valid settings object containing width, height, and dpi.
+     * Post-conditions:
+     *   - Returns a Promise that resolves to a JPEG data URL string.
+     *   - Safely parses page slots defensively to handle undefined or null pages.slots arrays.
+     */
     async _renderPage(page, settings) {
         const dpi = settings.dpi || 300;
         const pxW = Math.round(settings.width * dpi / 2.54);
@@ -92,9 +101,11 @@ const BookExporter = {
             return canvas.toDataURL('image/jpeg', 0.95);
         }
 
+        const slotsArray = Array.isArray(page.slots) ? page.slots : [];
+
         // ④ 預載所有照片
         const images = await Promise.all(
-            page.slots.map(slot => {
+            slotsArray.map(slot => {
                 if (!slot?.photoId) return Promise.resolve(null);
                 return this._loadImage(`${CONFIG.WORKER_URL}/${slot.photoId}`);
             })
@@ -105,7 +116,7 @@ const BookExporter = {
             const img = images[idx];
             if (!img) return;
 
-            const slot = page.slots[idx] || {};
+            const slot = slotsArray[idx] || {};
             const sx = slot.override?.x ?? slotDef.x;
             const sy = slot.override?.y ?? slotDef.y;
             const sw = slot.override?.w ?? slotDef.w;

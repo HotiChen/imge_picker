@@ -13,11 +13,89 @@ const Viewer = {
         this.bindEvents();
     },
 
+    /**
+     * Fetches the photobook details from the server, sanitizes its fields for backwards compatibility,
+     * and sets up the preview display.
+     * Pre-conditions:
+     *   - `this.bookId` must be a valid book identifier.
+     *   - The network connection to `${CONFIG.WORKER_URL}/api/books/${this.bookId}` must be active.
+     * Post-conditions:
+     *   - Fetches the book object, normalizes settings, pages, slots, and textLayers with default values.
+     *   - Sets the page index to 0, renders the first page, and queries approval status.
+     *   - Sets an error screen if fetching or structure sanitization fails.
+     */
     async loadBook() {
         try {
             const r = await fetch(`${CONFIG.WORKER_URL}/api/books/${this.bookId}`);
             if (!r.ok) throw new Error('找不到此相本（連結可能已過期或無效）');
-            this.book = await r.json();
+            const rawBook = await r.json();
+
+            // Ensure default structure and backward compatibility
+            this.book = {
+                name: '未命名相本',
+                clientFolders: [],
+                notifyUrl: '',
+                settings: { width: 20, height: 20, unit: 'cm', dpi: 300 },
+                coverSettings: { width: 20, height: 20, unit: 'cm', dpi: 300 },
+                pages: [],
+                ...rawBook
+            };
+            this.book.settings = {
+                width: 20, height: 20, unit: 'cm', dpi: 300,
+                ...(rawBook.settings || {})
+            };
+            this.book.coverSettings = {
+                width: 20, height: 20, unit: 'cm', dpi: 300,
+                ...(rawBook.coverSettings || {})
+            };
+
+            // Why: Guarantee that pages is a valid array of structured objects
+            if (Array.isArray(this.book.pages)) {
+                this.book.pages = this.book.pages.map((page, pIdx) => {
+                    if (!page || typeof page !== 'object') return null;
+
+                    const type = page.type || 'inner';
+                    let layout = page.layout;
+
+                    if (!layout || !LAYOUTS[layout]) {
+                        const defaultLayouts = { cover: 'full-bleed', inner: '2-up-h', 'back-cover': 'blank' };
+                        layout = defaultLayouts[type] || 'blank';
+                    }
+
+                    const layoutDef = LAYOUTS[layout] || LAYOUTS['blank'];
+                    const slots = Array.isArray(page.slots) ? page.slots : [];
+
+                    // Why: Map slots and fill in missing parameters conforming to layout slot count
+                    const sanitizedSlots = (layoutDef.slots || []).map((slotDef, sIdx) => {
+                        const s = slots[sIdx] || {};
+                        return {
+                            photoId: s.photoId || null,
+                            crop: {
+                                x: s.crop?.x ?? 0,
+                                y: s.crop?.y ?? 0,
+                                scale: s.crop?.scale ?? 1,
+                                rotation: s.crop?.rotation ?? 0
+                            },
+                            fit: s.fit || 'cover',
+                            ...(s.override ? { override: s.override } : {})
+                        };
+                    });
+
+                    return {
+                        id: page.id || `page-${Date.now()}-${pIdx}-${Math.random().toString(36).slice(2, 6)}`,
+                        type,
+                        layout,
+                        slots: sanitizedSlots,
+                        bg: page.bg || '#ffffff',
+                        bgImage: page.bgImage || null,
+                        textLayers: Array.isArray(page.textLayers) ? page.textLayers : [],
+                        locked: !!page.locked
+                    };
+                }).filter(Boolean);
+            } else {
+                this.book.pages = [];
+            }
+
             document.title = `${this.book.name || '相本'} · 預覽`;
             document.getElementById('bookTitle').textContent = this.book.name || '相本';
             this.currentPageIndex = 0;

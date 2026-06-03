@@ -33,44 +33,82 @@ class BookEditor {
         this.init();
     }
 
+    /**
+     * Initializes the Book Editor application, setting up the active book state, registering
+     * custom layouts, binding events, and rendering pages.
+     * Pre-conditions:
+     *   - Document DOM must be ready.
+     *   - `localStorage` and `location.search` must be accessible.
+     * Post-conditions:
+     *   - Sets `this.currentBookId` and retrieves or generates book data.
+     *   - Registers custom layouts with existence checks to prevent crashes.
+     *   - Binds UI event listeners and performs initial rendering.
+     *   - Captures any startup errors, logging them and displaying a toast notification.
+     */
     async init() {
-        const customIds = LayoutEditor.loadSaved();
-        customIds.forEach(id => this.addCustomLayoutBtn(id, LAYOUTS[id].name));
-
-        const { id, showModal } = this._initBookId();
-        this.currentBookId = id;
-
-        if (!this.loadFromStorage()) {
-            this._addPage('cover', 'full-bleed');
-            this._addPage('inner', '2-up-h');
-            this._addPage('inner', '2-up-h');
-            this._addPage('back-cover', 'blank');
-        }
-        this.bindEvents();
-        this.renderAll();
-        this.checkCloudStatus();
-
-        if (showModal) {
-            setTimeout(() => this.openBooksModal(), 300);
-        }
-
-        // Import photos handed over from main picker
-        const importRaw = localStorage.getItem('book_editor_import');
-        if (importRaw) {
-            localStorage.removeItem('book_editor_import');
-            try {
-                const { folderPath } = JSON.parse(importRaw);
-                if (folderPath) {
-                    const input = document.getElementById('libFolderInput');
-                    if (input) input.value = folderPath;
-                    toast.info('正在從選圖頁匯入照片庫...');
-                    setTimeout(() => this.loadLibrary(folderPath), 400);
+        try {
+            const customIds = LayoutEditor.loadSaved();
+            customIds.forEach(id => {
+                // Why: Defend against missing or corrupted custom layout definitions in LAYOUTS
+                if (LAYOUTS[id] && LAYOUTS[id].name) {
+                    this.addCustomLayoutBtn(id, LAYOUTS[id].name);
                 }
-            } catch (e) {}
-        }
+            });
 
-        if (!localStorage.getItem('book_editor_tour_done')) {
-            setTimeout(() => TourGuide.start(), 800);
+            const { id, showModal } = this._initBookId();
+            this.currentBookId = id;
+
+            let isLoaded = false;
+            try {
+                isLoaded = this.loadFromStorage();
+            } catch (loadErr) {
+                console.error("Error reading book from storage, falling back to new book:", loadErr);
+            }
+
+            if (!isLoaded) {
+                this._addPage('cover', 'full-bleed');
+                this._addPage('inner', '2-up-h');
+                this._addPage('inner', '2-up-h');
+                this._addPage('back-cover', 'blank');
+            } else {
+                // Why: Persist the sanitized/upgraded structure back to storage immediately
+                this.saveToStorage();
+            }
+
+            // Why: Ensure the current page index is within the boundaries of loaded pages
+            if (this.currentPageIndex >= this.book.pages.length) {
+                this.currentPageIndex = Math.max(0, this.book.pages.length - 1);
+            }
+
+            this.bindEvents();
+            this.renderAll();
+            this.checkCloudStatus();
+
+            if (showModal) {
+                setTimeout(() => this.openBooksModal(), 300);
+            }
+
+            // Import photos handed over from main picker
+            const importRaw = localStorage.getItem('book_editor_import');
+            if (importRaw) {
+                localStorage.removeItem('book_editor_import');
+                try {
+                    const { folderPath } = JSON.parse(importRaw);
+                    if (folderPath) {
+                        const input = document.getElementById('libFolderInput');
+                        if (input) input.value = folderPath;
+                        toast.info('正在從選圖頁匯入照片庫...');
+                        setTimeout(() => this.loadLibrary(folderPath), 400);
+                    }
+                } catch (e) {}
+            }
+
+            if (!localStorage.getItem('book_editor_tour_done')) {
+                setTimeout(() => TourGuide.start(), 800);
+            }
+        } catch (err) {
+            console.error("Failed to initialize book editor:", err);
+            toast.error("載入相本失敗: " + err.message, 10000);
         }
     }
 
@@ -1557,8 +1595,10 @@ class BookEditor {
      *   - `localStorage` must be accessible.
      * Post-conditions:
      *   - If the key exists, parses and loads the book state into `this.book`.
-     *   - Performs structure sanitization to guarantee backward compatibility by applying default settings
-     *     and coverSettings objects (preventing TypeError crashes on properties like settings.width).
+     *   - Performs comprehensive structure sanitization to guarantee backward compatibility:
+     *     - Ensures default settings and coverSettings objects are present.
+     *     - Filters and maps `pages` to guarantee they are objects, have valid layouts, and
+     *       fully populated slots arrays matching layout definitions.
      *   - Returns true if successful, false otherwise.
      */
     loadFromStorage() {
@@ -1585,9 +1625,60 @@ class BookEditor {
                     width: 20, height: 20, unit: 'cm', dpi: 300,
                     ...(parsed.coverSettings || {})
                 };
+
+                // Why: Guarantee that pages is a valid array of structured objects
+                if (Array.isArray(this.book.pages)) {
+                    this.book.pages = this.book.pages.map((page, pIdx) => {
+                        if (!page || typeof page !== 'object') return null;
+
+                        const type = page.type || 'inner';
+                        let layout = page.layout;
+
+                        // Why: Fallback to default layout if the saved layout ID is not present in LAYOUTS
+                        if (!layout || !LAYOUTS[layout]) {
+                            const defaultLayouts = { cover: 'full-bleed', inner: '2-up-h', 'back-cover': 'blank' };
+                            layout = defaultLayouts[type] || 'blank';
+                        }
+
+                        const layoutDef = LAYOUTS[layout] || LAYOUTS['blank'];
+                        const slots = Array.isArray(page.slots) ? page.slots : [];
+
+                        // Why: Construct fully populated slots conforming to the layout slots definition
+                        const sanitizedSlots = (layoutDef.slots || []).map((slotDef, sIdx) => {
+                            const s = slots[sIdx] || {};
+                            return {
+                                photoId: s.photoId || null,
+                                crop: {
+                                    x: s.crop?.x ?? 0,
+                                    y: s.crop?.y ?? 0,
+                                    scale: s.crop?.scale ?? 1,
+                                    rotation: s.crop?.rotation ?? 0
+                                },
+                                fit: s.fit || 'cover',
+                                ...(s.override ? { override: s.override } : {})
+                            };
+                        });
+
+                        return {
+                            id: page.id || `page-${Date.now()}-${pIdx}-${Math.random().toString(36).slice(2, 6)}`,
+                            type,
+                            layout,
+                            slots: sanitizedSlots,
+                            bg: page.bg || '#ffffff',
+                            bgImage: page.bgImage || null,
+                            textLayers: Array.isArray(page.textLayers) ? page.textLayers : [],
+                            locked: !!page.locked
+                        };
+                    }).filter(Boolean);
+                } else {
+                    this.book.pages = [];
+                }
+
                 return true;
             }
-        } catch (e) {}
+        } catch (e) {
+            console.error("Failed to parse book data from storage:", e);
+        }
         return false;
     }
 
