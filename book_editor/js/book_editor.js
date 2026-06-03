@@ -1803,18 +1803,24 @@ class BookEditor {
             </div>`;
         }).join('');
 
-        container.querySelectorAll('.books-open-btn').forEach(btn =>
-            btn.addEventListener('click', () => this._openBook(btn.dataset.id)));
-        container.querySelectorAll('.books-dup-btn').forEach(btn =>
-            btn.addEventListener('click', () => this._duplicateBook(btn.dataset.id)));
-        container.querySelectorAll('.books-del-btn').forEach(btn =>
-            btn.addEventListener('click', () => this._deleteBook(btn.dataset.id)));
-        container.querySelectorAll('.books-rename-btn').forEach(btn =>
-            btn.addEventListener('click', () => this._startRename(btn.dataset.id)));
-        container.querySelectorAll('.books-status-btn').forEach(btn =>
-            btn.addEventListener('click', () => this._cycleStatus(btn.dataset.id)));
-        container.querySelectorAll('.books-export-btn').forEach(btn =>
-            btn.addEventListener('click', () => this._exportBook(btn.dataset.id)));
+        // macOS trackpad 在 overflow-y:auto 捲動容器內會把點擊判定為 scroll gesture，
+        // 導致 click event 從未發出（mousedown+mouseup 都正常，click 沒有）。
+        // 改用 mousedown 觸發：stopPropagation 阻止事件冒泡到捲動容器，避免 scroll detection。
+        const _btn = (selector, action) => {
+            container.querySelectorAll(selector).forEach(btn => {
+                btn.addEventListener('mousedown', e => {
+                    if (e.button !== 0) return;
+                    e.stopPropagation();
+                    action(btn.dataset.id);
+                });
+            });
+        };
+        _btn('.books-open-btn',   id => this._openBook(id));
+        _btn('.books-dup-btn',    id => this._duplicateBook(id));
+        _btn('.books-del-btn',    id => this._deleteBook(id));
+        _btn('.books-rename-btn', id => this._startRename(id));
+        _btn('.books-status-btn', id => this._cycleStatus(id));
+        _btn('.books-export-btn', id => this._exportBook(id));
 
         this._bindDragReorder(container);
         this._renderStorageBar();
