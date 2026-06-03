@@ -92,17 +92,18 @@ html, body { height: 100%; font-family: 'IBM Plex Sans', sans-serif; background:
 .bar-fill.complete { background: var(--green); }
 .bar-fill.has-error { background: var(--red); }
 
-/* ── Queue ── */
+/* ── Queue / Tree ── */
 .queue-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
 .queue-title { font-size: 0.82rem; color: var(--ink-55); }
-.queue-list { display: flex; flex-direction: column; gap: 2px; max-height: 420px; overflow-y: auto; }
+.queue-list { display: flex; flex-direction: column; gap: 2px; max-height: 520px; overflow-y: auto; }
 
+/* File row */
 .queue-item {
     display: grid;
-    grid-template-columns: 20px 1fr auto auto;
+    grid-template-columns: 18px 1fr auto auto;
     align-items: center;
-    gap: 10px;
-    padding: 8px 12px;
+    gap: 8px;
+    padding: 6px 10px;
     background: var(--card);
     border: 1px solid var(--rule);
     border-radius: var(--radius);
@@ -110,21 +111,43 @@ html, body { height: 100%; font-family: 'IBM Plex Sans', sans-serif; background:
     transition: background 0.15s;
 }
 .queue-item.uploading { border-color: var(--accent); background: rgba(229,164,72,0.04); }
-.queue-item.done { border-color: var(--rule); }
+.queue-item.done { opacity: 0.6; }
 .queue-item.error { border-color: var(--red); background: rgba(229,115,115,0.04); }
 
-.qi-icon { text-align: center; font-size: 1rem; flex-shrink: 0; }
-.qi-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-90); font-family: 'IBM Plex Mono', monospace; font-size: 0.75rem; }
-.qi-size { color: var(--ink-55); white-space: nowrap; font-size: 0.72rem; }
-.qi-status { font-size: 0.72rem; color: var(--ink-55); white-space: nowrap; min-width: 60px; text-align: right; }
+.qi-icon { text-align: center; font-size: 0.9rem; flex-shrink: 0; }
+.qi-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-90); font-family: 'IBM Plex Mono', monospace; font-size: 0.73rem; }
+.qi-size { color: var(--ink-55); white-space: nowrap; font-size: 0.7rem; }
+.qi-status { font-size: 0.7rem; color: var(--ink-55); white-space: nowrap; min-width: 52px; text-align: right; }
 .qi-status.uploading { color: var(--accent); }
 .qi-status.done { color: var(--green); }
 .qi-status.error { color: var(--red); }
 
-/* ── Mini progress on item ── */
-.queue-item .item-bar { display: none; grid-column: 1 / -1; height: 2px; background: var(--rule); border-radius: 1px; overflow: hidden; margin-top: 2px; }
+/* Mini progress on item */
+.queue-item .item-bar { display: none; grid-column: 1 / -1; height: 2px; background: var(--rule); border-radius: 1px; overflow: hidden; margin-top: 1px; }
 .queue-item.uploading .item-bar { display: block; }
 .item-bar-fill { height: 100%; background: var(--accent); border-radius: 1px; transition: width 0.1s; }
+
+/* Folder node */
+.tree-dir { }
+.tree-dir-summary {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 10px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    cursor: pointer;
+    list-style: none;
+    user-select: none;
+    font-size: 0.78rem;
+}
+.tree-dir-summary::-webkit-details-marker { display: none; }
+.tree-chevron { font-size: 0.55rem; color: var(--ink-35); transition: transform 0.15s; flex-shrink: 0; margin-right: 1px; }
+details[open] > .tree-dir-summary .tree-chevron { transform: rotate(90deg); }
+.tree-dir-name { font-family: 'IBM Plex Mono', monospace; color: var(--ink-90); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tree-dir-meta { color: var(--ink-35); white-space: nowrap; font-size: 0.68rem; flex-shrink: 0; }
+.tree-children { padding-left: 14px; margin-top: 2px; display: flex; flex-direction: column; gap: 2px; }
 
 /* scrollbar */
 .queue-list::-webkit-scrollbar { width: 4px; }
@@ -349,31 +372,99 @@ function uploadWithProgress(item, key) {
     });
 }
 
+// ── Tree builder ──
+function buildTree(items) {
+    // Returns { children: { name -> node }, items: [] }
+    // where node is either a dir node or null (file nodes are items[])
+    const root = { children: {}, items: [] };
+    for (const item of items) {
+        const parts = item.path.split('/').filter(Boolean);
+        let node = root;
+        for (let i = 0; i < parts.length - 1; i++) {
+            const p = parts[i];
+            if (!node.children[p]) node.children[p] = { name: p, children: {}, items: [] };
+            node = node.children[p];
+        }
+        node.items.push(item);
+    }
+    return root;
+}
+
+function countAll(node) {
+    let n = node.items.length;
+    for (const c of Object.values(node.children)) n += countAll(c);
+    return n;
+}
+
+function countDone(node) {
+    let n = node.items.filter(i => i.state === 'done').length;
+    for (const c of Object.values(node.children)) n += countDone(c);
+    return n;
+}
+
+function renderDirNode(node, container) {
+    // Folders first (sorted), then files
+    const subdirs = Object.values(node.children).sort((a, b) => a.name.localeCompare(b.name));
+    const files   = node.items;
+
+    for (const sub of subdirs) {
+        const details = document.createElement('details');
+        details.className = 'tree-dir';
+        details.open = true;
+        details.dataset.treePath = sub.name;
+
+        const total = countAll(sub);
+        const summary = document.createElement('summary');
+        summary.className = 'tree-dir-summary';
+        summary.innerHTML =
+            `<span class="tree-chevron">▶</span>` +
+            `<span style="flex-shrink:0;margin-right:2px;">📁</span>` +
+            `<span class="tree-dir-name">${escHtml(sub.name)}/</span>` +
+            `<span class="tree-dir-meta">${total} 個</span>`;
+
+        const children = document.createElement('div');
+        children.className = 'tree-children';
+        renderDirNode(sub, children);
+
+        details.appendChild(summary);
+        details.appendChild(children);
+        container.appendChild(details);
+    }
+
+    for (const item of files) {
+        container.appendChild(makeItemEl(item));
+    }
+}
+
 // ── Render ──
 function renderQueue() {
     const list = $('queueList');
-    // Create missing elements, don't re-render all (preserve progress)
-    const existing = new Set(Array.from(list.children).map(el => el.dataset.id));
-    for (const item of queue) {
-        if (!existing.has(item.id)) {
-            list.appendChild(makeItemEl(item));
-        }
-    }
+    list.innerHTML = '';
+    const tree = buildTree(queue);
+    renderDirNode(tree, list);
     updateQueueTitle();
 }
 
 function makeItemEl(item) {
     const el = document.createElement('div');
-    el.className = 'queue-item pending';
+    el.className = `queue-item ${item.state}`;
     el.dataset.id = item.id;
-    el.innerHTML = `
-        <span class="qi-icon">○</span>
-        <span class="qi-name" title="${item.path}">${item.path}</span>
-        <span class="qi-size">${fmtSize(item.file.size)}</span>
-        <span class="qi-status">待上傳</span>
-        <div class="item-bar"><div class="item-bar-fill" style="width:0%"></div></div>
-    `;
+    const icon = { pending:'○', uploading:'↑', done:'✓', error:'✕' }[item.state] || '○';
+    const statusText = item.state === 'uploading' ? `${item.progress}%`
+                     : item.state === 'done'      ? '完成'
+                     : item.state === 'error'     ? (item.error || '失敗')
+                     : '待上傳';
+    el.innerHTML =
+        `<span class="qi-icon">${icon}</span>` +
+        `<span class="qi-name" title="${escHtml(item.path)}">${escHtml(item.file.name)}</span>` +
+        `<span class="qi-size">${fmtSize(item.file.size)}</span>` +
+        `<span class="qi-status ${item.state}">${statusText}</span>` +
+        `<div class="item-bar"><div class="item-bar-fill" style="width:${item.progress}%"></div></div>`;
     return el;
+}
+
+function escHtml(s) {
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
 function updateItemEl(item) {
@@ -434,10 +525,12 @@ function updateQueueTitle() {
 // ── Clear done ──
 $('clearDoneBtn').addEventListener('click', () => {
     queue = queue.filter(q => q.state !== 'done');
-    const list = $('queueList');
-    list.querySelectorAll('.queue-item.done').forEach(el => el.remove());
+    if (!queue.length) {
+        $('queueSection').style.display = 'none';
+    } else {
+        renderQueue();
+    }
     updateQueueTitle();
-    if (!queue.length) $('queueSection').style.display = 'none';
 });
 
 // ── Helpers ──
