@@ -665,15 +665,24 @@ class BookEditor {
         if (loadBtn) loadBtn.disabled = true;
         toast.info('載入中...');
         try {
-            const allPhotos = await this._loadFolderRecursive(folderPath);
-            this.libAllPhotos = allPhotos;
+            const { photos, folders } = await this._fetchFolderDirect(folderPath);
             this.libFolderStack.push(folderPath);
             this.libFilter.minRating = 0;
             const ratingEl = document.getElementById('libFilterRating');
             if (ratingEl) ratingEl.value = '0';
-            this._applyLibFilter();
             this._updateLibNav(folderPath);
-            toast.success(`共 ${allPhotos.length} 張照片`);
+            if (folders.length > 0) {
+                this.libAllPhotos = photos;
+                this.libraryPhotos = photos;
+                this.renderPhotoStrip();
+                this.renderLibrary(null, folders);
+                toast.success(`找到 ${folders.length} 個子資料夾`);
+            } else {
+                this.libAllPhotos = photos;
+                this._applyLibFilter();
+                this.renderLibrary(null, []);
+                toast.success(`共 ${this.libraryPhotos.length} 張照片`);
+            }
         } catch (e) {
             toast.error('載入失敗');
         } finally {
@@ -688,12 +697,18 @@ class BookEditor {
         const loadBtn = document.getElementById('libLoadBtn');
         if (loadBtn) loadBtn.disabled = true;
         try {
-            const { folders } = await this._fetchFolderDirect(prev);
-            this.libAllPhotos = [];
-            this.libraryPhotos = [];
-            this.renderPhotoStrip();
+            const { photos, folders } = await this._fetchFolderDirect(prev);
             this._updateLibNav(prev);
-            this.renderLibrary(null, folders);
+            if (folders.length > 0) {
+                this.libAllPhotos = photos;
+                this.libraryPhotos = photos;
+                this.renderPhotoStrip();
+                this.renderLibrary(null, folders);
+            } else {
+                this.libAllPhotos = photos;
+                this._applyLibFilter();
+                this.renderLibrary(null, []);
+            }
         } catch (e) {
             toast.error('載入失敗');
         } finally {
