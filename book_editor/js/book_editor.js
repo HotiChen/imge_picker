@@ -439,6 +439,29 @@ class BookEditor {
                 });
             });
 
+            // 旋轉 handle
+            const rotHandle = document.createElement('div');
+            rotHandle.className = 'slot-pos-handle pos-rotate';
+            rotHandle.title = '拖曳旋轉格位';
+            rotHandle.textContent = '↻';
+            slotEl.appendChild(rotHandle);
+            rotHandle.addEventListener('mousedown', e => {
+                e.preventDefault();
+                e.stopPropagation();
+                const canvasRect = canvas.getBoundingClientRect();
+                const geom = this._getSlotGeometry(slotIdx);
+                const centerX = canvasRect.left + (geom.x + geom.w / 2) / 100 * canvasRect.width;
+                const centerY = canvasRect.top + (geom.y + geom.h / 2) / 100 * canvasRect.height;
+                this.slotPosDragState = {
+                    type: 'rotate', slotIdx,
+                    centerX, centerY,
+                    startAngle: Math.atan2(e.clientY - centerY, e.clientX - centerX) * 180 / Math.PI,
+                    origRotation: geom.rotation || 0,
+                    orig: geom,
+                    cW: canvasRect.width, cH: canvasRect.height
+                };
+            });
+
             slotEl.addEventListener('mousedown', e => {
                 if (e.target.classList.contains('slot-pos-handle')) return;
                 e.preventDefault();
@@ -463,8 +486,22 @@ class BookEditor {
             if (!slot) return;
             const o = d.orig;
 
+            if (d.type === 'rotate') {
+                const angle = Math.atan2(e.clientY - d.centerY, e.clientX - d.centerX) * 180 / Math.PI;
+                let newRot = d.origRotation + (angle - d.startAngle);
+                // Snap to 15° when within 3°
+                const snapped = Math.round(newRot / 15) * 15;
+                if (Math.abs(newRot - snapped) < 3) newRot = snapped;
+                slot.override = { ...d.orig, rotation: newRot };
+                const slotEl = document.querySelector(`[data-slot-idx="${d.slotIdx}"]`);
+                if (slotEl) slotEl.style.transform = `rotate(${newRot}deg)`;
+                const lbl = document.getElementById('slotSizeLabel');
+                if (lbl) { lbl.textContent = `旋轉 ${Math.round(newRot)}°`; lbl.style.display = ''; }
+                return;
+            }
             if (d.type === 'move') {
                 slot.override = {
+                    ...d.orig,
                     x: Math.max(0, Math.min(100 - o.w, o.x + dx)),
                     y: Math.max(0, Math.min(100 - o.h, o.y + dy)),
                     w: o.w, h: o.h
@@ -484,7 +521,7 @@ class BookEditor {
                     w = Math.max(5, o.w - (newX - o.x));
                     x = newX;
                 }
-                slot.override = { x, y, w, h };
+                slot.override = { x, y, w, h, rotation: o.rotation || 0 };
             }
 
             const slotEl = document.querySelector(`[data-slot-idx="${d.slotIdx}"]`);
@@ -515,12 +552,12 @@ class BookEditor {
 
     _getSlotGeometry(slotIdx) {
         const page = this.book.pages[this.currentPageIndex];
-        if (!page) return { x: 0, y: 0, w: 50, h: 50 };
+        if (!page) return { x: 0, y: 0, w: 50, h: 50, rotation: 0 };
         const slot = page.slots[slotIdx];
-        if (slot?.override) return { ...slot.override };
+        if (slot?.override) return { rotation: 0, ...slot.override };
         const slotDef = LAYOUTS[page.layout]?.slots[slotIdx];
-        if (!slotDef) return { x: 0, y: 0, w: 50, h: 50 };
-        return { x: slotDef.x, y: slotDef.y, w: slotDef.w, h: slotDef.h };
+        if (!slotDef) return { x: 0, y: 0, w: 50, h: 50, rotation: 0 };
+        return { x: slotDef.x, y: slotDef.y, w: slotDef.w, h: slotDef.h, rotation: 0 };
     }
 
     /**

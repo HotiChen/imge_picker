@@ -121,6 +121,7 @@ const BookExporter = {
             const sy = slot.override?.y ?? slotDef.y;
             const sw = slot.override?.w ?? slotDef.w;
             const sh = slot.override?.h ?? slotDef.h;
+            const slotRotDeg = slot.override?.rotation ?? 0;
 
             const slotX = sx / 100 * pxW;
             const slotY = sy / 100 * pxH;
@@ -129,6 +130,16 @@ const BookExporter = {
             const crop = slot.crop || { x: 0, y: 0, scale: 1 };
 
             ctx.save();
+
+            // Rotate entire slot (frame + photo) around its center before clipping
+            if (slotRotDeg !== 0) {
+                const cx = slotX + slotW / 2;
+                const cy = slotY + slotH / 2;
+                ctx.translate(cx, cy);
+                ctx.rotate(slotRotDeg * Math.PI / 180);
+                ctx.translate(-cx, -cy);
+            }
+
             ctx.beginPath();
             ctx.rect(slotX, slotY, slotW, slotH);
             ctx.clip();

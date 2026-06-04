@@ -118,6 +118,7 @@ function renderPageHTML(page, displayW, displayH, cropSlotIdx = -1) {
         const cropX = (crop.x || 0) * 100;
         const cropY = (crop.y || 0) * 100;
         const rotation = crop.rotation || 0;
+        const slotRotation = slot.override?.rotation ?? 0;
         const sx = slot.override?.x ?? slotDef.x;
         const sy = slot.override?.y ?? slotDef.y;
         const sw = slot.override?.w ?? slotDef.w;
@@ -178,7 +179,7 @@ function renderPageHTML(page, displayW, displayH, cropSlotIdx = -1) {
             <div class="page-slot ${slot.photoId ? 'has-photo' : 'empty'} ${isCropActive ? 'crop-active' : ''}"
                  data-slot-idx="${idx}"
                  data-slot-w="${sw}" data-slot-h="${sh}"
-                 style="position:absolute; left:${sx}%; top:${sy}%; width:${sw}%; height:${sh}%; overflow:hidden; box-sizing:border-box; z-index:2;">
+                 style="position:absolute; left:${sx}%; top:${sy}%; width:${sw}%; height:${sh}%; overflow:hidden; box-sizing:border-box; z-index:2; transform-origin:center center;${slotRotation ? ` transform:rotate(${slotRotation}deg);` : ''}">
                 ${innerHTML}
             </div>
         `;
@@ -223,8 +224,10 @@ function renderPageThumbnailHTML(page) {
         const tsy = slot.override?.y ?? slotDef.y;
         const tsw = slot.override?.w ?? slotDef.w;
         const tsh = slot.override?.h ?? slotDef.h;
+        const tsr = slot.override?.rotation ?? 0;
+        const tsRotStyle = tsr ? `transform:rotate(${tsr}deg);transform-origin:center center;` : '';
         if (!slot.photoId) {
-            return `<div style="position:absolute;left:${tsx}%;top:${tsy}%;width:${tsw}%;height:${tsh}%;background:rgba(255,255,255,0.08);box-sizing:border-box;z-index:2;"></div>`;
+            return `<div style="position:absolute;left:${tsx}%;top:${tsy}%;width:${tsw}%;height:${tsh}%;background:rgba(255,255,255,0.08);box-sizing:border-box;z-index:2;${tsRotStyle}"></div>`;
         }
         const scale = slot.crop?.scale || 1;
         const cropX = (slot.crop?.x || 0) * 100;
@@ -232,7 +235,7 @@ function renderPageThumbnailHTML(page) {
         const src = _thumbUrl(slot.photoId, 240);
         const rotation = slot.crop?.rotation || 0;
         return `
-            <div style="position:absolute;left:${tsx}%;top:${tsy}%;width:${tsw}%;height:${tsh}%;overflow:hidden;box-sizing:border-box;z-index:2;">
+            <div style="position:absolute;left:${tsx}%;top:${tsy}%;width:${tsw}%;height:${tsh}%;overflow:hidden;box-sizing:border-box;z-index:2;${tsRotStyle}">
                 <div style="position:absolute;overflow:hidden;width:${100*scale}%;height:${100*scale}%;top:50%;left:50%;transform:translate(calc(-50% + ${cropX / scale}%), calc(-50% + ${cropY / scale}%)) rotate(${rotation}deg);">
                     <img src="${src}" style="width:100%;height:100%;object-fit:cover;object-position:50% 50%;display:block;">
                 </div>
