@@ -49,6 +49,13 @@ const Viewer = {
                 ...(rawBook.coverSettings || {})
             };
 
+            // Restore custom layouts BEFORE page sanitization so LAYOUTS[layout] check doesn't fall back
+            if (rawBook._customLayouts) {
+                Object.entries(rawBook._customLayouts).forEach(([id, layout]) => {
+                    if (!LAYOUTS[id] && layout?.name) LAYOUTS[id] = layout;
+                });
+            }
+
             // Why: Guarantee that pages is a valid array of structured objects
             if (Array.isArray(this.book.pages)) {
                 this.book.pages = this.book.pages.map((page, pIdx) => {
