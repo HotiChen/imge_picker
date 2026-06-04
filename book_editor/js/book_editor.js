@@ -1749,6 +1749,102 @@ class BookEditor {
         return true;
     }
 
+    // ─── 手動雲端同步（書單按鈕）────────────────
+
+    async _syncBookCloud(id) {
+        if (!CONFIG.PHOTOGRAPHER_TOKEN) {
+            toast.error('請先登入才能同步雲端');
+            return;
+        }
+        const books = this._getBooksList();
+        const bookName = books.find(b => b.id === id)?.name || id;
+        const choice = await this._showSyncDialog(bookName);
+        if (!choice) return;
+        if (choice === 'upload') await this._uploadBookToCloud(id);
+        else await this._downloadBookFromCloud(id);
+    }
+
+    // Why: Promise-based dialog needs to resolve with user's choice, so we create/destroy
+    // the element dynamically rather than toggling a static modal like other dialogs.
+    _showSyncDialog(bookName) {
+        return new Promise(resolve => {
+            const overlay = document.createElement('div');
+            overlay.className = 'sync-dialog-overlay';
+            overlay.innerHTML = `
+                <div class="sync-dialog-box">
+                    <div class="sync-dialog-title">☁ 雲端同步</div>
+                    <div class="sync-dialog-book">${this._escHtml(bookName)}</div>
+                    <div class="sync-dialog-btns">
+                        <button class="btn sync-btn-upload" title="將此裝置的版本上傳，覆蓋雲端">⬆ 上傳到雲端</button>
+                        <button class="btn sync-btn-download" title="從雲端下載，覆蓋此裝置的版本">⬇ 從雲端下載</button>
+                    </div>
+                    <button class="btn sync-btn-cancel">取消</button>
+                </div>`;
+            const close = val => { overlay.remove(); resolve(val); };
+            overlay.querySelector('.sync-btn-upload').addEventListener('click', () => close('upload'));
+            overlay.querySelector('.sync-btn-download').addEventListener('click', () => close('download'));
+            overlay.querySelector('.sync-btn-cancel').addEventListener('click', () => close(null));
+            overlay.addEventListener('click', e => { if (e.target === overlay) close(null); });
+            document.body.appendChild(overlay);
+        });
+    }
+
+    async _uploadBookToCloud(id) {
+        let payload;
+        if (id === this.currentBookId) {
+            payload = this._bookDataForSave();
+        } else {
+            const raw = localStorage.getItem(`book_editor_${id}`);
+            if (!raw) { toast.error('找不到此相本的本機資料'); return; }
+            try {
+                const data = JSON.parse(raw);
+                const usedLayouts = {};
+                (data.pages || []).forEach(p => {
+                    if (p.layout?.startsWith('custom-') && LAYOUTS[p.layout])
+                        usedLayouts[p.layout] = LAYOUTS[p.layout];
+                });
+                payload = Object.keys(usedLayouts).length > 0
+                    ? { ...data, _customLayouts: usedLayouts } : data;
+            } catch { toast.error('相本資料損壞'); return; }
+        }
+        try {
+            const r = await fetch(`${CONFIG.WORKER_URL}/api/books/${id}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${CONFIG.PHOTOGRAPHER_TOKEN}` },
+                body: JSON.stringify(payload)
+            });
+            if (!r.ok) throw new Error(`HTTP ${r.status}`);
+            toast.success('✓ 已上傳到雲端（含版型）');
+        } catch (e) { toast.error('上傳失敗：' + e.message); }
+    }
+
+    async _downloadBookFromCloud(id) {
+        try {
+            const r = await fetch(`${CONFIG.WORKER_URL}/api/books/${id}`);
+            if (!r.ok) throw new Error('雲端找不到此相本');
+            const data = await r.json();
+            if (!data || !Array.isArray(data.pages)) throw new Error('雲端資料格式錯誤');
+            this._restoreCustomLayouts(data);
+            localStorage.setItem(`book_editor_${id}`, JSON.stringify(data));
+            const list = this._getBooksList();
+            const idx = list.findIndex(b => b.id === id);
+            if (idx >= 0) {
+                list[idx] = { ...list[idx], name: data.name || list[idx].name, updatedAt: data.updatedAt || new Date().toISOString() };
+                localStorage.setItem('book_editor_books', JSON.stringify(list));
+            }
+            if (id === this.currentBookId) {
+                this.loadFromStorage();
+                this.currentPageIndex = 0;
+                this.renderPage();
+                this.renderPageList();
+                toast.success('✓ 已從雲端下載，版面已重新載入');
+            } else {
+                this._renderBooksModalList();
+                toast.success('✓ 已從雲端下載（含版型）');
+            }
+        } catch (e) { toast.error('下載失敗：' + e.message); }
+    }
+
     /**
      * Loads the active photobook state from local storage.
      * Pre-conditions:
@@ -1957,6 +2053,7 @@ class BookEditor {
                         ? '<span class="books-current-badge">編輯中</span>'
                         : `<button class="btn btn-secondary books-open-btn" data-id="${b.id}">開啟</button>`}
                     <button class="btn btn-icon books-dup-btn" data-id="${b.id}" title="建立副本">⿻</button>
+                    <button class="btn btn-icon books-sync-btn" data-id="${b.id}" title="同步到雲端">☁</button>
                     <button class="btn btn-icon books-export-btn" data-id="${b.id}" title="匯出 JSON">⬇</button>
                     <button class="btn btn-icon books-del-btn" data-id="${b.id}" title="刪除">✕</button>
                 </div>
@@ -1980,6 +2077,7 @@ class BookEditor {
         _btn('.books-del-btn',    id => this._deleteBook(id));
         _btn('.books-rename-btn', id => this._startRename(id));
         _btn('.books-status-btn', id => this._cycleStatus(id));
+        _btn('.books-sync-btn',   id => this._syncBookCloud(id));
         _btn('.books-export-btn', id => this._exportBook(id));
 
         this._bindDragReorder(container);

@@ -1274,3 +1274,73 @@ html, body {
     text-align: center;
 }
 .strip-photo.preview-active { border-color: var(--primary); outline: 2px solid var(--primary); }
+
+/* ─── 雲端同步對話框 ─── */
+.sync-dialog-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.6);
+    z-index: 3000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.sync-dialog-box {
+    background: var(--bg-panel);
+    border-radius: 10px;
+    padding: 28px 32px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 16px;
+    min-width: 280px;
+    box-shadow: 0 16px 48px rgba(0,0,0,0.5);
+}
+.sync-dialog-title {
+    font-size: 1rem;
+    font-weight: 600;
+    color: #e8eaf6;
+}
+.sync-dialog-book {
+    font-size: 0.85rem;
+    color: #9fa8da;
+    max-width: 240px;
+    text-align: center;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.sync-dialog-btns {
+    display: flex;
+    gap: 10px;
+}
+.sync-btn-upload {
+    background: #3d5afe;
+    color: white;
+    padding: 9px 20px;
+    font-size: 0.88rem;
+    border-radius: 4px;
+    border: none;
+    cursor: pointer;
+}
+.sync-btn-upload:hover { background: #304ffe; }
+.sync-btn-download {
+    background: #27ae60;
+    color: white;
+    padding: 9px 20px;
+    font-size: 0.88rem;
+    border-radius: 4px;
+    border: none;
+    cursor: pointer;
+}
+.sync-btn-download:hover { background: #1e8449; }
+.sync-btn-cancel {
+    background: transparent;
+    color: #9fa8da;
+    border: 1px solid rgba(255,255,255,0.12);
+    padding: 6px 20px;
+    font-size: 0.82rem;
+    border-radius: 4px;
+    cursor: pointer;
+}
+.sync-btn-cancel:hover { background: rgba(255,255,255,0.06); }
