@@ -421,6 +421,8 @@ class BookEditor {
         document.querySelectorAll('.page-slot').forEach(slotEl => {
             const slotIdx = parseInt(slotEl.dataset.slotIdx);
             slotEl.classList.add('slot-edit-active');
+            // Allow handles positioned outside the slot boundary to be visible
+            slotEl.style.overflow = 'visible';
 
             ['nw', 'ne', 'se', 'sw'].forEach(dir => {
                 const handle = document.createElement('div');

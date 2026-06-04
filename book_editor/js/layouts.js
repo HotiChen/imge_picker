@@ -180,7 +180,9 @@ function renderPageHTML(page, displayW, displayH, cropSlotIdx = -1) {
                  data-slot-idx="${idx}"
                  data-slot-w="${sw}" data-slot-h="${sh}"
                  style="position:absolute; left:${sx}%; top:${sy}%; width:${sw}%; height:${sh}%; overflow:hidden; box-sizing:border-box; z-index:2; transform-origin:center center;${slotRotation ? ` transform:rotate(${slotRotation}deg);` : ''}">
-                ${innerHTML}
+                <div class="slot-clip-inner" style="position:absolute;inset:0;overflow:hidden;">
+                    ${innerHTML}
+                </div>
             </div>
         `;
     }).join('');

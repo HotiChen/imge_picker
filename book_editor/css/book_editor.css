@@ -265,6 +265,8 @@ html, body {
 .slot-edit-active {
     outline: 2px dashed rgba(100,180,255,0.7) !important;
     cursor: move !important;
+    /* overflow set to visible via JS so handles outside slot boundary are visible;
+       slot-clip-inner keeps the photo clipped */
 }
 .slot-pos-handle {
     position: absolute;
