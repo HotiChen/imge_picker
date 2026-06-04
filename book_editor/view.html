@@ -8,6 +8,9 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
     <style>
         *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+        html {
+            height: -webkit-fill-available;
+        }
         html, body {
             height: 100%;
             font-family: 'Inter', -apple-system, sans-serif;
@@ -15,7 +18,8 @@
             color: #e8eaf6;
             overflow: hidden;
         }
-        .viewer-wrap { display: flex; flex-direction: column; height: 100vh; }
+        /* 100dvh fixes iOS Safari toolbar overlap; falls back to 100vh on older browsers */
+        .viewer-wrap { display: flex; flex-direction: column; height: 100vh; height: 100dvh; }
 
         .viewer-header {
             display: flex;
@@ -70,13 +74,13 @@
             border: none;
             transition: background 0.15s, opacity 0.15s;
         }
-        .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+        .btn:disabled { opacity: 0.25; cursor: not-allowed; }
         .btn-icon {
-            width: 36px; height: 36px; padding: 0;
-            background: rgba(255,255,255,0.05);
-            color: #9fa8da;
-            border: 1px solid rgba(255,255,255,0.08);
-            font-size: 1rem;
+            width: 40px; height: 40px; padding: 0;
+            background: rgba(255,255,255,0.08);
+            color: #c5cae9;
+            border: 1px solid rgba(255,255,255,0.15);
+            font-size: 1.1rem;
         }
         .btn-icon:hover:not(:disabled) { background: rgba(255,255,255,0.1); color: #e8eaf6; }
         .btn-approve {
@@ -230,6 +234,6 @@
 
 <script src="../js/config.js"></script>
 <script src="js/layouts.js?v=20260603-5"></script>
-<script src="js/viewer.js?v=20260604-1"></script>
+<script src="js/viewer.js?v=20260604-2"></script>
 </body>
 </html>
