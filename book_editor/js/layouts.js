@@ -87,7 +87,8 @@ function renderPageHTML(page, displayW, displayH, cropSlotIdx = -1) {
         const fit = page.bgImage.fit || 'cover';
         const opacity = page.bgImage.opacity ?? 1;
         if (fit === 'repeat') {
-            bgImageHTML = `<div class="page-bgimage" style="position:absolute;inset:0;z-index:0;opacity:${opacity};pointer-events:none;background-image:url('${src}');background-size:150px;background-repeat:repeat;"></div>`;
+            const repeatSize = page.bgImage.repeatSize || 10;
+            bgImageHTML = `<div class="page-bgimage" style="position:absolute;inset:0;z-index:0;opacity:${opacity};pointer-events:none;background-image:url('${src}');background-size:${repeatSize}%;background-repeat:repeat;"></div>`;
         } else {
             bgImageHTML = `<div class="page-bgimage" style="position:absolute;inset:0;z-index:0;opacity:${opacity};pointer-events:none;overflow:hidden;"><img src="${src}" draggable="false" style="width:100%;height:100%;object-fit:${fit};display:block;pointer-events:none;"></div>`;
         }

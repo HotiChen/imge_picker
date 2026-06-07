@@ -78,7 +78,15 @@ const BookExporter = {
                 ctx.globalAlpha = opacity;
                 if (fit === 'repeat') {
                     const pattern = ctx.createPattern(bgImg, 'repeat');
-                    if (pattern) { ctx.fillStyle = pattern; ctx.fillRect(0, 0, pxW, pxH); }
+                    if (pattern) {
+                        if (bgImg.naturalWidth > 0) {
+                            const tilePx = (page.bgImage.repeatSize || 10) / 100 * pxW;
+                            const sc = tilePx / bgImg.naturalWidth;
+                            try { pattern.setTransform(new DOMMatrix([sc, 0, 0, sc, 0, 0])); } catch (_) {}
+                        }
+                        ctx.fillStyle = pattern;
+                        ctx.fillRect(0, 0, pxW, pxH);
+                    }
                 } else if (fit === 'contain') {
                     const s = Math.min(pxW / bgImg.naturalWidth, pxH / bgImg.naturalHeight);
                     const dw = bgImg.naturalWidth * s, dh = bgImg.naturalHeight * s;

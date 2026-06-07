@@ -679,6 +679,14 @@ class BookEditor {
         this.saveToStorage();
     }
 
+    setBgImageRepeatSize(pct) {
+        const page = this.book.pages[this.currentPageIndex];
+        if (!page?.bgImage?.photoId) return;
+        page.bgImage.repeatSize = pct;
+        this.renderCurrentPage(this.cropMode ? this.cropSlotIdx : -1);
+        this.saveToStorage();
+    }
+
     removeBgImage() {
         const page = this.book.pages[this.currentPageIndex];
         if (!page) return;
@@ -709,7 +717,14 @@ class BookEditor {
         const opPct = Math.round((bgImage.opacity ?? 1) * 100);
         if (slider) slider.value = opPct;
         if (sliderVal) sliderVal.textContent = `${opPct}%`;
-        this.updateBgFitButtons(bgImage.fit || 'cover');
+        const fit = bgImage.fit || 'cover';
+        this.updateBgFitButtons(fit);
+        const repeatRow = document.getElementById('bgRepeatSizeRow');
+        if (repeatRow) repeatRow.style.display = fit === 'repeat' ? 'flex' : 'none';
+        const repSlider = document.getElementById('bgRepeatSizeSlider');
+        const repVal = document.getElementById('bgRepeatSizeVal');
+        if (repSlider) repSlider.value = bgImage.repeatSize || 10;
+        if (repVal) repVal.textContent = `${bgImage.repeatSize || 10}%`;
     }
 
     updateBgFitButtons(activeFit) {
@@ -718,6 +733,8 @@ class BookEditor {
             btn.style.borderColor = on ? 'var(--primary)' : '';
             btn.style.color = on ? 'var(--primary)' : '';
         });
+        const repeatRow = document.getElementById('bgRepeatSizeRow');
+        if (repeatRow) repeatRow.style.display = activeFit === 'repeat' ? 'flex' : 'none';
     }
 
     async openBgPicker(tab) {
@@ -2044,6 +2061,12 @@ class BookEditor {
         });
         document.querySelectorAll('.bg-fit-btn').forEach(btn => {
             btn.addEventListener('click', () => this.setBgImageFit(btn.dataset.fit));
+        });
+        this._on('bgRepeatSizeSlider', 'input', e => {
+            const v = parseInt(e.target.value);
+            const el = document.getElementById('bgRepeatSizeVal');
+            if (el) el.textContent = `${v}%`;
+            this.setBgImageRepeatSize(v);
         });
         // bgPickerModal
         this._on('closeBgPickerBtn', 'click', () => document.getElementById('bgPickerModal')?.classList.remove('active'));
