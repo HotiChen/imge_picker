@@ -46,8 +46,18 @@ const BookExporter = {
 
     async _renderPage(page, settings) {
         const dpi = settings.dpi || 300;
+
+        if (!settings?.width || !settings?.height) {
+            throw new Error('匯出設定缺少尺寸資料，請檢查相本設定');
+        }
+
         const pxW = Math.round(settings.width * dpi / 2.54);
         const pxH = Math.round(settings.height * dpi / 2.54);
+
+        const MAX_CANVAS_PX = 16383;
+        if (pxW >= MAX_CANVAS_PX || pxH >= MAX_CANVAS_PX) {
+            throw new Error(`尺寸超過瀏覽器限制 (${pxW}×${pxH}px)，請降低 DPI 或縮小尺寸`);
+        }
 
         const canvas = document.createElement('canvas');
         canvas.width = pxW;
