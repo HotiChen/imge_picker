@@ -162,6 +162,10 @@ function renderPageHTML(page, displayW, displayH, cropSlotIdx = -1) {
             innerHTML = `<div class="slot-empty-hint"><span>+</span><small>點擊放入照片</small></div>`;
         }
 
+        if (slot.photoId && !isCropActive) {
+            innerHTML += `<div class="slot-rc-hint">右鍵</div>`;
+        }
+
         return `
             <div class="page-slot ${slot.photoId ? 'has-photo' : 'empty'} ${isCropActive ? 'crop-active' : ''}"
                  data-slot-idx="${idx}"
