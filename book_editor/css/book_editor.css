@@ -1107,6 +1107,16 @@ html, body {
 .status-draft        { color: #8a8a8a; border-color: #8a8a8a; }
 .status-inprogress   { color: #e5a448; border-color: #e5a448; }
 .status-delivered    { color: #4caf7d; border-color: #4caf7d; }
+.books-jpg-btn {
+    padding: 0 8px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    background: var(--primary);
+    color: white;
+    height: 28px;
+    border-radius: 4px;
+}
+.books-jpg-btn:hover { background: var(--primary-hover); }
 
 /* Storage bar */
 .storage-bar-label {

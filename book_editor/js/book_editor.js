@@ -2093,6 +2093,7 @@ class BookEditor {
                         : `<button class="btn btn-secondary books-open-btn" data-id="${b.id}">開啟</button>`}
                     <button class="btn btn-icon books-dup-btn" data-id="${b.id}" title="建立副本">⿻</button>
                     <button class="btn btn-icon books-sync-btn" data-id="${b.id}" title="同步到雲端">☁</button>
+                    <button class="btn books-jpg-btn" data-id="${b.id}" title="匯出 JPEG">JPG</button>
                     <button class="btn btn-icon books-export-btn" data-id="${b.id}" title="匯出 JSON">⬇</button>
                     <button class="btn btn-icon books-del-btn" data-id="${b.id}" title="刪除">✕</button>
                 </div>
@@ -2117,6 +2118,7 @@ class BookEditor {
         _btn('.books-rename-btn', id => this._startRename(id));
         _btn('.books-status-btn', id => this._cycleStatus(id));
         _btn('.books-sync-btn',   id => this._syncBookCloud(id));
+        _btn('.books-jpg-btn',    id => this._exportBookJpg(id));
         _btn('.books-export-btn', id => this._exportBook(id));
 
         this._bindDragReorder(container);
@@ -2194,6 +2196,25 @@ class BookEditor {
         a.download = `${(book.name || 'book').replace(/[/\\:*?"<>|]/g, '_')}.photobook.json`;
         a.click();
         URL.revokeObjectURL(a.href);
+    }
+
+    async _exportBookJpg(id) {
+        const raw = localStorage.getItem(`book_editor_${id}`);
+        if (!raw) { toast.error('找不到此相本的本機資料，請先從雲端下載'); return; }
+        let book;
+        try { book = JSON.parse(raw); } catch { toast.error('相本資料損壞'); return; }
+        // Merge custom layouts from book JSON into LAYOUTS before export
+        if (book._customLayouts) {
+            Object.entries(book._customLayouts).forEach(([lid, layout]) => {
+                if (!LAYOUTS[lid] && layout?.name) LAYOUTS[lid] = layout;
+            });
+        }
+        toast.info(`開始匯出「${book.name || '相本'}」…`);
+        try {
+            await BookExporter.exportAll(book);
+        } catch (e) {
+            toast.error('匯出失敗：' + (e.message || e));
+        }
     }
 
     _importBook(file) {
