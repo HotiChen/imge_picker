@@ -273,9 +273,9 @@ class BookEditor {
         });
 
         const dismiss = ev => {
-            if (!menu.contains(ev.target)) { menu.remove(); document.removeEventListener('mousedown', dismiss); }
+            if (!menu.contains(ev.target)) { menu.remove(); document.removeEventListener('pointerdown', dismiss); }
         };
-        setTimeout(() => document.addEventListener('mousedown', dismiss), 0);
+        setTimeout(() => document.addEventListener('pointerdown', dismiss), 0);
     }
 
     _applyFitPreset(slotIdx, fit) {
@@ -348,9 +348,11 @@ class BookEditor {
                 const handle = document.createElement('div');
                 handle.className = `slot-pos-handle pos-${dir}`;
                 slotEl.appendChild(handle);
-                handle.addEventListener('mousedown', e => {
+                handle.addEventListener('pointerdown', e => {
+                    if (e.button !== 0) return;
                     e.preventDefault();
                     e.stopPropagation();
+                    e.target.setPointerCapture(e.pointerId);
                     const rect = canvas.getBoundingClientRect();
                     this.slotPosDragState = {
                         type: 'resize', slotIdx, dir,
@@ -361,9 +363,11 @@ class BookEditor {
                 });
             });
 
-            slotEl.addEventListener('mousedown', e => {
+            slotEl.addEventListener('pointerdown', e => {
+                if (e.button !== 0) return;
                 if (e.target.classList.contains('slot-pos-handle')) return;
                 e.preventDefault();
+                e.target.setPointerCapture(e.pointerId);
                 const rect = canvas.getBoundingClientRect();
                 this.slotPosDragState = {
                     type: 'move', slotIdx,
@@ -421,8 +425,8 @@ class BookEditor {
             }
         };
 
-        this._slotPosUpHandler = () => {
-            if (this.slotPosDragState) {
+        this._slotPosUpHandler = e => {
+            if (this.slotPosDragState && e?.type !== 'pointercancel') {
                 this._updatePageThumbnail(this.currentPageIndex);
                 this.saveToStorage();
             }
@@ -431,8 +435,9 @@ class BookEditor {
             if (lbl) lbl.style.display = 'none';
         };
 
-        document.addEventListener('mousemove', this._slotPosMoveHandler);
-        document.addEventListener('mouseup', this._slotPosUpHandler);
+        document.addEventListener('pointermove', this._slotPosMoveHandler);
+        document.addEventListener('pointerup', this._slotPosUpHandler);
+        document.addEventListener('pointercancel', this._slotPosUpHandler);
     }
 
     _getSlotGeometry(slotIdx) {
@@ -958,10 +963,11 @@ class BookEditor {
 
         document.querySelectorAll('.page-text-layer').forEach(el => {
             const layerId = el.dataset.textLayerId;
-            el.addEventListener('mousedown', e => {
+            el.addEventListener('pointerdown', e => {
                 if (e.button !== 0) return;
                 e.preventDefault();
                 e.stopPropagation();
+                e.target.setPointerCapture(e.pointerId);
                 this.selectTextLayer(layerId);
                 const cr = canvas.getBoundingClientRect();
                 const layer = page.textLayers?.find(t => t.id === layerId);
@@ -983,9 +989,10 @@ class BookEditor {
             const el = document.querySelector(`[data-text-layer-id="${d.id}"]`);
             if (el) { el.style.left = layer.x + '%'; el.style.top = layer.y + '%'; }
         };
-        this._textUpHandler = () => { if (this._textDragState) this.saveToStorage(); this._textDragState = null; };
-        document.addEventListener('mousemove', this._textMoveHandler);
-        document.addEventListener('mouseup', this._textUpHandler);
+        this._textUpHandler = e => { if (this._textDragState && e?.type !== 'pointercancel') this.saveToStorage(); this._textDragState = null; };
+        document.addEventListener('pointermove', this._textMoveHandler);
+        document.addEventListener('pointerup', this._textUpHandler);
+        document.addEventListener('pointercancel', this._textUpHandler);
     }
 
     // ─── 照片選取 Modal ──────────────────────
@@ -1221,20 +1228,23 @@ class BookEditor {
     _bindSlotInteractions(displayW, displayH) {
         // Remove old global listeners before (re)binding
         if (this._cropMoveHandler) {
-            document.removeEventListener('mousemove', this._cropMoveHandler);
-            document.removeEventListener('mouseup', this._cropUpHandler);
+            document.removeEventListener('pointermove', this._cropMoveHandler);
+            document.removeEventListener('pointerup', this._cropUpHandler);
+            document.removeEventListener('pointercancel', this._cropUpHandler);
             this._cropMoveHandler = null;
             this._cropUpHandler = null;
         }
         if (this._slotPosMoveHandler) {
-            document.removeEventListener('mousemove', this._slotPosMoveHandler);
-            document.removeEventListener('mouseup', this._slotPosUpHandler);
+            document.removeEventListener('pointermove', this._slotPosMoveHandler);
+            document.removeEventListener('pointerup', this._slotPosUpHandler);
+            document.removeEventListener('pointercancel', this._slotPosUpHandler);
             this._slotPosMoveHandler = null;
             this._slotPosUpHandler = null;
         }
         if (this._textMoveHandler) {
-            document.removeEventListener('mousemove', this._textMoveHandler);
-            document.removeEventListener('mouseup', this._textUpHandler);
+            document.removeEventListener('pointermove', this._textMoveHandler);
+            document.removeEventListener('pointerup', this._textUpHandler);
+            document.removeEventListener('pointercancel', this._textUpHandler);
             this._textMoveHandler = null;
             this._textUpHandler = null;
         }
@@ -1290,14 +1300,17 @@ class BookEditor {
 
             // 有照片的格子：mousedown 直接進入裁切 + 開始拖移（單一手勢）
             if (hasPhoto) {
-                slotEl.addEventListener('mousedown', e => {
+                slotEl.addEventListener('pointerdown', e => {
                     if (e.button !== 0) return; // ignore right-click / middle-click
                     if (e.target.classList.contains('slot-clear-btn')) return;
                     e.preventDefault();
                     if (!this.cropMode || this.cropSlotIdx !== slotIdx) {
                         this.enterCropMode(slotIdx);
                     }
-                    this.cropDragState = { lastX: e.clientX, lastY: e.clientY, slotEl: document.querySelector(`[data-slot-idx="${slotIdx}"]`) };
+                    // Query new slot element AFTER potential DOM rebuild in enterCropMode
+                    const newSlotEl = document.querySelector(`[data-slot-idx="${slotIdx}"]`);
+                    if (newSlotEl) newSlotEl.setPointerCapture(e.pointerId);
+                    this.cropDragState = { lastX: e.clientX, lastY: e.clientY, slotEl: newSlotEl };
                 });
 
                 slotEl.addEventListener('wheel', e => {
@@ -1322,9 +1335,10 @@ class BookEditor {
                     handle.textContent = '↻';
                     slotEl.appendChild(handle);
 
-                    handle.addEventListener('mousedown', e => {
+                    handle.addEventListener('pointerdown', e => {
                         e.preventDefault();
                         e.stopPropagation();
+                        e.target.setPointerCapture(e.pointerId);
                         const rect = slotEl.getBoundingClientRect();
                         const cx = rect.left + rect.width / 2;
                         const cy = rect.top + rect.height / 2;
@@ -1340,13 +1354,15 @@ class BookEditor {
                             this._updateSlotTransform(slotIdx);
                             this._updateRotationUI(slotIdx);
                         };
-                        const onUp = () => {
-                            document.removeEventListener('mousemove', onMove);
-                            document.removeEventListener('mouseup', onUp);
-                            this.saveToStorage();
+                        const onUp = e => {
+                            document.removeEventListener('pointermove', onMove);
+                            document.removeEventListener('pointerup', onUp);
+                            document.removeEventListener('pointercancel', onUp);
+                            if (e?.type !== 'pointercancel') this.saveToStorage();
                         };
-                        document.addEventListener('mousemove', onMove);
-                        document.addEventListener('mouseup', onUp);
+                        document.addEventListener('pointermove', onMove);
+                        document.addEventListener('pointerup', onUp);
+                        document.addEventListener('pointercancel', onUp);
                     });
                 }
             }
@@ -1377,12 +1393,14 @@ class BookEditor {
             this.cropDragState = { lastX: e.clientX, lastY: e.clientY, slotEl };
             this._updateSlotTransform(this.cropSlotIdx);
         };
-        this._cropUpHandler = () => { this.cropDragState = null; this.saveToStorage(); };
+        this._cropUpHandler = e => { this.cropDragState = null; if (e?.type !== 'pointercancel') this.saveToStorage(); };
 
-        document.removeEventListener('mousemove', this._cropMoveHandler);
-        document.removeEventListener('mouseup', this._cropUpHandler);
-        document.addEventListener('mousemove', this._cropMoveHandler);
-        document.addEventListener('mouseup', this._cropUpHandler);
+        document.removeEventListener('pointermove', this._cropMoveHandler);
+        document.removeEventListener('pointerup', this._cropUpHandler);
+        document.removeEventListener('pointercancel', this._cropUpHandler);
+        document.addEventListener('pointermove', this._cropMoveHandler);
+        document.addEventListener('pointerup', this._cropUpHandler);
+        document.addEventListener('pointercancel', this._cropUpHandler);
     }
 
     addCustomLayoutBtn(id, name) {
@@ -1754,16 +1772,16 @@ class BookEditor {
         let dragId = null;
         container.querySelectorAll('.books-row').forEach(row => {
             // Only allow drag when the grab handle is used, not action buttons
-            row.addEventListener('mousedown', e => {
+            row.addEventListener('pointerdown', e => {
                 if (!e.target.closest('.books-drag-handle')) {
                     row.removeAttribute('draggable');
-                    if (row._restoreDrag) document.removeEventListener('mouseup', row._restoreDrag);
+                    if (row._restoreDrag) document.removeEventListener('pointerup', row._restoreDrag);
                     row._restoreDrag = () => {
                         row.setAttribute('draggable', 'true');
-                        document.removeEventListener('mouseup', row._restoreDrag);
+                        document.removeEventListener('pointerup', row._restoreDrag);
                         row._restoreDrag = null;
                     };
-                    document.addEventListener('mouseup', row._restoreDrag);
+                    document.addEventListener('pointerup', row._restoreDrag);
                 }
             });
             row.addEventListener('dragstart', e => {

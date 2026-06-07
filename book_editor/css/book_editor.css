@@ -272,6 +272,7 @@ html, body {
     height: 10px;
     background: #64b4ff;
     border: 1px solid white;
+    touch-action: none;
     border-radius: 2px;
     z-index: 20;
 }
@@ -362,6 +363,7 @@ html, body {
 .page-slot {
     cursor: pointer;
     transition: outline 0.15s;
+    touch-action: none;
 }
 .page-slot.empty {
     outline: 2px dashed rgba(128,128,128,0.55);
@@ -899,7 +901,7 @@ html, body {
 }
 
 /* ─── Text Layer (canvas overlay) ─── */
-.page-text-layer { pointer-events: auto; }
+.page-text-layer { pointer-events: auto; touch-action: none; }
 .page-text-layer:hover span { outline: 1px dashed rgba(243,128,32,0.5); }
 .page-text-layer.text-layer-selected span {
     outline: 1px solid var(--primary);
@@ -1189,6 +1191,7 @@ html, body {
     background: var(--primary);
     border-radius: 50%;
     cursor: grab;
+    touch-action: none;
     display: flex;
     align-items: center;
     justify-content: center;
