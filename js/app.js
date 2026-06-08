@@ -928,13 +928,13 @@ class App {
         this.treeActivePath = rootPath;
         this._renderFolderTree();
         const container = document.getElementById('folderTreeContainer');
-        if (container) container.style.display = '';
+        if (container) container.style.display = 'block';
     }
 
     _syncTreeToPath(path, subFolders) {
         this.treeActivePath = path;
         const node = this._findTreeNode(path, this.folderTreeRoot);
-        if (node && !node.isLoaded) {
+        if (node) {
             node.children = (subFolders || []).map(fp => this._makeTreeNode(fp));
             node.isLoaded = true;
             node.isExpanded = true;
@@ -1012,9 +1012,7 @@ class App {
 
         label.addEventListener('click', e => {
             e.stopPropagation();
-            this.treeActivePath = node.path;
-            this.folderStack = [];
-            this.handleLoadPhotos(node.path);
+            this.navigateToFolder(node.path);
         });
 
         return wrap;
