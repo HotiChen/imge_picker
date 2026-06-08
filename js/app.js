@@ -913,6 +913,7 @@ class App {
             name: folderPath.replace(/\/$/, '').split('/').pop() || folderPath,
             children: [],
             isLoaded: false,
+            isLoading: false,
             isExpanded: false
         };
     }
@@ -923,6 +924,7 @@ class App {
             name: rootPath.replace(/\/$/, '').split('/').pop() || rootPath,
             children: (subFolders || []).map(fp => this._makeTreeNode(fp)),
             isLoaded: true,
+            isLoading: false,
             isExpanded: true
         };
         this.treeActivePath = rootPath;
@@ -934,11 +936,14 @@ class App {
     _syncTreeToPath(path, subFolders) {
         this.treeActivePath = path;
         const node = this._findTreeNode(path, this.folderTreeRoot);
-        if (node) {
-            node.children = (subFolders || []).map(fp => this._makeTreeNode(fp));
-            node.isLoaded = true;
-            node.isExpanded = true;
+        if (!node) {
+            // 路徑不在樹中（例如外部導航），重新初始化
+            this._initFolderTree(path, subFolders);
+            return;
         }
+        node.children = (subFolders || []).map(fp => this._makeTreeNode(fp));
+        node.isLoaded = true;
+        node.isExpanded = true;
         this._renderFolderTree();
     }
 
@@ -953,7 +958,8 @@ class App {
     }
 
     async _fetchNodeChildren(node) {
-        if (node.isLoaded) return;
+        if (node.isLoaded || node.isLoading) return;
+        node.isLoading = true;
         try {
             const url = `${CONFIG.WORKER_URL}/?list=${encodeURIComponent(node.path)}`;
             const res = await fetch(url);
@@ -962,7 +968,9 @@ class App {
             node.isLoaded = true;
         } catch (e) {
             console.warn('資料夾樹載入失敗，可再次點擊重試:', e.message);
-            // 不標記 isLoaded，讓使用者下次點擊可以重試
+            // 不標記 isLoaded，保留重試機會
+        } finally {
+            node.isLoading = false;
         }
     }
 
@@ -971,18 +979,36 @@ class App {
         if (!container || !this.folderTreeRoot) return;
         container.innerHTML = '';
         container.appendChild(this._buildTreeEl(this.folderTreeRoot, 0));
+        // 單一事件委派：所有節點的互動由此處理，避免重複附加監聽器
+        container.onclick = async e => {
+            const row = e.target.closest('.tree-row');
+            if (!row) return;
+            const node = this._findTreeNode(row.dataset.path, this.folderTreeRoot);
+            if (!node) return;
+            e.stopPropagation();
+            if (e.target.classList.contains('tree-toggle')) {
+                await this._fetchNodeChildren(node);
+                node.isExpanded = !node.isExpanded;
+                this._renderFolderTree();
+            } else if (e.target.classList.contains('tree-label')) {
+                this.navigateToFolder(node.path);
+            }
+        };
     }
 
     _buildTreeEl(node, depth) {
         const wrap = document.createElement('div');
         const row = document.createElement('div');
         row.className = 'tree-row' + (node.path === this.treeActivePath ? ' tree-active' : '');
+        row.dataset.path = node.path;
         row.style.paddingLeft = (4 + depth * 14) + 'px';
 
         const hasOrMayHaveChildren = !node.isLoaded || node.children.length > 0;
         const toggle = document.createElement('span');
         toggle.className = 'tree-toggle';
-        toggle.textContent = hasOrMayHaveChildren ? (node.isExpanded ? '▾' : '▸') : '';
+        toggle.textContent = hasOrMayHaveChildren
+            ? (node.isLoading ? '…' : (node.isExpanded ? '▾' : '▸'))
+            : '';
 
         const icon = document.createElement('span');
         icon.className = 'tree-icon';
@@ -1003,18 +1029,6 @@ class App {
             node.children.forEach(child => childrenEl.appendChild(this._buildTreeEl(child, depth + 1)));
             wrap.appendChild(childrenEl);
         }
-
-        toggle.addEventListener('click', async e => {
-            e.stopPropagation();
-            if (!node.isLoaded) await this._fetchNodeChildren(node);
-            node.isExpanded = !node.isExpanded;
-            this._renderFolderTree();
-        });
-
-        label.addEventListener('click', e => {
-            e.stopPropagation();
-            this.navigateToFolder(node.path);
-        });
 
         return wrap;
     }
