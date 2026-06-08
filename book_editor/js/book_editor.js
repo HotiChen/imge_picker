@@ -282,8 +282,9 @@ class BookEditor {
         const page = this.book.pages[this.currentPageIndex];
         const slot = page?.slots[slotIdx];
         if (!slot) return;
+        const prevRotation = slot.crop?.rotation || 0;
         slot.fit = fit;
-        if (fit === 'cover') slot.crop = { x: 0, y: 0, scale: 1 };
+        slot.crop = { x: 0, y: 0, scale: 1, rotation: prevRotation };
         this.renderCurrentPage(this.cropMode ? this.cropSlotIdx : -1);
         this._updateFitToggleBtn(fit);
         this.saveToStorage();
@@ -453,18 +454,29 @@ class BookEditor {
     _updateSlotTransform(slotIdx) {
         const page = this.book.pages[this.currentPageIndex];
         if (!page || !page.slots[slotIdx]) return;
-        const crop = page.slots[slotIdx].crop;
+        const slot = page.slots[slotIdx];
+        const fitMode = slot.fit || 'cover';
+        const crop = slot.crop || { x: 0, y: 0, scale: 1 };
         const slotEl = document.querySelector(`[data-slot-idx="${slotIdx}"]`);
         if (!slotEl) return;
+        const rotation = crop.rotation || 0;
+        slotEl.style.transform = `rotate(${rotation}deg)`;
+        if (fitMode === 'contain') return;
         const scale = crop.scale || 1;
         const cropX = (crop.x || 0) * 100;
         const cropY = (crop.y || 0) * 100;
-        const rotation = crop.rotation || 0;
-        slotEl.style.transform = `rotate(${rotation}deg)`;
         const img = slotEl.querySelector('.slot-crop-wrapper img');
         if (img) {
-            img.style.width = `${100 * scale}%`;
-            img.style.height = `${100 * scale}%`;
+            if (fitMode === 'fit-width') {
+                img.style.width = `${100 * scale}%`;
+                img.style.height = 'auto';
+            } else if (fitMode === 'fit-height') {
+                img.style.width = 'auto';
+                img.style.height = `${100 * scale}%`;
+            } else {
+                img.style.width = `${100 * scale}%`;
+                img.style.height = `${100 * scale}%`;
+            }
             img.style.left = `${50 + cropX}%`;
             img.style.top = `${50 + cropY}%`;
         }

@@ -129,21 +129,29 @@ function renderPageHTML(page, displayW, displayH, cropSlotIdx = -1) {
                 `;
             } else if (fitMode === 'fit-width') {
                 innerHTML = `
-                    <div style="position:absolute;inset:0;overflow:hidden;">
-                        <div class="slot-crop-wrapper" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;">
-                            <img src="${src}" draggable="false" style="width:100%;height:auto;flex-shrink:0;display:block;pointer-events:none;">
-                        </div>
+                    <div class="slot-crop-wrapper" style="position:absolute;inset:0;overflow:hidden;">
+                        <img src="${src}" draggable="false" style="
+                            position:absolute;
+                            width:${100 * scale}%; height:auto;
+                            left:${50 + cropX}%; top:${50 + cropY}%;
+                            transform:translate(-50%,-50%);
+                            display:block; pointer-events:none;">
                     </div>
                     <button class="slot-clear-btn" data-slot-idx="${idx}" title="移除照片">×</button>
+                    ${isCropActive ? '<div class="crop-hint">拖移平移 · 滾輪縮放 · ↻ 拖旋轉鈕</div>' : ''}
                 `;
             } else if (fitMode === 'fit-height') {
                 innerHTML = `
-                    <div style="position:absolute;inset:0;overflow:hidden;">
-                        <div class="slot-crop-wrapper" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;">
-                            <img src="${src}" draggable="false" style="height:100%;width:auto;flex-shrink:0;display:block;pointer-events:none;">
-                        </div>
+                    <div class="slot-crop-wrapper" style="position:absolute;inset:0;overflow:hidden;">
+                        <img src="${src}" draggable="false" style="
+                            position:absolute;
+                            width:auto; height:${100 * scale}%;
+                            left:${50 + cropX}%; top:${50 + cropY}%;
+                            transform:translate(-50%,-50%);
+                            display:block; pointer-events:none;">
                     </div>
                     <button class="slot-clear-btn" data-slot-idx="${idx}" title="移除照片">×</button>
+                    ${isCropActive ? '<div class="crop-hint">拖移平移 · 滾輪縮放 · ↻ 拖旋轉鈕</div>' : ''}
                 `;
             } else {
                 innerHTML = `

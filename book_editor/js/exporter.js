@@ -157,18 +157,24 @@ const BookExporter = {
                 const drawY = slotY + (slotH - drawH) / 2;
                 ctx.drawImage(img, 0, 0, img.naturalWidth, img.naturalHeight, drawX, drawY, drawW, drawH);
             } else if (slot.fit === 'fit-width') {
-                const s = slotW / img.naturalWidth;
-                const drawW = slotW;
+                const cropScale = crop.scale || 1;
+                const s = cropScale * slotW / img.naturalWidth;
+                const drawW = img.naturalWidth * s;
                 const drawH = img.naturalHeight * s;
-                const drawX = slotX;
-                const drawY = slotY + (slotH - drawH) / 2;
+                const cx = 0.5 + (crop.x || 0);
+                const cy = 0.5 + (crop.y || 0);
+                const drawX = slotX + cx * slotW - drawW / 2;
+                const drawY = slotY + cy * slotH - drawH / 2;
                 ctx.drawImage(img, 0, 0, img.naturalWidth, img.naturalHeight, drawX, drawY, drawW, drawH);
             } else if (slot.fit === 'fit-height') {
-                const s = slotH / img.naturalHeight;
-                const drawH = slotH;
+                const cropScale = crop.scale || 1;
+                const s = cropScale * slotH / img.naturalHeight;
+                const drawH = img.naturalHeight * s;
                 const drawW = img.naturalWidth * s;
-                const drawX = slotX + (slotW - drawW) / 2;
-                const drawY = slotY;
+                const cx = 0.5 + (crop.x || 0);
+                const cy = 0.5 + (crop.y || 0);
+                const drawX = slotX + cx * slotW - drawW / 2;
+                const drawY = slotY + cy * slotH - drawH / 2;
                 ctx.drawImage(img, 0, 0, img.naturalWidth, img.naturalHeight, drawX, drawY, drawW, drawH);
             } else {
                 const cropScale = crop.scale || 1;
