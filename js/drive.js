@@ -67,7 +67,10 @@ class DriveManager {
 
                 return {
                     photos: this.photos,
-                    folders: (result.folders || []),
+                    folders: (result.folders || []).map(f => ({
+                        id: f,
+                        name: f.replace(/\/$/, '').split('/').pop() || f
+                    })),
                     currentName: this.currentFolderName,
                     projectCreatedTime: projectCreatedTime ? new Date(projectCreatedTime).toISOString() : null,
                     canGoBack: !!folderPath

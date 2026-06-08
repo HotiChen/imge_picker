@@ -907,15 +907,13 @@ class App {
 
     // ─── Folder Tree ──────────────────────────────────────────────
 
-    _makeTreeNode(folderPath) {
-        return {
-            path: folderPath,
-            name: folderPath.replace(/\/$/, '').split('/').pop() || folderPath,
-            children: [],
-            isLoaded: false,
-            isLoading: false,
-            isExpanded: false
-        };
+    _makeTreeNode(folder) {
+        // 接受字串（來自 _fetchNodeChildren 直接抓 API）或 {id,name} 物件（來自 drive.js）
+        const path = typeof folder === 'string' ? folder : folder.id;
+        const name = typeof folder === 'string'
+            ? (path.replace(/\/$/, '').split('/').pop() || path)
+            : folder.name;
+        return { path, name, children: [], isLoaded: false, isLoading: false, isExpanded: false };
     }
 
     _initFolderTree(rootPath, subFolders) {
