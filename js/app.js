@@ -13,6 +13,8 @@ class App {
         this.lastSelectedIndex = -1; // 用於 Shift 選取
         this.folderStack = []; // [{path, name}] 資料夾導航歷史
         this.currentFolders = []; // 目前層級的子資料夾清單
+        this.folderTreeRoot = null; // 資料夾樹根節點
+        this.treeActivePath = ''; // 目前選中的路徑
 
         this.init();
     }
@@ -100,6 +102,15 @@ class App {
                 }
                 this.updateStats();
                 this.updateExpiryCountdown(result.projectCreatedTime);
+
+                // 同步資料夾樹
+                const normalizedPath = driveManager.currentFolderId;
+                const subFolders = result.folders || [];
+                if (!this.folderTreeRoot || !this._findTreeNode(normalizedPath, this.folderTreeRoot)) {
+                    this._initFolderTree(normalizedPath, subFolders);
+                } else {
+                    this._syncTreeToPath(normalizedPath, subFolders);
+                }
 
                 const hasCloudData = await driveManager.checkIfDataExistsOnCloud();
                 if (hasCloudData) {
@@ -892,6 +903,121 @@ class App {
         }, FIVE_MINUTES);
 
         console.log('--- 自動存檔計時器已啟動 (每 5 分鐘一次) ---');
+    }
+
+    // ─── Folder Tree ──────────────────────────────────────────────
+
+    _makeTreeNode(folderPath) {
+        return {
+            path: folderPath,
+            name: folderPath.replace(/\/$/, '').split('/').pop() || folderPath,
+            children: [],
+            isLoaded: false,
+            isExpanded: false
+        };
+    }
+
+    _initFolderTree(rootPath, subFolders) {
+        this.folderTreeRoot = {
+            path: rootPath,
+            name: rootPath.replace(/\/$/, '').split('/').pop() || rootPath,
+            children: (subFolders || []).map(fp => this._makeTreeNode(fp)),
+            isLoaded: true,
+            isExpanded: true
+        };
+        this.treeActivePath = rootPath;
+        this._renderFolderTree();
+        const container = document.getElementById('folderTreeContainer');
+        if (container) container.style.display = '';
+    }
+
+    _syncTreeToPath(path, subFolders) {
+        this.treeActivePath = path;
+        const node = this._findTreeNode(path, this.folderTreeRoot);
+        if (node && !node.isLoaded) {
+            node.children = (subFolders || []).map(fp => this._makeTreeNode(fp));
+            node.isLoaded = true;
+            node.isExpanded = true;
+        }
+        this._renderFolderTree();
+    }
+
+    _findTreeNode(path, node) {
+        if (!node) return null;
+        if (node.path === path) return node;
+        for (const child of (node.children || [])) {
+            const found = this._findTreeNode(path, child);
+            if (found) return found;
+        }
+        return null;
+    }
+
+    async _fetchNodeChildren(node) {
+        if (node.isLoaded) return;
+        try {
+            const url = `${CONFIG.WORKER_URL}/?list=${encodeURIComponent(node.path)}`;
+            const res = await fetch(url);
+            const result = await res.json();
+            node.children = (result.folders || []).map(fp => this._makeTreeNode(fp));
+        } catch (_) {}
+        node.isLoaded = true;
+    }
+
+    _renderFolderTree() {
+        const container = document.getElementById('folderTree');
+        if (!container || !this.folderTreeRoot) return;
+        container.innerHTML = '';
+        container.appendChild(this._buildTreeEl(this.folderTreeRoot, 0));
+    }
+
+    _buildTreeEl(node, depth) {
+        const wrap = document.createElement('div');
+        const row = document.createElement('div');
+        row.className = 'tree-row' + (node.path === this.treeActivePath ? ' tree-active' : '');
+        row.style.paddingLeft = (4 + depth * 14) + 'px';
+
+        const hasOrMayHaveChildren = !node.isLoaded || node.children.length > 0;
+        const toggle = document.createElement('span');
+        toggle.className = 'tree-toggle';
+        toggle.textContent = hasOrMayHaveChildren ? (node.isExpanded ? '▾' : '▸') : '';
+
+        const icon = document.createElement('span');
+        icon.className = 'tree-icon';
+        icon.textContent = depth === 0 ? '🗂' : '📁';
+
+        const label = document.createElement('span');
+        label.className = 'tree-label';
+        label.textContent = node.name;
+        label.title = node.path;
+
+        row.appendChild(toggle);
+        row.appendChild(icon);
+        row.appendChild(label);
+        wrap.appendChild(row);
+
+        if (node.isExpanded && node.children.length > 0) {
+            const childrenEl = document.createElement('div');
+            node.children.forEach(child => childrenEl.appendChild(this._buildTreeEl(child, depth + 1)));
+            wrap.appendChild(childrenEl);
+        }
+
+        toggle.addEventListener('click', async e => {
+            e.stopPropagation();
+            if (!node.isLoaded) {
+                await this._fetchNodeChildren(node);
+            }
+            node.isExpanded = !node.isExpanded;
+            this._renderFolderTree();
+        });
+
+        label.addEventListener('click', e => {
+            e.stopPropagation();
+            this.treeActivePath = node.path;
+            this.folderStack = [];
+            this.handleLoadPhotos(node.path);
+        });
+
+        return wrap;
     }
 }
 
