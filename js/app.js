@@ -959,8 +959,11 @@ class App {
             const res = await fetch(url);
             const result = await res.json();
             node.children = (result.folders || []).map(fp => this._makeTreeNode(fp));
-        } catch (_) {}
-        node.isLoaded = true;
+            node.isLoaded = true;
+        } catch (e) {
+            console.warn('資料夾樹載入失敗，可再次點擊重試:', e.message);
+            // 不標記 isLoaded，讓使用者下次點擊可以重試
+        }
     }
 
     _renderFolderTree() {
@@ -1003,9 +1006,7 @@ class App {
 
         toggle.addEventListener('click', async e => {
             e.stopPropagation();
-            if (!node.isLoaded) {
-                await this._fetchNodeChildren(node);
-            }
+            if (!node.isLoaded) await this._fetchNodeChildren(node);
             node.isExpanded = !node.isExpanded;
             this._renderFolderTree();
         });
