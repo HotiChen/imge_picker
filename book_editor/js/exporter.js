@@ -141,7 +141,10 @@ const BookExporter = {
             ctx.clip();
 
             const rotationDeg = crop.rotation || 0;
-            if (rotationDeg !== 0) {
+            // cover/contain: rotate the whole slot around its center (matches DOM slot-level rotation)
+            // fit-width/fit-height: rotation is applied per-image around image center below
+            const useSlotRotation = slot.fit !== 'fit-width' && slot.fit !== 'fit-height';
+            if (rotationDeg !== 0 && useSlotRotation) {
                 const cx = slotX + slotW / 2;
                 const cy = slotY + slotH / 2;
                 ctx.translate(cx, cy);
@@ -161,20 +164,30 @@ const BookExporter = {
                 const s = cropScale * slotW / img.naturalWidth;
                 const drawW = img.naturalWidth * s;
                 const drawH = img.naturalHeight * s;
-                const cx = 0.5 + (crop.x || 0);
-                const cy = 0.5 + (crop.y || 0);
-                const drawX = slotX + cx * slotW - drawW / 2;
-                const drawY = slotY + cy * slotH - drawH / 2;
+                const imgCx = slotX + (0.5 + (crop.x || 0)) * slotW;
+                const imgCy = slotY + (0.5 + (crop.y || 0)) * slotH;
+                const drawX = imgCx - drawW / 2;
+                const drawY = imgCy - drawH / 2;
+                if (rotationDeg !== 0) {
+                    ctx.translate(imgCx, imgCy);
+                    ctx.rotate(rotationDeg * Math.PI / 180);
+                    ctx.translate(-imgCx, -imgCy);
+                }
                 ctx.drawImage(img, 0, 0, img.naturalWidth, img.naturalHeight, drawX, drawY, drawW, drawH);
             } else if (slot.fit === 'fit-height') {
                 const cropScale = crop.scale || 1;
                 const s = cropScale * slotH / img.naturalHeight;
                 const drawH = img.naturalHeight * s;
                 const drawW = img.naturalWidth * s;
-                const cx = 0.5 + (crop.x || 0);
-                const cy = 0.5 + (crop.y || 0);
-                const drawX = slotX + cx * slotW - drawW / 2;
-                const drawY = slotY + cy * slotH - drawH / 2;
+                const imgCx = slotX + (0.5 + (crop.x || 0)) * slotW;
+                const imgCy = slotY + (0.5 + (crop.y || 0)) * slotH;
+                const drawX = imgCx - drawW / 2;
+                const drawY = imgCy - drawH / 2;
+                if (rotationDeg !== 0) {
+                    ctx.translate(imgCx, imgCy);
+                    ctx.rotate(rotationDeg * Math.PI / 180);
+                    ctx.translate(-imgCx, -imgCy);
+                }
                 ctx.drawImage(img, 0, 0, img.naturalWidth, img.naturalHeight, drawX, drawY, drawW, drawH);
             } else {
                 const cropScale = crop.scale || 1;

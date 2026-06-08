@@ -134,7 +134,8 @@ function renderPageHTML(page, displayW, displayH, cropSlotIdx = -1) {
                             position:absolute;
                             width:${100 * scale}%; height:auto;
                             left:${50 + cropX}%; top:${50 + cropY}%;
-                            transform:translate(-50%,-50%);
+                            transform:translate(-50%,-50%) rotate(${rotation}deg);
+                            transform-origin:center;
                             display:block; pointer-events:none;">
                     </div>
                     <button class="slot-clear-btn" data-slot-idx="${idx}" title="移除照片">×</button>
@@ -147,7 +148,8 @@ function renderPageHTML(page, displayW, displayH, cropSlotIdx = -1) {
                             position:absolute;
                             width:auto; height:${100 * scale}%;
                             left:${50 + cropX}%; top:${50 + cropY}%;
-                            transform:translate(-50%,-50%);
+                            transform:translate(-50%,-50%) rotate(${rotation}deg);
+                            transform-origin:center;
                             display:block; pointer-events:none;">
                     </div>
                     <button class="slot-clear-btn" data-slot-idx="${idx}" title="移除照片">×</button>
@@ -175,11 +177,14 @@ function renderPageHTML(page, displayW, displayH, cropSlotIdx = -1) {
             innerHTML += `<div class="slot-rc-hint">右鍵</div>`;
         }
 
+        const slotRotStyle = (fitMode === 'fit-width' || fitMode === 'fit-height')
+            ? ''
+            : `transform:rotate(${rotation}deg); transform-origin:center center;`;
         return `
             <div class="page-slot ${slot.photoId ? 'has-photo' : 'empty'} ${isCropActive ? 'crop-active' : ''}"
                  data-slot-idx="${idx}"
                  data-slot-w="${sw}" data-slot-h="${sh}"
-                 style="position:absolute; left:${sx}%; top:${sy}%; width:${sw}%; height:${sh}%; box-sizing:border-box; z-index:2; transform:rotate(${rotation}deg); transform-origin:center center;">
+                 style="position:absolute; left:${sx}%; top:${sy}%; width:${sw}%; height:${sh}%; box-sizing:border-box; z-index:2; ${slotRotStyle}">
                 ${innerHTML}
             </div>
         `;

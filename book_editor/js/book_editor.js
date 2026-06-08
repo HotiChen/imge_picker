@@ -460,22 +460,30 @@ class BookEditor {
         const slotEl = document.querySelector(`[data-slot-idx="${slotIdx}"]`);
         if (!slotEl) return;
         const rotation = crop.rotation || 0;
-        slotEl.style.transform = `rotate(${rotation}deg)`;
-        if (fitMode === 'contain') return;
+        if (fitMode === 'contain') {
+            slotEl.style.transform = `rotate(${rotation}deg)`;
+            return;
+        }
         const scale = crop.scale || 1;
         const cropX = (crop.x || 0) * 100;
         const cropY = (crop.y || 0) * 100;
         const img = slotEl.querySelector('.slot-crop-wrapper img');
         if (img) {
             if (fitMode === 'fit-width') {
+                slotEl.style.transform = '';
                 img.style.width = `${100 * scale}%`;
                 img.style.height = 'auto';
+                img.style.transform = `translate(-50%,-50%) rotate(${rotation}deg)`;
             } else if (fitMode === 'fit-height') {
+                slotEl.style.transform = '';
                 img.style.width = 'auto';
                 img.style.height = `${100 * scale}%`;
+                img.style.transform = `translate(-50%,-50%) rotate(${rotation}deg)`;
             } else {
+                slotEl.style.transform = `rotate(${rotation}deg)`;
                 img.style.width = `${100 * scale}%`;
                 img.style.height = `${100 * scale}%`;
+                // rotation is on slotEl; img keeps its HTML-set translate(-50%,-50%)
             }
             img.style.left = `${50 + cropX}%`;
             img.style.top = `${50 + cropY}%`;
