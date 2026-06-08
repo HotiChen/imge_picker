@@ -986,11 +986,11 @@ class App {
             const node = this._findTreeNode(row.dataset.path, this.folderTreeRoot);
             if (!node) return;
             e.stopPropagation();
-            if (e.target.classList.contains('tree-toggle')) {
+            if (e.target.closest('.tree-toggle')) {
                 await this._fetchNodeChildren(node);
                 node.isExpanded = !node.isExpanded;
                 this._renderFolderTree();
-            } else if (e.target.classList.contains('tree-label')) {
+            } else if (e.target.closest('.tree-label')) {
                 this.navigateToFolder(node.path);
             }
         };
