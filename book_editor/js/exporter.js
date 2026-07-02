@@ -24,7 +24,7 @@ const BookExporter = {
             try {
                 const jpeg = await this._renderPage(page, settings);
                 const typeLabel = { cover: 'cover', inner: `page_${String(i).padStart(3, '0')}`, 'back-cover': 'back' }[page.type] || `page_${i}`;
-                zip.file(`${typeLabel}.jpg`, jpeg.split(',')[1], { base64: true });
+                zip.file(`${typeLabel}.jpg`, this._jpegWithDpi(jpeg, settings.dpi || 300));
             } catch (e) {
                 errors.push(`頁面 ${i + 1}: ${e.message}`);
             }
@@ -55,8 +55,18 @@ const BookExporter = {
      */
     async _renderPage(page, settings) {
         const dpi = settings.dpi || 300;
+
+        if (!settings?.width || !settings?.height) {
+            throw new Error('匯出設定缺少尺寸資料，請檢查相本設定');
+        }
+
         const pxW = Math.round(settings.width * dpi / 2.54);
         const pxH = Math.round(settings.height * dpi / 2.54);
+
+        const MAX_CANVAS_PX = 16383;
+        if (pxW >= MAX_CANVAS_PX || pxH >= MAX_CANVAS_PX) {
+            throw new Error(`尺寸超過瀏覽器限制 (${pxW}×${pxH}px)，請降低 DPI 或縮小尺寸`);
+        }
 
         const canvas = document.createElement('canvas');
         canvas.width = pxW;
@@ -77,7 +87,15 @@ const BookExporter = {
                 ctx.globalAlpha = opacity;
                 if (fit === 'repeat') {
                     const pattern = ctx.createPattern(bgImg, 'repeat');
-                    if (pattern) { ctx.fillStyle = pattern; ctx.fillRect(0, 0, pxW, pxH); }
+                    if (pattern) {
+                        if (bgImg.naturalWidth > 0) {
+                            const tilePx = (page.bgImage.repeatSize || 10) / 100 * pxW;
+                            const sc = tilePx / bgImg.naturalWidth;
+                            try { pattern.setTransform(new DOMMatrix([sc, 0, 0, sc, 0, 0])); } catch (_) {}
+                        }
+                        ctx.fillStyle = pattern;
+                        ctx.fillRect(0, 0, pxW, pxH);
+                    }
                 } else if (fit === 'contain') {
                     const s = Math.min(pxW / bgImg.naturalWidth, pxH / bgImg.naturalHeight);
                     const dw = bgImg.naturalWidth * s, dh = bgImg.naturalHeight * s;
@@ -145,7 +163,10 @@ const BookExporter = {
             ctx.clip();
 
             const rotationDeg = crop.rotation || 0;
-            if (rotationDeg !== 0) {
+            // cover/contain: rotate the whole slot around its center (matches DOM slot-level rotation)
+            // fit-width/fit-height: rotation is applied per-image around image center below
+            const useSlotRotation = slot.fit !== 'fit-width' && slot.fit !== 'fit-height';
+            if (rotationDeg !== 0 && useSlotRotation) {
                 const cx = slotX + slotW / 2;
                 const cy = slotY + slotH / 2;
                 ctx.translate(cx, cy);
@@ -161,18 +182,34 @@ const BookExporter = {
                 const drawY = slotY + (slotH - drawH) / 2;
                 ctx.drawImage(img, 0, 0, img.naturalWidth, img.naturalHeight, drawX, drawY, drawW, drawH);
             } else if (slot.fit === 'fit-width') {
-                const s = slotW / img.naturalWidth;
-                const drawW = slotW;
+                const cropScale = crop.scale || 1;
+                const s = cropScale * slotW / img.naturalWidth;
+                const drawW = img.naturalWidth * s;
                 const drawH = img.naturalHeight * s;
-                const drawX = slotX;
-                const drawY = slotY + (slotH - drawH) / 2;
+                const imgCx = slotX + (0.5 + (crop.x || 0)) * slotW;
+                const imgCy = slotY + (0.5 + (crop.y || 0)) * slotH;
+                const drawX = imgCx - drawW / 2;
+                const drawY = imgCy - drawH / 2;
+                if (rotationDeg !== 0) {
+                    ctx.translate(imgCx, imgCy);
+                    ctx.rotate(rotationDeg * Math.PI / 180);
+                    ctx.translate(-imgCx, -imgCy);
+                }
                 ctx.drawImage(img, 0, 0, img.naturalWidth, img.naturalHeight, drawX, drawY, drawW, drawH);
             } else if (slot.fit === 'fit-height') {
-                const s = slotH / img.naturalHeight;
-                const drawH = slotH;
+                const cropScale = crop.scale || 1;
+                const s = cropScale * slotH / img.naturalHeight;
+                const drawH = img.naturalHeight * s;
                 const drawW = img.naturalWidth * s;
-                const drawX = slotX + (slotW - drawW) / 2;
-                const drawY = slotY;
+                const imgCx = slotX + (0.5 + (crop.x || 0)) * slotW;
+                const imgCy = slotY + (0.5 + (crop.y || 0)) * slotH;
+                const drawX = imgCx - drawW / 2;
+                const drawY = imgCy - drawH / 2;
+                if (rotationDeg !== 0) {
+                    ctx.translate(imgCx, imgCy);
+                    ctx.rotate(rotationDeg * Math.PI / 180);
+                    ctx.translate(-imgCx, -imgCy);
+                }
                 ctx.drawImage(img, 0, 0, img.naturalWidth, img.naturalHeight, drawX, drawY, drawW, drawH);
             } else {
                 /**
@@ -247,5 +284,35 @@ const BookExporter = {
             img.onerror = () => reject(new Error(`無法載入: ${src}`));
             img.src = src;
         });
+    },
+
+    /**
+     * 將 canvas.toDataURL 產生的 JPEG 寫入真實 DPI 資訊。
+     * 瀏覽器輸出的 JPEG 沒有密度資訊（JFIF units=0），看圖軟體會預設當成 72 dpi，
+     * 導致「像素正確但公分數看起來放大 3~4 倍」。這裡直接改寫 JFIF APP0 的
+     * density 欄位（units=1 inch, X/Y density = dpi），像素資料完全不動。
+     * 回傳 Uint8Array 可直接交給 JSZip。
+     */
+    _jpegWithDpi(dataUrl, dpi) {
+        const b64 = dataUrl.split(',')[1];
+        const bin = atob(b64);
+        const bytes = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+
+        // SOI(FFD8) + APP0(FFE0) + len + "JFIF\0" + version + units + Xdensity + Ydensity
+        const isJfif = bytes[0] === 0xFF && bytes[1] === 0xD8 &&
+                       bytes[2] === 0xFF && bytes[3] === 0xE0 &&
+                       bytes[6] === 0x4A && bytes[7] === 0x46 &&   // 'J','F'
+                       bytes[8] === 0x49 && bytes[9] === 0x46 &&   // 'I','F'
+                       bytes[10] === 0x00;
+        if (isJfif) {
+            const d = Math.max(1, Math.min(65535, Math.round(dpi)));
+            bytes[13] = 1;                  // units: dots per inch
+            bytes[14] = (d >> 8) & 0xFF;    // Xdensity high byte
+            bytes[15] = d & 0xFF;           // Xdensity low byte
+            bytes[16] = (d >> 8) & 0xFF;    // Ydensity high byte
+            bytes[17] = d & 0xFF;           // Ydensity low byte
+        }
+        return bytes;
     }
 };

@@ -19,7 +19,8 @@
       // ── Client mode ──────────────────────────────────────────────────────
       applyClientRestrictions(clientSession);
     } else if (studioToken) {
-      // ── Admin mode: full access, auth.js already handled ─────────────────
+      // ── Admin mode: restore token to CONFIG (auth.js no longer loaded) ───
+      if (typeof CONFIG !== 'undefined') CONFIG.PHOTOGRAPHER_TOKEN = studioToken;
       return;
     } else {
       // ── No auth: show choice overlay ─────────────────────────────────────

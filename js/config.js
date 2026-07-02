@@ -11,6 +11,3 @@ const CONFIG = {
     }
 };
 
-const API_CONFIG = {
-    GAS_WEB_APP_URL: 'YOUR_GOOGLE_APPS_SCRIPT_URL'
-};

@@ -15,8 +15,6 @@
     <!-- Stylesheets -->
     <link rel="stylesheet" href="css/styles.css?v=2.2.1">
 
-    <!-- Google API (僅用於 Google Sheets 同步，R2 載圖不需登入) -->
-    <script src="https://apis.google.com/js/api.js"></script>
 </head>
 
 <body>
@@ -51,12 +49,6 @@
             <button id="submitJobBtn" class="btn btn-success" style="display: none;">✅ 完成挑圖</button>
             <a href="upload.html" class="btn btn-outline" id="uploadPageBtn">⬆ 上傳</a>
             <button id="openBookEditorBtn" class="btn btn-outline">📖 相本書</button>
-            <button id="signInBtn" class="btn btn-primary" style="display: none;">登入 Google</button>
-            <div id="userInfo" class="user-info" style="display: none;">
-                <img id="userPhoto" class="user-photo" src="" alt="User">
-                <span id="userName" class="user-name"></span>
-                <button id="signOutBtn" class="btn btn-text">登出</button>
-            </div>
             <div class="user-avatar-circle" id="userAvatarStudio">HC</div>
         </div>
     </header>
@@ -167,23 +159,14 @@
                 </div>
             </div>
 
-            <!-- 05 / SYNC -->
+            <!-- 05 / DATA -->
             <div id="syncSidebarSection" class="sidebar-section">
-                <div class="side-title">05 / SYNC</div>
-                <button id="saveCurrentFolderBtn" class="btn btn-primary btn-block">
-                    💾 儲存進度
-                </button>
-                <div class="advanced-tools">
-                    <details>
-                        <summary>進階功能</summary>
-                        <div style="display:flex; flex-direction:column; gap:6px; margin-top:10px;">
-                            <button id="loadFromSheetsBtn" class="btn btn-secondary btn-block">讀取雲端備份</button>
-                            <button id="backupDataBtn" class="btn btn-secondary btn-block">匯出備份 JSON</button>
-                            <button id="resetCurrentDataBtn" class="btn btn-outline btn-block"
-                                style="color:var(--reject); border-color:var(--reject);">🗑️ 重設此資料夾</button>
-                            <button id="resetAllDataBtn" class="btn btn-danger btn-block">⚠️ 清除所有快取</button>
-                        </div>
-                    </details>
+                <div class="side-title">05 / DATA</div>
+                <div style="display:flex; flex-direction:column; gap:6px;">
+                    <button id="backupDataBtn" class="btn btn-secondary btn-block">匯出備份 JSON</button>
+                    <button id="resetCurrentDataBtn" class="btn btn-outline btn-block"
+                        style="color:var(--reject); border-color:var(--reject);">🗑️ 重設此資料夾</button>
+                    <button id="resetAllDataBtn" class="btn btn-danger btn-block">⚠️ 清除所有快取</button>
                 </div>
             </div>
 
@@ -509,62 +492,6 @@
         </div>
     </div>
 
-    <!-- Sync Progress Modal -->
-    <div id="syncModal" class="modal">
-        <div class="modal-overlay"></div>
-        <div class="modal-content" style="max-width: 500px;">
-            <div class="modal-header">
-                <h3>同步專案到 Google Sheets</h3>
-            </div>
-            <div class="modal-body">
-                <div id="syncWarning">
-                    <p style="margin-bottom: 20px;">這將會掃描整個專案（包含所有子目錄）並同步相片標注到 Google Sheets。如果資料夾很多，這可能需要一點時間。</p>
-                    <div class="flex-center">
-                        <button id="startSyncBtn" class="btn btn-primary">開始同步</button>
-                        <button id="cancelSyncBtn" class="btn btn-secondary" style="margin-left: 10px;">取消</button>
-                    </div>
-                </div>
-
-                <div id="syncProgressArea" style="display: none; margin-top: 10px;">
-                    <div class="progress-container">
-                        <div id="syncProgressBar" class="progress-bar" style="width: 0%;"></div>
-                    </div>
-                    <p id="syncStatusText" style="margin-top: 15px; text-align: center; color: var(--text-secondary);">
-                    </p>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- Data Discovery Modal -->
-    <div id="discoveryModal" class="modal">
-        <div class="modal-overlay"></div>
-        <div class="modal-content discovery-content">
-            <div class="discovery-header">
-                <div class="discovery-icon">
-                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#f38020" stroke-width="2"
-                        stroke-linecap="round" stroke-linejoin="round">
-                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3" />
-                    </svg>
-                </div>
-                <div class="discovery-text">
-                    <h3>發現雲端紀錄</h3>
-                    <p>
-                        此資料夾已有評分進度，是否還原？
-                    </p>
-                </div>
-            </div>
-
-            <div class="discovery-actions">
-                <button id="importCloudBtn" class="btn btn-primary btn-discovery">
-                    還原進度 (Restore)
-                </button>
-                <button id="skipCloudBtn" class="btn btn-outline btn-discovery-alt">
-                    從新開始
-                </button>
-            </div>
-        </div>
-    </div>
 
     <!-- Toast Container -->
     <div id="toastContainer" class="toast-container"></div>
@@ -579,15 +506,15 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 
     <!-- Scripts -->
-    <script src="js/config.js?v=2.2.1"></script>
-    <script src="js/auth.js"></script>
-    <script src="js/toast.js?v=2.2.1"></script>
-    <script src="js/logger.js?v=2.2.1"></script>
-    <script src="js/diagnostics.js?v=2.2.1"></script>
-    <script src="js/drive.js?v=2.2.1"></script>
-    <script src="js/annotation.js?v=2.2.1"></script>
-    <script src="js/rating.js?v=2.2.1"></script>
-    <script src="js/app.js?v=2.2.1"></script>
+    <script src="js/config.js?v=2.2.2"></script>
+    <script src="js/client-auth-check.js?v=2.2.2"></script>
+    <script src="js/toast.js?v=2.2.2"></script>
+    <script src="js/logger.js?v=2.2.2"></script>
+    <script src="js/diagnostics.js?v=2.2.2"></script>
+    <script src="js/drive.js?v=2.2.2"></script>
+    <script src="js/annotation.js?v=2.2.2"></script>
+    <script src="js/rating.js?v=2.2.2"></script>
+    <script src="js/app.js?v=2.2.2"></script>
 </body>
 
 </html>

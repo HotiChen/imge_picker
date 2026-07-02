@@ -8,7 +8,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;700&family=Noto+Serif+TC:wght@400;700&family=Playfair+Display:ital,wght@0,400;0,700;1,400&family=Cormorant+Garamond:ital,wght@0,400;0,700;1,400&family=Dancing+Script:wght@400;700&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
-    <link rel="stylesheet" href="css/book_editor.css?v=20260605-3">
+    <link rel="stylesheet" href="css/book_editor.css?v=20260702">
 </head>
 <body>
 <div class="app-container">
@@ -253,6 +253,11 @@
                     <button class="btn btn-secondary bg-fit-btn" data-fit="contain" style="flex:1;padding:3px 0;font-size:0.7rem;">完整</button>
                     <button class="btn btn-secondary bg-fit-btn" data-fit="repeat" style="flex:1;padding:3px 0;font-size:0.7rem;">重複</button>
                 </div>
+                <div id="bgRepeatSizeRow" style="display:none;margin-top:6px;align-items:center;gap:8px;">
+                    <label style="font-size:0.7rem;color:var(--text-muted);white-space:nowrap;min-width:32px;">大小</label>
+                    <input type="range" id="bgRepeatSizeSlider" min="5" max="50" step="5" value="10" style="flex:1;accent-color:var(--primary);">
+                    <span id="bgRepeatSizeVal" style="font-size:0.7rem;color:var(--text-muted);min-width:28px;text-align:right;">10%</span>
+                </div>
             </div>
 
             <!-- Text Layers -->
@@ -467,11 +472,11 @@
 <script src="../js/toast.js"></script>
 <script src="../js/drive.js"></script>
 <!-- Book Editor -->
-<script src="js/layouts.js?v=20260605-2"></script>
+<script src="js/layouts.js?v=20260702"></script>
 <script src="js/auto_layout.js?v=20260603"></script>
-<script src="js/exporter.js?v=20260605-1"></script>
+<script src="js/exporter.js?v=20260702"></script>
 <script src="js/layout_editor.js?v=20260603"></script>
 <script src="js/tour.js?v=20260603"></script>
-<script src="js/book_editor.js?v=20260605-3"></script>
+<script src="js/book_editor.js?v=20260702"></script>
 </body>
 </html>

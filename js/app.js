@@ -111,11 +111,6 @@ class App {
                 } else {
                     this._syncTreeToPath(normalizedPath, subFolders);
                 }
-
-                const hasCloudData = await driveManager.checkIfDataExistsOnCloud();
-                if (hasCloudData) {
-                    document.getElementById('discoveryModal').classList.add('active');
-                }
             }
         } finally {
             this.hideLoading();
@@ -330,34 +325,13 @@ class App {
             });
         });
 
-        // 儲存到 Google Sheets (GAS)
-        this.addListener('saveCurrentFolderBtn', 'click', () => {
-            driveManager.saveToGAS();
-        });
-
-        // 從 Google Sheets 同步
-        this.addListener('loadFromSheetsBtn', 'click', () => {
-            driveManager.loadFromGAS();
-        });
-
-        // 偵測雲端資料後的決策
-        this.addListener('importCloudBtn', 'click', async () => {
-            document.getElementById('discoveryModal').classList.remove('active');
-            await driveManager.loadFromGAS();
-        });
-
-        this.addListener('skipCloudBtn', 'click', () => {
-            document.getElementById('discoveryModal').classList.remove('active');
-            toast.info('已跳過雲端載入，使用本地/全新資料');
-        });
-
         // 備份與清理
         this.addListener('backupDataBtn', 'click', () => {
             driveManager.backupData();
         });
 
         this.addListener('resetAllDataBtn', 'click', () => {
-            if (confirm('確定要清除所有本地快取資料嗎？這將會刪除所有尚未同步到 Google Sheets 的評分與標注。')) {
+            if (confirm('確定要清除所有本地快取資料嗎？')) {
                 localStorage.clear();
                 window.location.reload();
             }
@@ -665,13 +639,6 @@ class App {
         if (confirm(msg)) {
             this.showLoading('正在彙整您挑選的結果並通知攝影師...');
             try {
-                // 強制執行一次存檔 (GAS 同步)
-                if (API_CONFIG.GAS_WEB_APP_URL) {
-                    await driveManager.saveToGAS(true);
-
-                    // [New] 觸發後端 Email 通知攝影師程序
-                    driveManager.notifyPhotographer(this.selectedPhotoIds, stats);
-                }
                 setTimeout(() => {
                     this.hideLoading();
                     toast.success('大功告成！已將挑圖結果送出。');
@@ -897,8 +864,7 @@ class App {
         this.autoSaveInterval = setInterval(async () => {
             // 只有當有照片載入且有資料夾時才執行
             if (this.photos.length > 0 && driveManager.currentFolderId) {
-                console.log('%c[System] 執行定時自動備份...', 'color: #667eea; font-weight: bold;');
-                await driveManager.saveToGAS(true); // true 表示為靜默存檔
+                console.log('%c[System] 自動備份 tick（localStorage 已即時同步）', 'color: #667eea; font-weight: bold;');
             }
         }, FIVE_MINUTES);
 
