@@ -24,7 +24,7 @@ const BookExporter = {
             try {
                 const jpeg = await this._renderPage(page, settings);
                 const typeLabel = { cover: 'cover', inner: `page_${String(i).padStart(3, '0')}`, 'back-cover': 'back' }[page.type] || `page_${i}`;
-                zip.file(`${typeLabel}.jpg`, jpeg.split(',')[1], { base64: true });
+                zip.file(`${typeLabel}.jpg`, this._jpegWithDpi(jpeg, settings.dpi || 300));
             } catch (e) {
                 errors.push(`頁面 ${i + 1}: ${e.message}`);
             }
@@ -255,5 +255,35 @@ const BookExporter = {
             img.onerror = () => reject(new Error(`無法載入: ${src}`));
             img.src = src;
         });
+    },
+
+    /**
+     * 將 canvas.toDataURL 產生的 JPEG 寫入真實 DPI 資訊。
+     * 瀏覽器輸出的 JPEG 沒有密度資訊（JFIF units=0），看圖軟體會預設當成 72 dpi，
+     * 導致「像素正確但公分數看起來放大 3~4 倍」。這裡直接改寫 JFIF APP0 的
+     * density 欄位（units=1 inch, X/Y density = dpi），像素資料完全不動。
+     * 回傳 Uint8Array 可直接交給 JSZip。
+     */
+    _jpegWithDpi(dataUrl, dpi) {
+        const b64 = dataUrl.split(',')[1];
+        const bin = atob(b64);
+        const bytes = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+
+        // SOI(FFD8) + APP0(FFE0) + len + "JFIF\0" + version + units + Xdensity + Ydensity
+        const isJfif = bytes[0] === 0xFF && bytes[1] === 0xD8 &&
+                       bytes[2] === 0xFF && bytes[3] === 0xE0 &&
+                       bytes[6] === 0x4A && bytes[7] === 0x46 &&   // 'J','F'
+                       bytes[8] === 0x49 && bytes[9] === 0x46 &&   // 'I','F'
+                       bytes[10] === 0x00;
+        if (isJfif) {
+            const d = Math.max(1, Math.min(65535, Math.round(dpi)));
+            bytes[13] = 1;                  // units: dots per inch
+            bytes[14] = (d >> 8) & 0xFF;    // Xdensity high byte
+            bytes[15] = d & 0xFF;           // Xdensity low byte
+            bytes[16] = (d >> 8) & 0xFF;    // Ydensity high byte
+            bytes[17] = d & 0xFF;           // Ydensity low byte
+        }
+        return bytes;
     }
 };
