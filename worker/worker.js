@@ -74,6 +74,13 @@ export default {
     // AUTH ROUTES
     // ═══════════════════════════════════════════════════════════════════════
 
+    // GET /api/auth/verify-admin — check if PHOTOGRAPHER_TOKEN matches
+    if (request.method === 'GET' && url.pathname === '/api/auth/verify-admin') {
+      if (!env.PHOTOGRAPHER_TOKEN) return jsonOk({ ok: true });
+      if (isAdminToken(request, env)) return jsonOk({ ok: true });
+      return jsonErr('Token 不正確', 401);
+    }
+
     // POST /api/auth/register
     if (request.method === 'POST' && url.pathname === '/api/auth/register') {
       if (!env.DB) return jsonErr('DB not configured', 500);

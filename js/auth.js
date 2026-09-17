@@ -34,22 +34,38 @@
         const btn = document.getElementById('auth-btn');
         const err = document.getElementById('auth-err');
 
-        function tryLogin() {
+        async function tryLogin() {
             const val = input.value.trim();
-            if (!val) return;
+            if (!val) { showError('請輸入密碼'); return; }
+            btn.disabled = true;
+            btn.textContent = '驗證中…';
+            try {
+                const workerBase = (typeof CONFIG !== 'undefined' && CONFIG.WORKER_URL) || 'https://imagepicker.hotichen.workers.dev';
+                const res = await fetch(`${workerBase}/api/auth/verify-admin`, {
+                    headers: { 'Authorization': `Bearer ${val}` }
+                });
+                if (!res.ok) {
+                    showError('密碼不正確，請重試');
+                    btn.disabled = false;
+                    btn.textContent = '進入';
+                    return;
+                }
+            } catch (e) {
+                // network error — let them in anyway
+            }
             sessionStorage.setItem(STORAGE_KEY, val);
             CONFIG.PHOTOGRAPHER_TOKEN = val;
             overlay.remove();
         }
 
-        function showError() {
-            err.textContent = '請輸入密碼';
+        function showError(msg) {
+            err.textContent = msg || '請輸入密碼';
             input.style.borderColor = '#e05c5c';
             setTimeout(() => { input.style.borderColor = '#3a3528'; err.textContent = ''; }, 2000);
         }
 
-        btn.addEventListener('click', () => { input.value.trim() ? tryLogin() : showError(); });
-        input.addEventListener('keydown', e => { if (e.key === 'Enter') btn.click(); });
+        btn.addEventListener('click', () => tryLogin());
+        input.addEventListener('keydown', e => { if (e.key === 'Enter') tryLogin(); });
         setTimeout(() => input.focus(), 50);
     }
 
