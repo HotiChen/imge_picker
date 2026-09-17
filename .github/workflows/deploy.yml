@@ -34,3 +34,13 @@ jobs:
             . /public_html/studio/
           bye
           LFTP_SCRIPT
+
+      - name: Deploy Cloudflare Worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+        run: |
+          cd worker
+          # Replace placeholder with actual D1 database ID from secret
+          sed -i "s/REPLACE_WITH_YOUR_D1_DATABASE_ID/${{ secrets.D1_DATABASE_ID }}/" wrangler.toml
+          npx wrangler@latest deploy --no-bundle
