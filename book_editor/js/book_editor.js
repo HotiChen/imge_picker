@@ -1094,7 +1094,7 @@ class BookEditor {
         }
         const area = document.getElementById('pagePreviewArea');
         const canvas = area?.querySelector('.page-canvas');
-        const displayW = canvas?.clientWidth || 600;
+        const displayW = canvas?.getBoundingClientRect().width || canvas?.clientWidth || 600;
         const fontSize = Math.max(8, Math.round(layer.size / 100 * displayW));
         el.style.left = `${layer.x}%`;
         el.style.top = `${layer.y}%`;

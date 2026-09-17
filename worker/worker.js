@@ -222,7 +222,7 @@ export default {
         const obj = await env.imagepicker.get(`_books/${bookId}.json`);
         if (!obj) return new Response('Not found', { status: 404, headers: corsHeaders });
         return new Response(await obj.text(), {
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+          headers: { ...corsHeaders, 'Content-Type': 'application/json', 'Cache-Control': 'no-cache' }
         });
       }
 
