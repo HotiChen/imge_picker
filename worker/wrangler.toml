@@ -9,7 +9,7 @@ bucket_name = "imagepicker"
 [[d1_databases]]
 binding = "DB"
 database_name = "imagepicker-db"
-database_id = "REPLACE_WITH_YOUR_D1_DATABASE_ID"
+database_id = "1176e663-7f85-498a-b16d-a22ec9aaeacc"
 
 # 部署後在 Cloudflare Dashboard 設定 Secret：
 # PHOTOGRAPHER_TOKEN = "你的秘密 token"
