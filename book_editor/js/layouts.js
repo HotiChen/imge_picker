@@ -231,7 +231,7 @@ function renderPageThumbnailHTML(page) {
         const src = _thumbUrl(page.bgImage.photoId, 240);
         const fit = page.bgImage.fit || 'cover';
         const opacity = page.bgImage.opacity ?? 1;
-        bgThumbHTML = `<div style="position:absolute;inset:0;opacity:${opacity};pointer-events:none;overflow:hidden;z-index:0;"><img src="${src}" style="width:100%;height:100%;object-fit:${fit};display:block;"></div>`;
+        bgThumbHTML = `<div style="position:absolute;inset:0;opacity:${opacity};pointer-events:none;overflow:hidden;z-index:0;"><img src="${src}" loading="lazy" decoding="async" style="width:100%;height:100%;object-fit:${fit};display:block;"></div>`;
     }
 
     const slotsArray = Array.isArray(page.slots) ? page.slots : [];
@@ -254,7 +254,7 @@ function renderPageThumbnailHTML(page) {
         return `
             <div style="position:absolute;left:${tsx}%;top:${tsy}%;width:${tsw}%;height:${tsh}%;overflow:hidden;box-sizing:border-box;z-index:2;${tsRotStyle}">
                 <div style="position:absolute;overflow:hidden;width:${100*scale}%;height:${100*scale}%;top:50%;left:50%;transform:translate(calc(-50% + ${cropX / scale}%), calc(-50% + ${cropY / scale}%)) rotate(${rotation}deg);">
-                    <img src="${src}" style="width:100%;height:100%;object-fit:cover;object-position:50% 50%;display:block;">
+                    <img src="${src}" loading="lazy" decoding="async" style="width:100%;height:100%;object-fit:cover;object-position:50% 50%;display:block;">
                 </div>
             </div>
         `;

@@ -14,9 +14,13 @@ class DriveManager {
         return Promise.resolve();
     }
 
-    getImageUrl(photo) {
+    // width: pixel width the image will actually be displayed at. The Worker
+    // maps it onto a pre-generated thumbnail; omit it only when the full
+    // original is genuinely needed (export, print, download).
+    getImageUrl(photo, width) {
         if (!photo || !photo.id) return '';
-        return `${CONFIG.WORKER_URL}/${photo.id}`;
+        const base = `${CONFIG.WORKER_URL}/${photo.id}`;
+        return width ? `${base}?w=${width}` : base;
     }
 
     // 載入資料庫中的照片清單
@@ -52,7 +56,7 @@ class DriveManager {
                         name: file.name,
                         size: file.size,
                         uploaded: file.uploaded,
-                        thumbnailLink: this.getImageUrl({ id: file.id }),
+                        thumbnailLink: this.getImageUrl({ id: file.id }, 400),
                         rating: 0,
                         note: '',
                         annotations: [],
@@ -109,11 +113,20 @@ class DriveManager {
     }
 
     saveRating(photoId, rating) {
+        this.saveRatings([photoId], rating);
+    }
+
+    // One parse + one stringify + one blocking localStorage write for the whole
+    // batch, instead of one per photo.
+    saveRatings(photoIds, rating) {
         const ratings = JSON.parse(localStorage.getItem(CONFIG.STORAGE_KEYS.RATINGS) || '{}');
-        ratings[photoId] = rating;
+        const byId = new Map(this.photos.map(p => [p.id, p]));
+        for (const photoId of photoIds) {
+            ratings[photoId] = rating;
+            const photo = byId.get(photoId);
+            if (photo) photo.rating = rating;
+        }
         localStorage.setItem(CONFIG.STORAGE_KEYS.RATINGS, JSON.stringify(ratings));
-        const photo = this.photos.find(p => p.id === photoId);
-        if (photo) photo.rating = rating;
     }
 
     saveNote(photoId, note) {

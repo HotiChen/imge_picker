@@ -333,7 +333,13 @@ const Viewer = {
             if (e.key === 'ArrowLeft') document.getElementById('prevBtn').click();
             if (e.key === 'ArrowRight') document.getElementById('nextBtn').click();
         });
-        window.addEventListener('resize', () => this.renderPage());
+        // renderPage() replaces the whole canvas and re-creates every <img>;
+        // a window drag would otherwise fire it dozens of times
+        let resizeTimer;
+        window.addEventListener('resize', () => {
+            clearTimeout(resizeTimer);
+            resizeTimer = setTimeout(() => this.renderPage(), 200);
+        });
     },
 
     // ─── 工具 ────────────────────────────────

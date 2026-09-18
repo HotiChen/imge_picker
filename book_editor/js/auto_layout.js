@@ -25,7 +25,8 @@ const AutoLayout = {
                 resolve({ ...photo, orientation: orient });
             };
             img.onerror = () => resolve({ ...photo, orientation: 'landscape' });
-            img.src = driveManager.getImageUrl(photo);
+            // only the aspect ratio is needed here — never the original
+            img.src = driveManager.getImageUrl(photo, 400);
         });
     },
 

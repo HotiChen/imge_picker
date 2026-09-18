@@ -15,19 +15,24 @@ const BookExporter = {
         const zip = new JSZip();
         const errors = [];
 
-        for (let i = 0; i < book.pages.length; i++) {
-            const page = book.pages[i];
-            const settings = page.type === 'inner'
-                ? book.settings
-                : (book.coverSettings || book.settings);
+        try {
+            for (let i = 0; i < book.pages.length; i++) {
+                const page = book.pages[i];
+                const settings = page.type === 'inner'
+                    ? book.settings
+                    : (book.coverSettings || book.settings);
 
-            try {
-                const jpeg = await this._renderPage(page, settings);
-                const typeLabel = { cover: 'cover', inner: `page_${String(i).padStart(3, '0')}`, 'back-cover': 'back' }[page.type] || `page_${i}`;
-                zip.file(`${typeLabel}.jpg`, this._jpegWithDpi(jpeg, settings.dpi || 300));
-            } catch (e) {
-                errors.push(`頁面 ${i + 1}: ${e.message}`);
+                try {
+                    const jpeg = await this._renderPage(page, settings);
+                    const typeLabel = { cover: 'cover', inner: `page_${String(i).padStart(3, '0')}`, 'back-cover': 'back' }[page.type] || `page_${i}`;
+                    zip.file(`${typeLabel}.jpg`, this._jpegWithDpi(jpeg, settings.dpi || 300));
+                } catch (e) {
+                    errors.push(`頁面 ${i + 1}: ${e.message}`);
+                }
             }
+        } finally {
+            // full-resolution decodes — don't hold them past the export
+            this._clearImageCache();
         }
 
         if (errors.length > 0) {
@@ -276,14 +281,28 @@ const BookExporter = {
         }
     },
 
+    // A photo reused across pages (a cover also used inside, a repeated
+    // background) would otherwise be downloaded again for every page it
+    // appears on — at full print resolution.
+    _imageCache: new Map(),
+
     _loadImage(src) {
-        return new Promise((resolve, reject) => {
+        const cached = this._imageCache.get(src);
+        if (cached) return cached;
+        const promise = new Promise((resolve, reject) => {
             const img = new Image();
             img.crossOrigin = 'anonymous';
             img.onload = () => resolve(img);
             img.onerror = () => reject(new Error(`無法載入: ${src}`));
             img.src = src;
         });
+        promise.catch(() => this._imageCache.delete(src));
+        this._imageCache.set(src, promise);
+        return promise;
+    },
+
+    _clearImageCache() {
+        this._imageCache.clear();
     },
 
     /**

@@ -5,6 +5,24 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': '*'
 };
 
+// ─── Thumbnail helpers ───────────────────────────────────────────────────────
+// Thumbnails are generated in the browser at upload time and stored alongside
+// the original as `_thumbs/<bucket>/<key>.thumb`. Serving falls back to the
+// original whenever a variant is missing, so pre-thumbnail uploads still work.
+const THUMB_PREFIX = '_thumbs/';
+const THUMB_BUCKETS = [400, 1600];
+
+function thumbBucket(width) {
+  return THUMB_BUCKETS.find(b => width <= b) || THUMB_BUCKETS[THUMB_BUCKETS.length - 1];
+}
+
+function preconditionStatus(request) {
+  const hasNoneMatch = request.headers.has('If-None-Match');
+  const hasModifiedSince = request.headers.has('If-Modified-Since');
+  // a failed If-None-Match / If-Modified-Since means "unchanged" → 304
+  return hasNoneMatch || hasModifiedSince ? 304 : 412;
+}
+
 // ─── Password helpers ────────────────────────────────────────────────────────
 async function hashPassword(password) {
   const salt = crypto.randomUUID().replace(/-/g, '');
@@ -62,7 +80,7 @@ function jsonErr(msg, status = 400) {
 }
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
     const params = url.searchParams;
 
@@ -297,7 +315,7 @@ export default {
           try {
             const book = JSON.parse(await bookObj.text());
             if (book.notifyUrl) {
-              await fetch(book.notifyUrl, {
+              const notify = fetch(book.notifyUrl, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -307,7 +325,9 @@ export default {
                   timestamp: status.timestamp,
                   message: `📸 客人已批准相本「${book.name || '相本'}」！`
                 })
-              });
+              }).catch(() => {});
+              // don't make the client wait on a third-party server
+              if (ctx?.waitUntil) ctx.waitUntil(notify); else await notify;
             }
           } catch (e) { /* ignore notify errors */ }
         }
@@ -337,11 +357,30 @@ export default {
     const listPrefix = params.get('list');
     if (listPrefix !== null) {
       try {
-        const listed = await env.imagepicker.list({ prefix: listPrefix, delimiter: '/' });
-        const files = listed.objects
+        // R2 list() caps at 1000 per call — follow the cursor or folders with
+        // more than 1000 photos silently lose everything past the first page
+        const objects = [];
+        const prefixes = [];
+        let cursor;
+        let truncated = true;
+        while (truncated) {
+          const listed = await env.imagepicker.list({
+            prefix: listPrefix, delimiter: '/', cursor
+          });
+          objects.push(...listed.objects);
+          prefixes.push(...(listed.delimitedPrefixes || []));
+          cursor = listed.cursor;
+          truncated = listed.truncated;
+        }
+
+        const files = objects
           .filter(obj => /\.(jpg|jpeg|png|webp|avif)$/i.test(obj.key))
           .map(obj => ({ id: obj.key, name: obj.key.split('/').pop(), size: obj.size, uploaded: obj.uploaded }));
-        const folders = listed.delimitedPrefixes || [];
+        // hide internal folders (_thumbs/, _books/) from the folder picker
+        const folders = prefixes.filter(p => {
+          const name = p.split('/').filter(Boolean).pop() || '';
+          return !name.startsWith('_');
+        });
         return jsonOk({ status: 'success', data: files, folders });
       } catch (e) {
         return jsonErr(e.message, 500);
@@ -351,14 +390,47 @@ export default {
     // GET object by key
     const key = decodeURIComponent(url.pathname.slice(1));
     if (key) {
-      const object = await env.imagepicker.get(key);
-      if (!object) return new Response('Object Not Found', { status: 404, headers: corsHeaders });
-      const headers = new Headers();
-      object.writeHttpMetadata(headers);
-      headers.set('etag', object.httpEtag);
-      headers.set('Access-Control-Allow-Origin', '*');
-      headers.set('Cache-Control', 'public, max-age=31536000');
-      return new Response(object.body, { headers });
+      // ?w=N serves a pre-generated thumbnail (written at upload time) when one
+      // exists, falling back to the original so old uploads keep working.
+      const wanted = parseInt(params.get('w'), 10);
+      const candidates = [];
+      if (Number.isFinite(wanted) && wanted > 0 && !key.startsWith(THUMB_PREFIX)) {
+        candidates.push(`${THUMB_PREFIX}${thumbBucket(wanted)}/${key}.thumb`);
+      }
+      candidates.push(key);
+
+      for (const candidate of candidates) {
+        const isLast = candidate === candidates[candidates.length - 1];
+        const object = await env.imagepicker.get(candidate, {
+          onlyIf: request.headers,
+          range: request.headers
+        });
+        if (!object) {
+          if (isLast) return new Response('Object Not Found', { status: 404, headers: corsHeaders });
+          continue; // no thumbnail for this key yet — fall back to the original
+        }
+
+        const headers = new Headers();
+        object.writeHttpMetadata(headers);
+        headers.set('etag', object.httpEtag);
+        headers.set('Access-Control-Allow-Origin', '*');
+        headers.set('Accept-Ranges', 'bytes');
+        // a re-upload reuses the same key, so revalidate rather than pin for a
+        // year; the conditional GET below makes revalidation a cheap 304
+        headers.set('Cache-Control', 'public, max-age=86400, stale-while-revalidate=604800');
+
+        // onlyIf failed the precondition → R2 returns metadata with no body
+        if (!('body' in object)) {
+          return new Response(null, { status: preconditionStatus(request), headers });
+        }
+        if (object.range && typeof object.range.offset === 'number') {
+          const start = object.range.offset;
+          const end = start + object.range.length - 1;
+          headers.set('Content-Range', `bytes ${start}-${end}/${object.size}`);
+          return new Response(object.body, { status: 206, headers });
+        }
+        return new Response(object.body, { headers });
+      }
     }
 
     return new Response('Invalid Request', { status: 400, headers: corsHeaders });

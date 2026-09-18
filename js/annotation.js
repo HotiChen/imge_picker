@@ -104,7 +104,7 @@ class AnnotationManager {
             };
 
             // R2 直接使用 URL，不需 Auth Header
-            img.src = driveManager.getImageUrl(photo);
+            img.src = driveManager.getImageUrl(photo, 1600);
         });
     }
 
@@ -317,7 +317,21 @@ class AnnotationManager {
     }
 
     // 繪圖中
+    // mousemove fires far faster than the screen refreshes, and every call here
+    // re-blits the full-resolution bitmap. Coalesce to one redraw per frame;
+    // the pan/move deltas below are cumulative, so skipped events aren't lost.
     draw(e) {
+        this._pendingEvent = e;
+        if (this._drawScheduled) return;
+        this._drawScheduled = true;
+        requestAnimationFrame(() => {
+            this._drawScheduled = false;
+            const ev = this._pendingEvent;
+            if (ev) this._drawNow(ev);
+        });
+    }
+
+    _drawNow(e) {
         if (this.isPanning) {
             this.panX += (e.clientX - this.lastPanX);
             this.panY += (e.clientY - this.lastPanY);

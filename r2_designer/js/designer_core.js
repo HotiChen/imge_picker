@@ -102,8 +102,9 @@ class Designer {
                 item.dataset.photoId = photo.id;
 
                 const img = document.createElement('img');
-                img.src = driveManager.getImageUrl(photo);
+                img.src = driveManager.getImageUrl(photo, 400);
                 img.loading = 'lazy';
+                img.decoding = 'async';
 
                 item.appendChild(img);
 
@@ -159,7 +160,7 @@ class Designer {
     }
 
     addImageToCanvas(photo, x, y) {
-        const url = driveManager.getImageUrl(photo);
+        const url = driveManager.getImageUrl(photo, 1600);
 
         fabric.Image.fromURL(url, (img) => {
             // 縮放並放置

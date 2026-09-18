@@ -449,14 +449,24 @@ class App {
 
         this.lastSelectedIndex = index;
         this.updateBulkUI();
-        this.renderPhotoGrid();
+        this.syncSelectionClasses();
     }
 
     clearSelection() {
         this.selectedPhotoIds.clear();
         this.lastSelectedIndex = -1;
         this.updateBulkUI();
-        this.renderPhotoGrid();
+        this.syncSelectionClasses();
+    }
+
+    // Selection only changes one class per card. Rebuilding the whole grid for
+    // it would re-create every <img> and force a re-decode of the entire page.
+    syncSelectionClasses() {
+        const grid = document.getElementById('photoGrid');
+        if (!grid) return;
+        grid.querySelectorAll('.photo-card').forEach(card => {
+            card.classList.toggle('selected', this.selectedPhotoIds.has(card.dataset.photoId));
+        });
     }
 
     resetCurrentFolderData() {
@@ -549,15 +559,7 @@ class App {
         const count = this.selectedPhotoIds.size;
         this.showLoading(`正在為 ${count} 張照片設置為 ${rating} 星...`);
         try {
-            const promises = Array.from(this.selectedPhotoIds).map(id => {
-                const photo = this.photos.find(p => p.id === id);
-                if (photo) {
-                    photo.rating = rating;
-                    return driveManager.saveRating(id, rating);
-                }
-                return Promise.resolve();
-            });
-            await Promise.all(promises);
+            driveManager.saveRatings(Array.from(this.selectedPhotoIds), rating);
             toast.success(`批量操作成功！已設置 ${count} 張照片為 ${rating} 星`);
 
             // 重要：更新介面呈現新星等
@@ -681,10 +683,12 @@ class App {
         }
         document.getElementById('emptyState').style.display = 'none';
 
+        // build off-document so N cards cost one layout pass, not N
+        const frag = document.createDocumentFragment();
         this.filteredPhotos.forEach((photo, index) => {
-            const card = this.createPhotoCard(photo, index);
-            grid.appendChild(card);
+            frag.appendChild(this.createPhotoCard(photo, index));
         });
+        grid.appendChild(frag);
     }
 
     createPhotoCard(photo, index) {
@@ -693,10 +697,10 @@ class App {
         card.className = `photo-card ${isSelected ? 'selected' : ''}`;
         card.dataset.photoId = photo.id;
 
-        const imageUrl = driveManager.getImageUrl(photo);
+        const imageUrl = driveManager.getImageUrl(photo, 400);
         card.innerHTML = `
             <div class="photo-image-container">
-                <img src="${imageUrl}" class="photo-image" loading="lazy">
+                <img src="${imageUrl}" class="photo-image" loading="lazy" decoding="async">
                 <div class="photo-overlay">
                     ${photo.hasAnnotations ? '<span class="photo-badge">✎</span>' : ''}
                 </div>
@@ -719,7 +723,10 @@ class App {
         });
 
         card.addEventListener('mouseenter', () => {
-            this.updatePreviewPane(photo);
+            // sweeping the mouse across the grid would otherwise queue one
+            // image request per card crossed, starving the grid's own loads
+            clearTimeout(this._previewTimer);
+            this._previewTimer = setTimeout(() => this.updatePreviewPane(photo), 120);
         });
 
         card.addEventListener('click', (e) => {
@@ -752,7 +759,7 @@ class App {
         content.style.display = 'flex';
 
         const img = document.getElementById('previewImg');
-        if (img) img.src = driveManager.getImageUrl(photo);
+        if (img) img.src = driveManager.getImageUrl(photo, 1600);
 
         const nameEl = document.getElementById('previewName');
         if (nameEl) nameEl.textContent = photo.name;

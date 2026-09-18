@@ -693,7 +693,7 @@ class BookEditor {
         grid.innerHTML = this.libraryPhotos.map(photo => {
             const stars = photo.rating > 0 ? `<div class="strip-photo-rating">${'★'.repeat(photo.rating)}</div>` : '';
             return `<div class="strip-photo" data-photo-id="${photo.id}" draggable="true" title="${photo.name}">
-                <img src="${driveManager.getImageUrl(photo)}" loading="lazy">
+                <img src="${driveManager.getImageUrl(photo, 400)}" loading="lazy" decoding="async">
                 ${stars}
             </div>`;
         }).join('');
@@ -900,7 +900,7 @@ class BookEditor {
         // direct DOM update — avoid full re-render while dragging
         const bgEl = document.querySelector('.page-bgimage');
         if (bgEl) bgEl.style.opacity = opacity;
-        this.saveToStorage();
+        this.saveToStorageSoon();
     }
 
     setBgImageFit(fit) {
@@ -916,8 +916,12 @@ class BookEditor {
         const page = this.book.pages[this.currentPageIndex];
         if (!page?.bgImage?.photoId) return;
         page.bgImage.repeatSize = pct;
-        this.renderCurrentPage(this.cropMode ? this.cropSlotIdx : -1);
-        this.saveToStorage();
+        // patch background-size directly; a full re-render here would re-create
+        // every slot <img> on every tick of the slider
+        const bgEl = document.querySelector('.page-bgimage');
+        if (bgEl && page.bgImage.fit === 'repeat') bgEl.style.backgroundSize = `${pct}%`;
+        else this.renderCurrentPage(this.cropMode ? this.cropSlotIdx : -1);
+        this.saveToStorageSoon();
     }
 
     removeBgImage() {
@@ -1076,10 +1080,18 @@ class BookEditor {
         const layer = page?.textLayers?.find(t => t.id === this.selectedTextLayerId);
         if (!layer) return;
         Object.assign(layer, props);
+        // This runs on every keystroke and every tick of the size slider. Only
+        // the live preview has to keep up; rebuilding the sidebar thumbnail and
+        // the layer panel, and stringifying the whole book into localStorage,
+        // can wait until typing pauses.
         this._patchTextLayerDOM(layer.id);
-        this._updatePageThumbnail(this.currentPageIndex);
-        this.renderTextLayerPanel();
-        this.saveToStorage();
+        clearTimeout(this._textLayerSettle);
+        this._textLayerSettle = setTimeout(() => {
+            this._textLayerSettle = null;
+            this._updatePageThumbnail(this.currentPageIndex);
+            this.renderTextLayerPanel();
+            this.saveToStorage();
+        }, 350);
     }
 
     _patchTextLayerDOM(layerId) {
@@ -1242,7 +1254,7 @@ class BookEditor {
 
         grid.innerHTML = this.libraryPhotos.map(photo => `
             <div class="modal-photo" data-photo-id="${photo.id}" draggable="true" title="點擊放入 · 或拖曳到格子">
-                <img src="${driveManager.getImageUrl(photo)}" loading="lazy">
+                <img src="${driveManager.getImageUrl(photo, 400)}" loading="lazy" decoding="async">
                 <div class="modal-photo-name">${photo.name}</div>
             </div>
         `).join('');
@@ -1276,6 +1288,23 @@ class BookEditor {
         this._populateSettingsUI();
     }
 
+    // Switching pages changes which sidebar thumbnail is active, not what any
+    // of them contain. Rebuilding the list would re-create every <img> and
+    // force a re-decode of the whole sidebar on each page turn.
+    renderPageSwitch() {
+        this._flushTextLayerSettle();
+        const list = document.getElementById('pageList');
+        if (!list) return this.renderAll();
+        list.querySelectorAll('.page-thumb').forEach(el => {
+            el.classList.toggle('active', parseInt(el.dataset.pageIdx) === this.currentPageIndex);
+        });
+        this.renderCurrentPage();
+        this.updateLayoutSelector();
+        this.updatePageNav();
+        this.updateBgImageUI();
+        this.renderTextLayerPanel();
+    }
+
     _populateSettingsUI() {
         const s = this.book.settings || {};
         const nameEl = document.getElementById('bookName');
@@ -1292,10 +1321,10 @@ class BookEditor {
         const list = document.getElementById('pageList');
         if (!list) return;
 
-        const innerPages = this.book.pages.filter(p => p.type === 'inner');
+        let innerCount = 0;
         list.innerHTML = this.book.pages.map((page, idx) => {
             const isActive = idx === this.currentPageIndex;
-            const innerNum = page.type === 'inner' ? innerPages.indexOf(page) + 1 : 0;
+            const innerNum = page.type === 'inner' ? ++innerCount : 0;
             const label = { cover: '封面', 'back-cover': '封底' }[page.type] || `第 ${innerNum} 頁`;
             return `
                 <div class="page-thumb ${isActive ? 'active' : ''} ${page.locked ? 'locked' : ''}" data-page-idx="${idx}">
@@ -1317,7 +1346,7 @@ class BookEditor {
                 this.exitCropMode();
                 this.selectedTextLayerId = null;
                 this.currentPageIndex = idx;
-                this.renderAll();
+                this.renderPageSwitch();
             });
 
             // drag-to-reorder (inner pages only)
@@ -1615,7 +1644,9 @@ class BookEditor {
 
             const slotEl = this.cropDragState.slotEl;
             if (!slotEl) return;
-            const rect = slotEl.getBoundingClientRect();
+            // the slot doesn't move or resize mid-drag, so measure it once —
+            // re-reading it per pointermove forces a synchronous layout
+            const rect = this.cropDragState.rect || slotEl.getBoundingClientRect();
             const dx_raw = (e.clientX - this.cropDragState.lastX) / rect.width;
             const dy_raw = (e.clientY - this.cropDragState.lastY) / rect.height;
 
@@ -1630,10 +1661,20 @@ class BookEditor {
             crop.x = (crop.x || 0) + dx;
             crop.y = (crop.y || 0) + dy;
             
-            this.cropDragState = { lastX: e.clientX, lastY: e.clientY, slotEl };
-            this._updateSlotTransform(this.cropSlotIdx);
+            this.cropDragState = { lastX: e.clientX, lastY: e.clientY, slotEl, rect };
+            // coalesce the style writes to one per frame
+            if (!this._cropRafPending) {
+                this._cropRafPending = true;
+                requestAnimationFrame(() => {
+                    this._cropRafPending = false;
+                    if (this.cropMode) this._updateSlotTransform(this.cropSlotIdx);
+                });
+            }
         };
-        this._cropUpHandler = e => { this.cropDragState = null; if (e?.type !== 'pointercancel') this.saveToStorage(); };
+        this._cropUpHandler = e => {
+            this.cropDragState = null;
+            if (e?.type !== 'pointercancel') this.saveToStorage();
+        };
 
         document.removeEventListener('pointermove', this._cropMoveHandler);
         document.removeEventListener('pointerup', this._cropUpHandler);
@@ -1789,6 +1830,17 @@ class BookEditor {
             this._updateBooksList();
         } catch (e) { /* quota exceeded */ }
         this._scheduleCloudSync();
+    }
+
+    // Slider drags fire dozens of times a second and each save stringifies the
+    // whole book into a synchronous localStorage write. One write when the
+    // slider settles is enough.
+    saveToStorageSoon() {
+        clearTimeout(this._saveDebounce);
+        this._saveDebounce = setTimeout(() => {
+            this._saveDebounce = null;
+            this.saveToStorage();
+        }, 400);
     }
 
     _scheduleCloudSync() {
@@ -2576,10 +2628,10 @@ class BookEditor {
 
         // 頁面導航（頂欄 + 底部）
         const goPrev = () => {
-            if (this.currentPageIndex > 0) { this.exitCropMode(); this.selectedTextLayerId = null; this.currentPageIndex--; this.renderAll(); }
+            if (this.currentPageIndex > 0) { this.exitCropMode(); this.selectedTextLayerId = null; this.currentPageIndex--; this.renderPageSwitch(); }
         };
         const goNext = () => {
-            if (this.currentPageIndex < this.book.pages.length - 1) { this.exitCropMode(); this.selectedTextLayerId = null; this.currentPageIndex++; this.renderAll(); }
+            if (this.currentPageIndex < this.book.pages.length - 1) { this.exitCropMode(); this.selectedTextLayerId = null; this.currentPageIndex++; this.renderPageSwitch(); }
         };
         this._on('prevPageBtn', 'click', goPrev);
         this._on('nextPageBtn', 'click', goNext);
@@ -2593,8 +2645,13 @@ class BookEditor {
             page.bg = color;
             const canvas = document.querySelector('.page-canvas');
             if (canvas) canvas.style.background = color;
-            this._updatePageThumbnail(this.currentPageIndex);
-            this.saveToStorage();
+            // the colour picker fires continuously while dragging — the live
+            // canvas keeps up, the thumbnail and the save wait for it to settle
+            clearTimeout(this._bgColorSettle);
+            this._bgColorSettle = setTimeout(() => {
+                this._updatePageThumbnail(this.currentPageIndex);
+            }, 250);
+            this.saveToStorageSoon();
         };
         this._on('pageBgColor', 'input', e => applyBg(e.target.value));
         this._on('pageBgWhiteBtn', 'click', () => { applyBg('#ffffff'); const i = document.getElementById('pageBgColor'); if (i) i.value = '#ffffff'; });
@@ -2840,11 +2897,11 @@ class BookEditor {
             const previewOpen = document.getElementById('photoPreviewModal')?.classList.contains('open');
             if (e.key === 'ArrowLeft') {
                 if (previewOpen) { this._showPreviewAt(this._previewIdx - 1); return; }
-                if (this.currentPageIndex > 0) { this.exitCropMode(); this.currentPageIndex--; this.renderAll(); }
+                if (this.currentPageIndex > 0) { this.exitCropMode(); this.currentPageIndex--; this.renderPageSwitch(); }
             }
             if (e.key === 'ArrowRight') {
                 if (previewOpen) { this._showPreviewAt(this._previewIdx + 1); return; }
-                if (this.currentPageIndex < this.book.pages.length - 1) { this.exitCropMode(); this.currentPageIndex++; this.renderAll(); }
+                if (this.currentPageIndex < this.book.pages.length - 1) { this.exitCropMode(); this.currentPageIndex++; this.renderPageSwitch(); }
             }
             if ((e.key === 'Delete' || e.key === 'Backspace') && this.cropMode && this.cropSlotIdx >= 0) {
                 this.clearSlot(this.cropSlotIdx);
@@ -2860,6 +2917,27 @@ class BookEditor {
             clearTimeout(resizeTimer);
             resizeTimer = setTimeout(() => this.renderCurrentPage(this.cropMode ? this.cropSlotIdx : -1), 200);
         });
+
+        // never let a debounced edit die with the tab
+        window.addEventListener('beforeunload', () => this._flushTextLayerSettle());
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'hidden') this._flushTextLayerSettle();
+        });
+    }
+
+    _flushTextLayerSettle() {
+        if (this._textLayerSettle) {
+            clearTimeout(this._textLayerSettle);
+            this._textLayerSettle = null;
+            this._updatePageThumbnail(this.currentPageIndex);
+            this.renderTextLayerPanel();
+            this.saveToStorage();
+        }
+        if (this._saveDebounce) {
+            clearTimeout(this._saveDebounce);
+            this._saveDebounce = null;
+            this.saveToStorage();
+        }
     }
 
     _on(id, event, cb) {

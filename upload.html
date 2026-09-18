@@ -426,6 +426,11 @@ details[open] > .tree-dir-summary .tree-chevron { transform: rotate(90deg); }
 const CONCURRENCY = 4;
 const IMAGE_EXTS = /\.(jpe?g|png|webp|heic|heif|tiff?|gif|avif|bmp)$/i;
 
+// Sizes the Worker serves for ?w=. Descending, because each thumbnail is
+// downscaled from the previous one rather than from the full-res decode.
+const THUMB_SIZES = [1600, 400];
+const THUMB_QUALITY = 0.82;
+
 let queue = [];
 let activeCount = 0;
 let targetFolder = '';
@@ -747,6 +752,7 @@ async function startUpload(item) {
     const key = targetFolder + item.path;
     try {
         await uploadWithProgress(item, key);
+        await uploadThumbnails(item, key);
         item.state = 'done';
         item.progress = 100;
     } catch (err) {
@@ -757,6 +763,80 @@ async function startUpload(item) {
     updateItemEl(item);
     updateOverall();
     pump();
+}
+
+// ── Thumbnails ──
+// Browsing used to download the full-resolution original for every 150px tile.
+// We generate the small variants here, at upload time, and store them next to
+// the original as _thumbs/<size>/<key>.webp. Best-effort throughout: a format
+// the browser cannot decode (HEIC, some TIFF) just yields nothing and the
+// Worker falls back to serving the original.
+let thumbChain = Promise.resolve();
+
+function buildThumbnails(file) {
+    // serialise the decodes — four concurrent full-res bitmaps is a lot of RAM
+    const run = thumbChain.then(() => decodeAndDownscale(file));
+    thumbChain = run.catch(() => {});
+    return run;
+}
+
+async function decodeAndDownscale(file) {
+    if (typeof createImageBitmap !== 'function') return [];
+    const bitmap = await createImageBitmap(file);
+    let closed = false;
+    const closeBitmap = () => { if (!closed) { closed = true; bitmap.close?.(); } };
+    let src = bitmap, srcW = bitmap.width, srcH = bitmap.height;
+    const out = [];
+    try {
+        for (const size of THUMB_SIZES) {
+            const scale = Math.min(1, size / Math.max(srcW, srcH));
+            const w = Math.max(1, Math.round(srcW * scale));
+            const h = Math.max(1, Math.round(srcH * scale));
+            const canvas = document.createElement('canvas');
+            canvas.width = w;
+            canvas.height = h;
+            const ctx = canvas.getContext('2d');
+            ctx.imageSmoothingQuality = 'high';
+            ctx.drawImage(src, 0, 0, w, h);
+            if (src === bitmap) closeBitmap();  // free the full-res decode ASAP
+            const blob = await encodeThumb(canvas);
+            if (blob) out.push({ size, blob });
+            src = canvas; srcW = w; srcH = h;
+        }
+    } finally {
+        closeBitmap();
+    }
+    return out;
+}
+
+// A browser that can't encode WebP silently hands back a PNG, which for a
+// photo is larger than the JPEG original — exactly backwards. Check what we
+// actually got and fall back to JPEG.
+async function encodeThumb(canvas) {
+    const webp = await new Promise(r => canvas.toBlob(r, 'image/webp', THUMB_QUALITY));
+    if (webp && webp.type === 'image/webp') return webp;
+    return new Promise(r => canvas.toBlob(r, 'image/jpeg', THUMB_QUALITY));
+}
+
+async function uploadThumbnails(item, key) {
+    let thumbs = [];
+    try {
+        thumbs = await buildThumbnails(item.file);
+    } catch (e) {
+        return; // unsupported format — the Worker will serve the original
+    }
+    // format-neutral suffix: the blob is WebP where supported and JPEG
+    // otherwise, and the browser goes by the stored Content-Type either way
+    await Promise.all(thumbs.map(({ size, blob }) =>
+        fetch(`${CONFIG.WORKER_URL}/${encodeURIComponent(`_thumbs/${size}/${key}.thumb`)}`, {
+            method: 'PUT',
+            headers: {
+                'Content-Type': blob.type || 'image/jpeg',
+                'Authorization': `Bearer ${CONFIG.PHOTOGRAPHER_TOKEN}`
+            },
+            body: blob
+        }).catch(() => {})
+    ));
 }
 
 function uploadWithProgress(item, key) {
@@ -879,7 +959,16 @@ function updateItemProgress(item) {
     if (st) st.textContent = item.progress + '%';
 }
 
+// xhr progress fires dozens of times a second per upload; coalesce the five
+// full queue scans below into one repaint per frame
+let overallPending = false;
 function updateOverall() {
+    if (overallPending) return;
+    overallPending = true;
+    requestAnimationFrame(() => { overallPending = false; renderOverall(); });
+}
+
+function renderOverall() {
     const total = queue.length;
     const done  = queue.filter(q => q.state === 'done').length;
     const errs  = queue.filter(q => q.state === 'error').length;
