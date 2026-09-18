@@ -193,6 +193,20 @@ npx http-server -p 8000
 
 ## 開發工具
 
+### 測試
+
+Worker 的測試不需要安裝任何套件，用 Node 內建的 test runner：
+
+```bash
+node --test "worker/test/*.test.mjs"
+```
+
+測試用假的 R2 binding（`worker/test/fakes.mjs`）模擬 Cloudflare 的行為，
+涵蓋縮圖路由與原檔 fallback、conditional request（304）、資料夾列表分頁、
+相本讀寫權限與快取標頭。
+
+GitHub Actions 在每次 push 與 PR 都會跑，**測試沒過就不會部署**。
+
 ### Claude Code Hook（自動程式碼審查）
 
 每次 `git commit` / `git push` 前，Hook 會自動執行四軸審查：
