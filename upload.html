@@ -420,8 +420,8 @@ details[open] > .tree-dir-summary .tree-chevron { transform: rotate(90deg); }
     </div><!-- /.main -->
 </div><!-- /.layout -->
 
-<script src="js/config.js"></script>
-<script src="js/auth.js"></script>
+<script src="js/config.js?v=20260918"></script>
+<script src="js/auth.js?v=20260918"></script>
 <script>
 const CONCURRENCY = 4;
 const IMAGE_EXTS = /\.(jpe?g|png|webp|heic|heif|tiff?|gif|avif|bmp)$/i;
@@ -774,10 +774,22 @@ async function startUpload(item) {
 let thumbChain = Promise.resolve();
 
 function buildThumbnails(file) {
-    // serialise the decodes — four concurrent full-res bitmaps is a lot of RAM
-    const run = thumbChain.then(() => decodeAndDownscale(file));
+    // Serialise the decodes — four concurrent full-res bitmaps is a lot of RAM,
+    // especially on a phone. The timeout matters: uploads await this, so a
+    // decode that never settles would otherwise freeze the entire queue.
+    const run = thumbChain.then(() => withTimeout(decodeAndDownscale(file), 30000));
     thumbChain = run.catch(() => {});
     return run;
+}
+
+function withTimeout(promise, ms) {
+    let timer;
+    return Promise.race([
+        promise.finally(() => clearTimeout(timer)),
+        new Promise((_, reject) => {
+            timer = setTimeout(() => reject(new Error('thumbnail timed out')), ms);
+        }),
+    ]);
 }
 
 async function decodeAndDownscale(file) {
