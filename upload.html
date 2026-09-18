@@ -309,6 +309,7 @@ html, body { height: 100%; font-family: 'IBM Plex Sans', sans-serif; background:
 .qi-status { font-size: 0.7rem; color: var(--ink-55); white-space: nowrap; min-width: 52px; text-align: right; }
 .qi-status.uploading { color: var(--accent); }
 .qi-status.done { color: var(--green); }
+.qi-status.done.warn { color: var(--accent); }
 .qi-status.error { color: var(--red); }
 
 /* Mini progress on item */
@@ -420,8 +421,8 @@ details[open] > .tree-dir-summary .tree-chevron { transform: rotate(90deg); }
     </div><!-- /.main -->
 </div><!-- /.layout -->
 
-<script src="js/config.js?v=20260919"></script>
-<script src="js/auth.js?v=20260919"></script>
+<script src="js/config.js?v=20260919b"></script>
+<script src="js/auth.js?v=20260919b"></script>
 <script>
 const CONCURRENCY = 4;
 const IMAGE_EXTS = /\.(jpe?g|png|webp|heic|heif|tiff?|gif|avif|bmp)$/i;
@@ -752,7 +753,9 @@ async function startUpload(item) {
     const key = targetFolder + item.path;
     try {
         await uploadWithProgress(item, key);
-        await uploadThumbnails(item, key);
+        // the photo itself is safely stored either way — a thumbnail problem
+        // only means browsing this one stays slow, so it is a warning
+        item.thumbWarning = await uploadThumbnails(item, key);
         item.state = 'done';
         item.progress = 100;
     } catch (err) {
@@ -768,7 +771,7 @@ async function startUpload(item) {
 // ── Thumbnails ──
 // Browsing used to download the full-resolution original for every 150px tile.
 // We generate the small variants here, at upload time, and store them next to
-// the original as _thumbs/<size>/<key>.webp. Best-effort throughout: a format
+// the original as _thumbs/<size>/<key>.thumb. Best-effort throughout: a format
 // the browser cannot decode (HEIC, some TIFF) just yields nothing and the
 // Worker falls back to serving the original.
 let thumbChain = Promise.resolve();
@@ -830,25 +833,38 @@ async function encodeThumb(canvas) {
     return new Promise(r => canvas.toBlob(r, 'image/jpeg', THUMB_QUALITY));
 }
 
+// Returns why thumbnails are missing, if they are. A silent best-effort is
+// worse than useless here: browsing stays slow and nothing says why.
 async function uploadThumbnails(item, key) {
     let thumbs = [];
     try {
         thumbs = await buildThumbnails(item.file);
     } catch (e) {
-        return; // unsupported format — the Worker will serve the original
+        return `無法讀取此格式（${e.name || 'error'}）`;
     }
+    if (!thumbs.length) return '無法產生縮圖';
+
     // format-neutral suffix: the blob is WebP where supported and JPEG
     // otherwise, and the browser goes by the stored Content-Type either way
-    await Promise.all(thumbs.map(({ size, blob }) =>
-        fetch(`${CONFIG.WORKER_URL}/${encodeURIComponent(`_thumbs/${size}/${key}.thumb`)}`, {
-            method: 'PUT',
-            headers: {
-                'Content-Type': blob.type || 'image/jpeg',
-                'Authorization': `Bearer ${CONFIG.PHOTOGRAPHER_TOKEN}`
-            },
-            body: blob
-        }).catch(() => {})
-    ));
+    const failures = await Promise.all(thumbs.map(async ({ size, blob }) => {
+        try {
+            const res = await fetch(
+                `${CONFIG.WORKER_URL}/${encodeURIComponent(`_thumbs/${size}/${key}.thumb`)}`, {
+                    method: 'PUT',
+                    headers: {
+                        'Content-Type': blob.type || 'image/jpeg',
+                        'Authorization': `Bearer ${CONFIG.PHOTOGRAPHER_TOKEN}`
+                    },
+                    body: blob
+                });
+            return res.ok ? null : `HTTP ${res.status}`;
+        } catch (e) {
+            return e.message || '網路錯誤';
+        }
+    }));
+
+    const bad = failures.filter(Boolean);
+    return bad.length ? `縮圖上傳失敗（${bad[0]}）` : null;
 }
 
 function uploadWithProgress(item, key) {
@@ -937,15 +953,12 @@ function makeItemEl(item) {
     el.className = `queue-item ${item.state}`;
     el.dataset.id = item.id;
     const icon = { pending:'○', uploading:'↑', done:'✓', error:'✕' }[item.state] || '○';
-    const statusText = item.state === 'uploading' ? `${item.progress}%`
-                     : item.state === 'done'      ? '完成'
-                     : item.state === 'error'     ? (item.error || '失敗')
-                     : '待上傳';
+    const statusText = itemStatusText(item);
     el.innerHTML =
         `<span class="qi-icon">${icon}</span>` +
         `<span class="qi-name" title="${escHtml(item.path)}">${escHtml(item.file.name)}</span>` +
         `<span class="qi-size">${fmtSize(item.file.size)}</span>` +
-        `<span class="qi-status ${item.state}">${statusText}</span>` +
+        `<span class="qi-status ${item.state}${item.thumbWarning ? ' warn' : ''}"${item.thumbWarning ? ` title="${escHtml(item.thumbWarning)}"` : ''}>${statusText}</span>` +
         `<div class="item-bar"><div class="item-bar-fill" style="width:${item.progress}%"></div></div>`;
     return el;
 }
@@ -956,10 +969,17 @@ function updateItemEl(item) {
     el.className = `queue-item ${item.state}`;
     el.querySelector('.qi-icon').textContent = { pending:'○', uploading:'↑', done:'✓', error:'✕' }[item.state] || '○';
     const st = el.querySelector('.qi-status');
-    st.className = `qi-status ${item.state}`;
-    st.textContent = item.state === 'uploading' ? `${item.progress}%`
-                   : item.state === 'done'      ? '完成'
-                   : item.error || '失敗';
+    st.className = `qi-status ${item.state}${item.thumbWarning ? ' warn' : ''}`;
+    st.textContent = itemStatusText(item);
+    if (item.thumbWarning) st.title = item.thumbWarning;
+}
+
+function itemStatusText(item) {
+    if (item.state === 'uploading') return `${item.progress}%`;
+    if (item.state === 'error') return item.error || '失敗';
+    if (item.state === 'pending') return '待上傳';
+    // uploaded, but this photo will still load at full size when browsing
+    return item.thumbWarning ? '完成 · 無縮圖' : '完成';
 }
 
 function updateItemProgress(item) {

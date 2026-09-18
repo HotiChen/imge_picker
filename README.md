@@ -205,7 +205,13 @@ node --test "worker/test/*.test.mjs"
 涵蓋縮圖路由與原檔 fallback、conditional request（304）、資料夾列表分頁、
 相本讀寫權限與快取標頭。
 
-GitHub Actions 在每次 push 與 PR 都會跑，**測試沒過就不會部署**。
+瀏覽器端的測試（裁切幾何、上傳縮圖）需要 Playwright：
+
+```bash
+node test/run.mjs
+```
+
+GitHub Actions 在每次 push 與 PR 都會跑 Worker 測試，**測試沒過就不會部署**。
 
 ### Claude Code Hook（自動程式碼審查）
 
