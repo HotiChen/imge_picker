@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<title>crop geometry: preview vs export</title>
+</head>
+<body>
+<div id="stage" style="position:absolute;left:-9999px;top:0;"></div>
+<script>
+// _thumbUrl() normally points at the Worker; the cases below supply their own
+// data-URL image so the test needs no network.
+var CONFIG = { WORKER_URL: '' };
+var __testSrc = '';
+</script>
+<script src="../js/layouts.js"></script>
+<script>
+window._thumbUrl = function () { return __testSrc; };
+
+// A photo whose aspect is TALLER than the slot is the case that used to lose
+// its top and bottom to object-fit:cover — the "feet" the photographer could
+// never pan back into view.
+function makeImage(w, h) {
+    const c = document.createElement('canvas');
+    c.width = w; c.height = h;
+    const ctx = c.getContext('2d');
+    ctx.fillStyle = '#888'; ctx.fillRect(0, 0, w, h);
+    ctx.fillStyle = '#e00'; ctx.fillRect(0, h - h * 0.12, w, h * 0.12); // the feet
+    return c.toDataURL('image/png');
+}
+
+// exporter.js cover branch, lifted verbatim, expressed as fractions of the slot
+function exportGeometry(natW, natH, slotW, slotH, crop) {
+    const scale = crop.scale || 1;
+    const s = Math.max(scale * slotW / natW, scale * slotH / natH);
+    const drawW = natW * s, drawH = natH * s;
+    return {
+        left: ((slotW - drawW) / 2 + (crop.x || 0) * slotW) / slotW,
+        top: ((slotH - drawH) / 2 + (crop.y || 0) * slotH) / slotH,
+        width: drawW / slotW,
+        height: drawH / slotH,
+    };
+}
+
+function previewGeometry(slotEl) {
+    const img = slotEl.querySelector('.slot-cover-img');
+    const wrap = img.parentElement;
+    const sw = wrap.clientWidth, sh = wrap.clientHeight;
+    return {
+        left: parseFloat(img.style.left) / sw,
+        top: parseFloat(img.style.top) / sh,
+        width: parseFloat(img.style.width) / sw,
+        height: parseFloat(img.style.height) / sh,
+    };
+}
+
+async function renderCase(layout, displayW, displayH, crop, natW, natH) {
+    __testSrc = makeImage(natW, natH);
+    const page = {
+        type: 'inner', layout, bg: '#fff',
+        slots: [{ photoId: 'p1', fit: 'cover', crop }],
+        textLayers: [],
+    };
+    const stage = document.getElementById('stage');
+    stage.innerHTML = renderPageHTML(page, displayW, displayH, -1);
+    const img = stage.querySelector('.slot-cover-img');
+    // addEventListener, not img.onload — assigning that property would replace
+    // the inline onload attribute, removing the very call under test
+    if (!img.complete || !img.naturalWidth) {
+        await new Promise(function (resolve) {
+            const done = () => resolve();
+            img.addEventListener('load', done, { once: true });
+            img.addEventListener('error', done, { once: true });
+            setTimeout(done, 3000);
+        });
+    }
+    await new Promise(r => requestAnimationFrame(r));
+    const slotEl = stage.querySelector('.page-slot');
+    return {
+        preview: previewGeometry(slotEl),
+        expected: exportGeometry(natW, natH, slotEl.clientWidth, slotEl.clientHeight, crop),
+        slotW: slotEl.clientWidth, slotH: slotEl.clientHeight,
+        natW, natH, crop,
+    };
+}
+
+const results = [];
+function check(name, cond, detail) {
+    results.push({ name, pass: !!cond, detail: detail || '' });
+}
+function near(a, b, tol) { return Math.abs(a - b) <= (tol === undefined ? 0.005 : tol); }
+
+window.runTests = async function () {
+    // ── 1. a wide page with a normal 3:2 photo — the reported case ──────────
+    // 57×21cm inner page is 2.71:1; a 3:2 photo is much taller in aspect, so
+    // cover scales it to the slot width and overflows top and bottom.
+    for (const crop of [{ x: 0, y: 0, scale: 1 }, { x: 0, y: 0.25, scale: 1 },
+                        { x: -0.1, y: -0.3, scale: 1 }, { x: 0.05, y: 0.15, scale: 1.6 }]) {
+        const r = await renderCase('full-bleed', 813, 300, crop, 3000, 2000);
+        const tag = `wide page · crop ${JSON.stringify(crop)}`;
+        check(`${tag} — left`, near(r.preview.left, r.expected.left), `${r.preview.left} vs ${r.expected.left}`);
+        check(`${tag} — top`, near(r.preview.top, r.expected.top), `${r.preview.top} vs ${r.expected.top}`);
+        check(`${tag} — width`, near(r.preview.width, r.expected.width), `${r.preview.width} vs ${r.expected.width}`);
+        check(`${tag} — height`, near(r.preview.height, r.expected.height), `${r.preview.height} vs ${r.expected.height}`);
+    }
+
+    // ── 2. panning must actually move which part of the photo is visible ────
+    const flat = await renderCase('full-bleed', 813, 300, { x: 0, y: 0, scale: 1 }, 3000, 2000);
+    const panned = await renderCase('full-bleed', 813, 300, { x: 0, y: -0.3, scale: 1 }, 3000, 2000);
+    check('panning moves the photo within the slot',
+        Math.abs(panned.preview.top - flat.preview.top) > 0.2,
+        `top ${flat.preview.top} -> ${panned.preview.top}`);
+
+    // the old markup clipped the photo to the slot box, so its rendered height
+    // could never exceed the slot; the feet were unreachable by definition
+    check('the photo is taller than the slot, so there is something to pan to',
+        flat.preview.height > 1.2, `height ${flat.preview.height}× the slot`);
+
+    // ── 3. a portrait slot with a landscape photo overflows sideways ────────
+    for (const crop of [{ x: 0, y: 0, scale: 1 }, { x: 0.3, y: 0, scale: 1 }]) {
+        const r = await renderCase('full-bleed', 300, 800, crop, 3000, 2000);
+        const tag = `tall page · crop ${JSON.stringify(crop)}`;
+        check(`${tag} — left`, near(r.preview.left, r.expected.left), `${r.preview.left} vs ${r.expected.left}`);
+        check(`${tag} — width`, near(r.preview.width, r.expected.width), `${r.preview.width} vs ${r.expected.width}`);
+    }
+
+    // ── 4. aspect ratio must be preserved, never stretched ──────────────────
+    const sq = await renderCase('full-bleed', 500, 500, { x: 0, y: 0, scale: 1 }, 3000, 2000);
+    const shownAspect = (sq.preview.width * sq.slotW) / (sq.preview.height * sq.slotH);
+    check('photo is not stretched', near(shownAspect, 3000 / 2000, 0.01),
+        `rendered aspect ${shownAspect.toFixed(4)} vs 1.5`);
+
+    return results;
+};
+</script>
+</body>
+</html>

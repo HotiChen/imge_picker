@@ -615,15 +615,14 @@ class BookEditor {
             }
             return;
         }
-        // cover：縮放/平移/照片旋轉在 wrapper 上（slot 容器保留給格框旋轉）
-        const wrapper = slotEl.querySelector('.slot-crop-wrapper');
-        if (wrapper) {
-            wrapper.style.width = `${100 * scale}%`;
-            wrapper.style.height = `${100 * scale}%`;
-            wrapper.style.transform = `translate(calc(-50% + ${cropX / safeScale}%), calc(-50% + ${cropY / safeScale}%)) rotate(${rotation}deg)`;
-        }
-        if (img) {
-            img.style.objectPosition = '50% 50%';
+        // cover：走與 exporter 相同的幾何，套在 img 上（slot 容器保留給格框旋轉）
+        const coverImg = slotEl.querySelector('.slot-cover-img');
+        if (coverImg) {
+            coverImg.dataset.scale = safeScale;
+            coverImg.dataset.cropx = crop.x || 0;
+            coverImg.dataset.cropy = crop.y || 0;
+            coverImg.dataset.rot = rotation;
+            fitCoverImage(coverImg);
         }
     }
 

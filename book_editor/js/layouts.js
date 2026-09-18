@@ -57,6 +57,55 @@ function _thumbUrl(photoId, w = 240) {
     return `${CONFIG.WORKER_URL}/${photoId}?w=${w}`;
 }
 
+// Positions a cover-mode photo using exactly the geometry exporter.js draws
+// with, so what the editor shows is what the exported JPEG contains.
+//
+// The old markup sized the <img> to the slot and let `object-fit: cover` crop
+// it. That throws the overflow away, so panning could only slide an
+// already-cropped picture around — the part outside the slot's aspect ratio
+// (feet, in a wide layout) could never be brought back. The exporter instead
+// draws the whole photo scaled to cover and lets the slot clip it, which is
+// why the JPEG had the feet when the preview did not.
+function fitCoverImage(img) {
+    const wrap = img.parentElement;
+    if (!wrap || !img.naturalWidth || !img.naturalHeight) return;
+    const slotW = wrap.clientWidth;
+    const slotH = wrap.clientHeight;
+    if (!slotW || !slotH) return;
+
+    const scale = parseFloat(img.dataset.scale) || 1;
+    const cropX = parseFloat(img.dataset.cropx) || 0;
+    const cropY = parseFloat(img.dataset.cropy) || 0;
+    const rot = parseFloat(img.dataset.rot) || 0;
+
+    // mirrors exporter.js: s = max(scale*slot / natural), draw the full image
+    const s = Math.max(scale * slotW / img.naturalWidth, scale * slotH / img.naturalHeight);
+    const drawW = img.naturalWidth * s;
+    const drawH = img.naturalHeight * s;
+    const left = (slotW - drawW) / 2 + cropX * slotW;
+    const top = (slotH - drawH) / 2 + cropY * slotH;
+
+    img.style.width = `${drawW}px`;
+    img.style.height = `${drawH}px`;
+    img.style.left = `${left}px`;
+    img.style.top = `${top}px`;
+    // the exporter rotates about the slot centre with the clip left unrotated
+    img.style.transformOrigin = `${slotW / 2 - left}px ${slotH / 2 - top}px`;
+    img.style.transform = rot ? `rotate(${rot}deg)` : '';
+}
+
+// lazy: only for the sidebar thumbnails. The page canvas is the photo being
+// edited right now, so it must load eagerly.
+function _coverImgHTML(src, crop, scale, rotation, lazy) {
+    // The starting style is the old cover behaviour, so a photo still looks
+    // right for the moment before it loads, or if onload never arrives.
+    return `<img class="slot-cover-img" src="${src}" draggable="false"
+        data-scale="${scale}" data-cropx="${crop.x || 0}" data-cropy="${crop.y || 0}" data-rot="${rotation}"
+        onload="fitCoverImage(this)"
+        ${lazy ? 'loading="lazy" ' : ''}decoding="async"
+        style="position:absolute;left:0;top:0;width:100%;height:100%;object-fit:cover;object-position:50% 50%;display:block;pointer-events:none;">`;
+}
+
 function _escapeHtml(s) {
     return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
@@ -168,13 +217,8 @@ function renderPageHTML(page, displayW, displayH, cropSlotIdx = -1) {
                 `;
             } else {
                 innerHTML = `
-                    <div class="slot-crop-wrapper" style="
-                        position:absolute; overflow:hidden;
-                        width:${100 * scale}%; height:${100 * scale}%;
-                        top:50%; left:50%;
-                        transform:translate(calc(-50% + ${cropX / scale}%), calc(-50% + ${cropY / scale}%)) rotate(${rotation}deg);
-                    ">
-                        <img src="${src}" draggable="false" style="width:100%;height:100%;object-fit:cover;object-position:50% 50%;display:block;pointer-events:none;">
+                    <div class="slot-crop-wrapper" style="position:absolute;inset:0;overflow:hidden;">
+                        ${_coverImgHTML(src, crop, scale, rotation)}
                     </div>
                     <button class="slot-clear-btn" data-slot-idx="${idx}" title="移除照片">×</button>
                     ${isCropActive ? `
@@ -253,8 +297,8 @@ function renderPageThumbnailHTML(page) {
         const rotation = slot.crop?.rotation || 0;
         return `
             <div style="position:absolute;left:${tsx}%;top:${tsy}%;width:${tsw}%;height:${tsh}%;overflow:hidden;box-sizing:border-box;z-index:2;${tsRotStyle}">
-                <div style="position:absolute;overflow:hidden;width:${100*scale}%;height:${100*scale}%;top:50%;left:50%;transform:translate(calc(-50% + ${cropX / scale}%), calc(-50% + ${cropY / scale}%)) rotate(${rotation}deg);">
-                    <img src="${src}" loading="lazy" decoding="async" style="width:100%;height:100%;object-fit:cover;object-position:50% 50%;display:block;">
+                <div style="position:absolute;inset:0;overflow:hidden;">
+                    ${_coverImgHTML(src, slot.crop || {}, scale, rotation, true)}
                 </div>
             </div>
         `;
