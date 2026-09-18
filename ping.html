@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>連線診斷</title>
+<!-- Deliberately self-contained: no external stylesheet, font or script.
+     If this page renders, the host and the path are fine and the fault is
+     inside the app's own assets — which is exactly what it then tests. -->
+<style>
+  body { margin:0; padding:16px; background:#15120d; color:#e8e3da;
+         font:14px/1.6 -apple-system,system-ui,sans-serif; }
+  h1 { font-size:16px; margin:0 0 4px; color:#e5a448; }
+  p.sub { color:#8c8375; margin:0 0 16px; font-size:12px; }
+  .row { display:flex; gap:8px; padding:7px 0; border-bottom:1px solid #2e2a22;
+         align-items:baseline; font-size:13px; }
+  .row .n { flex:1; word-break:break-all; font-family:ui-monospace,monospace; font-size:12px; }
+  .ok { color:#4caf7d; } .bad { color:#e57373; } .wait { color:#8c8375; }
+  pre { background:#221f18; border:1px solid #3a3528; border-radius:4px;
+        padding:10px; white-space:pre-wrap; word-break:break-word;
+        font:11px/1.5 ui-monospace,monospace; color:#8c8375; margin-top:16px; }
+</style>
+</head>
+<body>
+<h1>連線診斷</h1>
+<p class="sub">這一頁本身不依賴任何外部檔案。請等全部跑完，然後截圖回報。</p>
+<div id="rows"></div>
+<pre id="env"></pre>
+
+<script>
+(function () {
+  var rows = document.getElementById('rows');
+
+  function addRow(name) {
+    var d = document.createElement('div');
+    d.className = 'row';
+    d.innerHTML = '<span class="n"></span><span class="s wait">檢查中…</span>';
+    d.querySelector('.n').textContent = name;
+    rows.appendChild(d);
+    return function (ok, note) {
+      var s = d.querySelector('.s');
+      s.className = 's ' + (ok ? 'ok' : 'bad');
+      s.textContent = (ok ? '✓ ' : '✗ ') + note;
+    };
+  }
+
+  // 1. can this page reach the app's own assets?
+  var assets = [
+    'index.html', 'css/styles.css', 'js/config.js', 'js/client-auth-check.js',
+    'js/toast.js', 'js/logger.js', 'js/diagnostics.js', 'js/drive.js',
+    'js/annotation.js', 'js/rating.js', 'js/app.js'
+  ];
+  assets.forEach(function (a) {
+    var done = addRow(a);
+    var t0 = Date.now();
+    fetch(a + '?cachebust=' + t0, { cache: 'no-store' })
+      .then(function (r) { done(r.ok, 'HTTP ' + r.status + ' · ' + (Date.now() - t0) + 'ms'); })
+      .catch(function (e) { done(false, String(e.message || e)); });
+  });
+
+  // 2. third-party things index.html also pulls in
+  var doneFont = addRow('fonts.googleapis.com');
+  fetch('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400&display=swap', { mode: 'no-cors' })
+    .then(function () { doneFont(true, '可連線'); })
+    .catch(function (e) { doneFont(false, String(e.message || e)); });
+
+  var doneZip = addRow('cdnjs.cloudflare.com (JSZip)');
+  fetch('https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js', { mode: 'no-cors' })
+    .then(function () { doneZip(true, '可連線'); })
+    .catch(function (e) { doneZip(false, String(e.message || e)); });
+
+  // 3. the Worker that serves photos
+  var doneWorker = addRow('Worker (imagepicker)');
+  fetch('https://imagepicker.hotichen.workers.dev/api/auth/verify-admin')
+    .then(function (r) { doneWorker(true, 'HTTP ' + r.status + '（401 也算正常）'); })
+    .catch(function (e) { doneWorker(false, String(e.message || e)); });
+
+  // 4. storage — blocked site data breaks login
+  var doneStore = addRow('sessionStorage');
+  try {
+    sessionStorage.setItem('__ping', '1');
+    sessionStorage.removeItem('__ping');
+    doneStore(true, '可讀寫');
+  } catch (e) {
+    doneStore(false, (e.name || 'Error') + '：瀏覽器封鎖了網站資料');
+  }
+
+  document.getElementById('env').textContent =
+    location.href + '\n\n' + navigator.userAgent +
+    '\n\n螢幕 ' + screen.width + '×' + screen.height +
+    ' · 視窗 ' + innerWidth + '×' + innerHeight +
+    ' · DPR ' + (window.devicePixelRatio || 1);
+})();
+</script>
+</body>
+</html>
