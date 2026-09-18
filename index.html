@@ -13,7 +13,38 @@
     <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 
     <!-- Stylesheets -->
-    <link rel="stylesheet" href="css/styles.css?v=20260918">
+    <link rel="stylesheet" href="css/styles.css?v=20260918b">
+
+    <!-- Shows a startup error on screen instead of leaving a blank page.
+         Stays inline and first so it is listening before anything else runs. -->
+    <script>
+    (function () {
+        var shown = false;
+        function show(title, detail) {
+            if (shown) return;
+            shown = true;
+            var box = document.createElement('div');
+            box.setAttribute('style', 'position:fixed;inset:0;z-index:2147483647;background:#15120d;' +
+                'color:#e8e3da;font:13px/1.6 -apple-system,system-ui,sans-serif;padding:24px;overflow:auto;');
+            box.innerHTML =
+                '<div style="color:#e57373;font-weight:600;margin-bottom:12px;">頁面載入發生錯誤</div>' +
+                '<div style="color:#8c8375;margin-bottom:16px;">請截圖這個畫面回報</div>' +
+                '<pre id="startupErrorText" style="white-space:pre-wrap;word-break:break-word;background:#221f18;' +
+                'border:1px solid #3a3528;border-radius:4px;padding:12px;font:12px/1.5 ui-monospace,monospace;"></pre>';
+            (document.body || document.documentElement).appendChild(box);
+            box.querySelector('#startupErrorText').textContent =
+                title + '\n' + detail + '\n\n' + navigator.userAgent;
+        }
+        window.addEventListener('error', function (e) {
+            show(e.message || 'Script error',
+                 (e.filename || '?') + ':' + (e.lineno || '?') + ':' + (e.colno || '?'));
+        });
+        window.addEventListener('unhandledrejection', function (e) {
+            var r = e.reason;
+            show('Unhandled promise rejection', (r && (r.stack || r.message)) || String(r));
+        });
+    })();
+    </script>
 
 </head>
 
@@ -506,15 +537,15 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 
     <!-- Scripts -->
-    <script src="js/config.js?v=20260918"></script>
-    <script src="js/client-auth-check.js?v=20260918"></script>
-    <script src="js/toast.js?v=20260918"></script>
-    <script src="js/logger.js?v=20260918"></script>
-    <script src="js/diagnostics.js?v=20260918"></script>
-    <script src="js/drive.js?v=20260918"></script>
-    <script src="js/annotation.js?v=20260918"></script>
-    <script src="js/rating.js?v=20260918"></script>
-    <script src="js/app.js?v=20260918"></script>
+    <script src="js/config.js?v=20260918b"></script>
+    <script src="js/client-auth-check.js?v=20260918b"></script>
+    <script src="js/toast.js?v=20260918b"></script>
+    <script src="js/logger.js?v=20260918b"></script>
+    <script src="js/diagnostics.js?v=20260918b"></script>
+    <script src="js/drive.js?v=20260918b"></script>
+    <script src="js/annotation.js?v=20260918b"></script>
+    <script src="js/rating.js?v=20260918b"></script>
+    <script src="js/app.js?v=20260918b"></script>
 </body>
 
 </html>

@@ -3,12 +3,27 @@
 (function () {
   const WORKER_URL = typeof CONFIG !== 'undefined' ? CONFIG.WORKER_URL : 'https://imagepicker.hotichen.workers.dev';
 
+  // Safari in private mode, and any browser set to block site data, throws on
+  // sessionStorage access rather than returning null. Uncaught, that killed
+  // startup and left a page with no login prompt and no way forward.
+  const store = {
+    get(key) {
+      try { return sessionStorage.getItem(key) || ''; } catch (e) { return ''; }
+    },
+    set(key, value) {
+      try { sessionStorage.setItem(key, value); return true; } catch (e) { return false; }
+    },
+    remove(key) {
+      try { sessionStorage.removeItem(key); } catch (e) { /* nothing to clear */ }
+    },
+  };
+
   function getClientSession() {
-    try { return JSON.parse(sessionStorage.getItem('client_session') || 'null'); } catch { return null; }
+    try { return JSON.parse(store.get('client_session') || 'null'); } catch { return null; }
   }
 
   function getStudioToken() {
-    return sessionStorage.getItem('studio_token') || '';
+    return store.get('studio_token');
   }
 
   document.addEventListener('DOMContentLoaded', function () {
@@ -75,7 +90,7 @@
           headers: { 'Authorization': 'Bearer ' + token }
         }).catch(() => {});
       }
-      sessionStorage.removeItem('client_session');
+      store.remove('client_session');
       window.location.href = 'client-login.html';
     });
 
@@ -162,7 +177,9 @@
     function tryLogin() {
       const val = input.value.trim();
       if (!val) { err.textContent = '請輸入密碼'; return; }
-      sessionStorage.setItem('studio_token', val);
+      // if storage is blocked the password still works for this page view,
+      // it just won't survive a reload — better than refusing to log in
+      store.set('studio_token', val);
       if (typeof CONFIG !== 'undefined') CONFIG.PHOTOGRAPHER_TOKEN = val;
       overlay.remove();
     }
