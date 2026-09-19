@@ -25,18 +25,32 @@
 <h1>連線診斷</h1>
 <p class="sub">這一頁本身不依賴任何外部檔案。請等全部跑完，然後截圖回報。</p>
 <div id="rows"></div>
+
+<h1 style="margin-top:28px;">照片大小實測</h1>
+<p class="sub">輸入資料夾路徑，量測實際傳輸的位元組。<b>縮圖若有生效，w=400 應該只有幾十 KB</b>；
+若跟原檔一樣大，代表 Worker 找不到縮圖、回退成原檔了。</p>
+<div style="display:flex;gap:8px;margin-bottom:12px;">
+  <input id="folder" placeholder="例如 20260819/合照/" value=""
+         style="flex:1;min-width:0;background:#221f18;border:1px solid #3a3528;color:#e8e3da;
+                padding:8px 10px;border-radius:4px;font:13px ui-monospace,monospace;">
+  <button id="measureBtn"
+          style="background:#e5a448;color:#15120d;border:none;padding:8px 18px;border-radius:4px;
+                 font-weight:600;cursor:pointer;font-size:13px;">量測</button>
+</div>
+<div id="sizeRows"></div>
+
 <pre id="env"></pre>
 
 <script>
 (function () {
   var rows = document.getElementById('rows');
 
-  function addRow(name) {
+  function addRow(name, target) {
     var d = document.createElement('div');
     d.className = 'row';
     d.innerHTML = '<span class="n"></span><span class="s wait">檢查中…</span>';
     d.querySelector('.n').textContent = name;
-    rows.appendChild(d);
+    (target || rows).appendChild(d);
     return function (ok, note) {
       var s = d.querySelector('.s');
       s.className = 's ' + (ok ? 'ok' : 'bad');
@@ -84,6 +98,76 @@
   } catch (e) {
     doneStore(false, (e.name || 'Error') + '：瀏覽器封鎖了網站資料');
   }
+
+  // ── measure what a photo actually costs at each size ───────────────────
+  var WORKER = 'https://imagepicker.hotichen.workers.dev';
+
+  function fmt(bytes) {
+    if (bytes >= 1048576) return (bytes / 1048576).toFixed(1) + ' MB';
+    if (bytes >= 1024) return Math.round(bytes / 1024) + ' KB';
+    return bytes + ' B';
+  }
+
+  function measureOne(key, query, label, target) {
+    var done = addRow(label, target);
+    var t0 = Date.now();
+    // cache-bust so this measures the real transfer, not a local hit
+    var sep = query ? '&' : '?';
+    return fetch(WORKER + '/' + key + query + sep + 'nocache=' + t0)
+      .then(function (r) { return r.blob().then(function (b) { return { r: r, b: b }; }); })
+      .then(function (x) {
+        done(x.r.ok, fmt(x.b.size) + ' · ' + (Date.now() - t0) + 'ms · ' + (x.b.type || '?'));
+        return x.b.size;
+      })
+      .catch(function (e) { done(false, String(e.message || e)); return 0; });
+  }
+
+  document.getElementById('measureBtn').addEventListener('click', function () {
+    var target = document.getElementById('sizeRows');
+    target.innerHTML = '';
+    var folder = document.getElementById('folder').value.trim();
+
+    fetch(WORKER + '/?list=' + encodeURIComponent(folder))
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        var photos = (data && data.data) || [];
+        if (!photos.length) {
+          target.innerHTML = '<div class="row"><span class="n">這個路徑沒有照片</span></div>';
+          return;
+        }
+        var key = photos[0].id;
+        var head = document.createElement('div');
+        head.style.cssText = 'color:#8c8375;font-size:12px;margin:6px 0;word-break:break-all;';
+        head.textContent = '量測對象：' + key + '（此資料夾共 ' + photos.length + ' 張）';
+        target.appendChild(head);
+
+        var sizes = 0;
+        measureOne(key, '?w=400', 'w=400（格子縮圖）', target)
+          .then(function (s) { sizes = s; return measureOne(key, '?w=1200', 'w=1200（預覽）', target); })
+          .then(function () { return measureOne(key, '?w=1600', 'w=1600（頁面畫布）', target); })
+          .then(function () { return measureOne(key, '', '原檔（匯出用）', target); })
+          .then(function (orig) {
+            var verdict = document.createElement('div');
+            verdict.style.cssText = 'margin-top:12px;padding:10px;border-radius:4px;font-size:13px;';
+            if (!sizes || !orig) return;
+            if (sizes >= orig * 0.9) {
+              verdict.style.background = '#3a2020';
+              verdict.style.color = '#e57373';
+              verdict.textContent = '✗ w=400 跟原檔一樣大 — 這些照片沒有縮圖，Worker 回退成原檔了。';
+            } else {
+              verdict.style.background = '#1f2e24';
+              verdict.style.color = '#4caf7d';
+              verdict.textContent = '✓ 縮圖有生效 — w=400 只有原檔的 '
+                + Math.round(sizes / orig * 100) + '%。若仍覺得慢，瓶頸在連線延遲而非檔案大小。';
+            }
+            target.appendChild(verdict);
+          });
+      })
+      .catch(function (e) {
+        target.innerHTML = '<div class="row"><span class="n">列出資料夾失敗：'
+          + (e.message || e) + '</span></div>';
+      });
+  });
 
   document.getElementById('env').textContent =
     location.href + '\n\n' + navigator.userAgent +
