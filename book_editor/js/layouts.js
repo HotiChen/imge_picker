@@ -52,8 +52,9 @@ const LAYOUTS = {
     }
 };
 
-// 產生縮圖用 URL（?w=240，不支援 CF Image Resizing 時回傳原圖）
-function _thumbUrl(photoId, w = 240) {
+// 產生縮圖用 URL。寬度直接用 Worker 的縮圖級距，既省一次對應，也避開
+// 舊 ?w=240 / ?w=1200 網址留下的一年期快取（那時回傳的是原檔）。
+function _thumbUrl(photoId, w = 400) {
     return `${CONFIG.WORKER_URL}/${photoId}?w=${w}`;
 }
 
@@ -141,7 +142,7 @@ function renderPageHTML(page, displayW, displayH, cropSlotIdx = -1) {
     // ─── 底圖層 ───────────────────────────────────────────────────
     let bgImageHTML = '';
     if (page.bgImage?.photoId) {
-        const src = _thumbUrl(page.bgImage.photoId, 1200);
+        const src = _thumbUrl(page.bgImage.photoId, 1600);
         const fit = page.bgImage.fit || 'cover';
         const opacity = page.bgImage.opacity ?? 1;
         if (fit === 'repeat') {
@@ -176,7 +177,7 @@ function renderPageHTML(page, displayW, displayH, cropSlotIdx = -1) {
 
         let innerHTML = '';
         if (slot.photoId) {
-            const src = _thumbUrl(slot.photoId, 1200);
+            const src = _thumbUrl(slot.photoId, 1600);
             const fitMode = slot.fit || 'cover';
             if (fitMode === 'contain') {
                 innerHTML = `
@@ -272,7 +273,7 @@ function renderPageThumbnailHTML(page) {
     // 底圖縮圖
     let bgThumbHTML = '';
     if (page.bgImage?.photoId) {
-        const src = _thumbUrl(page.bgImage.photoId, 240);
+        const src = _thumbUrl(page.bgImage.photoId, 400);
         const fit = page.bgImage.fit || 'cover';
         const opacity = page.bgImage.opacity ?? 1;
         bgThumbHTML = `<div style="position:absolute;inset:0;opacity:${opacity};pointer-events:none;overflow:hidden;z-index:0;"><img src="${src}" loading="lazy" decoding="async" style="width:100%;height:100%;object-fit:${fit};display:block;"></div>`;
@@ -293,7 +294,7 @@ function renderPageThumbnailHTML(page) {
         const scale = slot.crop?.scale || 1;
         const cropX = (slot.crop?.x || 0) * 100;
         const cropY = (slot.crop?.y || 0) * 100;
-        const src = _thumbUrl(slot.photoId, 240);
+        const src = _thumbUrl(slot.photoId, 400);
         const rotation = slot.crop?.rotation || 0;
         return `
             <div style="position:absolute;left:${tsx}%;top:${tsy}%;width:${tsw}%;height:${tsh}%;overflow:hidden;box-sizing:border-box;z-index:2;${tsRotStyle}">
