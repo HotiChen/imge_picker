@@ -13,7 +13,7 @@
     <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 
     <!-- Stylesheets -->
-    <link rel="stylesheet" href="css/styles.css?v=20260919b">
+    <link rel="stylesheet" href="css/styles.css?v=20260919c">
 
     <!-- Shows a startup error on screen instead of leaving a blank page.
          Stays inline and first so it is listening before anything else runs. -->
@@ -45,44 +45,6 @@
         });
     })();
 
-    // Reads the version off the assets the browser actually loaded, rather
-    // than a number written here by hand — a hardcoded one can say "new" while
-    // a stale script is running, which is the one thing this needs to catch.
-    // Lives inline so it still reports when app.js itself fails to load.
-    (function () {
-        function versions() {
-            var nodes = document.querySelectorAll('script[src], link[rel="stylesheet"][href]');
-            var seen = {};
-            for (var i = 0; i < nodes.length; i++) {
-                var url = nodes[i].getAttribute('src') || nodes[i].getAttribute('href') || '';
-                if (/^https?:|^\/\//.test(url)) continue;      // CDN and fonts are not ours
-                var m = /[?&]v=([^&"]+)/.exec(url);
-                if (!m) continue;
-                (seen[m[1]] = seen[m[1]] || []).push(url.split('?')[0].split('/').pop());
-            }
-            return seen;
-        }
-
-        document.addEventListener('DOMContentLoaded', function () {
-            var el = document.getElementById('buildVersion');
-            if (!el) return;
-            var seen = versions();
-            var keys = Object.keys(seen);
-            if (!keys.length) { el.textContent = ''; return; }
-
-            if (keys.length === 1) {
-                el.textContent = 'v' + keys[0];
-                el.title = '載入中的程式版本：' + keys[0];
-                return;
-            }
-            // a mixed set means part of the page is being served from cache
-            keys.sort();
-            el.textContent = 'v' + keys[keys.length - 1] + ' ⚠ 版本不一致';
-            el.style.color = '#e5a448';
-            el.title = '偵測到混合版本，請強制重新整理：\n' +
-                keys.map(function (k) { return k + ' → ' + seen[k].join(', '); }).join('\n');
-        });
-    })();
     </script>
 
 </head>
@@ -99,8 +61,7 @@
             <div class="logo-mark">選</div>
             <span class="logo-name">選圖工作室</span>
             <span class="logo-label">STUDIO</span>
-            <span id="buildVersion" title="載入中的程式版本"
-                  style="font-family:'IBM Plex Mono',ui-monospace,monospace;font-size:10px;letter-spacing:0.06em;color:#5a5248;white-space:nowrap;"></span>
+            <span id="buildVersion"></span>
             <div id="expiryBadge" class="expiry-badge" style="display: none;">
                 <span class="icon">⌛</span>
                 <span id="expiryTimer">--天 --時</span>
@@ -578,15 +539,16 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 
     <!-- Scripts -->
-    <script src="js/config.js?v=20260919b"></script>
-    <script src="js/client-auth-check.js?v=20260919b"></script>
-    <script src="js/toast.js?v=20260919b"></script>
-    <script src="js/logger.js?v=20260919b"></script>
-    <script src="js/diagnostics.js?v=20260919b"></script>
-    <script src="js/drive.js?v=20260919b"></script>
-    <script src="js/annotation.js?v=20260919b"></script>
-    <script src="js/rating.js?v=20260919b"></script>
-    <script src="js/app.js?v=20260919b"></script>
+    <script src="js/build-version.js?v=20260919c"></script>
+    <script src="js/config.js?v=20260919c"></script>
+    <script src="js/client-auth-check.js?v=20260919c"></script>
+    <script src="js/toast.js?v=20260919c"></script>
+    <script src="js/logger.js?v=20260919c"></script>
+    <script src="js/diagnostics.js?v=20260919c"></script>
+    <script src="js/drive.js?v=20260919c"></script>
+    <script src="js/annotation.js?v=20260919c"></script>
+    <script src="js/rating.js?v=20260919c"></script>
+    <script src="js/app.js?v=20260919c"></script>
 </body>
 
 </html>
