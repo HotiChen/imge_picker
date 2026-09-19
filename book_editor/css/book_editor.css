@@ -678,6 +678,13 @@ html, body {
 .modal-library-grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    /* Rows must size to their tiles, not to the container. flex:1 hands this
+       grid a definite height, and auto rows then get squeezed into it once
+       there are more photos than fit — but the tiles keep the height their
+       aspect-ratio gives them, so they spill over and overlap the row below,
+       and the scrollable height comes out far too short to reach the end. */
+    grid-auto-rows: min-content;
+    align-content: start;
     gap: 10px;
     padding: 16px;
     overflow-y: auto;

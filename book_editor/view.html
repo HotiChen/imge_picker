@@ -173,10 +173,18 @@
         .viewer-picker-grid {
             display: grid;
             grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+            /* Rows must size to their tiles, not to the container — see the
+               note on .modal-library-grid in book_editor.css. Without this,
+               a folder with enough photos to need scrolling gets its rows
+               squeezed, the square tiles overlap each other, and the scroll
+               stops long before the last photo. */
+            grid-auto-rows: min-content;
+            align-content: start;
             gap: 6px;
             padding: 14px;
             overflow-y: auto;
             flex: 1;
+            min-height: 0;
         }
         .viewer-picker-photo {
             aspect-ratio: 1;
@@ -233,8 +241,8 @@
     </div>
 </div>
 
-<script src="../js/config.js?v=20260919f"></script>
-<script src="js/layouts.js?v=20260919f"></script>
-<script src="js/viewer.js?v=20260919f"></script>
+<script src="../js/config.js?v=20260920"></script>
+<script src="js/layouts.js?v=20260920"></script>
+<script src="js/viewer.js?v=20260920"></script>
 </body>
 </html>

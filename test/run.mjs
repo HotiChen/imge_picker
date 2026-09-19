@@ -209,6 +209,101 @@ await suite('photo preview — size, neighbour preloading and the original',
     },
   });
 
+// A photo grid must never stack its own tiles on top of each other, and its
+// scrollable height must actually reach the last photo. Both broke when the
+// container handed the grid a definite height: the rows were squeezed to fit
+// while the tiles kept the height their aspect-ratio gave them.
+const GRID_CHECK = sel => {
+  const g = document.querySelector(sel);
+  if (!g) return { missing: true };
+  const items = [...g.querySelectorAll('[data-photo-id]')];
+  const box = items.map(i => i.getBoundingClientRect());
+  let overlap = 0;
+  for (let i = 0; i < box.length; i++) {
+    for (let j = i + 1; j < box.length; j++) {
+      const oy = Math.min(box[i].bottom, box[j].bottom) - Math.max(box[i].top, box[j].top);
+      const ox = Math.min(box[i].right, box[j].right) - Math.max(box[i].left, box[j].left);
+      if (oy > 1 && ox > 1) overlap = Math.max(overlap, Math.round(oy));
+    }
+  }
+  g.scrollTop = g.scrollHeight;
+  const last = items[items.length - 1].getBoundingClientRect();
+  const gb = g.getBoundingClientRect();
+  return {
+    count: items.length,
+    overlap,
+    scrollH: g.scrollHeight,
+    clientH: g.clientHeight,
+    lastReachable: last.top >= gb.top - 1 && last.bottom <= gb.bottom + 1,
+  };
+};
+
+const PHOTOS = n => Array.from({ length: n }, (_, i) =>
+  ({ id: `20260819/p${i}.jpg`, name: `p${i}.jpg`, size: 9e6, rating: 0 }));
+
+function mockWorker(count) {
+  return async page => {
+    await page.route('**/imagepicker.hotichen.workers.dev/**', route => {
+      const u = new URL(route.request().url());
+      if (u.pathname.endsWith('/status'))
+        return route.fulfill({ status: 200, contentType: 'application/json', body: '{"approved":false}' });
+      if (u.pathname.includes('/api/books/'))
+        return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
+          name: 'T', clientFolders: ['20260819/'],
+          settings: { width: 57, height: 21, dpi: 300 }, coverSettings: { width: 20, height: 20, dpi: 300 },
+          pages: [{ type: 'inner', layout: '2-up-h', slots: [{}, {}], textLayers: [] }] }) });
+      if (u.searchParams.has('list'))
+        return route.fulfill({ status: 200, contentType: 'application/json',
+          body: JSON.stringify({ status: 'success', folders: [], data: PHOTOS(count) }) });
+      route.fulfill({ status: 200, contentType: 'image/png', body: PIXEL });
+    });
+  };
+}
+
+function gridAssertions(r, label) {
+  const out = [];
+  const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+  ok(`${label} — 所有照片都在`, r.count === 52, String(r.count));
+  ok(`${label} — 格子沒有互相重疊`, r.overlap === 0, `重疊 ${r.overlap}px`);
+  ok(`${label} — 內容高於容器，捲軸有意義`, r.scrollH > r.clientH + 10, `${r.scrollH}/${r.clientH}`);
+  ok(`${label} — 捲到底看得到最後一張`, r.lastReachable === true, String(r.lastReachable));
+  return out;
+}
+
+await suite('client picker grid — tiles must not overlap and scroll must reach the end',
+  `${base}/book_editor/view.html?id=test`,
+  async page => {
+    // Viewer is a top-level const, so it is not a window property
+    await page.waitForFunction(() => typeof Viewer !== 'undefined' && !!Viewer.book, null, { timeout: 5000 });
+    await page.evaluate(() => { Viewer.pickerSlotIdx = 0; Viewer._openPhotoPicker(); });
+    await page.waitForTimeout(1200);
+    const r = await page.evaluate(GRID_CHECK, '#viewerPickerGrid');
+    return r.missing ? ['FAIL  grid not found'] : gridAssertions(r, '客戶選圖');
+  },
+  { before: mockWorker(52) });
+
+await suite('editor picker grid — tiles must not overlap and scroll must reach the end',
+  `${base}/book_editor/index.html`,
+  async page => {
+    await page.waitForFunction(() => !!window.bookEditor, null, { timeout: 5000 });
+    await page.evaluate(n => {
+      bookEditor.libraryPhotos = Array.from({ length: n }, (_, i) =>
+        ({ id: `20260819/p${i}.jpg`, name: `p${i}.jpg`, rating: 0 }));
+      bookEditor.renderPhotoStrip();
+      bookEditor.openPhotoModal(0);
+    }, 52);
+    await page.waitForTimeout(1200);
+    const r = await page.evaluate(GRID_CHECK, '#modalLibraryGrid');
+    return r.missing ? ['FAIL  grid not found'] : gridAssertions(r, '編輯器選圖');
+  },
+  {
+    initScript: () => {
+      sessionStorage.setItem('studio_token', 'x');
+      try { localStorage.setItem('book_editor_tour_done', '1'); } catch (e) {}
+    },
+    before: mockWorker(52),
+  });
+
 await browser.close();
 server.close();
 console.log(failed ? `\n${failed} failing` : '\nall passed');
