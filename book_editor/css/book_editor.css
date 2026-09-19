@@ -1291,6 +1291,23 @@ html, body {
     font-weight: 600;
 }
 .photo-preview-use-btn:hover { background: var(--primary-hover); }
+
+/* 放入版面 stays the primary action; these two are secondary */
+#photoPreviewOriginalBtn,
+#photoPreviewDownload {
+    background: transparent;
+    border: 1px solid rgba(255, 255, 255, 0.35);
+    color: #e8e3da;
+    font-weight: 500;
+    padding: 7px 16px;
+    text-decoration: none;
+    display: inline-block;
+    line-height: 1.4;
+}
+#photoPreviewOriginalBtn:hover,
+#photoPreviewDownload:hover { background: rgba(255, 255, 255, 0.12); }
+#photoPreviewOriginalBtn:disabled { opacity: 0.55; cursor: default; }
+
 .photo-preview-nav {
     position: fixed;
     top: 50%;

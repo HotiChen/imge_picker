@@ -50,10 +50,20 @@ if (!pw) {
 const browser = await pw.chromium.launch();
 let failed = 0;
 
-async function suite(name, url, run) {
-  const page = await browser.newPage();
+// shared by the preview suite: what the page asked the Worker for
+const asked = [];
+const PREVIEW_Q = '?w=1200';
+const PIXEL = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+  'base64');
+
+async function suite(name, url, run, { initScript, before } = {}) {
+  const context = await browser.newContext({ viewport: { width: 1500, height: 950 } });
+  if (initScript) await context.addInitScript(initScript);
+  const page = await context.newPage();
   const pageErrors = [];
   page.on('pageerror', e => pageErrors.push(String(e).split('\n')[0]));
+  if (before) await before(page);
   await page.goto(url, { waitUntil: 'load' });
 
   console.log(`\n# ${name}`);
@@ -71,7 +81,7 @@ async function suite(name, url, run) {
     failed++;
     console.log('  FAIL  page errors: ' + pageErrors.join(' | '));
   }
-  await page.close();
+  await context.close();
 }
 
 await suite('crop geometry — preview must match the exported JPEG',
@@ -96,7 +106,11 @@ await suite('upload thumbnails — generation, key layout and error reporting',
     CONFIG.PHOTOGRAPHER_TOKEN = 'tok';
 
     const thumbs = await buildThumbnails(file);
-    ok('produces both thumbnail sizes', thumbs.length === 2, `got ${thumbs.length}`);
+    // one per configured size, whatever that list currently is
+    ok('produces one thumbnail per configured size',
+      thumbs.length === THUMB_SIZES.length &&
+      THUMB_SIZES.every(sz => thumbs.some(t => t.size === sz)),
+      `${thumbs.map(t => t.size).join(',')} vs ${THUMB_SIZES.join(',')}`);
     ok('thumbnails are far smaller than the original',
       thumbs.every(t => t.blob.size < blob.size / 4),
       thumbs.map(t => `${t.size}:${t.blob.size}B of ${blob.size}B`).join(', '));
@@ -108,12 +122,12 @@ await suite('upload thumbnails — generation, key layout and error reporting',
     window.fetch = realFetch;
 
     ok('no warning when every upload succeeds', warn === null, String(warn));
-    ok('writes both sizes', seen.length === 2, String(seen.length));
+    ok('writes every size', seen.length === THUMB_SIZES.length, String(seen.length));
     const keys = seen.map(s => decodeURIComponent(s.url.split('/').pop()));
     // the exact keys worker.js looks up for ?w=
-    ok('key matches what the Worker reads back',
-      keys.includes('_thumbs/400/20260819/合照/a.jpg.thumb') &&
-      keys.includes('_thumbs/1600/20260819/合照/a.jpg.thumb'), keys.join(' | '));
+    ok('keys match what the Worker reads back',
+      THUMB_SIZES.every(sz => keys.includes(`_thumbs/${sz}/20260819/合照/a.jpg.thumb`)),
+      keys.join(' | '));
     ok('uploads with PUT', seen.every(s => s.method === 'PUT'));
 
     // a silently swallowed failure is what hid missing thumbnails before
@@ -135,6 +149,65 @@ await suite('upload thumbnails — generation, key layout and error reporting',
     ok('a clean upload stays quiet', itemStatusText({ state: 'done' }) === '完成');
     return out;
   }));
+
+// The preview modal is the one place a photographer looks closely, so it has
+// to stay cheap to page through and still able to show the real pixels.
+await suite('photo preview — size, neighbour preloading and the original',
+  `${base}/book_editor/index.html`,
+  async page => {
+    const out = [];
+    const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+
+    await page.evaluate(() => {
+      bookEditor.libraryPhotos = Array.from({ length: 5 }, (_, i) =>
+        ({ id: `2026/p${i}.jpg`, name: `p${i}.jpg`, rating: 0 }));
+      bookEditor._showPreviewAt(2);
+      document.getElementById('photoPreviewModal').classList.add('open');
+      document.getElementById('tourCard')?.remove();
+    });
+    await page.waitForTimeout(500);
+
+    const r = await page.evaluate(() => ({
+      shown: document.getElementById('photoPreviewImg').getAttribute('src'),
+      dl: document.getElementById('photoPreviewDownload')?.getAttribute('href'),
+      btn: document.getElementById('photoPreviewOriginalBtn')?.textContent,
+    }));
+    ok('preview asks for a downscaled copy, not the original', /\?w=\d+$/.test(r.shown || ''), r.shown);
+    ok('preloads the next photo', asked.includes('/2026/p3.jpg' + PREVIEW_Q), asked.join(' '));
+    ok('preloads the previous photo', asked.includes('/2026/p1.jpg' + PREVIEW_Q), asked.join(' '));
+    ok('does not preload the whole strip', !asked.some(u => u.startsWith('/2026/p0')), asked.join(' '));
+    ok('download offers the original', /\/2026\/p2\.jpg$/.test(r.dl || ''), r.dl);
+    ok('the original button is offered', r.btn === '看原圖', r.btn);
+
+    await page.click('#photoPreviewOriginalBtn');
+    await page.waitForTimeout(500);
+    const after = await page.evaluate(() => ({
+      src: document.getElementById('photoPreviewImg').getAttribute('src'),
+      btn: document.getElementById('photoPreviewOriginalBtn').textContent,
+    }));
+    ok('看原圖 swaps in the un-resized image', /\/2026\/p2\.jpg$/.test(after.src || ''), after.src);
+    ok('and says so', after.btn === '已是原圖', after.btn);
+    return out;
+  },
+  {
+    initScript: () => {
+      sessionStorage.setItem('studio_token', 'x');
+      try { localStorage.setItem('book_editor_tour_done', '1'); } catch (e) {}
+    },
+    before: async page => {
+      asked.length = 0;
+      // stand in for the Worker so the test records what was requested
+      await page.route('**/imagepicker.hotichen.workers.dev/**', route => {
+        const u = new URL(route.request().url());
+        if (u.pathname.startsWith('/api/') || u.searchParams.has('list')) {
+          return route.fulfill({ status: 200, contentType: 'application/json',
+            body: JSON.stringify({ status: 'success', data: [], folders: [] }) });
+        }
+        asked.push(decodeURIComponent(u.pathname) + (u.search || ''));
+        route.fulfill({ status: 200, contentType: 'image/png', body: PIXEL });
+      });
+    },
+  });
 
 await browser.close();
 server.close();

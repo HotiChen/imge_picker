@@ -1,5 +1,11 @@
+// The preview modal is roughly 600 CSS px wide, so 1200 covers a 2× display
+// exactly. Anything larger is bytes the screen cannot show — the 看原圖 button
+// is there for when the real pixels actually matter.
+const PREVIEW_W = 1200;
+
 class BookEditor {
     constructor() {
+        this._preloaded = new Set();
         this.currentBookId = null;
         this.book = {
             name: '未命名相本',
@@ -819,7 +825,8 @@ class BookEditor {
             // photo not in current strip (e.g. placed from a different session) — show without navigation
             this._previewPhotoId = photoId;
             this._previewIdx = 0;
-            document.getElementById('photoPreviewImg').src = `${CONFIG.WORKER_URL}/${photoId}?w=1600`;
+            document.getElementById('photoPreviewImg').src = `${CONFIG.WORKER_URL}/${photoId}?w=${PREVIEW_W}`;
+            this._resetPreviewOriginal({ id: photoId, name: photoId.split('/').pop() });
             document.getElementById('photoPreviewCounter').textContent = '';
             document.getElementById('photoPreviewUseBtn').style.display = this.pendingSlotIdx >= 0 ? '' : 'none';
             document.getElementById('photoPreviewPrev').disabled = true;
@@ -832,6 +839,56 @@ class BookEditor {
         document.getElementById('photoPreviewModal').classList.add('open');
     }
 
+    // Browsing the strip is almost always sequential, so fetch the photos on
+    // either side while the current one is being looked at. They land in the
+    // browser cache, and arrowing across becomes instant.
+    _preloadNeighbours(idx) {
+        const photos = this.libraryPhotos;
+        for (const i of [idx + 1, idx - 1]) {
+            const p = photos[i];
+            if (!p) continue;
+            const url = `${CONFIG.WORKER_URL}/${p.id}?w=${PREVIEW_W}`;
+            if (this._preloaded.has(url)) continue;
+            this._preloaded.add(url);
+            const img = new Image();
+            img.decoding = 'async';
+            img.src = url;
+        }
+    }
+
+    // The preview is a downscaled copy; judging focus or a blink needs the
+    // real thing, so offer it explicitly rather than paying for it every time.
+    _resetPreviewOriginal(photo) {
+        const btn = document.getElementById('photoPreviewOriginalBtn');
+        const link = document.getElementById('photoPreviewDownload');
+        const url = `${CONFIG.WORKER_URL}/${photo.id}`;
+        if (link) {
+            link.href = url;
+            link.download = photo.name || '';
+        }
+        if (!btn) return;
+        btn.style.display = '';
+        btn.disabled = false;
+        btn.textContent = '看原圖';
+        btn.onclick = () => {
+            btn.disabled = true;
+            btn.textContent = '載入原圖…';
+            const img = document.getElementById('photoPreviewImg');
+            const full = new Image();
+            full.onload = () => {
+                // the user may have moved on while it downloaded
+                if (this._previewPhotoId !== photo.id) return;
+                img.src = url;
+                btn.textContent = '已是原圖';
+            };
+            full.onerror = () => {
+                btn.disabled = false;
+                btn.textContent = '看原圖（載入失敗）';
+            };
+            full.src = url;
+        };
+    }
+
     _showPreviewAt(idx) {
         const photos = this.libraryPhotos;
         if (!photos.length) return;
@@ -840,11 +897,13 @@ class BookEditor {
         const photo = photos[idx];
         this._previewPhotoId = photo.id;
 
-        document.getElementById('photoPreviewImg').src = `${CONFIG.WORKER_URL}/${photo.id}?w=1600`;
+        document.getElementById('photoPreviewImg').src = `${CONFIG.WORKER_URL}/${photo.id}?w=${PREVIEW_W}`;
         document.getElementById('photoPreviewCounter').textContent = `${idx + 1} / ${photos.length}`;
         document.getElementById('photoPreviewUseBtn').style.display = this.pendingSlotIdx >= 0 ? '' : 'none';
         document.getElementById('photoPreviewPrev').disabled = idx === 0;
         document.getElementById('photoPreviewNext').disabled = idx === photos.length - 1;
+        this._resetPreviewOriginal(photo);
+        this._preloadNeighbours(idx);
 
         // sync thumbnail highlight + scroll into view
         document.querySelectorAll('.strip-photo').forEach(el => el.classList.remove('preview-active'));

@@ -8,6 +8,7 @@ import { fakeBucket, ctx, req } from './fakes.mjs';
 const PHOTOS = {
   '2026/wedding/a.jpg': 'ORIGINAL-A-pretend-this-is-25MB',
   '_thumbs/400/2026/wedding/a.jpg.thumb': 'THUMB-400-A',
+  '_thumbs/1200/2026/wedding/a.jpg.thumb': 'THUMB-1200-A',
   '_thumbs/1600/2026/wedding/a.jpg.thumb': 'THUMB-1600-A',
   // uploaded before thumbnails existed — has no variants
   '2026/wedding/old.jpg': 'ORIGINAL-OLD',
@@ -23,13 +24,30 @@ test('?w= serves the small thumbnail, not the original', async () => {
 });
 
 test('a width between buckets rounds up to the next bucket', async () => {
-  // the sidebar asks for 240 and the page canvas for 1200
   assert.equal(await (await get('/2026/wedding/a.jpg?w=240')).text(), 'THUMB-400-A');
-  assert.equal(await (await get('/2026/wedding/a.jpg?w=1200')).text(), 'THUMB-1600-A');
+  assert.equal(await (await get('/2026/wedding/a.jpg?w=401')).text(), 'THUMB-1200-A');
 });
 
 test('a width above every bucket clamps to the largest thumbnail', async () => {
   assert.equal(await (await get('/2026/wedding/a.jpg?w=99999')).text(), 'THUMB-1600-A');
+});
+
+test('a missing bucket falls through to a larger one, not to the original', async () => {
+  // photos uploaded before a bucket existed only have the older sizes; serving
+  // them the original instead would make adding a bucket a slowdown
+  const older = () => ({ imagepicker: fakeBucket({
+    '2026/old.jpg': 'ORIGINAL-OLD-huge',
+    '_thumbs/400/2026/old.jpg.thumb': 'OLD-400',
+    '_thumbs/1600/2026/old.jpg.thumb': 'OLD-1600',
+  }) });
+  const res = await worker.fetch(req('/2026/old.jpg?w=1200'), older(), ctx);
+  assert.equal(await res.text(), 'OLD-1600');
+});
+
+test('the original is still the last resort when no bucket exists', async () => {
+  const none = () => ({ imagepicker: fakeBucket({ '2026/bare.jpg': 'ONLY-ORIGINAL' }) });
+  const res = await worker.fetch(req('/2026/bare.jpg?w=1200'), none(), ctx);
+  assert.equal(await res.text(), 'ONLY-ORIGINAL');
 });
 
 test('no ?w= serves the untouched original (export, print, download)', async () => {

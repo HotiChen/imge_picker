@@ -7,13 +7,18 @@ const corsHeaders = {
 
 // ─── Thumbnail helpers ───────────────────────────────────────────────────────
 // Thumbnails are generated in the browser at upload time and stored alongside
-// the original as `_thumbs/<bucket>/<key>.thumb`. Serving falls back to the
-// original whenever a variant is missing, so pre-thumbnail uploads still work.
+// the original as `_thumbs/<bucket>/<key>.thumb`.
 const THUMB_PREFIX = '_thumbs/';
-const THUMB_BUCKETS = [400, 1600];
+const THUMB_BUCKETS = [400, 1200, 1600];
 
-function thumbBucket(width) {
-  return THUMB_BUCKETS.find(b => width <= b) || THUMB_BUCKETS[THUMB_BUCKETS.length - 1];
+// Every bucket at least as large as the requested width, smallest first, then
+// the original last. Falling straight back to the original would mean that
+// introducing a new bucket makes every already-uploaded photo load at full
+// size — slower than before the bucket existed.
+function thumbCandidates(width, key) {
+  const usable = THUMB_BUCKETS.filter(b => b >= width);
+  if (!usable.length) usable.push(THUMB_BUCKETS[THUMB_BUCKETS.length - 1]);
+  return usable.map(b => `${THUMB_PREFIX}${b}/${key}.thumb`);
 }
 
 function preconditionStatus(request) {
@@ -395,7 +400,7 @@ export default {
       const wanted = parseInt(params.get('w'), 10);
       const candidates = [];
       if (Number.isFinite(wanted) && wanted > 0 && !key.startsWith(THUMB_PREFIX)) {
-        candidates.push(`${THUMB_PREFIX}${thumbBucket(wanted)}/${key}.thumb`);
+        candidates.push(...thumbCandidates(wanted, key));
       }
       candidates.push(key);
 
