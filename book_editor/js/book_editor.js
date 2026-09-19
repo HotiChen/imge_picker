@@ -819,7 +819,7 @@ class BookEditor {
             // photo not in current strip (e.g. placed from a different session) — show without navigation
             this._previewPhotoId = photoId;
             this._previewIdx = 0;
-            document.getElementById('photoPreviewImg').src = `${CONFIG.WORKER_URL}/${photoId}`;
+            document.getElementById('photoPreviewImg').src = `${CONFIG.WORKER_URL}/${photoId}?w=1600`;
             document.getElementById('photoPreviewCounter').textContent = '';
             document.getElementById('photoPreviewUseBtn').style.display = this.pendingSlotIdx >= 0 ? '' : 'none';
             document.getElementById('photoPreviewPrev').disabled = true;
@@ -840,7 +840,7 @@ class BookEditor {
         const photo = photos[idx];
         this._previewPhotoId = photo.id;
 
-        document.getElementById('photoPreviewImg').src = `${CONFIG.WORKER_URL}/${photo.id}`;
+        document.getElementById('photoPreviewImg').src = `${CONFIG.WORKER_URL}/${photo.id}?w=1600`;
         document.getElementById('photoPreviewCounter').textContent = `${idx + 1} / ${photos.length}`;
         document.getElementById('photoPreviewUseBtn').style.display = this.pendingSlotIdx >= 0 ? '' : 'none';
         document.getElementById('photoPreviewPrev').disabled = idx === 0;
@@ -948,7 +948,7 @@ class BookEditor {
             return;
         }
 
-        const src = `${CONFIG.WORKER_URL}/${bgImage.photoId}`;
+        const src = `${CONFIG.WORKER_URL}/${bgImage.photoId}?w=400`;
         if (preview) preview.innerHTML = `<img src="${src}" style="width:100%;height:100%;object-fit:cover;display:block;">`;
         const opPct = Math.round((bgImage.opacity ?? 1) * 100);
         if (slider) slider.value = opPct;
@@ -1005,8 +1005,8 @@ class BookEditor {
         }
 
         grid.innerHTML = photos.map(p => {
-            const src = `${CONFIG.WORKER_URL}/${p.id}`;
-            return `<div class="modal-photo bg-picker-photo" data-photo-id="${p.id}" title="${p.name}"><img src="${src}" loading="lazy"></div>`;
+            const src = `${CONFIG.WORKER_URL}/${p.id}?w=400`;
+            return `<div class="modal-photo bg-picker-photo" data-photo-id="${p.id}" title="${p.name}"><img src="${src}" loading="lazy" decoding="async"></div>`;
         }).join('');
         grid.querySelectorAll('.bg-picker-photo').forEach(el => {
             el.addEventListener('click', () => this.setBgImage(el.dataset.photoId));
@@ -2174,7 +2174,7 @@ class BookEditor {
             const date = new Date(b.updatedAt).toLocaleDateString('zh-TW');
             const isCurrent = b.id === this.currentBookId;
             const [statusLabel, statusClass] = statusMap[b.status || 'draft'] || statusMap.draft;
-            const thumbUrl = b.coverPhotoId ? `${CONFIG.WORKER_URL}/${encodeURIComponent(b.coverPhotoId)}` : '';
+            const thumbUrl = b.coverPhotoId ? `${CONFIG.WORKER_URL}/${encodeURIComponent(b.coverPhotoId)}?w=400` : '';
             const folder = b.clientFolder || '';
             const folderShort = folder.length > 22 ? '…' + folder.slice(-20) : folder;
             return `<div class="books-row${isCurrent ? ' books-row--current' : ''}" data-id="${b.id}" data-idx="${i}">

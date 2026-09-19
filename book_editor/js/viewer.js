@@ -202,7 +202,7 @@ const Viewer = {
 
             grid.innerHTML = allPhotos.map(photo => `
                 <div class="viewer-picker-photo" data-photo-id="${photo.id}" title="${photo.name}">
-                    <img src="${CONFIG.WORKER_URL}/${photo.id}" loading="lazy">
+                    <img src="${CONFIG.WORKER_URL}/${photo.id}?w=400" loading="lazy" decoding="async">
                 </div>
             `).join('');
 
