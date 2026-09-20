@@ -122,23 +122,42 @@
       .catch(function (e) { done(false, String(e.message || e)); return 0; });
   }
 
-  document.getElementById('measureBtn').addEventListener('click', function () {
-    var target = document.getElementById('sizeRows');
-    target.innerHTML = '';
-    var folder = document.getElementById('folder').value.trim();
-
-    fetch(WORKER + '/?list=' + encodeURIComponent(folder))
+  // The listing only reports one level, so a folder holding nothing but
+  // subfolders looks empty. Walk down until a photo turns up.
+  function findPhoto(folder, depth) {
+    return fetch(WORKER + '/?list=' + encodeURIComponent(folder))
       .then(function (r) { return r.json(); })
       .then(function (data) {
         var photos = (data && data.data) || [];
-        if (!photos.length) {
-          target.innerHTML = '<div class="row"><span class="n">這個路徑沒有照片</span></div>';
+        if (photos.length) return { key: photos[0].id, folder: folder, count: photos.length };
+        var subs = (data && data.folders) || [];
+        if (!subs.length || depth >= 4) return null;
+        return subs.reduce(function (chain, sub) {
+          return chain.then(function (found) {
+            return found || findPhoto(sub, depth + 1);
+          });
+        }, Promise.resolve(null));
+      })
+      .catch(function () { return null; });
+  }
+
+  document.getElementById('measureBtn').addEventListener('click', function () {
+    var target = document.getElementById('sizeRows');
+    target.innerHTML = '<div class="row"><span class="n">尋找照片中…</span></div>';
+    var folder = document.getElementById('folder').value.trim();
+
+    findPhoto(folder, 0)
+      .then(function (found) {
+        target.innerHTML = '';
+        if (!found) {
+          target.innerHTML = '<div class="row"><span class="n">' +
+            '這個路徑底下找不到照片（已往下找 4 層）</span></div>';
           return;
         }
-        var key = photos[0].id;
+        var key = found.key;
         var head = document.createElement('div');
         head.style.cssText = 'color:#8c8375;font-size:12px;margin:6px 0;word-break:break-all;';
-        head.textContent = '量測對象：' + key + '（此資料夾共 ' + photos.length + ' 張）';
+        head.textContent = '量測對象：' + key + '（' + found.folder + ' 共 ' + found.count + ' 張）';
         target.appendChild(head);
 
         var sizes = 0;
