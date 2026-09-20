@@ -111,8 +111,10 @@ function _coverImgHTML(src, crop, scale, rotation, lazy) {
 // off, the safe margin to keep faces and text inside, and the spine down the
 // middle. Lives here rather than in the editor so the client's preview shows
 // exactly the same lines the photographer is working to.
-function appendPageGuides(canvas, displayW, displayH, settings) {
-    const bleedMm = 3, safeMm = 3;
+// bleedMm comes from the book, because every print shop asks for a different
+// one; safeMm is a rule of thumb for keeping faces off the fold and the trim.
+function appendPageGuides(canvas, displayW, displayH, settings, bleedMm = 3) {
+    const safeMm = 3;
     const scaleX = displayW / (settings.width * 10);   // px per mm
     const scaleY = displayH / (settings.height * 10);
     const bleedX = bleedMm * scaleX, bleedY = bleedMm * scaleY;

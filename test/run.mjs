@@ -241,7 +241,7 @@ const GRID_CHECK = sel => {
 const PHOTOS = n => Array.from({ length: n }, (_, i) =>
   ({ id: `20260819/p${i}.jpg`, name: `p${i}.jpg`, size: 9e6, rating: 0 }));
 
-function mockWorker(count) {
+function mockWorker(count, extraSettings = {}) {
   return async page => {
     await page.route('**/imagepicker.hotichen.workers.dev/**', route => {
       const u = new URL(route.request().url());
@@ -250,7 +250,8 @@ function mockWorker(count) {
       if (u.pathname.includes('/api/books/'))
         return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
           name: 'T', clientFolders: ['20260819/'],
-          settings: { width: 57, height: 21, dpi: 300 }, coverSettings: { width: 20, height: 20, dpi: 300 },
+          settings: { width: 57, height: 21, dpi: 300, ...extraSettings },
+          coverSettings: { width: 20, height: 20, dpi: 300 },
           pages: [{ type: 'inner', layout: '2-up-h', textLayers: [],
             slots: [{ photoId: '20260819/p0.jpg', crop: { x: 0, y: 0, scale: 1 } },
                     { photoId: '20260819/p1.jpg', crop: { x: 0, y: 0, scale: 1 } }] }] }) });
@@ -387,6 +388,78 @@ await suite('editor guides — unchanged after moving them into layouts.js',
     },
     before: mockWorker(8),
   });
+
+// Every print shop asks for a different bleed, so it is a per-book setting —
+// and the client's preview has to show the photographer's number, not a
+// default that quietly disagrees with what is being sent to print.
+const RING_PX = () => {
+  const c = document.querySelector('.page-canvas');
+  // computed form is "rgba(...) 0px 0px 0px <spread>px" — the spread is last
+  const px = (getComputedStyle(c).boxShadow || '').match(/-?\d+(?:\.\d+)?px/g);
+  return px ? parseFloat(px[px.length - 1]) : 0;
+};
+
+await suite('bleed is a book setting the editor can change',
+  `${base}/book_editor/index.html`,
+  async page => {
+    const out = [];
+    const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+    await page.waitForFunction(() => !!window.bookEditor, null, { timeout: 5000 });
+    await page.waitForTimeout(500);
+    await page.evaluate(() => document.getElementById('tourCard')?.remove());
+
+    ok('defaults to 3mm', (await page.inputValue('#bookBleed')) === '3');
+    await page.click('#guideToggleBtn');
+    await page.waitForTimeout(400);
+    const at3 = await page.evaluate(RING_PX);
+    ok('3mm draws a ring', at3 > 0, String(at3));
+
+    await page.fill('#bookBleed', '10');
+    await page.dispatchEvent('#bookBleed', 'change');
+    await page.waitForTimeout(450);
+    const at10 = await page.evaluate(RING_PX);
+    ok('the ring follows the number', Math.abs(at10 / at3 - 10 / 3) < 0.35,
+      `${at3} → ${at10}, ratio ${(at10 / at3).toFixed(2)}`);
+    ok('the label follows too',
+      /10\s*mm/.test(await page.evaluate(() =>
+        [...document.querySelectorAll('.guide-overlay span')].map(s => s.textContent).find(t => t.includes('出血')) || '')));
+    ok('it is stored on the book', (await page.evaluate(() => bookEditor.book.settings.bleed)) === 10);
+
+    await page.fill('#bookBleed', '0');
+    await page.dispatchEvent('#bookBleed', 'change');
+    await page.waitForTimeout(400);
+    ok('0mm is allowed', (await page.evaluate(RING_PX)) === 0);
+    return out;
+  },
+  {
+    initScript: () => {
+      sessionStorage.setItem('studio_token', 'x');
+      try { localStorage.setItem('book_editor_tour_done', '1'); } catch (e) {}
+    },
+    before: mockWorker(8),
+  });
+
+await suite("client preview uses the photographer's bleed, not a default",
+  `${base}/book_editor/view.html?id=t`,
+  async page => {
+    const out = [];
+    const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+    await page.waitForFunction(() => typeof Viewer !== 'undefined' && !!Viewer.book, null, { timeout: 5000 });
+    await page.click('#guideToggleBtn');
+    await page.waitForTimeout(400);
+    const { px, mmPx } = await page.evaluate(() => {
+      const c = document.querySelector('.page-canvas');
+      const all = (getComputedStyle(c).boxShadow || '').match(/-?\d+(?:\.\d+)?px/g) || ['0px'];
+      return {
+        px: parseFloat(all[all.length - 1]),
+        mmPx: c.getBoundingClientRect().width / (Viewer.book.settings.width * 10),
+      };
+    });
+    ok('renders the book\'s 8mm rather than the 3mm default',
+      Math.abs(px / mmPx - 8) < 1.2, `${px.toFixed(1)}px = ${(px / mmPx).toFixed(1)}mm`);
+    return out;
+  },
+  { before: mockWorker(8, { bleed: 8 }) });
 
 await browser.close();
 server.close();

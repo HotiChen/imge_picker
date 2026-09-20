@@ -11,7 +11,7 @@ class BookEditor {
             name: '未命名相本',
             clientFolders: [],
             notifyUrl: '',
-            settings: { width: 20, height: 20, unit: 'cm', dpi: 300 },
+            settings: { width: 20, height: 20, unit: 'cm', dpi: 300, bleed: 3 },
             coverSettings: { width: 20, height: 20, unit: 'cm', dpi: 300 },
             pages: []
         };
@@ -1373,6 +1373,8 @@ class BookEditor {
         if (wEl && wEl !== document.activeElement) wEl.value = s.width ?? 20;
         if (hEl && hEl !== document.activeElement) hEl.value = s.height ?? 20;
         if (dpiEl && dpiEl !== document.activeElement) dpiEl.value = s.dpi ?? 300;
+        const bleedEl = document.getElementById('bookBleed');
+        if (bleedEl && bleedEl !== document.activeElement) bleedEl.value = s.bleed ?? 3;
     }
 
     renderPageList() {
@@ -1496,7 +1498,7 @@ class BookEditor {
         const canvas = area.querySelector('.page-canvas');
         if (canvas) {
             if (this.showGuides) {
-                appendPageGuides(canvas, displayW, displayH, settings);
+                appendPageGuides(canvas, displayW, displayH, settings, this.book.settings?.bleed ?? 3);
             } else {
                 canvas.style.boxShadow = '';
             }
@@ -1918,7 +1920,7 @@ class BookEditor {
         if (!data || !Array.isArray(data.pages)) return false;
         this.book = {
             name: '未命名相本', clientFolders: [], notifyUrl: '',
-            settings: { width: 20, height: 20, unit: 'cm', dpi: 300 },
+            settings: { width: 20, height: 20, unit: 'cm', dpi: 300, bleed: 3 },
             coverSettings: { width: 20, height: 20, unit: 'cm', dpi: 300 },
             pages: [], ...data,
             settings: { width: 20, height: 20, unit: 'cm', dpi: 300, ...(data.settings || {}) },
@@ -2048,7 +2050,7 @@ class BookEditor {
                     name: '未命名相本',
                     clientFolders: [],
                     notifyUrl: '',
-                    settings: { width: 20, height: 20, unit: 'cm', dpi: 300 },
+                    settings: { width: 20, height: 20, unit: 'cm', dpi: 300, bleed: 3 },
                     coverSettings: { width: 20, height: 20, unit: 'cm', dpi: 300 },
                     pages: [],
                     ...parsed
@@ -2641,6 +2643,13 @@ class BookEditor {
         this._on('bookWidth', 'change', e => { this.book.settings.width = parseFloat(e.target.value) || 20; this.renderCurrentPage(); this.saveToStorage(); });
         this._on('bookHeight', 'change', e => { this.book.settings.height = parseFloat(e.target.value) || 20; this.renderCurrentPage(); this.saveToStorage(); });
         this._on('bookDpi', 'change', e => { this.book.settings.dpi = parseInt(e.target.value) || 300; this.saveToStorage(); });
+        this._on('bookBleed', 'change', e => {
+            const mm = parseFloat(e.target.value);
+            this.book.settings.bleed = Number.isFinite(mm) && mm >= 0 ? mm : 3;
+            // redraw so the guide moves with the number while it is showing
+            this.renderCurrentPage(this.cropMode ? this.cropSlotIdx : -1);
+            this.saveToStorage();
+        });
         this._on('coverWidth', 'change', e => { this.book.coverSettings.width = parseFloat(e.target.value) || 20; this.saveToStorage(); });
         this._on('coverHeight', 'change', e => { this.book.coverSettings.height = parseFloat(e.target.value) || 20; this.saveToStorage(); });
 
@@ -2905,7 +2914,7 @@ class BookEditor {
         this._on('clearBookBtn', 'click', async () => {
             if (await this._confirm('確定要清除相本並重新開始？所有頁面都會消失。', '清除重設')) {
                 localStorage.removeItem(`book_editor_${this.currentBookId}`);
-                this.book = { name: '未命名相本', clientFolders: [], notifyUrl: '', settings: { width: 20, height: 20, unit: 'cm', dpi: 300 }, coverSettings: { width: 20, height: 20, unit: 'cm', dpi: 300 }, pages: [] };
+                this.book = { name: '未命名相本', clientFolders: [], notifyUrl: '', settings: { width: 20, height: 20, unit: 'cm', dpi: 300, bleed: 3 }, coverSettings: { width: 20, height: 20, unit: 'cm', dpi: 300 }, pages: [] };
                 this._addPage('cover', 'full-bleed');
                 this._addPage('inner', '2-up-h');
                 this._addPage('inner', '2-up-h');

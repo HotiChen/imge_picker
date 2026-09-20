@@ -150,7 +150,7 @@ const Viewer = {
 
         if (this.showGuides) {
             const canvas = area.querySelector('.page-canvas');
-            if (canvas) appendPageGuides(canvas, displayW, displayH, settings);
+            if (canvas) appendPageGuides(canvas, displayW, displayH, settings, this.book.settings?.bleed ?? 3);
         }
 
         const counter = document.getElementById('pageCounter');
