@@ -1206,6 +1206,103 @@ class BookEditor {
         thumbEl.innerHTML = renderPageThumbnailHTML(page);
     }
 
+    // Lists everything on the page front-to-back. Reordering writes explicit
+    // z values, which is what both the preview and the exporter read.
+    renderLayerPanel() {
+        const list = document.getElementById('layerOrderList');
+        if (!list) return;
+        const page = this.book.pages[this.currentPageIndex];
+        if (!page) { list.innerHTML = ''; return; }
+
+        const layout = LAYOUTS[page.layout] || LAYOUTS['blank'];
+        const order = pageZOrder(page);
+        if (!order.length) {
+            list.innerHTML = '<div style="font-size:0.72rem;color:var(--text-muted);">這一頁沒有內容</div>';
+            return;
+        }
+
+        // front of the page reads first, the way a layers panel usually does
+        const rows = order.slice().reverse();
+        list.innerHTML = rows.map((item, pos) => {
+            const atTop = pos === 0;
+            const atBottom = pos === rows.length - 1;
+            let icon, name, muted = false, selected = false;
+            if (item.kind === 'slot') {
+                const slot = page.slots?.[item.idx];
+                const has = !!slot?.photoId;
+                icon = '🖼';
+                name = has ? `照片 ${item.idx + 1}` : `格子 ${item.idx + 1}（空）`;
+                muted = !has;
+                selected = this.cropMode && this.cropSlotIdx === item.idx;
+                if (!layout.slots?.[item.idx]) return '';   // stale slot, not in this layout
+            } else {
+                const t = page.textLayers?.[item.idx];
+                icon = 'T';
+                name = (t?.text || '').trim() || '(空白文字)';
+                muted = !(t?.text || '').trim();
+                selected = t && t.id === this.selectedTextLayerId;
+            }
+            return `<div class="layer-row${selected ? ' selected' : ''}"
+                         data-kind="${item.kind}" data-idx="${item.idx}">
+                <span class="kind">${icon}</span>
+                <span class="name${muted ? ' muted' : ''}">${_escapeHtml(name)}</span>
+                <button class="layer-move" data-dir="up" title="往前一層" ${atTop ? 'disabled' : ''}>▲</button>
+                <button class="layer-move" data-dir="down" title="往後一層" ${atBottom ? 'disabled' : ''}>▼</button>
+            </div>`;
+        }).join('');
+
+        list.querySelectorAll('.layer-row').forEach(row => {
+            const kind = row.dataset.kind;
+            const idx = parseInt(row.dataset.idx, 10);
+            row.querySelectorAll('.layer-move').forEach(btn => {
+                btn.addEventListener('click', e => {
+                    e.stopPropagation();
+                    this.moveLayer(kind, idx, btn.dataset.dir);
+                });
+            });
+            row.addEventListener('click', () => {
+                if (kind === 'text') {
+                    const t = page.textLayers?.[idx];
+                    if (t) this.selectTextLayer(t.id);
+                } else {
+                    this.enterCropMode(idx);
+                }
+            });
+        });
+    }
+
+    // Swap with the neighbour, then renumber everything so the stored values
+    // stay tidy and no two elements can end up tied.
+    moveLayer(kind, idx, dir) {
+        const page = this.book.pages[this.currentPageIndex];
+        if (!page) return;
+        const order = pageZOrder(page);
+        const at = order.findIndex(i => i.kind === kind && i.idx === idx);
+        const swapWith = dir === 'up' ? at + 1 : at - 1;
+        if (at < 0 || swapWith < 0 || swapWith >= order.length) return;
+
+        [order[at], order[swapWith]] = [order[swapWith], order[at]];
+        order.forEach((item, pos) => {
+            const z = (pos + 1) * 10;
+            if (item.kind === 'slot') {
+                if (page.slots?.[item.idx]) page.slots[item.idx].z = z;
+            } else if (page.textLayers?.[item.idx]) {
+                page.textLayers[item.idx].z = z;
+                // the old above/below flag no longer decides anything; keep it
+                // roughly in step so the text panel's buttons still read true
+                const slotZs = order.filter(i => i.kind === 'slot').map(i => (order.indexOf(i) + 1) * 10);
+                page.textLayers[item.idx].layer =
+                    slotZs.length && z < Math.max(...slotZs) ? 'below' : 'above';
+            }
+        });
+
+        this.renderCurrentPage(this.cropMode ? this.cropSlotIdx : -1);
+        this.renderLayerPanel();
+        this.renderTextLayerPanel();
+        this._updatePageThumbnail(this.currentPageIndex);
+        this.saveToStorage();
+    }
+
     renderTextLayerPanel() {
         const page = this.book.pages[this.currentPageIndex];
         const layers = page?.textLayers || [];
@@ -1358,6 +1455,7 @@ class BookEditor {
         this.updatePageNav();
         this.updateBgImageUI();
         this.renderTextLayerPanel();
+        this.renderLayerPanel();
         this._populateSettingsUI();
     }
 
@@ -1376,6 +1474,7 @@ class BookEditor {
         this.updatePageNav();
         this.updateBgImageUI();
         this.renderTextLayerPanel();
+        this.renderLayerPanel();
     }
 
     _populateSettingsUI() {

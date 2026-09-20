@@ -593,6 +593,82 @@ await suite('page labels — a single-page book counts pages, not spreads',
   },
   { before: mockBook({ pagesPerSheet: 1 }) });
 
+// Stacking order is now explicit data, and two renderers read it. The pair
+// that must never disagree is the preview and the exported file.
+await suite('layer order — one order, honoured by preview and export alike',
+  `${base}/book_editor/test/crop-geometry.test.html`,
+  async page => {
+    await page.addScriptTag({ url: '/book_editor/js/exporter.js' });
+    return page.evaluate(async () => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+
+      const solid = colour => {
+        const c = document.createElement('canvas');
+        c.width = 400; c.height = 400;
+        const x = c.getContext('2d');
+        x.fillStyle = colour; x.fillRect(0, 0, 400, 400);
+        return c.toDataURL('image/png');
+      };
+      const RED = solid('#ff0000'), BLUE = solid('#0000ff');
+      BookExporter._loadImage = src => new Promise(r => {
+        const i = new Image(); i.onload = () => r(i); i.src = /p1/.test(src) ? BLUE : RED;
+      });
+      window._thumbUrl = id => (/p1/.test(id) ? BLUE : RED);
+
+      // two slots deliberately overlapping, so which is in front is visible
+      const mkPage = (extra = {}) => ({
+        type: 'inner', layout: '2-up-h', bg: '#00ff00',
+        slots: [
+          { photoId: 'p0.jpg', fit: 'cover', crop: { x: 0, y: 0, scale: 1 }, override: { x: 10, y: 10, w: 60, h: 60 }, ...(extra.s0 || {}) },
+          { photoId: 'p1.jpg', fit: 'cover', crop: { x: 0, y: 0, scale: 1 }, override: { x: 30, y: 30, w: 60, h: 60 }, ...(extra.s1 || {}) },
+        ],
+        textLayers: [{ id: 't1', text: 'HELLO', x: 50, y: 50, w: 80, size: 10, font: 'Inter',
+                       color: '#ffffff', align: 'center', layer: 'above', ...(extra.t0 || {}) }],
+      });
+
+      const keys = page => pageZOrder(page).map(i => `${i.kind}:${i.idx}`);
+      const legacy = mkPage();
+
+      // an album saved before z existed must stack exactly as it did
+      ok('legacy default is photos in order, text on top',
+        JSON.stringify(keys(legacy)) === JSON.stringify(['slot:0', 'slot:1', 'text:0']), keys(legacy).join(' → '));
+      ok('text flagged below still goes behind the photos',
+        JSON.stringify(keys(mkPage({ t0: { layer: 'below' } }))) === JSON.stringify(['text:0', 'slot:0', 'slot:1']));
+
+      const stage = document.getElementById('stage');
+      const domOrder = pg => {
+        stage.innerHTML = renderPageHTML(pg, 600, 300, -1);
+        return [...stage.querySelectorAll('.page-slot, .page-text-layer')]
+          .map(el => ({ el, z: +getComputedStyle(el).zIndex }))
+          .sort((a, b) => a.z - b.z)
+          .map(x => x.el.classList.contains('page-slot') ? `slot:${x.el.dataset.slotIdx}` : 'text:0');
+      };
+      ok('the preview paints in that order',
+        JSON.stringify(domOrder(legacy)) === JSON.stringify(keys(legacy)), domOrder(legacy).join(' → '));
+
+      const swapped = mkPage({ s0: { z: 50 }, s1: { z: 20 }, t0: { z: 10 } });
+      ok('explicit z reorders', JSON.stringify(keys(swapped)) === JSON.stringify(['text:0', 'slot:1', 'slot:0']));
+      ok('the preview follows', JSON.stringify(domOrder(swapped)) === JSON.stringify(keys(swapped)));
+
+      // the pixel where both slots overlap says who won in the actual file
+      const overlapPixel = async pg => {
+        const url = await BookExporter._renderPage(pg, { width: 20, height: 10, unit: 'cm', dpi: 50, bleed: 0 });
+        const img = await new Promise(r => { const i = new Image(); i.onload = () => r(i); i.src = url; });
+        const c = document.createElement('canvas');
+        c.width = img.naturalWidth; c.height = img.naturalHeight;
+        c.getContext('2d').drawImage(img, 0, 0);
+        const d = c.getContext('2d').getImageData(Math.round(c.width * 0.5), Math.round(c.height * 0.5), 1, 1).data;
+        return [d[0], d[2]];
+      };
+      const [lr, lb] = await overlapPixel(legacy);
+      ok('export agrees: the later photo is in front', lb > 150 && lr < 100, `rgb(${lr},_,${lb})`);
+      const [sr, sb] = await overlapPixel(swapped);
+      ok('export follows a reorder too', sr > 150 && sb < 100, `rgb(${sr},_,${sb})`);
+      return out;
+    });
+  });
+
 await browser.close();
 server.close();
 console.log(failed ? `\n${failed} failing` : '\nall passed');

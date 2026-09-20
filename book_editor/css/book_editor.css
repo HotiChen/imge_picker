@@ -1415,3 +1415,39 @@ html, body {
     cursor: pointer;
 }
 .sync-btn-cancel:hover { background: rgba(255,255,255,0.06); }
+
+/* ─── Layer order panel ─── */
+.layer-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 6px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    font-size: 0.73rem;
+    cursor: pointer;
+    transition: border-color 0.15s;
+}
+.layer-row:hover { border-color: rgba(243,128,32,0.4); }
+.layer-row.selected { border-color: var(--primary); background: rgba(243,128,32,0.08); }
+.layer-row .kind { font-size: 0.85rem; flex-shrink: 0; }
+.layer-row .name {
+    flex: 1; min-width: 0;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    color: var(--text-primary);
+}
+.layer-row .name.muted { color: var(--text-muted); }
+.layer-move {
+    background: none;
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+    border-radius: 3px;
+    width: 20px; height: 20px;
+    line-height: 1;
+    font-size: 0.7rem;
+    cursor: pointer;
+    flex-shrink: 0;
+}
+.layer-move:hover:not(:disabled) { color: var(--primary); border-color: var(--primary); }
+.layer-move:disabled { opacity: 0.25; cursor: default; }

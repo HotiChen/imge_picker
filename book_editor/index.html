@@ -8,7 +8,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;700&family=Noto+Serif+TC:wght@400;700&family=Playfair+Display:ital,wght@0,400;0,700;1,400&family=Cormorant+Garamond:ital,wght@0,400;0,700;1,400&family=Dancing+Script:wght@400;700&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
-    <link rel="stylesheet" href="css/book_editor.css?v=20260920e">
+    <link rel="stylesheet" href="css/book_editor.css?v=20260920f">
 </head>
 <body>
 <div class="app-container">
@@ -267,6 +267,15 @@
                 </div>
             </div>
 
+            <!-- Layer order: everything on this page, front at the top -->
+            <div class="panel-section">
+                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+                    <div class="panel-title" style="margin:0;">圖層順序</div>
+                    <span style="font-size:0.65rem;color:var(--text-muted);">上＝最前面</span>
+                </div>
+                <div id="layerOrderList" style="display:flex;flex-direction:column;gap:4px;"></div>
+            </div>
+
             <!-- Text Layers -->
             <div class="panel-section">
                 <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
@@ -478,17 +487,17 @@
 <!-- Shared from picker -->
 <div id="toastContainer" class="toast-container"></div>
 
-<script src="../js/build-version.js?v=20260920e"></script>
-<script src="../js/config.js?v=20260920e"></script>
-<script src="../js/auth.js?v=20260920e"></script>
-<script src="../js/toast.js?v=20260920e"></script>
-<script src="../js/drive.js?v=20260920e"></script>
+<script src="../js/build-version.js?v=20260920f"></script>
+<script src="../js/config.js?v=20260920f"></script>
+<script src="../js/auth.js?v=20260920f"></script>
+<script src="../js/toast.js?v=20260920f"></script>
+<script src="../js/drive.js?v=20260920f"></script>
 <!-- Book Editor -->
-<script src="js/layouts.js?v=20260920e"></script>
-<script src="js/auto_layout.js?v=20260920e"></script>
-<script src="js/exporter.js?v=20260920e"></script>
-<script src="js/layout_editor.js?v=20260920e"></script>
-<script src="js/tour.js?v=20260920e"></script>
-<script src="js/book_editor.js?v=20260920e"></script>
+<script src="js/layouts.js?v=20260920f"></script>
+<script src="js/auto_layout.js?v=20260920f"></script>
+<script src="js/exporter.js?v=20260920f"></script>
+<script src="js/layout_editor.js?v=20260920f"></script>
+<script src="js/tour.js?v=20260920f"></script>
+<script src="js/book_editor.js?v=20260920f"></script>
 </body>
 </html>

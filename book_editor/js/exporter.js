@@ -129,19 +129,10 @@ const BookExporter = {
         // everything from here is positioned in trim coordinates
         ctx.translate(bleedPx, bleedPx);
 
-        // ③ 文字層（照片下方）
-        this._drawTextLayers(ctx, (page.textLayers || []).filter(t => t.layer === 'below'), pxW, pxH);
-
         const layout = LAYOUTS[page.layout];
-        if (!layout || layout.slots.length === 0) {
-            // ⑤ 文字層（照片上方）even on blank pages
-            this._drawTextLayers(ctx, (page.textLayers || []).filter(t => t.layer !== 'below'), pxW, pxH);
-            return canvas.toDataURL('image/jpeg', 0.95);
-        }
-
         const slotsArray = Array.isArray(page.slots) ? page.slots : [];
 
-        // ④ 預載所有照片
+        // ③ 預載所有照片
         const images = await Promise.all(
             slotsArray.map(slot => {
                 if (!slot?.photoId) return Promise.resolve(null);
@@ -149,8 +140,7 @@ const BookExporter = {
             })
         );
 
-        // ④ 繪製每個 slot
-        layout.slots.forEach((slotDef, idx) => {
+        const drawSlot = (slotDef, idx) => {
             const img = images[idx];
             if (!img) return;
 
@@ -274,10 +264,20 @@ const BookExporter = {
                 ctx.drawImage(img, 0, 0, img.naturalWidth, img.naturalHeight, destImgX, destImgY, drawW, drawH);
             }
             ctx.restore();
-        });
+        };
 
-        // ⑤ 文字層（照片上方）
-        this._drawTextLayers(ctx, (page.textLayers || []).filter(t => t.layer !== 'below'), pxW, pxH);
+        // ④ 依共用的圖層順序繪製 — the preview walks this same list, so what
+        // sits in front on screen sits in front in the file
+        const textLayers = page.textLayers || [];
+        for (const item of pageZOrder(page)) {
+            if (item.kind === 'slot') {
+                const slotDef = layout?.slots?.[item.idx];
+                if (slotDef) drawSlot(slotDef, item.idx);
+            } else {
+                const t = textLayers[item.idx];
+                if (t) this._drawTextLayers(ctx, [t], pxW, pxH);
+            }
+        }
 
         return canvas.toDataURL('image/jpeg', 0.95);
     },

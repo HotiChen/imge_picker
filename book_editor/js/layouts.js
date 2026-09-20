@@ -127,7 +127,7 @@ function appendPageGuides(canvas, displayW, displayH, settings, bleedMm = 3) {
     canvas.querySelector('.guide-overlay')?.remove();
     const el = document.createElement('div');
     el.className = 'guide-overlay';
-    el.style.cssText = 'position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:20;overflow:visible;';
+    el.style.cssText = 'position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:9999;overflow:visible;';
     const label = 'font-size:9px;background:rgba(0,0,0,0.55);padding:1px 5px;border-radius:2px;white-space:nowrap;';
     el.innerHTML = `
         <div style="position:absolute;top:${safeY}px;left:${safeX}px;right:${safeX}px;bottom:${safeY}px;border:1px dashed rgba(66,133,244,0.8);pointer-events:none;"></div>
@@ -162,17 +162,40 @@ function pageLabel(pages, index, settings) {
     return `P${first}–${first + per - 1}`;
 }
 
+// The one place that decides what sits in front of what. The preview and the
+// exporter both walk this, because the last time those two disagreed about
+// geometry the photographer only found out from the exported file.
+//
+// Elements carry an explicit `z`. Anything saved before this existed has none,
+// so the fallbacks below reproduce the old fixed bands exactly — text marked
+// "below" behind the photos, everything else in front — and an old album keeps
+// looking the way it did.
+function pageZOrder(page) {
+    const items = [];
+    (page.slots || []).forEach((slot, idx) => {
+        items.push({ kind: 'slot', idx, z: slot?.z ?? (20 + idx) });
+    });
+    (page.textLayers || []).forEach((t, idx) => {
+        items.push({ kind: 'text', idx, id: t.id, z: t.z ?? (t.layer === 'below' ? 10 : 40 + idx) });
+    });
+    // ties keep their old relative order: photos before text, then by index
+    items.sort((a, b) =>
+        a.z - b.z ||
+        (a.kind === b.kind ? 0 : a.kind === 'slot' ? -1 : 1) ||
+        a.idx - b.idx);
+    return items;
+}
+
 function _escapeHtml(s) {
     return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
 // 產生文字層 HTML
-function _renderTextLayerHTML(t, displayW, selectedId) {
+function _renderTextLayerHTML(t, displayW, selectedId, zIndex) {
     const fontSize = Math.max(8, Math.round(t.size / 100 * displayW));
     const fw = t.bold ? '700' : '400';
     const fs = t.italic ? 'italic' : 'normal';
     const isSelected = t.id === selectedId;
-    const zIndex = t.layer === 'below' ? 1 : 5;
     const lines = _escapeHtml(t.text || '').split('\n').join('<br>');
     return `<div class="page-text-layer${isSelected ? ' text-layer-selected' : ''}" data-text-layer-id="${t.id}"
         style="position:absolute;left:${t.x}%;top:${t.y}%;width:${t.w}%;transform:translate(-50%,-50%);text-align:${t.align};cursor:move;user-select:none;z-index:${zIndex};pointer-events:auto;">
@@ -211,12 +234,10 @@ function renderPageHTML(page, displayW, displayH, cropSlotIdx = -1) {
     // ─── 文字層 ───────────────────────────────────────────────────
     const selectedId = window.bookEditor?.selectedTextLayerId;
     const textLayers = page.textLayers || [];
-    const textBelow = textLayers.filter(t => t.layer === 'below').map(t => _renderTextLayerHTML(t, displayW, selectedId)).join('');
-    const textAbove = textLayers.filter(t => t.layer !== 'below').map(t => _renderTextLayerHTML(t, displayW, selectedId)).join('');
 
     // ─── 照片格子層 ───────────────────────────────────────────────
     const slotsArray = Array.isArray(page.slots) ? page.slots : [];
-    const slotsHTML = layout.slots.map((slotDef, idx) => {
+    const slotHTMLByIdx = layout.slots.map((slotDef, idx) => {
         const slot = slotsArray[idx] || { photoId: null, crop: { x: 0, y: 0, scale: 1 } };
         const isCropActive = idx === cropSlotIdx;
         const crop = slot.crop || { x: 0, y: 0, scale: 1 };
@@ -294,20 +315,31 @@ function renderPageHTML(page, displayW, displayH, cropSlotIdx = -1) {
             <div class="page-slot ${slot.photoId ? 'has-photo' : 'empty'} ${isCropActive ? 'crop-active' : ''}"
                  data-slot-idx="${idx}"
                  data-slot-w="${sw}" data-slot-h="${sh}"
-                 style="position:absolute; left:${sx}%; top:${sy}%; width:${sw}%; height:${sh}%; overflow:hidden; box-sizing:border-box; z-index:2; transform-origin:center center;${slotRotation ? ` transform:rotate(${slotRotation}deg);` : ''}">
+                 style="position:absolute; left:${sx}%; top:${sy}%; width:${sw}%; height:${sh}%; overflow:hidden; box-sizing:border-box; z-index:__Z__; transform-origin:center center;${slotRotation ? ` transform:rotate(${slotRotation}deg);` : ''}">
                 <div class="slot-clip-inner" style="position:absolute;inset:0;overflow:hidden;">
                     ${innerHTML}
                 </div>
             </div>
         `;
+    });
+
+    // ─── 依圖層順序堆疊 ────────────────────────────────────────────
+    // z-index is the position in the shared order, so the panel's list reads
+    // bottom-to-top exactly as it paints.
+    const stacked = pageZOrder(page).map((item, pos) => {
+        const z = pos + 1;
+        if (item.kind === 'slot') {
+            const html = slotHTMLByIdx[item.idx];
+            return html ? html.replace('__Z__', z) : '';
+        }
+        const t = textLayers[item.idx];
+        return t ? _renderTextLayerHTML(t, displayW, selectedId, z) : '';
     }).join('');
 
     return `
         <div class="page-canvas" style="width:${displayW}px; height:${displayH}px; background:${bg}; position:relative; flex-shrink:0; box-shadow:0 4px 24px rgba(0,0,0,0.4);">
             ${bgImageHTML}
-            ${textBelow}
-            ${slotsHTML}
-            ${textAbove}
+            ${stacked}
         </div>
     `;
 }
