@@ -532,6 +532,67 @@ await suite('export extends artwork into the bleed',
     });
   });
 
+// A sheet of this book is a spread, so naming it by its printed page numbers
+// is what lets the photographer and the client talk about the same thing.
+const LABEL_PAGES = [
+  { type: 'cover', layout: 'full-bleed', slots: [{}], textLayers: [] },
+  ...Array.from({ length: 4 }, () => ({ type: 'inner', layout: '2-up-h', slots: [{}, {}], textLayers: [] })),
+  { type: 'back-cover', layout: 'blank', slots: [], textLayers: [] },
+];
+
+function mockBook(settingsExtra) {
+  return async page => {
+    await page.route('**/imagepicker.hotichen.workers.dev/**', route => {
+      const u = new URL(route.request().url());
+      if (u.pathname.endsWith('/status'))
+        return route.fulfill({ status: 200, contentType: 'application/json', body: '{"approved":false}' });
+      if (u.pathname.includes('/api/books/'))
+        return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
+          name: 'T', clientFolders: ['f/'],
+          settings: { width: 57, height: 21, dpi: 300, ...settingsExtra },
+          coverSettings: { width: 28.5, height: 21, dpi: 300 },
+          pages: LABEL_PAGES }) });
+      if (u.searchParams.has('list'))
+        return route.fulfill({ status: 200, contentType: 'application/json',
+          body: '{"status":"success","folders":[],"data":[]}' });
+      route.fulfill({ status: 200, contentType: 'image/png', body: PIXEL });
+    });
+  };
+}
+
+const readLabels = async page => {
+  await page.waitForFunction(() => typeof Viewer !== 'undefined' && !!Viewer.book, null, { timeout: 5000 });
+  const got = [];
+  for (let i = 0; i < 6; i++) {
+    await page.evaluate(n => { Viewer.currentPageIndex = n; Viewer.renderPage(); }, i);
+    await page.waitForTimeout(100);
+    got.push((await page.textContent('#pageCounter')).split('（')[0].replace(/[🔒🔓]/g, '').trim());
+  }
+  return got;
+};
+
+await suite('page labels — a spread is named by the pages it prints as',
+  `${base}/book_editor/view.html?id=t`,
+  async page => {
+    const got = await readLabels(page);
+    const want = ['封面', 'P1–2', 'P3–4', 'P5–6', 'P7–8', '封底'];
+    return [JSON.stringify(got) === JSON.stringify(want)
+      ? `ok    ${got.join(' · ')}`
+      : `FAIL  labels   [${got.join(' · ')} vs ${want.join(' · ')}]`];
+  },
+  { before: mockBook({}) });
+
+await suite('page labels — a single-page book counts pages, not spreads',
+  `${base}/book_editor/view.html?id=t`,
+  async page => {
+    const got = await readLabels(page);
+    const want = ['封面', '第 1 頁', '第 2 頁', '第 3 頁', '第 4 頁', '封底'];
+    return [JSON.stringify(got) === JSON.stringify(want)
+      ? `ok    ${got.join(' · ')}`
+      : `FAIL  labels   [${got.join(' · ')} vs ${want.join(' · ')}]`];
+  },
+  { before: mockBook({ pagesPerSheet: 1 }) });
+
 await browser.close();
 server.close();
 console.log(failed ? `\n${failed} failing` : '\nall passed');

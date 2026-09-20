@@ -145,6 +145,23 @@ function removePageGuides(canvas) {
     canvas.querySelector('.guide-overlay')?.remove();
 }
 
+// What to call a sheet, in the terms the printer and the client both use.
+// An inner sheet of this book is a spread — 57cm wide where a single page is
+// 28.5 — so sheet 1 carries physical pages 1 and 2. Books whose inner sheet is
+// one page set settings.pagesPerSheet to 1.
+function pageLabel(pages, index, settings) {
+    const page = pages[index];
+    if (!page) return '';
+    if (page.type === 'cover') return '封面';
+    if (page.type === 'back-cover') return '封底';
+
+    const nth = pages.slice(0, index + 1).filter(p => p.type === 'inner').length;
+    const per = Math.max(1, settings?.pagesPerSheet ?? 2);
+    if (per === 1) return `第 ${nth} 頁`;
+    const first = (nth - 1) * per + 1;
+    return `P${first}–${first + per - 1}`;
+}
+
 function _escapeHtml(s) {
     return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }

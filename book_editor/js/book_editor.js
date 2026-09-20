@@ -1397,11 +1397,9 @@ class BookEditor {
         const list = document.getElementById('pageList');
         if (!list) return;
 
-        let innerCount = 0;
         list.innerHTML = this.book.pages.map((page, idx) => {
             const isActive = idx === this.currentPageIndex;
-            const innerNum = page.type === 'inner' ? ++innerCount : 0;
-            const label = { cover: '封面', 'back-cover': '封底' }[page.type] || `第 ${innerNum} 頁`;
+            const label = pageLabel(this.book.pages, idx, this.book.settings);
             return `
                 <div class="page-thumb ${isActive ? 'active' : ''} ${page.locked ? 'locked' : ''}" data-page-idx="${idx}">
                     <div class="page-thumb-preview">${renderPageThumbnailHTML(page)}</div>
@@ -1520,7 +1518,9 @@ class BookEditor {
             }
         }
 
-        const counterText = `${this.currentPageIndex + 1} / ${this.book.pages.length}`;
+        // name the sheet, not just its position, so it matches what goes to print
+        const counterText = `${pageLabel(this.book.pages, this.currentPageIndex, this.book.settings)}`
+            + `　${this.currentPageIndex + 1} / ${this.book.pages.length}`;
         const counter = document.getElementById('pageCounter');
         if (counter) counter.textContent = counterText;
         const counterBot = document.getElementById('pageCounterBot');
