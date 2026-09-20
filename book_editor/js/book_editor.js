@@ -589,6 +589,21 @@ class BookEditor {
      * - 將 `wrapper` 元素的 `transform` 屬性更新為 `translate(calc(-50% + cropX/safeScale%), calc(-50% + cropY/safeScale%))`。
      * - 將 `img` 元素的 `objectPosition` 固定為 `'50% 50%'`，以配合 wrapper 的 transform 平移。
      */
+    // The exported file is bigger than the finished page by the bleed, and the
+    // printer trims it back. Spelling the number out avoids sending the wrong
+    // size to a shop that asked for a specific one.
+    _updateExportSizeHint() {
+        const el = document.getElementById('exportSizeHint');
+        if (!el) return;
+        const s = this.book.settings || {};
+        const bleed = Math.max(0, s.bleed ?? 3);
+        const w = (s.width ?? 20) + bleed / 5;   // both sides, mm → cm
+        const h = (s.height ?? 20) + bleed / 5;
+        el.textContent = bleed > 0
+            ? `匯出 ${+w.toFixed(2)} × ${+h.toFixed(2)} cm（含出血）`
+            : `匯出 ${+(s.width ?? 20).toFixed(2)} × ${+(s.height ?? 20).toFixed(2)} cm`;
+    }
+
     _updateSlotTransform(slotIdx) {
         const page = this.book.pages[this.currentPageIndex];
         if (!page || !page.slots[slotIdx]) return;
@@ -1375,6 +1390,7 @@ class BookEditor {
         if (dpiEl && dpiEl !== document.activeElement) dpiEl.value = s.dpi ?? 300;
         const bleedEl = document.getElementById('bookBleed');
         if (bleedEl && bleedEl !== document.activeElement) bleedEl.value = s.bleed ?? 3;
+        this._updateExportSizeHint();
     }
 
     renderPageList() {
@@ -1923,7 +1939,7 @@ class BookEditor {
             settings: { width: 20, height: 20, unit: 'cm', dpi: 300, bleed: 3 },
             coverSettings: { width: 20, height: 20, unit: 'cm', dpi: 300 },
             pages: [], ...data,
-            settings: { width: 20, height: 20, unit: 'cm', dpi: 300, ...(data.settings || {}) },
+            settings: { width: 20, height: 20, unit: 'cm', dpi: 300, bleed: 3, ...(data.settings || {}) },
             coverSettings: { width: 20, height: 20, unit: 'cm', dpi: 300, ...(data.coverSettings || {}) }
         };
         this._restoreCustomLayouts(data);
@@ -2057,7 +2073,7 @@ class BookEditor {
                 };
                 // Ensure nested settings objects are also fully initialized
                 this.book.settings = {
-                    width: 20, height: 20, unit: 'cm', dpi: 300,
+                    width: 20, height: 20, unit: 'cm', dpi: 300, bleed: 3,
                     ...(parsed.settings || {})
                 };
                 this.book.coverSettings = {
@@ -2640,14 +2656,15 @@ class BookEditor {
         this._on('bookName', 'change', e => { this.book.name = e.target.value; this.saveToStorage(); });
 
         // 設定
-        this._on('bookWidth', 'change', e => { this.book.settings.width = parseFloat(e.target.value) || 20; this.renderCurrentPage(); this.saveToStorage(); });
-        this._on('bookHeight', 'change', e => { this.book.settings.height = parseFloat(e.target.value) || 20; this.renderCurrentPage(); this.saveToStorage(); });
+        this._on('bookWidth', 'change', e => { this.book.settings.width = parseFloat(e.target.value) || 20; this.renderCurrentPage(); this._updateExportSizeHint(); this.saveToStorage(); });
+        this._on('bookHeight', 'change', e => { this.book.settings.height = parseFloat(e.target.value) || 20; this.renderCurrentPage(); this._updateExportSizeHint(); this.saveToStorage(); });
         this._on('bookDpi', 'change', e => { this.book.settings.dpi = parseInt(e.target.value) || 300; this.saveToStorage(); });
         this._on('bookBleed', 'change', e => {
             const mm = parseFloat(e.target.value);
             this.book.settings.bleed = Number.isFinite(mm) && mm >= 0 ? mm : 3;
             // redraw so the guide moves with the number while it is showing
             this.renderCurrentPage(this.cropMode ? this.cropSlotIdx : -1);
+            this._updateExportSizeHint();
             this.saveToStorage();
         });
         this._on('coverWidth', 'change', e => { this.book.coverSettings.width = parseFloat(e.target.value) || 20; this.saveToStorage(); });

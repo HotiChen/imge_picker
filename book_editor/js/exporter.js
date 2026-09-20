@@ -18,9 +18,11 @@ const BookExporter = {
         try {
             for (let i = 0; i < book.pages.length; i++) {
                 const page = book.pages[i];
-                const settings = page.type === 'inner'
+                const base = page.type === 'inner'
                     ? book.settings
                     : (book.coverSettings || book.settings);
+                // bleed belongs to the print job, not to one page size
+                const settings = { ...base, bleed: book.settings?.bleed ?? 0 };
 
                 try {
                     const jpeg = await this._renderPage(page, settings);
@@ -65,22 +67,29 @@ const BookExporter = {
             throw new Error('匯出設定缺少尺寸資料，請檢查相本設定');
         }
 
+        // Layout stays in trim coordinates throughout: pxW/pxH are the finished
+        // page. The sheet is bigger by the bleed on every side, and the printer
+        // cuts it back down, so anything meant to run off the edge has to be
+        // painted out into that margin or the cut exposes bare paper.
         const pxW = Math.round(settings.width * dpi / 2.54);
         const pxH = Math.round(settings.height * dpi / 2.54);
+        const bleedPx = Math.round(Math.max(0, settings.bleed || 0) / 10 * dpi / 2.54);
+        const sheetW = pxW + bleedPx * 2;
+        const sheetH = pxH + bleedPx * 2;
 
         const MAX_CANVAS_PX = 16383;
-        if (pxW >= MAX_CANVAS_PX || pxH >= MAX_CANVAS_PX) {
-            throw new Error(`尺寸超過瀏覽器限制 (${pxW}×${pxH}px)，請降低 DPI 或縮小尺寸`);
+        if (sheetW >= MAX_CANVAS_PX || sheetH >= MAX_CANVAS_PX) {
+            throw new Error(`尺寸超過瀏覽器限制 (${sheetW}×${sheetH}px)，請降低 DPI 或縮小尺寸`);
         }
 
         const canvas = document.createElement('canvas');
-        canvas.width = pxW;
-        canvas.height = pxH;
+        canvas.width = sheetW;
+        canvas.height = sheetH;
         const ctx = canvas.getContext('2d');
 
-        // ① 背景色
+        // ① 背景色 — across the whole sheet, bleed included
         ctx.fillStyle = page.bg || '#ffffff';
-        ctx.fillRect(0, 0, pxW, pxH);
+        ctx.fillRect(0, 0, sheetW, sheetH);
 
         // ② 底圖
         if (page.bgImage?.photoId) {
@@ -90,6 +99,8 @@ const BookExporter = {
                 const fit = page.bgImage.fit || 'cover';
                 ctx.save();
                 ctx.globalAlpha = opacity;
+                // a page background is by definition edge-to-edge, so it fills
+                // the sheet rather than stopping at the trim
                 if (fit === 'repeat') {
                     const pattern = ctx.createPattern(bgImg, 'repeat');
                     if (pattern) {
@@ -99,20 +110,24 @@ const BookExporter = {
                             try { pattern.setTransform(new DOMMatrix([sc, 0, 0, sc, 0, 0])); } catch (_) {}
                         }
                         ctx.fillStyle = pattern;
-                        ctx.fillRect(0, 0, pxW, pxH);
+                        ctx.fillRect(0, 0, sheetW, sheetH);
                     }
                 } else if (fit === 'contain') {
+                    // contain is meant to sit inside the page, so it keeps to the trim
                     const s = Math.min(pxW / bgImg.naturalWidth, pxH / bgImg.naturalHeight);
                     const dw = bgImg.naturalWidth * s, dh = bgImg.naturalHeight * s;
-                    ctx.drawImage(bgImg, (pxW - dw) / 2, (pxH - dh) / 2, dw, dh);
+                    ctx.drawImage(bgImg, bleedPx + (pxW - dw) / 2, bleedPx + (pxH - dh) / 2, dw, dh);
                 } else { // cover
-                    const s = Math.max(pxW / bgImg.naturalWidth, pxH / bgImg.naturalHeight);
+                    const s = Math.max(sheetW / bgImg.naturalWidth, sheetH / bgImg.naturalHeight);
                     const dw = bgImg.naturalWidth * s, dh = bgImg.naturalHeight * s;
-                    ctx.drawImage(bgImg, (pxW - dw) / 2, (pxH - dh) / 2, dw, dh);
+                    ctx.drawImage(bgImg, (sheetW - dw) / 2, (sheetH - dh) / 2, dw, dh);
                 }
                 ctx.restore();
             }
         }
+
+        // everything from here is positioned in trim coordinates
+        ctx.translate(bleedPx, bleedPx);
 
         // ③ 文字層（照片下方）
         this._drawTextLayers(ctx, (page.textLayers || []).filter(t => t.layer === 'below'), pxW, pxH);
@@ -146,21 +161,39 @@ const BookExporter = {
             const sh = slot.override?.h ?? slotDef.h;
             const slotRotDeg = slot.override?.rotation ?? 0;
 
-            const slotX = sx / 100 * pxW;
-            const slotY = sy / 100 * pxH;
-            const slotW = sw / 100 * pxW;
-            const slotH = sh / 100 * pxH;
+            // the finished rectangle, which is what the preview shows and what
+            // the crop offsets below are relative to
+            const trimX = sx / 100 * pxW;
+            const trimY = sy / 100 * pxH;
+            const trimW = sw / 100 * pxW;
+            const trimH = sh / 100 * pxH;
+
+            // A slot sitting on the page edge has to keep going into the bleed,
+            // or the cut lands on bare paper. Only the edges that actually
+            // touch grow — an inner slot of a two-up spread keeps its inside
+            // edge where it is.
+            const EDGE = 0.01;
+            const outL = bleedPx && sx <= EDGE ? bleedPx : 0;
+            const outT = bleedPx && sy <= EDGE ? bleedPx : 0;
+            const outR = bleedPx && sx + sw >= 100 - EDGE ? bleedPx : 0;
+            const outB = bleedPx && sy + sh >= 100 - EDGE ? bleedPx : 0;
+
+            const slotX = trimX - outL;
+            const slotY = trimY - outT;
+            const slotW = trimW + outL + outR;
+            const slotH = trimH + outT + outB;
             const crop = slot.crop || { x: 0, y: 0, scale: 1 };
 
             ctx.save();
 
-            // Rotate entire slot (frame + photo) around its center before clipping
+            const trimCx = trimX + trimW / 2;
+            const trimCy = trimY + trimH / 2;
+
+            // Rotate entire slot (frame + photo) around the trim centre before clipping
             if (slotRotDeg !== 0) {
-                const cx = slotX + slotW / 2;
-                const cy = slotY + slotH / 2;
-                ctx.translate(cx, cy);
+                ctx.translate(trimCx, trimCy);
                 ctx.rotate(slotRotDeg * Math.PI / 180);
-                ctx.translate(-cx, -cy);
+                ctx.translate(-trimCx, -trimCy);
             }
 
             ctx.beginPath();
@@ -172,27 +205,25 @@ const BookExporter = {
             // fit-width/fit-height: rotation is applied per-image around image center below
             const useSlotRotation = slot.fit !== 'fit-width' && slot.fit !== 'fit-height';
             if (rotationDeg !== 0 && useSlotRotation) {
-                const cx = slotX + slotW / 2;
-                const cy = slotY + slotH / 2;
-                ctx.translate(cx, cy);
+                ctx.translate(trimCx, trimCy);
                 ctx.rotate(rotationDeg * Math.PI / 180);
-                ctx.translate(-cx, -cy);
+                ctx.translate(-trimCx, -trimCy);
             }
 
             if (slot.fit === 'contain') {
-                const s = Math.min(slotW / img.naturalWidth, slotH / img.naturalHeight);
+                const s = Math.min(trimW / img.naturalWidth, trimH / img.naturalHeight);
                 const drawW = img.naturalWidth * s;
                 const drawH = img.naturalHeight * s;
-                const drawX = slotX + (slotW - drawW) / 2;
-                const drawY = slotY + (slotH - drawH) / 2;
+                const drawX = trimX + (trimW - drawW) / 2;
+                const drawY = trimY + (trimH - drawH) / 2;
                 ctx.drawImage(img, 0, 0, img.naturalWidth, img.naturalHeight, drawX, drawY, drawW, drawH);
             } else if (slot.fit === 'fit-width') {
                 const cropScale = crop.scale || 1;
-                const s = cropScale * slotW / img.naturalWidth;
+                const s = cropScale * trimW / img.naturalWidth;
                 const drawW = img.naturalWidth * s;
                 const drawH = img.naturalHeight * s;
-                const imgCx = slotX + (0.5 + (crop.x || 0)) * slotW;
-                const imgCy = slotY + (0.5 + (crop.y || 0)) * slotH;
+                const imgCx = trimX + (0.5 + (crop.x || 0)) * trimW;
+                const imgCy = trimY + (0.5 + (crop.y || 0)) * trimH;
                 const drawX = imgCx - drawW / 2;
                 const drawY = imgCy - drawH / 2;
                 if (rotationDeg !== 0) {
@@ -203,11 +234,11 @@ const BookExporter = {
                 ctx.drawImage(img, 0, 0, img.naturalWidth, img.naturalHeight, drawX, drawY, drawW, drawH);
             } else if (slot.fit === 'fit-height') {
                 const cropScale = crop.scale || 1;
-                const s = cropScale * slotH / img.naturalHeight;
+                const s = cropScale * trimH / img.naturalHeight;
                 const drawH = img.naturalHeight * s;
                 const drawW = img.naturalWidth * s;
-                const imgCx = slotX + (0.5 + (crop.x || 0)) * slotW;
-                const imgCy = slotY + (0.5 + (crop.y || 0)) * slotH;
+                const imgCx = trimX + (0.5 + (crop.x || 0)) * trimW;
+                const imgCy = trimY + (0.5 + (crop.y || 0)) * trimH;
                 const drawX = imgCx - drawW / 2;
                 const drawY = imgCy - drawH / 2;
                 if (rotationDeg !== 0) {
@@ -229,13 +260,17 @@ const BookExporter = {
                  * - 計算影像在插槽內的目標繪製寬高及位置，在剪裁區域內進行繪製，保證平移超出邊界時亦不會發生拉伸或截斷。
                  */
                 const cropScale = crop.scale || 1;
-                const wW = cropScale * slotW;
-                const wH = cropScale * slotH;
-                const s = Math.max(wW / img.naturalWidth, wH / img.naturalHeight);
+                // Grow symmetrically by the larger of the two sides so the
+                // photo still covers an asymmetric expansion while staying
+                // centred where the preview put it.
+                const coverW = trimW + 2 * Math.max(outL, outR);
+                const coverH = trimH + 2 * Math.max(outT, outB);
+                const s = Math.max(cropScale * coverW / img.naturalWidth,
+                                   cropScale * coverH / img.naturalHeight);
                 const drawW = img.naturalWidth * s;
                 const drawH = img.naturalHeight * s;
-                const destImgX = slotX + (slotW - drawW) / 2 + (crop.x || 0) * slotW;
-                const destImgY = slotY + (slotH - drawH) / 2 + (crop.y || 0) * slotH;
+                const destImgX = trimCx - drawW / 2 + (crop.x || 0) * trimW;
+                const destImgY = trimCy - drawH / 2 + (crop.y || 0) * trimH;
                 ctx.drawImage(img, 0, 0, img.naturalWidth, img.naturalHeight, destImgX, destImgY, drawW, drawH);
             }
             ctx.restore();

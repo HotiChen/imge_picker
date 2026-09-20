@@ -461,6 +461,77 @@ await suite("client preview uses the photographer's bleed, not a default",
   },
   { before: mockWorker(8, { bleed: 8 }) });
 
+// Bleed is print output: if this is wrong the photographer finds out from a
+// printed book. Check the actual pixels, not just that the canvas grew.
+await suite('export extends artwork into the bleed',
+  `${base}/book_editor/test/crop-geometry.test.html`,
+  async page => {
+    await page.addScriptTag({ url: '/book_editor/js/exporter.js' });
+    return page.evaluate(async () => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+
+      // blue only in the outer 5%, red in the middle, so "the photo's edge"
+      // is distinguishable from "the photo's middle stretched outwards"
+      const c0 = document.createElement('canvas');
+      c0.width = 2000; c0.height = 1000;
+      const x0 = c0.getContext('2d');
+      x0.fillStyle = '#0000ff'; x0.fillRect(0, 0, 2000, 1000);
+      x0.fillStyle = '#ff0000'; x0.fillRect(100, 50, 1800, 900);
+      const src = c0.toDataURL('image/png');
+      BookExporter._loadImage = () => new Promise(r => { const i = new Image(); i.onload = () => r(i); i.src = src; });
+
+      const render = async (layout, bleed) => {
+        const url = await BookExporter._renderPage(
+          { type: 'inner', layout, bg: '#00ff00', textLayers: [],
+            slots: [{ photoId: 'p', fit: 'cover', crop: { x: 0, y: 0, scale: 1 } }] },
+          { width: 57, height: 21, unit: 'cm', dpi: 50, bleed });
+        const img = await new Promise(r => { const i = new Image(); i.onload = () => r(i); i.src = url; });
+        const c = document.createElement('canvas');
+        c.width = img.naturalWidth; c.height = img.naturalHeight;
+        c.getContext('2d').drawImage(img, 0, 0);
+        const g = c.getContext('2d');
+        return { w: c.width, h: c.height, px: (x, y) => [...g.getImageData(x, y, 1, 1).data].slice(0, 3) };
+      };
+
+      const trim = await render('full-bleed', 0);
+      const bled = await render('full-bleed', 5);
+      const mmPx = trim.w / 570;
+
+      ok('no bleed leaves the size alone', trim.w === 1122, `${trim.w}×${trim.h}`);
+      ok('5mm adds 5mm to each side, across', Math.abs((bled.w - trim.w) / 2 / mmPx - 5) < 0.6, `${trim.w} → ${bled.w}`);
+      ok('5mm adds 5mm to each side, down', Math.abs((bled.h - trim.h) / 2 / mmPx - 5) < 0.6, `${trim.h} → ${bled.h}`);
+
+      const corners = [[2, 2], [bled.w - 3, 2], [2, bled.h - 3], [bled.w - 3, bled.h - 3]];
+      const bare = corners.filter(([x, y]) => { const [r, g, b] = bled.px(x, y); return g > 200 && r < 100 && b < 100; });
+      ok('the bleed is covered — no page colour at the corners', bare.length === 0, `${bare.length}/4 corners bare`);
+
+      const [er, , eb] = bled.px(4, Math.round(bled.h / 2));
+      ok("the bleed carries the photo's own edge, not its middle", eb > 150 && er < 120, `rgb(${er},_,${eb})`);
+      const [cr, , cb] = bled.px(Math.round(bled.w / 2), Math.round(bled.h / 2));
+      ok('the middle is still the middle', cr > 150 && cb < 120, `rgb(${cr},_,${cb})`);
+
+      // A layout with its own margin must not be dragged outwards on any
+      // side — only edges that actually sit on the page boundary grow.
+      const inset = await render('1-up', 5);
+      const bleedPx = (inset.w - trim.w) / 2;
+      // 1-up is inset 8% all round, so just outside each slot edge is page
+      const probes = {
+        '左': [bleedPx + 0.08 * trim.w - 8, Math.round(inset.h / 2)],
+        '右': [bleedPx + 0.92 * trim.w + 8, Math.round(inset.h / 2)],
+        '上': [Math.round(inset.w / 2), bleedPx + 0.08 * trim.h - 8],
+        '下': [Math.round(inset.w / 2), bleedPx + 0.92 * trim.h + 8],
+      };
+      const spilled = Object.entries(probes).filter(([, [x, y]]) => {
+        const [r, g, b] = inset.px(Math.round(x), Math.round(y));
+        return !(g > 200 && r < 100 && b < 100);
+      }).map(([side]) => side);
+      ok('an inset layout keeps its margin on every side',
+        spilled.length === 0, `照片溢出到：${spilled.join('、') || '無'}`);
+      return out;
+    });
+  });
+
 await browser.close();
 server.close();
 console.log(failed ? `\n${failed} failing` : '\nall passed');
