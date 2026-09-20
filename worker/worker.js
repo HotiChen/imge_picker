@@ -62,8 +62,12 @@ async function getSessionUser(request, env) {
 }
 
 // ─── Admin auth check ────────────────────────────────────────────────────────
+// Fails CLOSED: with no PHOTOGRAPHER_TOKEN configured nothing admin-side is
+// reachable. The old behaviour ("no token set = open") meant a missing or
+// mistyped Cloudflare secret silently threw upload, book writes and every
+// admin route open to anyone who found the Worker URL.
 function isAdminToken(request, env) {
-  if (!env.PHOTOGRAPHER_TOKEN) return true; // no token set = open
+  if (!env.PHOTOGRAPHER_TOKEN) return false;
   const auth = request.headers.get('Authorization') || '';
   const token = auth.replace(/^Bearer\s+/i, '').trim();
   return token === env.PHOTOGRAPHER_TOKEN;
@@ -99,7 +103,6 @@ export default {
 
     // GET /api/auth/verify-admin — check if PHOTOGRAPHER_TOKEN matches
     if (request.method === 'GET' && url.pathname === '/api/auth/verify-admin') {
-      if (!env.PHOTOGRAPHER_TOKEN) return jsonOk({ ok: true });
       if (isAdminToken(request, env)) return jsonOk({ ok: true });
       return jsonErr('Token 不正確', 401);
     }
@@ -250,13 +253,7 @@ export default {
       }
 
       if (request.method === 'PUT' && !pathParts[3]) {
-        if (env.PHOTOGRAPHER_TOKEN) {
-          const auth = request.headers.get('Authorization') || '';
-          const token = auth.replace(/^Bearer\s+/i, '').trim();
-          if (token !== env.PHOTOGRAPHER_TOKEN) {
-            return jsonErr('Unauthorized', 401);
-          }
-        }
+        if (!isAdminToken(request, env)) return jsonErr('Unauthorized', 401);
         await env.imagepicker.put(`_books/${bookId}.json`, await request.text(), {
           httpMetadata: { contentType: 'application/json' }
         });
@@ -344,13 +341,7 @@ export default {
 
     // PUT (upload) — admin only
     if (request.method === 'PUT') {
-      if (env.PHOTOGRAPHER_TOKEN) {
-        const auth = request.headers.get('Authorization') || '';
-        const token = auth.replace(/^Bearer\s+/i, '').trim();
-        if (token !== env.PHOTOGRAPHER_TOKEN) {
-          return jsonErr('Unauthorized', 401);
-        }
-      }
+      if (!isAdminToken(request, env)) return jsonErr('Unauthorized', 401);
       let key = decodeURIComponent(url.pathname.slice(1));
       if (key.startsWith('_assets/')) key = key.slice('_assets/'.length);
       const contentType = request.headers.get('Content-Type') || 'image/jpeg';
