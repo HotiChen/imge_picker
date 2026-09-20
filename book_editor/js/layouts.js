@@ -186,8 +186,13 @@ function pageZOrder(page) {
     return items;
 }
 
+// config.js owns the canonical version; crop-geometry.test.html loads this
+// file on its own, so keep a matching fallback rather than failing there.
 function _escapeHtml(s) {
-    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    if (typeof escapeHtml === 'function') return escapeHtml(s);
+    return String(s ?? '')
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
 // 產生文字層 HTML

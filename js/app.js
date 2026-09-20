@@ -145,12 +145,12 @@ class App {
 
         const crumbs = this.folderStack
             .filter(item => item.name)
-            .map((item, idx) => `<span class="breadcrumb-item" data-idx="${idx}">${item.name}</span>`)
+            .map((item, idx) => `<span class="breadcrumb-item" data-idx="${idx}">${escapeHtml(item.name)}</span>`)
             .join('<span class="breadcrumb-sep"> › </span>');
 
         const currentName = driveManager.currentFolderName;
         const current = currentName
-            ? `<span class="breadcrumb-sep"> › </span><span class="breadcrumb-current">${currentName}</span>`
+            ? `<span class="breadcrumb-sep"> › </span><span class="breadcrumb-current">${escapeHtml(currentName)}</span>`
             : '';
 
         nav.innerHTML = `
@@ -180,7 +180,7 @@ class App {
         card.className = 'folder-card';
         card.innerHTML = `
             <div class="folder-icon">📁</div>
-            <div class="folder-name">${folder.name}</div>
+            <div class="folder-name">${escapeHtml(folder.name)}</div>
         `;
         card.addEventListener('click', () => this.navigateToFolder(folder.id));
         return card;
@@ -700,15 +700,15 @@ class App {
         const imageUrl = driveManager.getImageUrl(photo, 400);
         card.innerHTML = `
             <div class="photo-image-container">
-                <img src="${imageUrl}" class="photo-image" loading="lazy" decoding="async">
+                <img src="${escapeHtml(imageUrl)}" class="photo-image" loading="lazy" decoding="async">
                 <div class="photo-overlay">
                     ${photo.hasAnnotations ? '<span class="photo-badge">✎</span>' : ''}
                 </div>
                 <div class="select-toggle-btn" title="選取此照片"></div>
             </div>
             <div class="photo-info-section">
-                <div class="photo-name">${photo.name}</div>
-                <div class="rating-container" id="rating-${photo.id.replace(/\//g, '_')}"></div>
+                <div class="photo-name">${escapeHtml(photo.name)}</div>
+                <div class="rating-container" id="rating-${escapeHtml(photo.id.replace(/\//g, '_'))}"></div>
             </div>
         `;
 

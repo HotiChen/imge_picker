@@ -822,9 +822,9 @@ class BookEditor {
         }
         grid.innerHTML = folders.map(f => {
             const name = f.replace(/\/$/, '').split('/').pop();
-            return `<div class="lib-folder" data-folder-path="${f}" title="${name}">
+            return `<div class="lib-folder" data-folder-path="${escapeHtml(f)}" title="${escapeHtml(name)}">
                 <span style="font-size:1.2rem;">📁</span>
-                <span class="lib-folder-name">${name}</span>
+                <span class="lib-folder-name">${escapeHtml(name)}</span>
             </div>`;
         }).join('');
         grid.querySelectorAll('.lib-folder').forEach(el => {
@@ -2660,8 +2660,8 @@ class BookEditor {
             const checked = (this.book.clientFolders || []).length === 0
                 || (this.book.clientFolders || []).includes(rootPath);
             container.innerHTML = `<label class="share-folder-item">
-                <input type="checkbox" class="share-folder-cb" value="${rootPath}" ${checked ? 'checked' : ''}>
-                <span>📁 ${rootPath.replace(/\/$/, '').split('/').pop() || rootPath}</span>
+                <input type="checkbox" class="share-folder-cb" value="${escapeHtml(rootPath)}" ${checked ? 'checked' : ''}>
+                <span>📁 ${escapeHtml(rootPath.replace(/\/$/, '').split('/').pop() || rootPath)}</span>
             </label>`;
             return;
         }
@@ -2671,8 +2671,8 @@ class BookEditor {
             const name = f.replace(/\/$/, '').split('/').pop();
             const checked = current.size === 0 || current.has(f);
             return `<label class="share-folder-item">
-                <input type="checkbox" class="share-folder-cb" value="${f}" ${checked ? 'checked' : ''}>
-                <span>📁 ${name}</span>
+                <input type="checkbox" class="share-folder-cb" value="${escapeHtml(f)}" ${checked ? 'checked' : ''}>
+                <span>📁 ${escapeHtml(name)}</span>
             </label>`;
         }).join('');
     }

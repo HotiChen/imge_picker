@@ -737,6 +737,129 @@ await suite('guides stay inside the canvas, under any modal',
     before: mockWorker(5),
   });
 
+// ─── 檔名 escaping ───────────────────────────────────────────────────────────
+// Every name on screen comes from an R2 key, and keys are whatever the
+// uploader called the file. These pages used to write names straight into
+// innerHTML, so a filename could decide what the page rendered — both by
+// opening a tag and by breaking out of an attribute with a quote.
+const XSS = '"><img src=x onerror="window.__xss=1">';
+
+// Counts markup the name should never have produced. Reading it back as text
+// is checked separately: escaping must not mangle what the photographer sees.
+const XSS_PROBE = () => ({
+  fired: !!window.__xss,
+  injected: document.querySelectorAll('img[src="x"]').length,
+});
+
+function xssAssertions(r, label, shownSelector) {
+  const out = [];
+  const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+  ok(`${label} — 惡意檔名沒有變成元素`, r.injected === 0, `注入了 ${r.injected} 個 img`);
+  ok(`${label} — onerror 沒有執行`, r.fired === false, String(r.fired));
+  if (shownSelector) ok(`${label} — 名稱仍照原樣顯示`, r.shown === XSS, JSON.stringify(r.shown));
+  return out;
+}
+
+await suite('檔名 escaping — 主選圖頁（照片名、資料夾名、麵包屑）',
+  `${base}/index.html`,
+  async page => {
+    await page.waitForFunction(() => !!window.app, null, { timeout: 5000 });
+    const r = await page.evaluate(async payload => {
+      app.filteredPhotos = [{ id: '20260819/a.jpg', name: payload, rating: 0 }];
+      app.renderPhotoGrid();
+      const shown = document.querySelector('.photo-name')?.textContent;
+
+      app.currentFolders = [{ id: '20260819/sub/', name: payload }];
+      app.renderFolderGrid();
+      const folderShown = document.querySelector('.folder-name')?.textContent;
+
+      app.folderStack = [{ path: '20260819/', name: payload }];
+      app.updateFolderNav();
+      const crumbShown = document.querySelector('.breadcrumb-item')?.textContent;
+
+      await new Promise(r => setTimeout(r, 400));
+      return {
+        fired: !!window.__xss,
+        injected: document.querySelectorAll('img[src="x"]').length,
+        shown, folderShown, crumbShown,
+      };
+    }, XSS);
+    const out = xssAssertions(r, '主選圖頁', true);
+    const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+    ok('主選圖頁 — 資料夾名仍照原樣顯示', r.folderShown === XSS, JSON.stringify(r.folderShown));
+    ok('主選圖頁 — 麵包屑仍照原樣顯示', r.crumbShown === XSS, JSON.stringify(r.crumbShown));
+    return out;
+  },
+  {
+    initScript: () => sessionStorage.setItem('studio_token', 'x'),
+    before: mockWorker(1),
+  });
+
+await suite('檔名 escaping — 相本編輯器的分享資料夾清單',
+  `${base}/book_editor/index.html`,
+  async page => {
+    await page.waitForFunction(() => !!window.bookEditor, null, { timeout: 5000 });
+    const r = await page.evaluate(async payload => {
+      bookEditor.libFolderStack = ['20260819/'];
+      // the folder list the Worker would hand back, with a hostile name in it
+      bookEditor._fetchFolderDirect = async () => ({
+        photos: [], folders: [`20260819/${payload}/`],
+      });
+      await bookEditor._renderShareFolders();
+      await new Promise(r => setTimeout(r, 400));
+      const cb = document.querySelector('.share-folder-cb');
+      return {
+        fired: !!window.__xss,
+        injected: document.querySelectorAll('img[src="x"]').length,
+        // a quote in the name used to end the value attribute early
+        value: cb?.value,
+        boxes: document.querySelectorAll('.share-folder-cb').length,
+      };
+    }, XSS);
+    const out = xssAssertions(r, '分享資料夾');
+    const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+    ok('分享資料夾 — checkbox 的 value 完整保留路徑',
+      r.value === `20260819/${XSS}/`, JSON.stringify(r.value));
+    ok('分享資料夾 — 只長出一個 checkbox', r.boxes === 1, String(r.boxes));
+    return out;
+  },
+  {
+    initScript: () => {
+      sessionStorage.setItem('studio_token', 'x');
+      try { localStorage.setItem('book_editor_tour_done', '1'); } catch (e) {}
+    },
+    before: mockWorker(1),
+  });
+
+await suite('檔名 escaping — 客戶預覽的選圖 modal',
+  `${base}/book_editor/view.html?id=test`,
+  async page => {
+    await page.waitForFunction(() => typeof Viewer !== 'undefined' && !!Viewer.book, null, { timeout: 5000 });
+    const r = await page.evaluate(async payload => {
+      Viewer.pickerSlotIdx = 0;
+      Viewer._loadFolderRecursive = async () => [{ id: `20260819/${payload}.jpg`, name: payload }];
+      await Viewer._openPhotoPicker();
+      // let any injected <img src=x> finish failing, so onerror is a real check
+      await new Promise(r => setTimeout(r, 400));
+      const tile = document.querySelector('.viewer-picker-photo');
+      return {
+        fired: !!window.__xss,
+        injected: document.querySelectorAll('img[src="x"]').length,
+        title: tile?.getAttribute('title'),
+        photoId: tile?.dataset.photoId,
+        tiles: document.querySelectorAll('.viewer-picker-photo').length,
+      };
+    }, XSS);
+    const out = xssAssertions(r, '客戶選圖 modal');
+    const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+    ok('客戶選圖 modal — title 屬性完整保留檔名', r.title === XSS, JSON.stringify(r.title));
+    ok('客戶選圖 modal — data-photo-id 完整保留 key',
+      r.photoId === `20260819/${XSS}.jpg`, JSON.stringify(r.photoId));
+    ok('客戶選圖 modal — 只長出一個格子', r.tiles === 1, String(r.tiles));
+    return out;
+  },
+  { before: mockWorker(1) });
+
 await browser.close();
 server.close();
 console.log(failed ? `\n${failed} failing` : '\nall passed');

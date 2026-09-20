@@ -11,3 +11,15 @@ const CONFIG = {
     }
 };
 
+// Names on screen come from R2 keys, which are whatever the uploader called the
+// file. Quotes matter as much as angle brackets here: most of these names land
+// in attributes (title=, value=, data-photo-id=), where a bare " ends the
+// attribute and everything after it is parsed as markup.
+function escapeHtml(s) {
+    return String(s ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
