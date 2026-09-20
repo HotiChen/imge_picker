@@ -5,9 +5,12 @@ import assert from 'node:assert/strict';
 import worker from '../worker.js';
 import { fakeBucket, ctx, req } from './fakes.mjs';
 
+// listing is gated now; these tests are about what the listing contains
+const ADMIN = 'secret';
 const listing = async (bucket, prefix = '') => {
   const res = await worker.fetch(
-    req(`/?list=${encodeURIComponent(prefix)}`), { imagepicker: bucket }, ctx
+    req(`/?list=${encodeURIComponent(prefix)}`, { token: ADMIN }),
+    { imagepicker: bucket, PHOTOGRAPHER_TOKEN: ADMIN }, ctx
   );
   assert.equal(res.status, 200);
   return res.json();

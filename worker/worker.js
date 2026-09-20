@@ -73,11 +73,105 @@ function isAdminToken(request, env) {
   return token === env.PHOTOGRAPHER_TOKEN;
 }
 
+// ─── Client share tokens ─────────────────────────────────────────────────────
+// Clients get an album link over LINE. Two things follow. LINE's crawler
+// pre-fetches the URL to build the preview card before anyone taps it, so a
+// token can never be one-time-use and a crawler fetch must not count as the
+// client opening the link. And the client reopens that same chat message for
+// months, so the token rides in the query string rather than in any storage
+// the in-app webview might drop.
+const SHARE_TTL_MS = 90 * 24 * 60 * 60 * 1000;
+// A single album page pulls hundreds of images through the gated object route.
+// Bumping the expiry on each one would be hundreds of D1 writes per view.
+const SHARE_TOUCH_AFTER_MS = 24 * 60 * 60 * 1000;
+const PREVIEW_CRAWLER = /line-poker|facebookexternalhit/i;
+
+function newShareToken() {
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  let binary = '';
+  for (const b of bytes) binary += String.fromCharCode(b);
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+// A token opens folders, not the bucket. The match has to land on a `/`
+// boundary or the folder `20260819/` also reaches `20260819-other/`, which is
+// a different client's wedding.
+function folderCovers(folder, path) {
+  if (typeof folder !== 'string' || !folder) return false;
+  const prefix = folder.endsWith('/') ? folder : folder + '/';
+  // `//x.jpg` reaches us as the key `/x.jpg`, so a bare `/` would open the lot
+  if (prefix === '/') return false;
+  return path === prefix || path.startsWith(prefix);
+}
+
+function shareCovers(share, path) {
+  if (!path) return false;
+  const segments = path.split('/');
+  if (segments.includes('..') || segments.includes('.')) return false;
+  return share.folders.some(f => folderCovers(f, path));
+}
+
+// Thumbnails live under `_thumbs/<width>/<key>.thumb`, so permission on one is
+// permission on the photo it was made from.
+function sourceKey(key) {
+  if (!key.startsWith(THUMB_PREFIX)) return key;
+  const rest = key.slice(THUMB_PREFIX.length);
+  const slash = rest.indexOf('/');
+  if (slash < 1 || !/^\d+$/.test(rest.slice(0, slash))) return key;
+  return rest.slice(slash + 1).replace(/\.thumb$/, '');
+}
+
+// Returns the token row (folders already parsed) or null. Revoked, expired,
+// unknown and "no D1 bound at all" are all deliberately the same answer.
+async function resolveShareToken(request, url, env) {
+  if (!env.DB) return null;
+  const value = url.searchParams.get('t') || request.headers.get('X-Share-Token') || '';
+  if (!value) return null;
+  let row;
+  try {
+    row = await env.DB.prepare('SELECT * FROM share_tokens WHERE token = ?').bind(value).first();
+  } catch { return null; }
+  if (!row || row.revoked_at) return null;
+  const expiry = Date.parse(row.expires_at);
+  if (!Number.isFinite(expiry) || expiry <= Date.now()) return null;
+  let folders;
+  try { folders = JSON.parse(row.folders); } catch { return null; }
+  if (!Array.isArray(folders)) return null;
+  return { ...row, folders };
+}
+
+// Sliding 90-day expiry, throttled to at most one write a day and skipped for
+// preview crawlers so a link nobody opened does not keep renewing itself.
+async function touchShareToken(share, request, env) {
+  if (PREVIEW_CRAWLER.test(request.headers.get('User-Agent') || '')) return;
+  const now = Date.now();
+  const seen = share.last_seen_at ? Date.parse(share.last_seen_at) : 0;
+  if (Number.isFinite(seen) && now - seen < SHARE_TOUCH_AFTER_MS) return;
+  share.last_seen_at = new Date(now).toISOString();
+  share.expires_at = new Date(now + SHARE_TTL_MS).toISOString();
+  // the browser opens an album's images in parallel, so every one of those
+  // requests read the same stale last_seen_at and got here; the WHERE clause
+  // is what keeps all but the first from actually writing
+  const cutoff = new Date(now - SHARE_TOUCH_AFTER_MS).toISOString();
+  try {
+    await env.DB.prepare(
+      'UPDATE share_tokens SET last_seen_at = ?, expires_at = ? WHERE token = ? AND (last_seen_at IS NULL OR last_seen_at < ?)'
+    ).bind(share.last_seen_at, share.expires_at, share.token, cutoff).run();
+  } catch { /* a missed bump just means the next visit tries again */ }
+}
+
+// A share link is a URL sitting in a chat thread. Its responses must not land
+// in any cache another request could read, and because the token is also
+// accepted as a header — which no shared cache keys on — the response has to
+// say so.
+const SHARED_LINK_HEADERS = { 'Cache-Control': 'private, no-store', 'Vary': 'X-Share-Token' };
+
 // ─── JSON response helpers ───────────────────────────────────────────────────
-function jsonOk(data, status = 200) {
+function jsonOk(data, status = 200, extraHeaders) {
   return new Response(JSON.stringify(data), {
     status,
-    headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+    headers: { ...corsHeaders, 'Content-Type': 'application/json', ...extraHeaders }
   });
 }
 
@@ -96,6 +190,10 @@ export default {
     if (request.method === 'OPTIONS') return new Response(null, { headers: corsHeaders });
 
     const pathParts = url.pathname.split('/').filter(Boolean);
+
+    // resolved at most once per request, and only on the routes that need it
+    let sharePromise;
+    const share = () => (sharePromise ??= resolveShareToken(request, url, env));
 
     // ═══════════════════════════════════════════════════════════════════════
     // AUTH ROUTES
@@ -237,19 +335,102 @@ export default {
       return jsonOk({ success: true });
     }
 
+    // POST /api/shares/:token/revoke — kill a link that went to the wrong chat
+    if (request.method === 'POST' && pathParts[0] === 'api' && pathParts[1] === 'shares' && pathParts[2] && pathParts[3] === 'revoke') {
+      if (!isAdminToken(request, env)) return jsonErr('Unauthorized', 401);
+      if (!env.DB) return jsonErr('DB not configured', 500);
+      const result = await env.DB.prepare(
+        'UPDATE share_tokens SET revoked_at = ? WHERE token = ? AND revoked_at IS NULL'
+      ).bind(new Date().toISOString(), pathParts[2]).run();
+      if (!result.meta?.changes) return jsonErr('Not found', 404);
+      return jsonOk({ ok: true });
+    }
+
     // ═══════════════════════════════════════════════════════════════════════
-    // EXISTING BOOK / R2 ROUTES (unchanged)
+    // BOOK / R2 ROUTES — a client reaches these with a share token
     // ═══════════════════════════════════════════════════════════════════════
 
     if (pathParts[0] === 'api' && pathParts[1] === 'books' && pathParts[2]) {
       const bookId = pathParts[2];
+      const admin = isAdminToken(request, env);
+
+      // POST /api/books/:id/share — mint a link for this album
+      if (request.method === 'POST' && pathParts[3] === 'share') {
+        if (!admin) return jsonErr('Unauthorized', 401);
+        if (!env.DB) return jsonErr('DB not configured', 500);
+        const obj = await env.imagepicker.get(`_books/${bookId}.json`);
+        if (!obj) return new Response('Not found', { status: 404, headers: corsHeaders });
+        let book;
+        try { book = JSON.parse(await obj.text()); }
+        catch { return new Response('Invalid book data', { status: 500, headers: corsHeaders }); }
+        let body;
+        try { body = await request.json(); } catch { body = {}; }
+        const token = newShareToken();
+        const now = Date.now();
+        const expiresAt = new Date(now + SHARE_TTL_MS).toISOString();
+        await env.DB.prepare(
+          'INSERT INTO share_tokens (token, book_id, label, folders, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)'
+        ).bind(
+          token, bookId, String(body?.label ?? '').slice(0, 200),
+          JSON.stringify(Array.isArray(book.clientFolders) ? book.clientFolders : []),
+          new Date(now).toISOString(), expiresAt
+        ).run();
+        return jsonOk({ token, expires_at: expiresAt });
+      }
+
+      // GET /api/books/:id/shares — which links are out there, to revoke one
+      if (request.method === 'GET' && pathParts[3] === 'shares') {
+        if (!admin) return jsonErr('Unauthorized', 401);
+        if (!env.DB) return jsonErr('DB not configured', 500);
+        const { results } = await env.DB.prepare(
+          'SELECT token, label, created_at, expires_at, revoked_at, last_seen_at FROM share_tokens WHERE book_id = ? ORDER BY created_at DESC'
+        ).bind(bookId).all();
+        return jsonOk(results);
+      }
+
+      // Everything below is the client-facing album. Without the photographer
+      // token it needs a live share token issued for THIS book.
+      // null for the photographer; the routes below treat that as "no limits
+      // beyond the book's own policy"
+      let bookShare = null;
+      if (!admin) {
+        bookShare = await share();
+        if (!bookShare || bookShare.book_id !== bookId) return jsonErr('Unauthorized', 401);
+        await touchShareToken(bookShare, request, env);
+      }
 
       if (request.method === 'GET' && !pathParts[3]) {
         const obj = await env.imagepicker.get(`_books/${bookId}.json`);
         if (!obj) return new Response('Not found', { status: 404, headers: corsHeaders });
-        return new Response(await obj.text(), {
-          headers: { ...corsHeaders, 'Content-Type': 'application/json', 'Cache-Control': 'no-cache' }
-        });
+        const text = await obj.text();
+        if (!bookShare) {
+          return new Response(text, {
+            headers: { ...corsHeaders, 'Content-Type': 'application/json', 'Cache-Control': 'no-cache' }
+          });
+        }
+        // The stored book carries notifyUrl — a bearer webhook the client
+        // would get in full, and that revoking this link does NOT revoke. Hand
+        // over a whitelist instead of trimming a blacklist, so a field added
+        // to the editor later is private by default.
+        let book;
+        try { book = JSON.parse(text); }
+        catch { return new Response('Invalid book data', { status: 500, headers: corsHeaders }); }
+        return jsonOk({
+          name: book.name,
+          settings: book.settings,
+          coverSettings: book.coverSettings,
+          // the viewer restores these before it sanitises pages; without them
+          // every custom-layout page silently falls back to a default one
+          _customLayouts: book._customLayouts,
+          // slot photoIds are left as they are even when the token cannot
+          // fetch them: the viewer PATCHes `page.slots` back wholesale, so a
+          // nulled slot would be written back as null and destroy the
+          // photographer's placement
+          pages: book.pages,
+          // the token's own snapshot, not the book's current (possibly wider)
+          // list — the viewer builds its photo picker from this
+          clientFolders: bookShare.folders,
+        }, 200, SHARED_LINK_HEADERS);
       }
 
       if (request.method === 'PUT' && !pathParts[3]) {
@@ -277,14 +458,19 @@ export default {
         if (page.locked) {
           return jsonErr('此頁已鎖定，無法修改', 403);
         }
-        const clientFolders = book.clientFolders || [];
-        if (clientFolders.length > 0 && Array.isArray(slots)) {
+        const clientFolders = Array.isArray(book.clientFolders) ? book.clientFolders : [];
+        if (Array.isArray(slots)) {
           for (const slot of slots) {
-            if (slot.photoId) {
-              const allowed = clientFolders.some(f => slot.photoId.startsWith(f));
-              if (!allowed) {
-                return jsonErr('照片不在開放資料夾內', 403);
-              }
+            if (!slot || !slot.photoId) continue;
+            // the book's own policy, which applies to the photographer too
+            if (clientFolders.length > 0 && !clientFolders.some(f => folderCovers(f, slot.photoId))) {
+              return jsonErr('照片不在開放資料夾內', 403);
+            }
+            // and a share token is additionally held to the folders that were
+            // snapshotted when the link was issued — no empty-list escape
+            // hatch, because empty is the default for a new book
+            if (bookShare && !shareCovers(bookShare, slot.photoId)) {
+              return jsonErr('照片不在開放資料夾內', 403);
             }
           }
         }
@@ -304,7 +490,12 @@ export default {
       if (request.method === 'GET' && pathParts[3] === 'status') {
         const obj = await env.imagepicker.get(`_books/${bookId}_status.json`);
         const data = obj ? await obj.text() : JSON.stringify({ approved: false });
-        return new Response(data, { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+        return new Response(data, {
+          headers: {
+            ...corsHeaders, 'Content-Type': 'application/json',
+            ...(bookShare ? SHARED_LINK_HEADERS : {}),
+          }
+        });
       }
 
       if (request.method === 'POST' && pathParts[3] === 'approve') {
@@ -352,6 +543,12 @@ export default {
     // GET list
     const listPrefix = params.get('list');
     if (listPrefix !== null) {
+      let listShare = null;
+      if (!isAdminToken(request, env)) {
+        listShare = await share();
+        if (!listShare || !shareCovers(listShare, listPrefix)) return jsonErr('Unauthorized', 401);
+        await touchShareToken(listShare, request, env);
+      }
       try {
         // R2 list() caps at 1000 per call — follow the cursor or folders with
         // more than 1000 photos silently lose everything past the first page
@@ -377,7 +574,8 @@ export default {
           const name = p.split('/').filter(Boolean).pop() || '';
           return !name.startsWith('_');
         });
-        return jsonOk({ status: 'success', data: files, folders });
+        return jsonOk({ status: 'success', data: files, folders }, 200,
+          listShare ? SHARED_LINK_HEADERS : undefined);
       } catch (e) {
         return jsonErr(e.message, 500);
       }
@@ -386,6 +584,14 @@ export default {
     // GET object by key
     const key = decodeURIComponent(url.pathname.slice(1));
     if (key) {
+      let viaShare = false;
+      if (!isAdminToken(request, env)) {
+        const s = await share();
+        if (!s || !shareCovers(s, sourceKey(key))) return jsonErr('Unauthorized', 401);
+        await touchShareToken(s, request, env);
+        viaShare = true;
+      }
+
       // ?w=N serves a pre-generated thumbnail (written at upload time) when one
       // exists, falling back to the original so old uploads keep working.
       const wanted = parseInt(params.get('w'), 10);
@@ -413,7 +619,11 @@ export default {
         headers.set('Accept-Ranges', 'bytes');
         // a re-upload reuses the same key, so revalidate rather than pin for a
         // year; the conditional GET below makes revalidation a cheap 304
-        headers.set('Cache-Control', 'public, max-age=86400, stale-while-revalidate=604800');
+        // `public` would let a shared proxy keep one client's photos and hand
+        // them to the next request that guessed the URL
+        headers.set('Cache-Control',
+          `${viaShare ? 'private' : 'public'}, max-age=86400, stale-while-revalidate=604800`);
+        if (viaShare) headers.set('Vary', 'X-Share-Token');
 
         // onlyIf failed the precondition → R2 returns metadata with no body
         if (!('body' in object)) {

@@ -35,7 +35,7 @@ test('a thumbnail write lands on the key the image route reads back', async () =
   assert.equal(put.status, 200);
 
   // ...and the browser then asks for it through ?w=
-  const got = await call(bucket, '/2026/a.jpg?w=400', {}, env);
+  const got = await call(bucket, '/2026/a.jpg?w=400', { token: 'secret' }, env);
   assert.equal(await got.text(), 'THUMB-BYTES');
   assert.equal(got.headers.get('Content-Type'), 'image/webp');
 });

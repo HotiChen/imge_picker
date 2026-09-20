@@ -14,8 +14,12 @@ const PHOTOS = {
   '2026/wedding/old.jpg': 'ORIGINAL-OLD',
 };
 
-const env = () => ({ imagepicker: fakeBucket(PHOTOS) });
-const get = (path, headers) => worker.fetch(req(path, { headers }), env(), ctx);
+// the image routes are gated now; these tests are about what comes back once
+// you are through the gate, so they go in as the photographer
+const ADMIN = 'secret';
+const env = () => ({ imagepicker: fakeBucket(PHOTOS), PHOTOGRAPHER_TOKEN: ADMIN });
+const get = (path, headers) =>
+  worker.fetch(req(path, { headers, token: ADMIN }), env(), ctx);
 
 test('?w= serves the small thumbnail, not the original', async () => {
   const res = await get('/2026/wedding/a.jpg?w=400');
@@ -39,14 +43,14 @@ test('a missing bucket falls through to a larger one, not to the original', asyn
     '2026/old.jpg': 'ORIGINAL-OLD-huge',
     '_thumbs/400/2026/old.jpg.thumb': 'OLD-400',
     '_thumbs/1600/2026/old.jpg.thumb': 'OLD-1600',
-  }) });
-  const res = await worker.fetch(req('/2026/old.jpg?w=1200'), older(), ctx);
+  }), PHOTOGRAPHER_TOKEN: ADMIN });
+  const res = await worker.fetch(req('/2026/old.jpg?w=1200', { token: ADMIN }), older(), ctx);
   assert.equal(await res.text(), 'OLD-1600');
 });
 
 test('the original is still the last resort when no bucket exists', async () => {
-  const none = () => ({ imagepicker: fakeBucket({ '2026/bare.jpg': 'ONLY-ORIGINAL' }) });
-  const res = await worker.fetch(req('/2026/bare.jpg?w=1200'), none(), ctx);
+  const none = () => ({ imagepicker: fakeBucket({ '2026/bare.jpg': 'ONLY-ORIGINAL' }), PHOTOGRAPHER_TOKEN: ADMIN });
+  const res = await worker.fetch(req('/2026/bare.jpg?w=1200', { token: ADMIN }), none(), ctx);
   assert.equal(await res.text(), 'ONLY-ORIGINAL');
 });
 

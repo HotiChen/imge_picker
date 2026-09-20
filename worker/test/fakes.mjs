@@ -1,3 +1,6 @@
+import { DatabaseSync } from 'node:sqlite';
+import { readFileSync } from 'node:fs';
+
 // Minimal stand-ins for the R2 and D1 bindings the Worker receives at runtime.
 // They mimic the parts of the real API the Worker actually depends on —
 // notably that R2 get() returns an object WITHOUT a `body` property when an
@@ -106,4 +109,54 @@ export function req(path, { method = 'GET', headers = {}, body, token } = {}) {
   const h = new Headers(headers);
   if (token) h.set('Authorization', `Bearer ${token}`);
   return new Request(`https://worker.test${path}`, { method, headers: h, body });
+}
+
+// D1 stand-in backed by Node's built-in SQLite, running the Worker's real
+// schema.sql. A hand-rolled mock would happily accept a query the real D1
+// rejects, so the tests would pass against SQL that cannot run in production.
+export function fakeDB({ schema } = {}) {
+  const db = new DatabaseSync(':memory:');
+  db.exec(schema ?? readFileSync(new URL('../schema.sql', import.meta.url), 'utf8'));
+
+  const sqlLog = [];
+  let rowsChanged = 0;
+
+  const normalise = v => {
+    if (v === undefined) return null;
+    if (typeof v === 'boolean') return v ? 1 : 0;
+    return v;
+  };
+
+  const result = (stmt, sql, params) => ({
+    async first() {
+      sqlLog.push(sql);
+      return stmt.get(...params) ?? null;
+    },
+    async all() {
+      sqlLog.push(sql);
+      return { success: true, results: stmt.all(...params) }; // D1 wraps rows in {results}
+    },
+    async run() {
+      sqlLog.push(sql);
+      const r = stmt.run(...params);
+      rowsChanged += r.changes;
+      return { success: true, meta: { changes: r.changes, last_row_id: Number(r.lastInsertRowid) } };
+    },
+  });
+
+  return {
+    _db: db,
+    _sql: sqlLog,
+    _writes: () => sqlLog.filter(s => /^\s*(INSERT|UPDATE|DELETE)/i.test(s)),
+    // statements issued vs rows actually changed: under parallel requests only
+    // the second is a meaningful bound
+    _changed: () => rowsChanged,
+    prepare(sql) {
+      const stmt = db.prepare(sql); // throws on malformed SQL, exactly as D1 does
+      return {
+        bind(...args) { return result(stmt, sql, args.map(normalise)); },
+        ...result(stmt, sql, []),
+      };
+    },
+  };
 }
