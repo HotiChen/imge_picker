@@ -251,7 +251,9 @@ function mockWorker(count) {
         return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
           name: 'T', clientFolders: ['20260819/'],
           settings: { width: 57, height: 21, dpi: 300 }, coverSettings: { width: 20, height: 20, dpi: 300 },
-          pages: [{ type: 'inner', layout: '2-up-h', slots: [{}, {}], textLayers: [] }] }) });
+          pages: [{ type: 'inner', layout: '2-up-h', textLayers: [],
+            slots: [{ photoId: '20260819/p0.jpg', crop: { x: 0, y: 0, scale: 1 } },
+                    { photoId: '20260819/p1.jpg', crop: { x: 0, y: 0, scale: 1 } }] }] }) });
       if (u.searchParams.has('list'))
         return route.fulfill({ status: 200, contentType: 'application/json',
           body: JSON.stringify({ status: 'success', folders: [], data: PHOTOS(count) }) });
@@ -302,6 +304,88 @@ await suite('editor picker grid — tiles must not overlap and scroll must reach
       try { localStorage.setItem('book_editor_tour_done', '1'); } catch (e) {}
     },
     before: mockWorker(52),
+  });
+
+// The client sees the same guides the photographer works to, so both pages
+// must draw them from the one implementation in layouts.js.
+const GUIDE_READ = () => {
+  const c = document.querySelector('.page-canvas');
+  const ov = c?.querySelector('.guide-overlay');
+  if (!ov) return { on: false, shadow: c ? getComputedStyle(c).boxShadow : null };
+  const cb = c.getBoundingClientRect();
+  const spine = [...ov.children].find(e => e.tagName === 'DIV' && e.style.left === '50%');
+  const sb = spine?.getBoundingClientRect();
+  return {
+    on: true,
+    shadow: getComputedStyle(c).boxShadow,
+    labels: [...ov.querySelectorAll('span')].map(s => s.textContent.trim()),
+    spineCentred: sb ? Math.abs((sb.left + sb.width / 2) - (cb.left + cb.width / 2)) < 1.5 : null,
+    spineFullHeight: sb ? Math.abs(sb.height - cb.height) < 1.5 : null,
+  };
+};
+
+let clientLabels = null;
+
+await suite('client preview guides — spine, bleed and safe margin',
+  `${base}/book_editor/view.html?id=t`,
+  async page => {
+    const out = [];
+    const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+    await page.waitForFunction(() => typeof Viewer !== 'undefined' && !!Viewer.book, null, { timeout: 5000 });
+    await page.waitForTimeout(300);
+
+    ok('off by default', !(await page.evaluate(GUIDE_READ)).on);
+
+    await page.click('#guideToggleBtn');
+    await page.waitForTimeout(350);
+    const on = await page.evaluate(GUIDE_READ);
+    clientLabels = on.labels;
+    ok('the button turns them on', on.on);
+    ok('spine sits on the centre', on.spineCentred === true, String(on.spineCentred));
+    ok('spine runs the full page height', on.spineFullHeight === true, String(on.spineFullHeight));
+    ok('bleed is drawn', /rgba?\(220, 50, 50/.test(on.shadow || ''), on.shadow);
+    ok('all three are labelled',
+      ['出血', '安全邊距', '書脊'].every(t => (on.labels || []).some(l => l.includes(t))),
+      (on.labels || []).join(' / '));
+
+    // a re-render must not drop them, and turning them off must clean up
+    await page.evaluate(() => Viewer.renderPage());
+    await page.waitForTimeout(350);
+    ok('survive a re-render', (await page.evaluate(GUIDE_READ)).on);
+
+    await page.click('#guideToggleBtn');
+    await page.waitForTimeout(350);
+    const off = await page.evaluate(GUIDE_READ);
+    ok('the button turns them off again', !off.on);
+    ok('bleed is cleared too', !/rgba?\(220, 50, 50/.test(off.shadow || ''), off.shadow);
+    return out;
+  },
+  { before: mockWorker(8) });
+
+await suite('editor guides — unchanged after moving them into layouts.js',
+  `${base}/book_editor/index.html`,
+  async page => {
+    const out = [];
+    const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+    await page.waitForFunction(() => !!window.bookEditor, null, { timeout: 5000 });
+    await page.waitForTimeout(500);
+    await page.evaluate(() => document.getElementById('tourCard')?.remove());
+    await page.click('#guideToggleBtn');
+    await page.waitForTimeout(450);
+    const ed = await page.evaluate(GUIDE_READ);
+    ok('editor still draws guides', ed.on, JSON.stringify(ed));
+    ok('spine sits on the centre', ed.spineCentred === true, String(ed.spineCentred));
+    ok('identical labels to the client preview',
+      JSON.stringify(ed.labels) === JSON.stringify(clientLabels),
+      `${JSON.stringify(ed.labels)} vs ${JSON.stringify(clientLabels)}`);
+    return out;
+  },
+  {
+    initScript: () => {
+      sessionStorage.setItem('studio_token', 'x');
+      try { localStorage.setItem('book_editor_tour_done', '1'); } catch (e) {}
+    },
+    before: mockWorker(8),
   });
 
 await browser.close();

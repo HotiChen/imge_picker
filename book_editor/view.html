@@ -97,6 +97,14 @@
             padding: 8px 20px; font-size: 0.9rem;
         }
         .btn-save:hover:not(:disabled) { background: #304ffe; }
+        /* secondary next to 批准相本, and clearly on/off */
+        .btn-guide {
+            background: transparent; color: #9fa8da;
+            border: 1px solid rgba(255,255,255,0.22);
+            padding: 7px 16px; font-size: 0.85rem;
+        }
+        .btn-guide:hover { color: #fff; border-color: rgba(255,255,255,0.45); }
+        .btn-guide.active { color: #f38020; border-color: #f38020; }
 
         .page-counter { font-size: 0.85rem; color: #9fa8da; min-width: 80px; text-align: center; }
         .sep { width: 1px; height: 24px; background: rgba(255,255,255,0.1); }
@@ -223,6 +231,8 @@
         <span id="pageCounter" class="page-counter">—</span>
         <button id="nextBtn" class="btn btn-icon" disabled>▶</button>
         <div class="sep"></div>
+        <button id="guideToggleBtn" class="btn btn-guide"
+                title="顯示書脊中線、出血範圍與安全邊距">⊞ 參考線</button>
         <button id="saveChangesBtn" class="btn btn-save" style="display:none;">💾 儲存修改</button>
         <button id="approveBtn" class="btn btn-approve">批准相本</button>
     </footer>
@@ -241,8 +251,8 @@
     </div>
 </div>
 
-<script src="../js/config.js?v=20260920"></script>
-<script src="js/layouts.js?v=20260920"></script>
-<script src="js/viewer.js?v=20260920"></script>
+<script src="../js/config.js?v=20260920b"></script>
+<script src="js/layouts.js?v=20260920b"></script>
+<script src="js/viewer.js?v=20260920b"></script>
 </body>
 </html>

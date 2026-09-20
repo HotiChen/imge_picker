@@ -4,6 +4,7 @@ const Viewer = {
     bookId: null,
     changedPages: new Set(),
     pickerSlotIdx: -1,
+    showGuides: false,
 
     async init() {
         const params = new URLSearchParams(location.search);
@@ -146,6 +147,11 @@ const Viewer = {
         }
 
         area.innerHTML = renderPageHTML(page, displayW, displayH);
+
+        if (this.showGuides) {
+            const canvas = area.querySelector('.page-canvas');
+            if (canvas) appendPageGuides(canvas, displayW, displayH, settings);
+        }
 
         const counter = document.getElementById('pageCounter');
         if (counter) {
@@ -318,6 +324,12 @@ const Viewer = {
         });
         document.getElementById('nextBtn').addEventListener('click', () => {
             if (this.currentPageIndex < this.book.pages.length - 1) { this.currentPageIndex++; this.renderPage(); }
+        });
+        document.getElementById('guideToggleBtn')?.addEventListener('click', e => {
+            this.showGuides = !this.showGuides;
+            e.currentTarget.classList.toggle('active', this.showGuides);
+            e.currentTarget.textContent = this.showGuides ? '⊞ 參考線 ✓' : '⊞ 參考線';
+            this.renderPage();
         });
         document.getElementById('approveBtn')?.addEventListener('click', () => this.approve());
         document.getElementById('saveChangesBtn')?.addEventListener('click', () => this.saveChanges());
