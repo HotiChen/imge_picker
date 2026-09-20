@@ -127,7 +127,7 @@ function appendPageGuides(canvas, displayW, displayH, settings, bleedMm = 3) {
     canvas.querySelector('.guide-overlay')?.remove();
     const el = document.createElement('div');
     el.className = 'guide-overlay';
-    el.style.cssText = 'position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:9999;overflow:visible;';
+    el.style.cssText = 'position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:1000;overflow:visible;';
     const label = 'font-size:9px;background:rgba(0,0,0,0.55);padding:1px 5px;border-radius:2px;white-space:nowrap;';
     el.innerHTML = `
         <div style="position:absolute;top:${safeY}px;left:${safeX}px;right:${safeX}px;bottom:${safeY}px;border:1px dashed rgba(66,133,244,0.8);pointer-events:none;"></div>

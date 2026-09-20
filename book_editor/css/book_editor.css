@@ -373,6 +373,11 @@ html, body {
 .page-canvas {
     position: relative;
     flex-shrink: 0;
+    /* Own stacking context: page content and the guides are layered against
+       each other, never against the rest of the app. Without this a high
+       z-index inside the canvas competes with the modals and paints over
+       them — which is exactly what the guides did. */
+    isolation: isolate;
 }
 
 .page-slot {

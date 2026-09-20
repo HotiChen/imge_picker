@@ -669,6 +669,74 @@ await suite('layer order — one order, honoured by preview and export alike',
     });
   });
 
+// The guides have to sit above the artwork to be any use, but the canvas is
+// not the whole app: raising them once let them paint over the photo preview
+// modal. The canvas owns its own stacking context so that cannot recur.
+await suite('guides stay inside the canvas, under any modal',
+  `${base}/book_editor/index.html`,
+  async page => {
+    const out = [];
+    const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+    await page.waitForFunction(() => !!window.bookEditor, null, { timeout: 5000 });
+    await page.waitForTimeout(500);
+    await page.evaluate(() => {
+      document.getElementById('tourCard')?.remove();
+      const pg = bookEditor.book.pages[bookEditor.currentPageIndex];
+      pg.layout = '2-up-h';
+      pg.slots = [{ photoId: 'a.jpg', fit: 'cover', crop: { x: 0, y: 0, scale: 1 } },
+                  { photoId: 'b.jpg', fit: 'cover', crop: { x: 0, y: 0, scale: 1 } }];
+      bookEditor.libraryPhotos = Array.from({ length: 5 }, (_, i) => ({ id: `p${i}.jpg`, name: `p${i}.jpg`, rating: 0 }));
+      bookEditor.renderAll();
+    });
+    await page.waitForTimeout(300);
+    await page.click('#guideToggleBtn');
+    await page.waitForTimeout(350);
+
+    const state = await page.evaluate(() => {
+      const g = document.querySelector('.guide-overlay');
+      const slot = document.querySelector('.page-slot');
+      return g && slot ? {
+        isolated: getComputedStyle(g.parentElement).isolation,
+        aboveContent: +getComputedStyle(g).zIndex > +getComputedStyle(slot).zIndex,
+      } : null;
+    });
+    ok('the canvas isolates its own stacking', state?.isolated === 'isolate', JSON.stringify(state));
+    ok('guides still sit above the page content', state?.aboveContent === true);
+
+    const topmost = () => page.evaluate(() => {
+      const el = document.elementFromPoint(innerWidth / 2, innerHeight / 2);
+      if (!el) return 'none';
+      return el.closest('.guide-overlay') ? 'guide'
+        : el.closest('#photoPreviewModal') ? 'previewModal'
+        : el.closest('.modal-overlay') ? 'modal'
+        : el.closest('.page-canvas') ? 'canvas' : 'other';
+    });
+
+    await page.evaluate(() => {
+      bookEditor._showPreviewAt(0);
+      document.getElementById('photoPreviewModal').classList.add('open');
+    });
+    await page.waitForTimeout(400);
+    let hit = await topmost();
+    ok('the photo preview covers them', hit === 'previewModal', hit);
+
+    await page.evaluate(() => {
+      document.getElementById('photoPreviewModal').classList.remove('open');
+      bookEditor.openPhotoModal(0);
+    });
+    await page.waitForTimeout(400);
+    hit = await topmost();
+    ok('so does the photo picker', hit === 'modal' || hit === 'previewModal', hit);
+    return out;
+  },
+  {
+    initScript: () => {
+      sessionStorage.setItem('studio_token', 'x');
+      try { localStorage.setItem('book_editor_tour_done', '1'); } catch (e) {}
+    },
+    before: mockWorker(5),
+  });
+
 await browser.close();
 server.close();
 console.log(failed ? `\n${failed} failing` : '\nall passed');
