@@ -2341,6 +2341,40 @@ const revokeCalls = m => m.seen.filter(r =>
   for (const l of lines) { if (l.startsWith('FAIL')) failed++; console.log('  ' + l); }
 }
 
+await suite('studio token — the book list thumbnails carry it too',
+  `${base}/book_editor/index.html`,
+  async page => {
+    await page.waitForFunction(() => !!window.bookEditor, null, { timeout: 5000 });
+    const r = await page.evaluate(async () => {
+      // a saved book with a cover photo is what puts an <img> in this modal
+      bookEditor._getBooksList = () => ([{
+        id: 'b-cover', name: 'T', status: 'draft', pages: 4,
+        coverPhotoId: '20260819/p0.jpg', clientFolder: '20260819/',
+        updatedAt: '2026-09-22',
+      }]);
+      await window.StudioToken.ensure();
+      bookEditor._renderBooksModalList();
+      await new Promise(r => setTimeout(r, 200));
+      const img = document.querySelector('#booksModalList img');
+      return { src: img ? img.src : null, token: CONFIG.SHARE_TOKEN || '' };
+    });
+    const out = [];
+    const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+    ok('the cover thumbnail is rendered at all', !!r.src, String(r.src));
+    ok('a studio token is in hand', r.token.length > 0, String(r.token.length));
+    // the one the six other builders were routed through; this one was missed
+    ok('and the thumbnail carries it, like every other <img> on the page',
+      !!r.src && r.src.includes(`t=${encodeURIComponent(r.token)}`), String(r.src));
+    return out;
+  },
+  {
+    initScript: () => {
+      sessionStorage.setItem('studio_token', 'x');
+      try { localStorage.setItem('book_editor_tour_done', '1'); } catch (e) {}
+    },
+    before: shareMock().attach,
+  });
+
 await browser.close();
 server.close();
 console.log(failed ? `\n${failed} failing` : '\nall passed');

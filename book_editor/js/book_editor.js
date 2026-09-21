@@ -2337,7 +2337,7 @@ class BookEditor {
             const date = new Date(b.updatedAt).toLocaleDateString('zh-TW');
             const isCurrent = b.id === this.currentBookId;
             const [statusLabel, statusClass] = statusMap[b.status || 'draft'] || statusMap.draft;
-            const thumbUrl = b.coverPhotoId ? `${CONFIG.WORKER_URL}/${encodeURIComponent(b.coverPhotoId)}?w=400` : '';
+            const thumbUrl = b.coverPhotoId ? _thumbUrl(b.coverPhotoId, 400) : '';
             const folder = b.clientFolder || '';
             const folderShort = folder.length > 22 ? '…' + folder.slice(-20) : folder;
             return `<div class="books-row${isCurrent ? ' books-row--current' : ''}" data-id="${b.id}" data-idx="${i}">
