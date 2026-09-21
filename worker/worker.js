@@ -889,7 +889,12 @@ export default {
         if (!('body' in object)) {
           return new Response(null, { status: preconditionStatus(request), headers });
         }
-        if (object.range && typeof object.range.offset === 'number') {
+        // Only a request that actually asked for a range gets a 206. R2 reports
+        // a range covering the whole object whenever `range` is passed at all,
+        // so trusting it alone served 206 to every <img> — which browsers
+        // refuse to render.
+        if (request.headers.has('Range') &&
+            object.range && typeof object.range.offset === 'number') {
           const start = object.range.offset;
           const end = start + object.range.length - 1;
           headers.set('Content-Range', `bytes ${start}-${end}/${object.size}`);

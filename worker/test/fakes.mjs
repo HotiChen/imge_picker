@@ -60,6 +60,14 @@ export function fakeBucket(initial = {}, { pageSize = 1000 } = {}) {
           range: { offset: start, length: end - start + 1 },
         };
       }
+      // Real R2, handed a Headers object as `range`, reports a range covering
+      // the whole object even when the request carried no Range header. The
+      // fake used to omit it, so every test saw a bare body and the Worker's
+      // "did R2 give me a range" check looked sound while production served
+      // 206 for every <img> and browsers refused to render them.
+      if (opts.range) {
+        return { ...withBody(rec.body), range: { offset: 0, length: rec.body.length } };
+      }
       return withBody(rec.body);
     },
 
