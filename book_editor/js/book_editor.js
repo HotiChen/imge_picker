@@ -671,7 +671,10 @@ class BookEditor {
         if (folderPath && !folderPath.endsWith('/')) folderPath += '/';
         try {
             const url = `${CONFIG.WORKER_URL}/?list=${encodeURIComponent(folderPath)}`;
-            const resp = await fetch(url);
+            // Gated like every other album route. Without this the share
+            // modal's folder picker comes back empty and the photographer
+            // silently saves an album that opens nothing.
+            const resp = await fetch(url, { headers: this._adminHeaders() });
             const result = await resp.json();
             if (result.status !== 'success') return { photos: [], folders: [] };
             const savedRatings = JSON.parse(localStorage.getItem(CONFIG.STORAGE_KEYS.RATINGS) || '{}');
@@ -2029,7 +2032,10 @@ class BookEditor {
     }
 
     async _loadFromCloud() {
-        const r = await fetch(`${CONFIG.WORKER_URL}/api/books/${this.currentBookId}`);
+        // The editor is the photographer's page; the Worker gates this route.
+        const r = await fetch(`${CONFIG.WORKER_URL}/api/books/${this.currentBookId}`, {
+            headers: this._adminHeaders()
+        });
         if (!r.ok) return false;
         const data = await r.json();
         if (!data || !Array.isArray(data.pages)) return false;
@@ -2117,7 +2123,9 @@ class BookEditor {
 
     async _downloadBookFromCloud(id) {
         try {
-            const r = await fetch(`${CONFIG.WORKER_URL}/api/books/${id}`);
+            const r = await fetch(`${CONFIG.WORKER_URL}/api/books/${id}`, {
+                headers: this._adminHeaders()
+            });
             if (!r.ok) throw new Error('雲端找不到此相本');
             const data = await r.json();
             if (!data || !Array.isArray(data.pages)) throw new Error('雲端資料格式錯誤');
@@ -2632,6 +2640,14 @@ class BookEditor {
         });
     }
 
+    // Every Worker route this page touches is photographer-only now, so the
+    // bearer token goes on all of them, not just the writes.
+    _adminHeaders(extra) {
+        const h = { ...(extra || {}) };
+        if (CONFIG.PHOTOGRAPHER_TOKEN) h['Authorization'] = `Bearer ${CONFIG.PHOTOGRAPHER_TOKEN}`;
+        return h;
+    }
+
     async openShareModal() {
         document.getElementById('shareFolderStep').style.display = '';
         document.getElementById('shareUrlStep').style.display = 'none';
@@ -2639,7 +2655,101 @@ class BookEditor {
         // 帶入已儲存的 notify URL
         const notifyInput = document.getElementById('notifyUrlInput');
         if (notifyInput) notifyInput.value = this.book.notifyUrl || '';
+        const labelInput = document.getElementById('shareLabelInput');
+        if (labelInput) labelInput.value = '';
         await this._renderShareFolders();
+        this._renderShareLinks();
+    }
+
+    // ─── 分享連結（發出 / 列出 / 撤銷）────────────
+
+    /**
+     * Mints a share token for this album. The client link is worthless
+     * without one — the Worker 401s every album route otherwise — so a
+     * failure here has to be loud, not a dead link handed to a client.
+     */
+    async _mintShareToken(bookId, label) {
+        const r = await fetch(`${CONFIG.WORKER_URL}/api/books/${bookId}/share`, {
+            method: 'POST',
+            headers: this._adminHeaders({ 'Content-Type': 'application/json' }),
+            body: JSON.stringify({ label })
+        });
+        if (!r.ok) throw new Error(`產生分享連結失敗（${r.status}）`);
+        const data = await r.json();
+        if (!data || !data.token) throw new Error('產生分享連結失敗（回應缺少 token）');
+        return data.token;
+    }
+
+    _shareLinkState(row) {
+        if (row.revoked_at) return 'revoked';
+        const expiry = Date.parse(row.expires_at);
+        // an unreadable expiry is treated as dead, the same way the Worker does
+        return (!Number.isFinite(expiry) || expiry <= Date.now()) ? 'expired' : 'live';
+    }
+
+    _shareDate(value) {
+        const t = Date.parse(value);
+        return Number.isFinite(t) ? new Date(t).toLocaleDateString('zh-TW') : '—';
+    }
+
+    async _renderShareLinks() {
+        const list = document.getElementById('shareLinkList');
+        if (!list) return;
+        const bookId = this.book.cloudId || this.currentBookId;
+        if (!bookId) { list.innerHTML = ''; return; }
+        list.innerHTML = '<p class="share-link-empty">載入中…</p>';
+        let rows;
+        try {
+            const r = await fetch(`${CONFIG.WORKER_URL}/api/books/${bookId}/shares`, {
+                headers: this._adminHeaders()
+            });
+            if (!r.ok) throw new Error(`HTTP ${r.status}`);
+            rows = await r.json();
+        } catch (e) {
+            list.innerHTML = '<p class="share-link-empty">讀取連結清單失敗，請重試。</p>';
+            return;
+        }
+        if (!Array.isArray(rows) || rows.length === 0) {
+            list.innerHTML = '<p class="share-link-empty">還沒發出任何連結。</p>';
+            return;
+        }
+        const stateText = { live: '有效', revoked: '已撤銷', expired: '已過期' };
+        list.innerHTML = rows.map(row => {
+            const state = this._shareLinkState(row);
+            // LINE hands over no identity at all, so this label is the only
+            // thing telling the photographer which link belongs to whom.
+            const label = row.label || '（未命名）';
+            const seen = row.last_seen_at ? `最後開啟 ${this._shareDate(row.last_seen_at)}` : '尚未開啟';
+            return `<div class="share-link-row ${state}" data-token="${escapeHtml(row.token)}">
+                <div class="share-link-main">
+                    <div class="share-link-label">${escapeHtml(label)}</div>
+                    <div class="share-link-meta">發出 ${escapeHtml(this._shareDate(row.created_at))} · 到期 ${escapeHtml(this._shareDate(row.expires_at))} · ${escapeHtml(seen)}</div>
+                </div>
+                <span class="share-link-state">${stateText[state]}</span>
+                ${state === 'live'
+                    ? `<button class="btn btn-danger share-revoke-btn" data-token="${escapeHtml(row.token)}">撤銷</button>`
+                    : ''}
+            </div>`;
+        }).join('');
+    }
+
+    async _revokeShareLink(token) {
+        const row = document.querySelector(`.share-link-row[data-token="${CSS.escape(token)}"]`);
+        const label = row?.querySelector('.share-link-label')?.textContent || '這條連結';
+        const okToKill = await this._confirm(
+            `確定撤銷「${label}」？客戶的相本會立刻打不開，而且無法復原。`, '撤銷連結');
+        if (!okToKill) return;
+        try {
+            const r = await fetch(`${CONFIG.WORKER_URL}/api/shares/${encodeURIComponent(token)}/revoke`, {
+                method: 'POST',
+                headers: this._adminHeaders()
+            });
+            if (!r.ok) throw new Error(`HTTP ${r.status}`);
+            toast.success('連結已撤銷');
+        } catch (e) {
+            toast.error('撤銷失敗：' + e.message);
+        }
+        await this._renderShareLinks();
     }
 
     async _renderShareFolders() {
@@ -2700,7 +2810,13 @@ class BookEditor {
 
             this.saveToStorage();
 
-            const viewUrl = new URL(`view.html?id=${id}`, window.location.href).href;
+            // The old `view.html?id=…` link is dead for clients: every album
+            // route is gated now. Mint a token and hand out a link that works.
+            const label = (document.getElementById('shareLabelInput')?.value || '').trim();
+            const token = await this._mintShareToken(id, label);
+            const viewUrl = new URL(
+                `view.html?id=${encodeURIComponent(id)}&t=${encodeURIComponent(token)}`,
+                window.location.href).href;
             const editUrl = new URL(`index.html?id=${id}`, window.location.href).href;
             const urlInput = document.getElementById('shareUrl');
             if (urlInput) urlInput.value = viewUrl;
@@ -2709,6 +2825,7 @@ class BookEditor {
 
             document.getElementById('shareFolderStep').style.display = 'none';
             document.getElementById('shareUrlStep').style.display = '';
+            this._renderShareLinks();
             this.checkCloudStatus();
         } catch (e) {
             toast.error(e.message || '分享失敗，請確認網路連線');
@@ -2720,7 +2837,9 @@ class BookEditor {
     async checkCloudStatus() {
         if (!this.book.cloudId) return;
         try {
-            const r = await fetch(`${CONFIG.WORKER_URL}/api/books/${this.book.cloudId}/status`);
+            const r = await fetch(`${CONFIG.WORKER_URL}/api/books/${this.book.cloudId}/status`, {
+                headers: this._adminHeaders()
+            });
             if (!r.ok) return;
             const data = await r.json();
             const el = document.getElementById('cloudStatusIndicator');
@@ -2934,6 +3053,11 @@ class BookEditor {
         this._on('shareBtn', 'click', () => this.openShareModal());
         this._on('shareConfirmBtn', 'click', () => this.saveToCloud());
         this._on('closeShareModalBtn', 'click', () => document.getElementById('shareModal')?.classList.remove('active'));
+        // delegated: the rows are re-rendered after every mint and revoke
+        this._on('shareLinkList', 'click', e => {
+            const btn = e.target.closest('.share-revoke-btn');
+            if (btn) this._revokeShareLink(btn.dataset.token);
+        });
         this._on('shareModal', 'click', e => { if (e.target.id === 'shareModal') document.getElementById('shareModal').classList.remove('active'); });
         this._on('copyShareUrlBtn', 'click', () => {
             const url = document.getElementById('shareUrl')?.value;

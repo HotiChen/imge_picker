@@ -54,8 +54,15 @@ const LAYOUTS = {
 
 // 產生縮圖用 URL。寬度直接用 Worker 的縮圖級距，既省一次對應，也避開
 // 舊 ?w=240 / ?w=1200 網址留下的一年期快取（那時回傳的是原檔）。
+//
+// CONFIG.SHARE_TOKEN is set only by the client viewer, which reads it from
+// ?t= in its own URL. The object route is gated, and an <img> cannot send the
+// X-Share-Token header the fetch() calls use, so the token has to travel in
+// the query string here. In the editor it is unset and the URL is unchanged.
 function _thumbUrl(photoId, w = 400) {
-    return `${CONFIG.WORKER_URL}/${photoId}?w=${w}`;
+    const base = `${CONFIG.WORKER_URL}/${photoId}?w=${w}`;
+    const t = (typeof CONFIG !== 'undefined' && CONFIG.SHARE_TOKEN) || '';
+    return t ? `${base}&t=${encodeURIComponent(t)}` : base;
 }
 
 // Positions a cover-mode photo using exactly the geometry exporter.js draws

@@ -3,12 +3,44 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!-- This page holds the photographer's token and mints client share
+         tokens into the DOM; it loads fonts and a CDN script, so keep the
+         URL out of every Referer it sends. -->
+    <meta name="referrer" content="no-referrer">
     <title>相本書編輯器</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;700&family=Noto+Serif+TC:wght@400;700&family=Playfair+Display:ital,wght@0,400;0,700;1,400&family=Cormorant+Garamond:ital,wght@0,400;0,700;1,400&family=Dancing+Script:wght@400;700&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
-    <link rel="stylesheet" href="css/book_editor.css?v=20260921a">
+    <link rel="stylesheet" href="css/book_editor.css?v=20260921b">
+    <style>
+        /* 已發出的分享連結清單。撤銷不可復原，所以「還活著」和「已經死了」
+           必須一眼分得出來，不能只靠旁邊那行小字。 */
+        .share-link-list { max-height: 190px; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; }
+        .share-link-empty { font-size: 0.72rem; color: var(--text-muted); margin: 0; }
+        .share-link-row {
+            display: flex; align-items: center; gap: 8px;
+            padding: 7px 9px; border: 1px solid var(--border); border-radius: 4px;
+            background: var(--bg-input); opacity: 1;
+        }
+        .share-link-main { flex: 1; min-width: 0; }
+        .share-link-label {
+            font-size: 0.78rem; color: var(--text-primary);
+            text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+        }
+        .share-link-meta { font-size: 0.66rem; color: var(--text-muted); margin-top: 2px; }
+        .share-link-state {
+            font-size: 0.66rem; padding: 1px 7px; border-radius: 9px; white-space: nowrap;
+            color: #27ae60; border: 1px solid rgba(39, 174, 96, 0.45);
+        }
+        .share-link-row .share-revoke-btn { font-size: 0.7rem; padding: 4px 10px; }
+        .share-link-row.revoked,
+        .share-link-row.expired { opacity: 0.45; }
+        .share-link-row.revoked .share-link-label,
+        .share-link-row.expired .share-link-label { text-decoration: line-through; }
+        .share-link-row.revoked .share-link-state { color: #ff6b6b; border-color: rgba(255, 107, 107, 0.45); }
+        .share-link-row.expired .share-link-state { color: var(--text-muted); border-color: var(--border); }
+    </style>
 </head>
 <body>
 <div class="app-container">
@@ -373,6 +405,12 @@
                 <input type="url" id="notifyUrlInput" placeholder="https://... 客人批准後自動 POST" style="width:100%;background:var(--bg-input);border:1px solid var(--border);border-radius:4px;color:var(--text-primary);padding:6px 10px;font-size:0.8rem;outline:none;margin-bottom:5px;">
                 <p style="font-size:0.68rem;color:var(--text-muted);line-height:1.5;">支援 make.com、n8n、Discord webhook、Zapier 等。<br>Payload：<code style="font-size:0.65rem;background:rgba(255,255,255,0.06);padding:1px 4px;border-radius:2px;">{ event, bookId, bookName, timestamp, message }</code></p>
             </div>
+            <div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--border);">
+                <p style="font-size:0.78rem;color:var(--text-secondary);margin-bottom:4px;">這條連結給誰？</p>
+                <input type="text" id="shareLabelInput" maxlength="200" placeholder="例：王先生 婚紗"
+                    style="width:100%;background:var(--bg-input);border:1px solid var(--border);border-radius:4px;color:var(--text-primary);padding:6px 10px;font-size:0.8rem;outline:none;margin-bottom:5px;">
+                <p style="font-size:0.68rem;color:var(--text-muted);line-height:1.5;">LINE 不會告訴你是誰開的連結，這個標籤是之後要撤銷時唯一認得出來的依據。</p>
+            </div>
             <button id="shareConfirmBtn" class="btn btn-primary btn-block" style="margin-top:14px;">儲存並產生分享連結 →</button>
         </div>
 
@@ -391,6 +429,12 @@
                     <button id="copyEditUrlBtn" class="btn btn-secondary">複製</button>
                 </div>
             </div>
+        </div>
+
+        <!-- 已發出的連結：撤銷是唯一的關閉開關，所以每條都要看得到狀態 -->
+        <div id="shareLinksStep" style="padding:14px 18px 20px;border-top:1px solid var(--border);">
+            <p style="font-size:0.8rem;color:var(--text-secondary);margin-bottom:8px;">已發出的連結</p>
+            <div id="shareLinkList" class="share-link-list"></div>
         </div>
     </div>
 </div>
@@ -487,17 +531,17 @@
 <!-- Shared from picker -->
 <div id="toastContainer" class="toast-container"></div>
 
-<script src="../js/build-version.js?v=20260921a"></script>
-<script src="../js/config.js?v=20260921a"></script>
-<script src="../js/auth.js?v=20260921a"></script>
-<script src="../js/toast.js?v=20260921a"></script>
-<script src="../js/drive.js?v=20260921a"></script>
+<script src="../js/build-version.js?v=20260921b"></script>
+<script src="../js/config.js?v=20260921b"></script>
+<script src="../js/auth.js?v=20260921b"></script>
+<script src="../js/toast.js?v=20260921b"></script>
+<script src="../js/drive.js?v=20260921b"></script>
 <!-- Book Editor -->
-<script src="js/layouts.js?v=20260921a"></script>
-<script src="js/auto_layout.js?v=20260921a"></script>
-<script src="js/exporter.js?v=20260921a"></script>
-<script src="js/layout_editor.js?v=20260921a"></script>
-<script src="js/tour.js?v=20260921a"></script>
-<script src="js/book_editor.js?v=20260921a"></script>
+<script src="js/layouts.js?v=20260921b"></script>
+<script src="js/auto_layout.js?v=20260921b"></script>
+<script src="js/exporter.js?v=20260921b"></script>
+<script src="js/layout_editor.js?v=20260921b"></script>
+<script src="js/tour.js?v=20260921b"></script>
+<script src="js/book_editor.js?v=20260921b"></script>
 </body>
 </html>

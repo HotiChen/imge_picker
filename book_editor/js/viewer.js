@@ -5,13 +5,87 @@ const Viewer = {
     changedPages: new Set(),
     pickerSlotIdx: -1,
     showGuides: false,
+    // ?t= from the URL. The client opens this page from a LINE chat message,
+    // over and over, for months: LINE's in-app webview may drop any storage we
+    // put it in, so the URL is the only copy that survives. It is read and
+    // never rewritten away, and nothing about a first load consumes it —
+    // LINE pre-fetches every link to build its preview card, so the very first
+    // request the Worker sees is usually a crawler, not the client.
+    shareToken: '',
+    // The photographer opens the same page to preview an album, with no ?t=.
+    adminToken: '',
 
     async init() {
         const params = new URLSearchParams(location.search);
         this.bookId = params.get('id');
         if (!this.bookId) { this._setError('無效的分享連結'); return; }
+
+        this.shareToken = params.get('t') || '';
+        this.adminToken = (typeof CONFIG !== 'undefined' && CONFIG.PHOTOGRAPHER_TOKEN) || this._storedAdminToken();
+
+        // layouts.js builds every <img src> on the page canvas; an element
+        // cannot send a header, so the token has to be in the query string.
+        if (typeof CONFIG !== 'undefined') CONFIG.SHARE_TOKEN = this.shareToken;
+
+        if (!this.shareToken && !this.adminToken) {
+            // A blank screen here has already cost this project a long
+            // debugging session. Say what is missing.
+            this._setError('這個連結缺少存取權杖，無法開啟相本。請向攝影師索取完整的分享連結。');
+            return;
+        }
+
         await this.loadBook();
         this.bindEvents();
+    },
+
+    _storedAdminToken() {
+        try { return sessionStorage.getItem('studio_token') || ''; } catch (e) { return ''; }
+    },
+
+    /**
+     * The credential for everything fetch() sends.
+     *
+     * Header form rather than ?t= on purpose: one code path then covers both
+     * the client's share token and the photographer's bearer token, the token
+     * stays out of the Worker's request URLs, and the Worker already answers
+     * `Vary: X-Share-Token` on these routes. <img> is the exception — an
+     * element cannot carry a header — so those keep the ?t= query form.
+     */
+    _authHeaders(extra) {
+        const h = { ...(extra || {}) };
+        if (this.shareToken) h['X-Share-Token'] = this.shareToken;
+        else if (this.adminToken) h['Authorization'] = `Bearer ${this.adminToken}`;
+        return h;
+    },
+
+    // Photo URL for an <img>, with the share token in the query string.
+    _photoUrl(photoId, w = 400) {
+        return _thumbUrl(photoId, w);
+    },
+
+    // Photographer preview only. There is no ?t= to put in the URL and an
+    // <img> cannot send Authorization, so each photo is fetched with the
+    // bearer token and handed to the element as a blob URL. The promise —
+    // not the resolved URL — is cached, so the parallel <img> tags of one
+    // page share a single request, and so do later re-renders.
+    _blobs: new Map(),
+    async _authorizeImages(root) {
+        if (this.shareToken || !this.adminToken || !root) return;
+        const prefix = CONFIG.WORKER_URL + '/';
+        const imgs = [...root.querySelectorAll('img')]
+            .filter(el => (el.getAttribute('src') || '').startsWith(prefix));
+        await Promise.all(imgs.map(async el => {
+            const url = el.getAttribute('src');
+            if (!this._blobs.has(url)) {
+                this._blobs.set(url, (async () => {
+                    const r = await fetch(url, { headers: this._authHeaders() });
+                    if (!r.ok) throw new Error(String(r.status));
+                    return URL.createObjectURL(await r.blob());
+                })());
+            }
+            try { el.src = await this._blobs.get(url); }
+            catch (e) { /* leave the original src; a broken tile beats a thrown render */ }
+        }));
     },
 
     /**
@@ -27,7 +101,10 @@ const Viewer = {
      */
     async loadBook() {
         try {
-            const r = await fetch(`${CONFIG.WORKER_URL}/api/books/${this.bookId}`);
+            const r = await fetch(`${CONFIG.WORKER_URL}/api/books/${this.bookId}`, {
+                headers: this._authHeaders()
+            });
+            if (r.status === 401) throw new Error('這個相本連結已失效或被撤銷，請向攝影師索取新的連結。');
             if (!r.ok) throw new Error('找不到此相本（連結可能已過期或無效）');
             const rawBook = await r.json();
 
@@ -116,7 +193,9 @@ const Viewer = {
 
     async checkApprovalStatus() {
         try {
-            const r = await fetch(`${CONFIG.WORKER_URL}/api/books/${this.bookId}/status`);
+            const r = await fetch(`${CONFIG.WORKER_URL}/api/books/${this.bookId}/status`, {
+                headers: this._authHeaders()
+            });
             if (!r.ok) return;
             const data = await r.json();
             if (data.approved) this._showApproved(data.timestamp);
@@ -164,6 +243,7 @@ const Viewer = {
         document.getElementById('nextBtn').disabled = this.currentPageIndex === this.book.pages.length - 1;
 
         if (!page.locked) this._bindSlotClicks();
+        this._authorizeImages(area);
     },
 
     // ─── 換圖互動 ──────────────────────────────
@@ -206,9 +286,11 @@ const Viewer = {
 
             grid.innerHTML = allPhotos.map(photo => `
                 <div class="viewer-picker-photo" data-photo-id="${_escapeHtml(photo.id)}" title="${_escapeHtml(photo.name)}">
-                    <img src="${_escapeHtml(CONFIG.WORKER_URL + '/' + photo.id)}?w=400" loading="lazy" decoding="async">
+                    <img src="${_escapeHtml(this._photoUrl(photo.id, 400))}" loading="lazy" decoding="async">
                 </div>
             `).join('');
+
+            this._authorizeImages(grid);
 
             grid.querySelectorAll('.viewer-picker-photo').forEach(el => {
                 el.addEventListener('click', () => {
@@ -224,7 +306,9 @@ const Viewer = {
     async _fetchFolderDirect(folderPath) {
         if (folderPath && !folderPath.endsWith('/')) folderPath += '/';
         try {
-            const resp = await fetch(`${CONFIG.WORKER_URL}/?list=${encodeURIComponent(folderPath)}`);
+            const resp = await fetch(`${CONFIG.WORKER_URL}/?list=${encodeURIComponent(folderPath)}`, {
+                headers: this._authHeaders()
+            });
             const result = await resp.json();
             if (result.status !== 'success') return { photos: [], folders: [] };
             return {
@@ -270,7 +354,7 @@ const Viewer = {
                 const page = this.book.pages[pageIndex];
                 const r = await fetch(`${CONFIG.WORKER_URL}/api/books/${this.bookId}`, {
                     method: 'PATCH',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: this._authHeaders({ 'Content-Type': 'application/json' }),
                     body: JSON.stringify({ pageIndex, slots: page.slots })
                 });
                 if (!r.ok) {
@@ -303,7 +387,7 @@ const Viewer = {
         try {
             const r = await fetch(`${CONFIG.WORKER_URL}/api/books/${this.bookId}/approve`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' }
+                headers: this._authHeaders({ 'Content-Type': 'application/json' })
             });
             if (!r.ok) throw new Error();
             this._showApproved(new Date().toISOString());

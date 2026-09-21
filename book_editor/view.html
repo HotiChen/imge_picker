@@ -3,6 +3,12 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!-- The share token lives in this page's URL, so nothing this page loads
+         may carry that URL in a Referer header. The Google Fonts stylesheet
+         below is the only third-party request here; modern engines would send
+         it the origin alone, but LINE's in-app webview is not a browser we
+         choose, and one stale engine leaking a client's album is enough. -->
+    <meta name="referrer" content="no-referrer">
     <title>相本預覽</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
@@ -251,8 +257,8 @@
     </div>
 </div>
 
-<script src="../js/config.js?v=20260921a"></script>
-<script src="js/layouts.js?v=20260921a"></script>
-<script src="js/viewer.js?v=20260921a"></script>
+<script src="../js/config.js?v=20260921b"></script>
+<script src="js/layouts.js?v=20260921b"></script>
+<script src="js/viewer.js?v=20260921b"></script>
 </body>
 </html>

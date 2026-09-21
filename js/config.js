@@ -3,6 +3,9 @@ const CONFIG = {
     WORKER_URL: 'https://imagepicker.hotichen.workers.dev',
     DEFAULT_FOLDER: '', // 留空讓使用者手動輸入，或填入預設路徑 e.g. '2026/'
     PHOTOGRAPHER_TOKEN: '', // 由 auth.js 從 sessionStorage 載入，不在原始碼中儲存
+    // 客戶分享連結的 token（?t=）。由 viewer.js 從網址讀入；編輯器不會設定它。
+    // <img> 沒辦法送 header，所以縮圖網址得靠它把 token 帶上。
+    SHARE_TOKEN: '',
 
     STORAGE_KEYS: {
         RATINGS: 'r2_photo_picker_ratings',
