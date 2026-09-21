@@ -81,6 +81,10 @@ function isAdminToken(request, env) {
 // months, so the token rides in the query string rather than in any storage
 // the in-app webview might drop.
 const SHARE_TTL_MS = 90 * 24 * 60 * 60 * 1000;
+// The slide alone means a link forwarded into a group chat never dies on its
+// own, and revocation is the only kill switch. A link may not outlive this
+// from the day it was issued, whatever its stored expiry says.
+const SHARE_MAX_LIFE_MS = 180 * 24 * 60 * 60 * 1000;
 // A single album page pulls hundreds of images through the gated object route.
 // Bumping the expiry on each one would be hundreds of D1 writes per view.
 const SHARE_TOUCH_AFTER_MS = 24 * 60 * 60 * 1000;
@@ -122,6 +126,12 @@ function sourceKey(key) {
   return rest.slice(slash + 1).replace(/\.thumb$/, '');
 }
 
+// NaN for a row whose created_at cannot be read, which then fails closed.
+function shareCeiling(row) {
+  const created = Date.parse(row.created_at);
+  return created + SHARE_MAX_LIFE_MS;
+}
+
 // Returns the token row (folders already parsed) or null. Revoked, expired,
 // unknown and "no D1 bound at all" are all deliberately the same answer.
 async function resolveShareToken(request, url, env) {
@@ -135,6 +145,10 @@ async function resolveShareToken(request, url, env) {
   if (!row || row.revoked_at) return null;
   const expiry = Date.parse(row.expires_at);
   if (!Number.isFinite(expiry) || expiry <= Date.now()) return null;
+  // checked against created_at rather than trusting the stored expiry, so a
+  // hand-edited or clock-skewed row cannot buy itself extra life
+  const ceiling = shareCeiling(row);
+  if (!Number.isFinite(ceiling) || Date.now() >= ceiling) return null;
   let folders;
   try { folders = JSON.parse(row.folders); } catch { return null; }
   if (!Array.isArray(folders)) return null;
@@ -148,8 +162,13 @@ async function touchShareToken(share, request, env) {
   const now = Date.now();
   const seen = share.last_seen_at ? Date.parse(share.last_seen_at) : 0;
   if (Number.isFinite(seen) && now - seen < SHARE_TOUCH_AFTER_MS) return;
+  const next = Math.min(now + SHARE_TTL_MS, shareCeiling(share));
+  if (!Number.isFinite(next) || next <= now) return;
   share.last_seen_at = new Date(now).toISOString();
-  share.expires_at = new Date(now + SHARE_TTL_MS).toISOString();
+  // clamped, not skipped: at the ceiling this writes the same expiry back
+  // while last_seen_at keeps moving, because the photographer reads that off
+  // /shares to tell a link nobody opens from one being browsed daily
+  share.expires_at = new Date(next).toISOString();
   // the browser opens an album's images in parallel, so every one of those
   // requests read the same stale last_seen_at and got here; the WHERE clause
   // is what keeps all but the first from actually writing
@@ -499,6 +518,20 @@ export default {
       }
 
       if (request.method === 'POST' && pathParts[3] === 'approve') {
+        // The client taps this, and so can anyone else holding the link. Only
+        // the false→true transition is worth a message in the photographer's
+        // chat — and a repeat is not an error, the viewer shows its success
+        // state off this response.
+        const prev = await env.imagepicker.get(`_books/${bookId}_status.json`);
+        if (prev) {
+          let already = false;
+          // an unreadable status file fails toward notifying: a duplicate
+          // message costs a line in a chat, a missed one costs the approval
+          try { already = JSON.parse(await prev.text()).approved === true; } catch {}
+          // the stored timestamp records when the client approved, which a
+          // later tap does not change, so the whole row is left alone
+          if (already) return jsonOk({ ok: true });
+        }
         const status = { approved: true, timestamp: new Date().toISOString() };
         await env.imagepicker.put(`_books/${bookId}_status.json`, JSON.stringify(status), {
           httpMetadata: { contentType: 'application/json' }

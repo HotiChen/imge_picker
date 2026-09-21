@@ -19,8 +19,12 @@ export function fakeBucket(initial = {}, { pageSize = 1000 } = {}) {
     };
   }
 
+  const putLog = [];
+
   return {
     _store: store,
+    // which keys were written, so a test can pin that a repeat call is a no-op
+    _puts: putLog,
 
     async get(key, opts = {}) {
       const rec = store.get(key);
@@ -60,6 +64,7 @@ export function fakeBucket(initial = {}, { pageSize = 1000 } = {}) {
     },
 
     async put(key, value, opts = {}) {
+      putLog.push(key);
       // the upload route hands us request.body (a stream), the book routes a string
       const text = typeof value === 'string' ? value : await new Response(value).text();
       store.set(key, entry(key, { body: text, contentType: opts.httpMetadata?.contentType }));

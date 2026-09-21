@@ -708,3 +708,221 @@ test('a share token row cannot have a NULL token', async () => {
     'INSERT INTO share_tokens (token, book_id, folders, created_at, expires_at) VALUES (NULL, ?, ?, ?, ?)'
   ).run('b1', '[]', days(0), days(90)), /NOT NULL/i);
 });
+
+// ─── the six-month ceiling ───────────────────────────────────────────────────
+// The sliding expiry alone means a link forwarded into a LINE group never dies
+// on its own. The effective expiry is min(now + 90d, created_at + 180d).
+
+const CEILING_DAYS = 180;
+
+test('a link opened steadily for six months dies anyway', async () => {
+  const env = setup();
+  // kept alive by daily visits right up to the ceiling: the stored column
+  // still says it is live, and it must be refused regardless
+  await seed(env, { created_at: days(-CEILING_DAYS - 1), expires_at: days(80), last_seen_at: days(-1) });
+  for (const [method, path] of gated()) {
+    const sep = path.includes('?') ? '&' : '?';
+    assert.equal((await call(env, `${path}${sep}t=TK`, { method })).status, 401, `${method} ${path}`);
+  }
+});
+
+test('the ceiling is enforced against created_at, not against the stored expiry', async () => {
+  // a hand-edited or clock-skewed row must not buy itself extra life
+  const env = setup();
+  await seed(env, { created_at: days(-CEILING_DAYS - 1), expires_at: days(500) });
+  assert.equal((await call(env, '/20260819/a.jpg?t=TK')).status, 401);
+  assert.equal((await call(env, '/api/books/b1?t=TK')).status, 401);
+});
+
+test('a stored expiry beyond the ceiling is clamped, not treated as a forgery', async () => {
+  // the same odd row inside its first six months is still a live link — the
+  // ceiling is a deadline, not a tripwire
+  const env = setup();
+  await seed(env, { created_at: days(-10), expires_at: days(500) });
+  assert.equal((await call(env, '/20260819/a.jpg?t=TK')).status, 200);
+});
+
+test('the last bump before the ceiling is clamped to it, not pushed 90 days out', async () => {
+  const env = setup();
+  await seed(env, { created_at: days(-(CEILING_DAYS - 1)), expires_at: days(10), last_seen_at: days(-3) });
+  await call(env, '/20260819/a.jpg?t=TK');
+  const left = (Date.parse(row(env, 'TK').expires_at) - Date.now()) / 86400000;
+  assert.ok(left > 0.5 && left < 1.5, `expiry landed ${left} days out, expected ~1`);
+});
+
+test('a token created 179 days ago still works today', async () => {
+  const env = setup();
+  await seed(env, { created_at: days(-(CEILING_DAYS - 1)), expires_at: days(10), last_seen_at: days(-3) });
+  assert.equal((await call(env, '/20260819/a.jpg?t=TK')).status, 200);
+});
+
+test('the photographer’s link list shows the real deadline, not a stale column', async () => {
+  const env = setup();
+  await seed(env, { created_at: days(-(CEILING_DAYS - 1)), expires_at: days(80), last_seen_at: days(-3) });
+  await call(env, '/20260819/a.jpg?t=TK');
+  const [entry] = await (await call(env, '/api/books/b1/shares', { token: SECRET })).json();
+  const left = (Date.parse(entry.expires_at) - Date.now()) / 86400000;
+  assert.ok(left < 1.5, `the revoke UI would claim ${left} more days than the link really has`);
+});
+
+test('a token at its ceiling still records visits, though its expiry stops moving', async () => {
+  // the photographer reads last_seen_at off /shares to decide whether a link
+  // is still in use before revoking it; freezing it for the back half of the
+  // link's life would read as "nobody has touched this" while someone browses
+  // it daily
+  const env = setup();
+  const created = days(-120);
+  const ceiling = new Date(Date.parse(created) + CEILING_DAYS * 86400000).toISOString();
+  await seed(env, { created_at: created, expires_at: ceiling, last_seen_at: days(-3) });
+  const before = row(env, 'TK');
+  const changedBefore = env.DB._changed();
+
+  await Promise.all(Array.from({ length: 50 }, () => call(env, '/20260819/a.jpg?t=TK')));
+
+  const after = row(env, 'TK');
+  assert.equal(after.expires_at, before.expires_at, 'the ceiling pins the expiry');
+  assert.notEqual(after.last_seen_at, before.last_seen_at,
+    'a link being opened daily must not look untouched');
+  assert.ok(Date.now() - Date.parse(after.last_seen_at) < 5000, 'last_seen_at should be now');
+  // the throttle and the self-guarded UPDATE together: one row changed for a
+  // whole album view, not one per image
+  assert.equal(env.DB._changed() - changedBefore, 1, 'a D1 write per image');
+
+  await call(env, '/20260819/a.jpg?t=TK');
+  assert.equal(env.DB._changed() - changedBefore, 1, 'a later visit the same day must not write again');
+});
+
+test('a young token still gets the full 90 days', async () => {
+  const env = setup();
+  await seed(env, { created_at: days(-1), expires_at: days(10), last_seen_at: days(-3) });
+  await call(env, '/20260819/a.jpg?t=TK');
+  const left = (Date.parse(row(env, 'TK').expires_at) - Date.now()) / 86400000;
+  assert.ok(left > 89 && left <= 90, `expiry landed ${left} days out, expected ~90`);
+});
+
+test('revocation still beats a token well inside its ceiling', async () => {
+  const env = setup();
+  await seed(env, { created_at: days(-1), expires_at: days(89), revoked_at: days(-0.5) });
+  assert.equal((await call(env, '/20260819/a.jpg?t=TK')).status, 401);
+  assert.equal((await call(env, '/api/books/b1?t=TK')).status, 401);
+});
+
+test('a row with an unreadable created_at fails closed', async () => {
+  const env = setup();
+  await seed(env, { created_at: 'sometime last spring', expires_at: days(89) });
+  assert.equal((await call(env, '/20260819/a.jpg?t=TK')).status, 401);
+});
+
+// ─── approve fires the webhook once ──────────────────────────────────────────
+
+function captureNotify() {
+  const original = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = (url, init) => {
+    calls.push({ url, body: JSON.parse(init.body) });
+    return Promise.resolve(new Response('ok'));
+  };
+  return { calls, restore() { globalThis.fetch = original; } };
+}
+
+test('approving notifies the photographer once, however often the client taps', async () => {
+  const env = setup();
+  await seed(env);
+  const notify = captureNotify();
+  try {
+    const first = await call(env, '/api/books/b1/approve?t=TK', { method: 'POST' });
+    assert.equal(first.status, 200);
+    assert.equal(notify.calls.length, 1, 'the first approval must notify');
+
+    for (let i = 0; i < 5; i++) {
+      const again = await call(env, '/api/books/b1/approve?t=TK', { method: 'POST' });
+      // the viewer shows a success state off this; a double-tap is not an error
+      assert.equal(again.status, 200, 'a repeat approval still succeeds');
+      assert.deepEqual(await again.json(), { ok: true }, 'and returns the same shape');
+    }
+    assert.equal(notify.calls.length, 1,
+      `the webhook fired ${notify.calls.length} times; anyone in the LINE group can spam it`);
+  } finally { notify.restore(); }
+});
+
+test('a repeat approval keeps the moment the client actually approved', async () => {
+  // seeded rather than produced by a first call: two calls a millisecond apart
+  // would write the same ISO timestamp and the assertion could never fail
+  const env = setup();
+  await seed(env);
+  const approvedAt = '2026-03-01T09:15:00.000Z';
+  await env.imagepicker.put('_books/b1_status.json',
+    JSON.stringify({ approved: true, timestamp: approvedAt }));
+  const notify = captureNotify();
+  try {
+    await call(env, '/api/books/b1/approve?t=TK', { method: 'POST' });
+    const after = JSON.parse(env.imagepicker._store.get('_books/b1_status.json').body);
+    assert.equal(after.timestamp, approvedAt,
+      'the approval time is a fact about the first approval, not the last tap');
+    assert.equal(after.approved, true);
+  } finally { notify.restore(); }
+});
+
+test('a repeat approval does not rewrite R2 either', async () => {
+  const env = setup();
+  await seed(env);
+  const notify = captureNotify();
+  try {
+    await call(env, '/api/books/b1/approve?t=TK', { method: 'POST' });
+    const before = env.imagepicker._puts.length;
+    for (let i = 0; i < 5; i++) await call(env, '/api/books/b1/approve?t=TK', { method: 'POST' });
+    assert.equal(env.imagepicker._puts.length - before, 0,
+      'a held-down button should not turn into a write per tap');
+  } finally { notify.restore(); }
+});
+
+test('a book explicitly marked unapproved still notifies when approved', async () => {
+  const env = setup();
+  await seed(env);
+  await env.imagepicker.put('_books/b1_status.json', JSON.stringify({ approved: false }));
+  const notify = captureNotify();
+  try {
+    await call(env, '/api/books/b1/approve?t=TK', { method: 'POST' });
+    assert.equal(notify.calls.length, 1);
+  } finally { notify.restore(); }
+});
+
+test('an unreadable status file fails toward notifying, not toward silence', async () => {
+  // a missed notification is the photographer never learning the album is
+  // approved; a duplicate is a second message in their chat
+  const env = setup();
+  await seed(env);
+  await env.imagepicker.put('_books/b1_status.json', 'not json at all');
+  const notify = captureNotify();
+  try {
+    const res = await call(env, '/api/books/b1/approve?t=TK', { method: 'POST' });
+    assert.equal(res.status, 200);
+    assert.equal(notify.calls.length, 1);
+  } finally { notify.restore(); }
+});
+
+test('the photographer approving is idempotent too', async () => {
+  const env = setup();
+  const notify = captureNotify();
+  try {
+    await call(env, '/api/books/b1/approve', { method: 'POST', token: SECRET });
+    await call(env, '/api/books/b1/approve', { method: 'POST', token: SECRET });
+    assert.equal(notify.calls.length, 1);
+  } finally { notify.restore(); }
+});
+
+test('the notification still carries what the photographer needs', async () => {
+  const env = setup();
+  await seed(env);
+  const notify = captureNotify();
+  try {
+    await call(env, '/api/books/b1/approve?t=TK', { method: 'POST' });
+    const [{ url, body }] = notify.calls;
+    assert.equal(url, BOOK.notifyUrl);
+    assert.equal(body.event, 'book_approved');
+    assert.equal(body.bookId, 'b1');
+    assert.equal(body.bookName, BOOK.name);
+    const stored = JSON.parse(env.imagepicker._store.get('_books/b1_status.json').body);
+    assert.equal(body.timestamp, stored.timestamp, 'the message and the record must agree');
+  } finally { notify.restore(); }
+});
