@@ -2816,6 +2816,13 @@ class BookEditor {
 
             // The old `view.html?id=…` link is dead for clients: every album
             // route is gated now. Mint a token and hand out a link that works.
+            // A token snapshots the folders open at the moment it is issued, so
+            // an empty set mints a link that opens the album and not one photo.
+            // Both sides are left guessing: the photographer sees a link, the
+            // client sees an empty book, and nothing says why.
+            if (!(this.book.clientFolders || []).length) {
+                throw new Error('請先勾選要開放給客戶的資料夾，再產生分享連結');
+            }
             const label = (document.getElementById('shareLabelInput')?.value || '').trim();
             const token = await this._mintShareToken(id, label);
             const viewUrl = new URL(

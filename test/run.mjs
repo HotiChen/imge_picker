@@ -2375,6 +2375,122 @@ await suite('studio token — the book list thumbnails carry it too',
     before: shareMock().attach,
   });
 
+await suite('a client is not shown the photographer\u2019s pages at all',
+  `${base}/index.html`,
+  async page => {
+    await page.waitForFunction(() => !!document.getElementById('client-bar'), null, { timeout: 5000 });
+    const r = await page.evaluate(() => {
+      // asserted on the attribute our own code sets, not on computed display:
+      // these buttons are already display:none in this harness for unrelated
+      // layout reasons, so a computed check passes before anything is built
+      const vis = id => {
+        const el = document.getElementById(id);
+        if (!el) return 'gone';
+        return el.hasAttribute('hidden') ? 'hidden' : 'shown';
+      };
+      return {
+        upload: vis('uploadPageBtn'),
+        book: vis('openBookEditorBtn'),
+        // the red "no permission" labels are redundant once the buttons are gone
+        bar: document.getElementById('client-bar').textContent,
+      };
+    });
+    const out = [];
+    const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+    // clicking these asked a client for the photographer's password
+    // 'gone' would pass a looser check while meaning the id was wrong
+    ok('the upload button is explicitly hidden for a client', r.upload === 'hidden', r.upload);
+    ok('and so is the album editor', r.book === 'hidden', r.book);
+    ok('and the bar does not explain a button that is gone',
+      !r.bar.includes('\u7121\u6b0a\u9650'), r.bar.trim().slice(0, 60));
+    return out;
+  },
+  {
+    initScript: () => {
+      sessionStorage.setItem('client_session', JSON.stringify({
+        token: 'CS', user: { name: 'A', email: 'a@b.c', folder_path: '20260819/' },
+        permissions: { can_book: 0, can_upload: 0 },
+      }));
+    },
+    before: shareMock().attach,
+  });
+
+await suite('a share link cannot be issued for folders nobody opened',
+  `${base}/book_editor/index.html`,
+  async page => {
+    await page.waitForFunction(() => !!window.bookEditor, null, { timeout: 5000 });
+    const r = await page.evaluate(async () => {
+      bookEditor.book.clientFolders = [];
+      let minted = false;
+      bookEditor._mintShareToken = async () => { minted = true; return 'TOK'; };
+      let told = '';
+      const origToast = window.toast;
+      window.toast = { error: m => { told = String(m); }, success: () => {}, info: () => {} };
+      try { await bookEditor.saveToCloud(); } catch (e) { told = told || String(e.message || e); }
+      window.toast = origToast;
+      return { minted, told };
+    });
+    const out = [];
+    const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+    // a link with an empty snapshot opens the album and not one photo, and
+    // neither side is told why
+    ok('no token is minted for an empty folder set', r.minted === false, String(r.minted));
+    ok('and the photographer is told to pick folders first',
+      /\u8cc7\u6599\u593e/.test(r.told), JSON.stringify(r.told));
+    return out;
+  },
+  {
+    initScript: () => {
+      sessionStorage.setItem('studio_token', 'x');
+      try { localStorage.setItem('book_editor_tour_done', '1'); } catch (e) {}
+    },
+    before: shareMock().attach,
+  });
+
+await suite('the photographer can sign out of this browser',
+  `${base}/index.html`,
+  async page => {
+    await page.waitForFunction(() => !!document.getElementById('studio-logout'),
+      null, { timeout: 5000 }).catch(() => {});
+    const present = await page.evaluate(() => !!document.getElementById('studio-logout'));
+
+    // the handler reloads; location.reload cannot be stubbed, so follow it
+    // through and assert on the page that comes back
+    // click without awaiting the evaluate: the navigation tears the context
+    // down before it can resolve, which is a throw, not a failure
+    page.evaluate(() => document.getElementById('studio-logout')?.click()).catch(() => {});
+    await page.waitForFunction(() => !sessionStorage.getItem('studio_token'),
+      null, { timeout: 5000 }).catch(() => {});
+    await page.waitForLoadState('load');
+    const after = await page.evaluate(() => ({
+      cleared: !sessionStorage.getItem('studio_token'),
+      token: (typeof CONFIG !== 'undefined' && CONFIG.PHOTOGRAPHER_TOKEN) || '',
+      logoutGone: !document.getElementById('studio-logout'),
+    }));
+
+    const out = [];
+    const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+    ok('there is a sign-out control', present === true, String(present));
+    ok('it forgets the stored credential', after.cleared === true, String(after.cleared));
+    ok('the reloaded page holds no token', after.token === '', String(after.token.length));
+    ok('and does not offer sign-out to someone already signed out',
+      after.logoutGone === true, String(after.logoutGone));
+    return out;
+  },
+  {
+    // addInitScript runs on EVERY navigation, so seeding unconditionally would
+    // put the token back after the reload and quietly un-test the logout
+    initScript: () => {
+      try {
+        if (!localStorage.getItem('__seeded_studio')) {
+          localStorage.setItem('__seeded_studio', '1');
+          sessionStorage.setItem('studio_token', 'adm');
+        }
+      } catch (e) { /* private mode */ }
+    },
+    before: shareMock().attach,
+  });
+
 await browser.close();
 server.close();
 console.log(failed ? `\n${failed} failing` : '\nall passed');

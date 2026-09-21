@@ -18,6 +18,24 @@
     },
   };
 
+  // Clearing sessionStorage by hand in the console was the only way out of an
+  // admin session, which matters most when the token turns out to be wrong:
+  // this page stores whatever is typed without checking it, so the first sign
+  // of a typo is every tile failing.
+  function addStudioLogout() {
+    const host = document.querySelector('.header-actions, header') || document.body;
+    const btn = document.createElement('button');
+    btn.id = 'studio-logout';
+    btn.className = 'btn btn-outline';
+    btn.textContent = '登出';
+    btn.addEventListener('click', function () {
+      store.remove('studio_token');
+      if (typeof CONFIG !== 'undefined') CONFIG.PHOTOGRAPHER_TOKEN = '';
+      location.reload();
+    });
+    host.appendChild(btn);
+  }
+
   function getClientSession() {
     try { return JSON.parse(store.get('client_session') || 'null'); } catch { return null; }
   }
@@ -36,6 +54,7 @@
     } else if (studioToken) {
       // ── Admin mode: restore token to CONFIG (auth.js no longer loaded) ───
       if (typeof CONFIG !== 'undefined') CONFIG.PHOTOGRAPHER_TOKEN = studioToken;
+      addStudioLogout();
       return;
     } else {
       // ── No auth: show choice overlay ─────────────────────────────────────
@@ -64,6 +83,15 @@
       folderInput.style.cursor = 'not-allowed';
     }
 
+    // A client has no use for these and cannot use them either: both pages
+    // accept only the photographer's credential, so clicking one asked a
+    // client for a password that is not theirs to have. Hiding beats a
+    // disabled button or a hover note — neither stops someone trying.
+    ['uploadPageBtn', 'openBookEditorBtn'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.hidden = true;
+    });
+
     // Show client info bar
     const clientBar = document.createElement('div');
     clientBar.id = 'client-bar';
@@ -79,8 +107,6 @@
       <span>·</span>
       <span id="client-scope">讀取權限中…</span>
       <span style="flex:1"></span>
-      ${!permissions.can_book ? '<span style="color:#e05c5c;font-size:11px;font-family:\'IBM Plex Mono\',monospace;">相本書：無權限</span>' : ''}
-      ${!permissions.can_upload ? '<span style="color:#e05c5c;font-size:11px;font-family:\'IBM Plex Mono\',monospace;">上傳：無權限</span>' : ''}
       <button id="client-logout" style="background:transparent;border:1px solid #3a3528;color:#8c8375;padding:3px 10px;border-radius:4px;cursor:pointer;font-size:11px;font-family:inherit;">登出</button>
     `;
     document.body.appendChild(clientBar);
