@@ -80,7 +80,18 @@ class App {
             // 顯示完成提交按鈕
             const submitBtn = document.getElementById('submitJobBtn');
             if (submitBtn) submitBtn.style.display = 'inline-block';
+            return;
         }
+
+        // 用 D1 帳號登入的客戶沒有 bucket 根目錄可以逛：帶空前綴的 `?list=`
+        // 對他們而言是設計上的 401。能列的只有鑄造權杖時 Worker 回報的那個
+        // 資料夾，而且要照它拼的字列 —— 管理員手打的 `20260819` 少了斜線，
+        // 那是另一個前綴，也會掃到 20260819-other/。
+        const scope = window.SessionToken ? await window.SessionToken.scope() : '';
+        if (!scope) return;
+        const input = document.getElementById('driveUrl');
+        if (input) input.value = scope;
+        await this.handleLoadPhotos(scope);
     }
 
     async handleLoadPhotos(path) {
@@ -933,7 +944,7 @@ class App {
         node.isLoading = true;
         try {
             const url = `${CONFIG.WORKER_URL}/?list=${encodeURIComponent(node.path)}`;
-            const res = await fetch(url, { headers: driveManager._adminHeaders() });
+            const res = await fetch(url, { headers: driveManager._authHeaders() });
             const result = await res.json();
             node.children = (result.folders || []).map(fp => this._makeTreeNode(fp));
             node.isLoaded = true;

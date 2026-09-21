@@ -43,22 +43,25 @@
     }
   });
 
+  function findFolderInput() {
+    return document.getElementById('folderPath') || document.getElementById('folder-path') ||
+      document.querySelector('input[type="text"][placeholder*="料夾"]') ||
+      document.querySelector('input[type="text"][placeholder*="folder"]');
+  }
+
   function applyClientRestrictions(session) {
     const { user, permissions } = session;
 
-    // Set folder path to client's folder (lock it)
-    if (user && user.folder_path) {
-      const folderInput = document.getElementById('folderPath') || document.getElementById('folder-path') ||
-        document.querySelector('input[type="text"][placeholder*="料夾"]') ||
-        document.querySelector('input[type="text"][placeholder*="folder"]');
-      if (folderInput) {
-        folderInput.value = user.folder_path;
-        folderInput.readOnly = true;
-        folderInput.style.opacity = '0.7';
-        folderInput.style.cursor = 'not-allowed';
-      }
-      // Also update CONFIG if available
-      if (typeof CONFIG !== 'undefined') CONFIG.DEFAULT_FOLDER = user.folder_path;
+    // Lock the path box. What goes in it is settled by the mint below, not by
+    // the folder_path in this session: that was snapshotted at login and an
+    // admin may have narrowed the account since, and it is whatever they typed
+    // — `20260819` without the slash is a prefix the Worker refuses, because
+    // it would also reach 20260819-other/.
+    const folderInput = findFolderInput();
+    if (folderInput) {
+      folderInput.readOnly = true;
+      folderInput.style.opacity = '0.7';
+      folderInput.style.cursor = 'not-allowed';
     }
 
     // Show client info bar
@@ -74,13 +77,19 @@
     clientBar.innerHTML = `
       <span style="color:#e8e3da;font-weight:500;">${escHtml(user.name || user.email)}</span>
       <span>·</span>
-      <span>${escHtml(user.folder_path || '所有資料夾')}</span>
+      <span id="client-scope">讀取權限中…</span>
       <span style="flex:1"></span>
       ${!permissions.can_book ? '<span style="color:#e05c5c;font-size:11px;font-family:\'IBM Plex Mono\',monospace;">相本書：無權限</span>' : ''}
       ${!permissions.can_upload ? '<span style="color:#e05c5c;font-size:11px;font-family:\'IBM Plex Mono\',monospace;">上傳：無權限</span>' : ''}
       <button id="client-logout" style="background:transparent;border:1px solid #3a3528;color:#8c8375;padding:3px 10px;border-radius:4px;cursor:pointer;font-size:11px;font-family:inherit;">登出</button>
     `;
     document.body.appendChild(clientBar);
+
+    // The mint is what actually decides what this account can see. Until it
+    // answers, the only honest label is that we are still asking — the old one
+    // read an unset folder_path as 所有資料夾 and told a client with no folder
+    // at all that they had the whole bucket.
+    if (window.SessionToken) window.SessionToken.ensure().then(applyScope, applyScope);
 
     document.getElementById('client-logout').addEventListener('click', function () {
       const token = session.token;
@@ -107,6 +116,52 @@
         el.style.display = 'none';
       });
     }
+  }
+
+  // Called once the trade for a URL-carryable token has settled, whichever way
+  // it went. Three outcomes, three different things the client needs from us.
+  function applyScope() {
+    const T = window.SessionToken;
+    if (!T) return;
+    const scopeEl = document.getElementById('client-scope');
+
+    // 401 — the session is dead or unknown, and nothing on this page fixes
+    // that. It is cleared on the way out, or client-login.html reads it back
+    // and sends them straight here again.
+    if (T.expired) {
+      store.remove('client_session');
+      window.location.href = 'client-login.html';
+      return;
+    }
+
+    // 403 — an account state only the photographer can change. Terminal, so
+    // no spinner and no empty grid: the Worker's own wording is the only
+    // reading a human can act on.
+    if (T.error) {
+      if (scopeEl) {
+        scopeEl.textContent = T.error;
+        scopeEl.style.color = '#e05c5c';
+      }
+      showBlockedNotice(T.error);
+      return;
+    }
+
+    const folder = T.folders[0] || '';
+    if (!folder) return;
+    if (scopeEl) scopeEl.textContent = folder;
+    const folderInput = findFolderInput();
+    if (folderInput) folderInput.value = folder;
+    if (typeof CONFIG !== 'undefined') CONFIG.DEFAULT_FOLDER = folder;
+  }
+
+  function showBlockedNotice(message) {
+    const empty = document.getElementById('emptyState');
+    if (!empty) return;
+    const h2 = empty.querySelector('h2');
+    const p = empty.querySelector('p');
+    if (h2) h2.textContent = '目前無法開啟相簿';
+    if (p) p.textContent = message;
+    empty.style.display = '';
   }
 
   function showChoiceOverlay() {

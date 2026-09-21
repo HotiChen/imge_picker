@@ -87,6 +87,12 @@
   .btn-logout:hover { border-color: var(--danger); color: var(--danger); }
   
   .actions { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  .panel { border: 1px solid #3a3528; border-radius: 6px; background: #1d1a14; margin-bottom: 28px; }
+  .panel-body { padding: 16px 18px; }
+  .panel-stat { color: #e8e3da; font-size: 14px; font-weight: 500; margin-bottom: 8px; }
+  .panel-note { color: #8c8375; font-size: 12px; line-height: 1.7; margin: 0 0 8px; }
+  .panel-note strong { color: #e8e3da; font-weight: 600; }
+  .panel-result { color: #8c8375; font-size: 12px; margin-left: 10px; }
 </style>
 </head>
 <body>
@@ -112,6 +118,28 @@
     <button class="btn-logout" id="logout-btn">登出</button>
   </header>
   <main>
+    <h2>登入中的裝置</h2>
+    <div id="minted-panel" class="panel">
+      <div class="panel-body">
+        <div id="minted-summary" class="panel-stat">讀取中…</div>
+        <p class="panel-note">
+          攝影師登入後，每個分頁會換一張十二小時的唯讀權杖；客戶登入後換的是一小時、只開自己資料夾的那張。
+          改密碼不會讓這些權杖失效，只有這裡的按鈕會。
+        </p>
+        <p class="panel-note">
+          <strong>已經寄給客戶的相本分享連結不會被這個動作關掉</strong>，按下去只會踢掉攝影師與客戶目前的登入權杖，
+          他們下次開頁面重新登入即可。
+        </p>
+        <p class="panel-note">
+          <strong>密碼外洩的話，要先改密碼再按這裡。</strong>
+          這個按鈕不會換掉攝影師密碼本身（<code>wrangler secret put PHOTOGRAPHER_TOKEN</code>），
+          還握著舊密碼的人只要重新整理頁面，就會再換到一張新的權杖。
+        </p>
+        <button id="revoke-all-btn" class="btn btn-danger">登出所有裝置</button>
+        <span id="revoke-result" class="panel-result"></span>
+      </div>
+    </div>
+
     <h2>客戶列表</h2>
     <div class="table-wrap">
       <table id="clients-table">
@@ -170,8 +198,57 @@
     loginView.style.display = 'none';
     adminView.style.display = 'block';
     loadClients();
+    loadMinted();
     startAutoRefresh();
   }
+
+  // ── Minted tokens ─────────────────────────────────────────────────────────
+  // A studio or session token is a credential that outlives a password change:
+  // rotating PHOTOGRAPHER_TOKEN does not reach one that has already been
+  // minted, and nothing else on this page can even name one. This is the
+  // control for "I think my password leaked".
+  async function loadMinted() {
+    const el = document.getElementById('minted-summary');
+    if (!el) return;
+    try {
+      const r = await fetch(`${WORKER_URL}/api/shares/minted`, {
+        headers: { 'Authorization': `Bearer ${getToken()}` }
+      });
+      if (!r.ok) { el.textContent = `讀取失敗（${r.status}）`; return; }
+      const rows = await r.json();
+      const list = Array.isArray(rows) ? rows : [];
+      const studio = list.filter(x => x.kind === 'studio').length;
+      const client = list.filter(x => x.kind === 'session').length;
+      el.textContent = `目前有 ${list.length} 張登入權杖還活著（攝影師 ${studio}、客戶 ${client}）`;
+    } catch (e) {
+      el.textContent = '讀取失敗，無法連線到 Worker';
+    }
+  }
+
+  document.getElementById('revoke-all-btn').addEventListener('click', async function () {
+    // Spelled out rather than a bare "are you sure": the expensive mistake
+    // here would be believing this kills the album links already sent out.
+    if (!confirm('確定要登出所有裝置嗎？\n\n攝影師與客戶目前的登入權杖都會立刻失效，下次開頁面需要重新登入。\n已經寄出的相本分享連結不受影響，仍然可以開啟。\n\n若是密碼外洩，請先換掉攝影師密碼再執行，否則還握著舊密碼的人可以立刻再換一張。')) return;
+    const result = document.getElementById('revoke-result');
+    this.disabled = true;
+    const label = this.textContent;
+    this.textContent = '處理中…';
+    try {
+      const r = await fetch(`${WORKER_URL}/api/shares/minted/revoke-all`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${getToken()}` }
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) { result.textContent = `失敗（${r.status}）`; return; }
+      result.textContent = `已撤銷 ${data.revoked ?? 0} 張權杖`;
+      await loadMinted();
+    } catch (e) {
+      result.textContent = '失敗，無法連線到 Worker';
+    } finally {
+      this.disabled = false;
+      this.textContent = label;
+    }
+  });
 
   document.getElementById('admin-login-btn').addEventListener('click', tryAdminLogin);
   document.getElementById('admin-token-input').addEventListener('keydown', e => { if (e.key === 'Enter') tryAdminLogin(); });

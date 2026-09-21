@@ -36,12 +36,25 @@ class DriveManager {
         return width ? `${base}?w=${width}` : base;
     }
 
-    // Every Worker route this class touches is photographer-only now, so the
-    // bearer token goes on all of them, reads included.
-    _adminHeaders(extra) {
+    // A credential in a header, for everything that goes through fetch().
+    //
+    // The photographer sends the real one. A signed-in client has no admin
+    // token and no share link, so they send the token session-token.js minted
+    // for them — as X-Share-Token rather than ?t=, because a fetch can carry a
+    // header and a query string ends up in proxy and access logs.
+    //
+    // Whichever is in hand, never both: an admin token outranks the URL token
+    // that was derived from it, and putting both on a request would only
+    // widen what a log can see.
+    _authHeaders(extra) {
         const h = { ...(extra || {}) };
         const tok = (typeof CONFIG !== 'undefined' && CONFIG.PHOTOGRAPHER_TOKEN) || '';
-        if (tok) h['Authorization'] = `Bearer ${tok}`;
+        if (tok) {
+            h['Authorization'] = `Bearer ${tok}`;
+            return h;
+        }
+        const share = (typeof CONFIG !== 'undefined' && CONFIG.SHARE_TOKEN) || '';
+        if (share) h['X-Share-Token'] = share;
         return h;
     }
 
@@ -59,12 +72,14 @@ class DriveManager {
             const loadingEl = document.getElementById('loadingState');
             if (loadingEl) loadingEl.style.display = 'flex';
 
-            // Every thumbnail below is built from CONFIG.SHARE_TOKEN, so the
-            // token has to be in hand before the URLs are written.
+            // Every thumbnail below is built from CONFIG.SHARE_TOKEN, and the
+            // listing itself needs a credential, so whichever of the two mints
+            // applies has to have settled before the request goes out.
             if (window.StudioToken) await window.StudioToken.ensure();
+            if (window.SessionToken) await window.SessionToken.ensure();
 
             const url = `${CONFIG.WORKER_URL}/?list=${encodeURIComponent(folderPath)}`;
-            const response = await fetch(url, { headers: this._adminHeaders() });
+            const response = await fetch(url, { headers: this._authHeaders() });
             const result = await response.json();
 
             if (result && result.status === 'success') {
@@ -191,7 +206,7 @@ class DriveManager {
                 const batch = photoList.slice(i, i + batchSize);
                 await Promise.all(batch.map(async (photo) => {
                     const url = this.objectUrl(photo.id);
-                    const response = await fetch(url, { headers: this._adminHeaders() });
+                    const response = await fetch(url, { headers: this._authHeaders() });
                     const blob = await response.blob();
                     zip.file(photo.name, blob);
                 }));
