@@ -55,6 +55,10 @@ class BookEditor {
      */
     async init() {
         try {
+            // Every tile this page draws goes into an <img src>, which cannot
+            // carry a header. Get the URL token before anything renders.
+            if (window.StudioToken) await window.StudioToken.ensure();
+
             const customIds = LayoutEditor.loadSaved();
             customIds.forEach(id => {
                 // Why: Defend against missing or corrupted custom layout definitions in LAYOUTS
@@ -843,7 +847,7 @@ class BookEditor {
             // photo not in current strip (e.g. placed from a different session) — show without navigation
             this._previewPhotoId = photoId;
             this._previewIdx = 0;
-            document.getElementById('photoPreviewImg').src = `${CONFIG.WORKER_URL}/${photoId}?w=${PREVIEW_W}`;
+            document.getElementById('photoPreviewImg').src = _thumbUrl(photoId, PREVIEW_W);
             this._resetPreviewOriginal({ id: photoId, name: photoId.split('/').pop() });
             document.getElementById('photoPreviewCounter').textContent = '';
             document.getElementById('photoPreviewUseBtn').style.display = this.pendingSlotIdx >= 0 ? '' : 'none';
@@ -865,7 +869,7 @@ class BookEditor {
         for (const i of [idx + 1, idx - 1]) {
             const p = photos[i];
             if (!p) continue;
-            const url = `${CONFIG.WORKER_URL}/${p.id}?w=${PREVIEW_W}`;
+            const url = _thumbUrl(p.id, PREVIEW_W);
             if (this._preloaded.has(url)) continue;
             this._preloaded.add(url);
             const img = new Image();
@@ -879,7 +883,7 @@ class BookEditor {
     _resetPreviewOriginal(photo) {
         const btn = document.getElementById('photoPreviewOriginalBtn');
         const link = document.getElementById('photoPreviewDownload');
-        const url = `${CONFIG.WORKER_URL}/${photo.id}`;
+        const url = _originalUrl(photo.id);
         if (link) {
             link.href = url;
             link.download = photo.name || '';
@@ -915,7 +919,7 @@ class BookEditor {
         const photo = photos[idx];
         this._previewPhotoId = photo.id;
 
-        document.getElementById('photoPreviewImg').src = `${CONFIG.WORKER_URL}/${photo.id}?w=${PREVIEW_W}`;
+        document.getElementById('photoPreviewImg').src = _thumbUrl(photo.id, PREVIEW_W);
         document.getElementById('photoPreviewCounter').textContent = `${idx + 1} / ${photos.length}`;
         document.getElementById('photoPreviewUseBtn').style.display = this.pendingSlotIdx >= 0 ? '' : 'none';
         document.getElementById('photoPreviewPrev').disabled = idx === 0;
@@ -1025,7 +1029,7 @@ class BookEditor {
             return;
         }
 
-        const src = `${CONFIG.WORKER_URL}/${bgImage.photoId}?w=400`;
+        const src = _thumbUrl(bgImage.photoId, 400);
         if (preview) preview.innerHTML = `<img src="${src}" style="width:100%;height:100%;object-fit:cover;display:block;">`;
         const opPct = Math.round((bgImage.opacity ?? 1) * 100);
         if (slider) slider.value = opPct;
@@ -1082,7 +1086,7 @@ class BookEditor {
         }
 
         grid.innerHTML = photos.map(p => {
-            const src = `${CONFIG.WORKER_URL}/${p.id}?w=400`;
+            const src = _thumbUrl(p.id, 400);
             return `<div class="modal-photo bg-picker-photo" data-photo-id="${p.id}" title="${p.name}"><img src="${src}" loading="lazy" decoding="async"></div>`;
         }).join('');
         grid.querySelectorAll('.bg-picker-photo').forEach(el => {

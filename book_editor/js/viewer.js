@@ -34,6 +34,18 @@ const Viewer = {
             return;
         }
 
+        // The photographer previews an album with no ?t= at all. They used to
+        // get blob URLs: every <img> fired a naked request that 401'd, then
+        // the same bytes were fetched again with the bearer token. Trading the
+        // bearer token for a studio token costs one POST and lets the elements
+        // load the photos themselves, cache and all.
+        if (!this.shareToken) {
+            if (typeof CONFIG !== 'undefined' && !CONFIG.PHOTOGRAPHER_TOKEN) {
+                CONFIG.PHOTOGRAPHER_TOKEN = this.adminToken;
+            }
+            if (window.StudioToken) await window.StudioToken.ensure();
+        }
+
         await this.loadBook();
         this.bindEvents();
     },
@@ -61,31 +73,6 @@ const Viewer = {
     // Photo URL for an <img>, with the share token in the query string.
     _photoUrl(photoId, w = 400) {
         return _thumbUrl(photoId, w);
-    },
-
-    // Photographer preview only. There is no ?t= to put in the URL and an
-    // <img> cannot send Authorization, so each photo is fetched with the
-    // bearer token and handed to the element as a blob URL. The promise —
-    // not the resolved URL — is cached, so the parallel <img> tags of one
-    // page share a single request, and so do later re-renders.
-    _blobs: new Map(),
-    async _authorizeImages(root) {
-        if (this.shareToken || !this.adminToken || !root) return;
-        const prefix = CONFIG.WORKER_URL + '/';
-        const imgs = [...root.querySelectorAll('img')]
-            .filter(el => (el.getAttribute('src') || '').startsWith(prefix));
-        await Promise.all(imgs.map(async el => {
-            const url = el.getAttribute('src');
-            if (!this._blobs.has(url)) {
-                this._blobs.set(url, (async () => {
-                    const r = await fetch(url, { headers: this._authHeaders() });
-                    if (!r.ok) throw new Error(String(r.status));
-                    return URL.createObjectURL(await r.blob());
-                })());
-            }
-            try { el.src = await this._blobs.get(url); }
-            catch (e) { /* leave the original src; a broken tile beats a thrown render */ }
-        }));
     },
 
     /**
@@ -243,7 +230,6 @@ const Viewer = {
         document.getElementById('nextBtn').disabled = this.currentPageIndex === this.book.pages.length - 1;
 
         if (!page.locked) this._bindSlotClicks();
-        this._authorizeImages(area);
     },
 
     // ─── 換圖互動 ──────────────────────────────
@@ -289,8 +275,6 @@ const Viewer = {
                     <img src="${_escapeHtml(this._photoUrl(photo.id, 400))}" loading="lazy" decoding="async">
                 </div>
             `).join('');
-
-            this._authorizeImages(grid);
 
             grid.querySelectorAll('.viewer-picker-photo').forEach(el => {
                 el.addEventListener('click', () => {

@@ -899,6 +899,9 @@ function shareMock(opts = {}) {
       const json = (body, status = 200) =>
         route.fulfill({ status, contentType: 'application/json', body });
 
+      if (u.pathname === '/api/auth/studio-token')
+        return json(JSON.stringify({ token: 'STUDIO-TOK',
+          expires_at: new Date(Date.now() + 12 * 3600000).toISOString() }));
       if (req.method() === 'GET' && u.pathname.endsWith('/shares'))
         return json(JSON.stringify(state.shares));
       if (req.method() === 'POST' && u.pathname.endsWith('/share'))
@@ -1013,12 +1016,15 @@ const authorised = (r, tok) => !!r && (r.share === tok || r.t === tok);
       ok('and sends no share token', !bookReq?.share && !bookReq?.t, JSON.stringify(bookReq));
       ok('the album rendered', (await page.textContent('#bookTitle')) === 'T',
         await page.textContent('#bookTitle'));
-      ok('the photo was fetched with the bearer token',
-        m.seen.some(r => r.path === '/20260819/p0.jpg' && r.auth === 'Bearer adm'),
-        JSON.stringify(m.seen.filter(r => r.path.includes('p0.jpg'))));
+      ok('minting the studio token used the bearer token',
+        m.seen.find(r => r.path === '/api/auth/studio-token')?.auth === 'Bearer adm',
+        JSON.stringify(m.seen.find(r => r.path === '/api/auth/studio-token')));
+      const photoReqs = m.seen.filter(r => r.path === '/20260819/p0.jpg');
+      ok('the photo was fetched with it, and never without a credential first',
+        photoReqs.length === 1 && photoReqs[0].t === 'STUDIO-TOK', JSON.stringify(photoReqs));
       const srcs = await page.$$eval('.page-canvas img', els => els.map(e => e.src));
-      ok('and handed to the <img>, which cannot carry a header itself',
-        srcs.length === 2 && srcs.every(s => s.startsWith('blob:')), JSON.stringify(srcs));
+      ok('and the <img> loads it itself — no blob swap, no wasted 401',
+        srcs.length === 2 && srcs.every(s => /[?&]t=STUDIO-TOK(&|$)/.test(s)), JSON.stringify(srcs));
       return out;
     },
     { before: m.attach, initScript: () => sessionStorage.setItem('studio_token', 'adm') });
@@ -1211,6 +1217,424 @@ const OPEN_SHARE_MODAL = async () => {
         try { localStorage.setItem('book_editor_tour_done', '1'); } catch (e) {}
       },
     });
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Studio tokens — gating GET /<key> broke every photographer-facing page,
+// because an <img> cannot send an Authorization header. The photographer now
+// trades their real credential for a short-lived, read-only token that fits
+// in a URL, and it rides in ?t= exactly like a client's.
+//
+// Everything below asserts on what actually reached the Worker. A src string
+// that looks right but never arrives — or arrives naked and 401s before the
+// "fixed" one goes out — is precisely the bug this is here to catch.
+// ═══════════════════════════════════════════════════════════════════════════
+
+const STUDIO_BOOK = {
+  name: 'T', clientFolders: ['20260819/'],
+  settings: { width: 57, height: 21, dpi: 300 },
+  coverSettings: { width: 20, height: 20, dpi: 300 },
+  pages: [{ type: 'inner', layout: '2-up-h', textLayers: [],
+    slots: [{ photoId: '20260819/p0.jpg', crop: { x: 0, y: 0, scale: 1 } },
+            { photoId: '20260819/p1.jpg', crop: { x: 0, y: 0, scale: 1 } }] }],
+};
+
+// `ttlHours` is what the Worker says the minted token is good for; `mintStatus`
+// stands in for a wrong PHOTOGRAPHER_TOKEN; `failPhotos` makes object reads
+// 401 the way a dead token would.
+function studioMock(opts = {}) {
+  const seen = [];
+  const state = {
+    ttlHours: opts.ttlHours ?? 12,
+    mintStatus: opts.mintStatus ?? 200,
+    // mints past this many succeed no more — 500, not 401, so it reads as
+    // transient and nothing is allowed to remember it as a refusal
+    mintFailAfter: opts.mintFailAfter ?? Infinity,
+    // 'none' | 'first' (only the first read of each key) | 'all'
+    failPhotos: opts.failPhotos ?? 'none',
+    photos: opts.photos ?? 3,
+    minted: [],
+    reads: new Map(),
+  };
+  const attach = async page => {
+    await page.route('**/imagepicker.hotichen.workers.dev/**', async route => {
+      const req = route.request();
+      const u = new URL(req.url());
+      const h = await req.allHeaders();
+      seen.push({
+        path: decodeURIComponent(u.pathname), method: req.method(),
+        t: u.searchParams.get('t'),
+        share: h['x-share-token'] ?? null,
+        auth: h['authorization'] ?? null,
+        list: u.searchParams.get('list'),
+        w: u.searchParams.get('w'),
+      });
+      const json = (body, status = 200) =>
+        route.fulfill({ status, contentType: 'application/json', body });
+
+      if (u.pathname === '/api/auth/studio-token') {
+        if (state.mintStatus !== 200) return json('{"error":"Unauthorized"}', state.mintStatus);
+        if (state.minted.length >= state.mintFailAfter) {
+          state.minted.push(null);
+          return json('{"error":"DB not configured"}', 500);
+        }
+        const token = `STUDIO-${state.minted.length + 1}`;
+        state.minted.push(token);
+        return json(JSON.stringify({
+          token,
+          expires_at: new Date(Date.now() + state.ttlHours * 3600000).toISOString(),
+        }));
+      }
+      if (u.pathname.endsWith('/status')) return json('{"approved":false}');
+      if (u.pathname.includes('/api/books/')) {
+        if (req.method() === 'GET') return json(JSON.stringify(STUDIO_BOOK));
+        return json('{"ok":true}');
+      }
+      if (u.searchParams.has('list'))
+        return json(JSON.stringify({ status: 'success', folders: [], data: PHOTOS(state.photos) }));
+
+      const n = (state.reads.get(u.pathname) || 0) + 1;
+      state.reads.set(u.pathname, n);
+      if (state.failPhotos === 'all' || (state.failPhotos === 'first' && n === 1))
+        return json('{"error":"Unauthorized"}', 401);
+      route.fulfill({ status: 200, contentType: 'image/png', body: PIXEL });
+    });
+  };
+  return { seen, state, attach };
+}
+
+const CONFIG_WORKER = 'https://imagepicker.hotichen.workers.dev/';
+const mints = m => m.seen.filter(r => r.path === '/api/auth/studio-token');
+const tileReqs = m => m.seen.filter(r => r.method === 'GET' && /^\/20260819\/p\d+\.jpg$/.test(r.path));
+const ADMIN = () => sessionStorage.setItem('studio_token', 'adm');
+
+{
+  const m = studioMock();
+  await suite('studio token — the main picker mints one and every tile carries it',
+    `${base}/index.html?folder=${encodeURIComponent('20260819/')}`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForFunction(() => document.querySelectorAll('.photo-card img').length > 0,
+        null, { timeout: 5000 });
+      await page.waitForTimeout(400);
+
+      const mint = mints(m)[0];
+      ok('a studio token was minted', !!mint, JSON.stringify(m.seen.map(r => r.method + ' ' + r.path)));
+      ok('minting used the real credential in a header', mint?.auth === 'Bearer adm', JSON.stringify(mint));
+      ok('and POSTed, with nothing in the query string',
+        mint?.method === 'POST' && mint?.t === null, JSON.stringify(mint));
+
+      const list = m.seen.find(r => r.list !== null);
+      ok('the folder listing reached the Worker', !!list, JSON.stringify(m.seen.map(r => r.path + '?' + r.list)));
+      ok('and it is a fetch, so it carries the real credential as a header',
+        list?.auth === 'Bearer adm', JSON.stringify(list));
+
+      const tiles = tileReqs(m);
+      ok('every tile the browser asked for carried the studio token',
+        tiles.length >= 3 && tiles.every(r => r.t === 'STUDIO-1'), JSON.stringify(tiles));
+      ok('and asked for a thumbnail, not the original',
+        tiles.length >= 3 && tiles.every(r => r.w === '400'), JSON.stringify(tiles.map(r => r.w)));
+
+      const srcs = await page.$$eval('.photo-card img', els => els.map(e => e.getAttribute('src')));
+      ok('the rendered <img> src carries it too',
+        srcs.length >= 3 && srcs.every(s => /[?&]t=STUDIO-1(&|$)/.test(s)), JSON.stringify(srcs.slice(0, 3)));
+
+      // the sidebar tree is a second listing call, on a different code path
+      await page.evaluate(() => app._fetchNodeChildren(
+        { path: '20260819/tree/', isLoaded: false, isLoading: false, children: [] }));
+      await page.waitForTimeout(300);
+      const tree = m.seen.find(r => r.list === '20260819/tree/');
+      ok('the sidebar folder tree is authenticated too', tree?.auth === 'Bearer adm', JSON.stringify(tree));
+
+      // the ZIP download is a fetch, so it sends the header and has no reason
+      // to put a token in the URL — and it wants the original, not a thumbnail
+      await page.evaluate(() => {
+        window.JSZip = function () { this.file = () => {}; this.generateAsync = async () => new Blob(['z']); };
+        return driveManager.downloadPhotos([{ id: '20260819/p9.jpg', name: 'p9.jpg' }], 'x.zip');
+      });
+      await page.waitForTimeout(400);
+      const dl = m.seen.find(r => r.path === '/20260819/p9.jpg');
+      ok('the ZIP download sends the real credential as a header',
+        dl?.auth === 'Bearer adm', JSON.stringify(dl));
+      ok('and asks for the original with no token in the URL',
+        dl?.t === null && dl?.w === null, JSON.stringify(dl));
+
+      // a second folder must not cost another credential — the Worker reuses
+      // one server-side, but a mint per listing is still a round trip per click
+      await page.evaluate(() => app.handleLoadPhotos('20260819/sub/'));
+      await page.waitForTimeout(500);
+      ok('browsing to another folder reuses the token it already has',
+        mints(m).length === 1, `${mints(m).length} mints`);
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN });
+}
+
+{
+  const m = studioMock();
+  await suite('studio token — the editor canvas, strip and preview all carry it',
+    `${base}/book_editor/index.html`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForFunction(() => !!window.bookEditor, null, { timeout: 5000 });
+      await page.evaluate(async () => {
+        bookEditor.currentBookId = 'test';
+        await bookEditor._loadFromCloud();
+        bookEditor.renderAll();
+      });
+      await page.waitForTimeout(500);
+
+      const mint = mints(m)[0];
+      ok('a studio token was minted', !!mint, JSON.stringify(m.seen.map(r => r.method + ' ' + r.path)));
+      ok('with the real credential', mint?.auth === 'Bearer x', JSON.stringify(mint));
+
+      const book = m.seen.find(r => r.method === 'GET' && r.path === '/api/books/test');
+      ok('the book itself is still fetched with the real credential, not the studio token',
+        book?.auth === 'Bearer x' && book?.t === null && book?.share === null, JSON.stringify(book));
+
+      const canvas = await page.$$eval('.page-canvas img', els => els.map(e => e.getAttribute('src')));
+      ok('every canvas <img> carries ?t=',
+        canvas.length === 2 && canvas.every(s => /[?&]t=STUDIO-1(&|$)/.test(s)), JSON.stringify(canvas));
+
+      await page.evaluate(() => {
+        bookEditor.libraryPhotos = [{ id: '20260819/p0.jpg', name: 'p0.jpg', rating: 0 },
+                                    { id: '20260819/p1.jpg', name: 'p1.jpg', rating: 0 }];
+        bookEditor.renderPhotoStrip();
+        bookEditor._showPreviewAt(0);
+      });
+      await page.waitForTimeout(400);
+
+      const strip = await page.$$eval('.strip-photo img', els => els.map(e => e.getAttribute('src')));
+      ok('the library strip carries it',
+        strip.length === 2 && strip.every(s => /[?&]t=STUDIO-1(&|$)/.test(s)), JSON.stringify(strip));
+
+      const prev = await page.evaluate(() => ({
+        img: document.getElementById('photoPreviewImg').getAttribute('src'),
+        dl: document.getElementById('photoPreviewDownload')?.getAttribute('href'),
+      }));
+      ok('the preview modal carries it', /[?&]t=STUDIO-1(&|$)/.test(prev.img || ''), prev.img);
+      // an <a download> navigates; it cannot send a header either
+      ok('the original-download link carries it', /[?&]t=STUDIO-1(&|$)/.test(prev.dl || ''), prev.dl);
+      ok('and the download link is still the original, not a thumbnail',
+        /\/20260819\/p0\.jpg\?t=/.test(prev.dl || ''), prev.dl);
+
+      await page.evaluate(() => bookEditor.openBgPicker('library'));
+      await page.waitForTimeout(400);
+      const bg = await page.$$eval('.bg-picker-photo img', els => els.map(e => e.getAttribute('src')));
+      ok('the background picker carries it',
+        bg.length === 2 && bg.every(s => /[?&]t=STUDIO-1(&|$)/.test(s)), JSON.stringify(bg));
+
+      const tiles = tileReqs(m);
+      ok('every photo request that reached the Worker was authorised',
+        tiles.length >= 2 && tiles.every(r => r.t === 'STUDIO-1'), JSON.stringify(tiles));
+      return out;
+    },
+    {
+      before: m.attach,
+      initScript: () => {
+        sessionStorage.setItem('studio_token', 'x');
+        try { localStorage.setItem('book_editor_tour_done', '1'); } catch (e) {}
+      },
+    });
+}
+
+{
+  const m = studioMock();
+  await suite('studio token — previewing an album needs no blob-URL workaround',
+    `${base}/book_editor/view.html?id=test`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForFunction(() => typeof Viewer !== 'undefined' && !!Viewer.book, null, { timeout: 5000 });
+      await page.waitForTimeout(600);
+
+      ok('a studio token was minted with the real credential',
+        mints(m)[0]?.auth === 'Bearer adm', JSON.stringify(mints(m)[0]));
+      const book = m.seen.find(r => r.method === 'GET' && r.path === '/api/books/test');
+      ok('the book GET still uses the header credential, which the Worker demands',
+        book?.auth === 'Bearer adm' && book?.t === null && book?.share === null, JSON.stringify(book));
+
+      const srcs = await page.$$eval('.page-canvas img', els => els.map(e => e.getAttribute('src')));
+      ok('the canvas images are real Worker URLs, not blob: swaps',
+        srcs.length === 2 && srcs.every(s => s.startsWith(CONFIG_WORKER)), JSON.stringify(srcs));
+      ok('and they carry ?t=',
+        srcs.length === 2 && srcs.every(s => /[?&]t=STUDIO-1(&|$)/.test(s)), JSON.stringify(srcs));
+
+      const tiles = tileReqs(m);
+      // the band-aid fired one naked <img> request that 401'd before the
+      // authenticated fetch went out; nothing may 401 first any more
+      ok('no photo was ever asked for without a credential',
+        tiles.length >= 2 && tiles.every(r => r.t === 'STUDIO-1'), JSON.stringify(tiles));
+      ok('and each photo was asked for exactly once',
+        tiles.length === new Set(tiles.map(r => r.path + r.w)).size,
+        JSON.stringify(tiles.map(r => r.path)));
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN });
+}
+
+{
+  const m = studioMock();
+  await suite('studio token — a client link neither mints one nor loses its own',
+    `${base}/book_editor/view.html?id=test&t=SHARE-TOK`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForFunction(() => typeof Viewer !== 'undefined' && !!Viewer.book, null, { timeout: 5000 });
+      await page.waitForTimeout(500);
+
+      ok('the client never asks the Worker to mint anything',
+        mints(m).length === 0, JSON.stringify(m.seen.map(r => r.method + ' ' + r.path)));
+      const tiles = tileReqs(m);
+      ok('and its own token is what reached the Worker',
+        tiles.length >= 2 && tiles.every(r => r.t === 'SHARE-TOK'), JSON.stringify(tiles));
+      return out;
+    },
+    { before: m.attach });
+}
+
+{
+  // 12 hours outlives a working session but not a tab left open overnight
+  const m = studioMock({ ttlHours: 0.05 });
+  await suite('studio token — one near its deadline is replaced before it is used',
+    `${base}/index.html?folder=${encodeURIComponent('20260819/')}`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForFunction(() => document.querySelectorAll('.photo-card img').length > 0,
+        null, { timeout: 5000 });
+      await page.waitForTimeout(300);
+      ok('the first load minted one', mints(m).length === 1, `${mints(m).length} mints`);
+
+      await page.evaluate(() => app.handleLoadPhotos('20260819/sub/'));
+      await page.waitForTimeout(600);
+      ok('the next listing replaced it rather than reusing a dying one',
+        mints(m).length === 2, `${mints(m).length} mints`);
+
+      const late = tileReqs(m).filter(r => r.t !== 'STUDIO-1');
+      ok('and the tiles drawn after it carry the new token',
+        late.length >= 3 && late.every(r => r.t === 'STUDIO-2'), JSON.stringify(late.slice(0, 4)));
+      const srcs = await page.$$eval('.photo-card img', els => els.map(e => e.getAttribute('src')));
+      ok('as do the rendered elements',
+        srcs.length >= 3 && srcs.every(s => /[?&]t=STUDIO-2(&|$)/.test(s)), JSON.stringify(srcs.slice(0, 3)));
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN });
+}
+
+{
+  // the known trap: a mistyped PHOTOGRAPHER_TOKEN gets the user in anyway, and
+  // then everything 401s. That must stay one refused mint, not a flood.
+  const m = studioMock({ mintStatus: 401 });
+  await suite('studio token — a refused credential does not become a mint storm',
+    `${base}/index.html?folder=${encodeURIComponent('20260819/')}`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForTimeout(700);
+      for (const f of ['20260819/a/', '20260819/b/', '20260819/c/']) {
+        await page.evaluate(p => app.handleLoadPhotos(p), f);
+      }
+      await page.waitForTimeout(700);
+      ok('the Worker was asked to mint exactly once', mints(m).length === 1, `${mints(m).length} mints`);
+      ok('the page still listed folders instead of giving up',
+        m.seen.filter(r => r.list !== null).length >= 4,
+        JSON.stringify(m.seen.filter(r => r.list !== null).map(r => r.list)));
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN });
+}
+
+{
+  // a tab left open overnight: the tiles are the first thing to notice
+  const m = studioMock({ failPhotos: 'first' });
+  await suite('studio token — a tile that 401s re-mints once and retries',
+    `${base}/index.html?folder=${encodeURIComponent('20260819/')}`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForFunction(() => document.querySelectorAll('.photo-card img').length > 0,
+        null, { timeout: 5000 });
+      await page.waitForTimeout(900);
+
+      ok('the dead token was replaced', mints(m).length === 2, `${mints(m).length} mints`);
+      ok('every tile that 401d was asked for again',
+        tileReqs(m).filter(r => r.t === 'STUDIO-2').length >= 3,
+        JSON.stringify(tileReqs(m).map(r => r.path + ':' + r.t)));
+      const srcs = await page.$$eval('.photo-card img', els => els.map(e => e.getAttribute('src')));
+      ok('and the elements now point at the new token',
+        srcs.length >= 3 && srcs.every(s => /[?&]t=STUDIO-2(&|$)/.test(s)), JSON.stringify(srcs.slice(0, 3)));
+      const loaded = await page.$$eval('.photo-card img', els => els.map(e => e.naturalWidth));
+      ok('the tiles actually loaded in the end',
+        loaded.length >= 3 && loaded.every(w => w > 0), JSON.stringify(loaded.slice(0, 3)));
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN });
+}
+
+{
+  const m = studioMock({ failPhotos: 'all' });
+  await suite('studio token — tiles that keep failing retry once, then stop',
+    `${base}/index.html?folder=${encodeURIComponent('20260819/')}`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForFunction(() => document.querySelectorAll('.photo-card img').length > 0,
+        null, { timeout: 5000 });
+      await page.waitForTimeout(1500);
+
+      ok('the whole page cost one extra mint, not one per tile',
+        mints(m).length === 2, `${mints(m).length} mints`);
+      const counts = {};
+      for (const r of tileReqs(m)) counts[r.path] = (counts[r.path] || 0) + 1;
+      const paths = Object.keys(counts);
+      ok('and no tile was asked for more than twice',
+        paths.length >= 3 && paths.every(p => counts[p] <= 2), JSON.stringify(counts));
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN });
+}
+
+{
+  // The replacement mint itself fails, transiently — a 500, not a refusal, so
+  // nothing may write it off as a wrong credential. The token on the page is
+  // now known-dead and stays known-dead, and tiles keep arriving one at a
+  // time: lazily loaded rows scrolling into view, a modal opening. Each one
+  // reports the same corpse. That must buy one replacement attempt in total,
+  // not one per tile — the case where two tiles failing at the same instant
+  // share a single request says nothing, because they share it by accident.
+  const m = studioMock({ failPhotos: 'all', mintFailAfter: 1 });
+  await suite('studio token — a failed replacement is not retried by the next tile',
+    `${base}/index.html?folder=${encodeURIComponent('20260819/')}`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForFunction(() => document.querySelectorAll('.photo-card img').length > 0,
+        null, { timeout: 5000 });
+      await page.waitForTimeout(900);
+      const afterFirstRound = mints(m).length;
+      ok('the first round of dead tiles tried to replace the token once',
+        afterFirstRound === 2, `${afterFirstRound} mints`);
+
+      // one new tile at a time, each well after the previous attempt settled
+      for (const id of ['20260819/q0.jpg', '20260819/q1.jpg', '20260819/q2.jpg']) {
+        await page.evaluate(photoId => {
+          app.filteredPhotos = [{ id: photoId, name: photoId, rating: 0, annotations: [] }];
+          app.renderPhotoGrid();
+        }, id);
+        await page.waitForTimeout(450);
+      }
+
+      const late = m.seen.filter(r => /^\/20260819\/q\d\.jpg$/.test(r.path));
+      ok('the new tiles really did reach the Worker and really did fail',
+        late.length === 3 && late.every(r => r.t === 'STUDIO-1'), JSON.stringify(late));
+      ok('and not one of them bought another mint',
+        mints(m).length === afterFirstRound, `${mints(m).length} mints, was ${afterFirstRound}`);
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN });
 }
 
 // A changed script served under an unchanged ?v= leaves returning browsers on

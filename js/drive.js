@@ -17,10 +17,32 @@ class DriveManager {
     // width: pixel width the image will actually be displayed at. The Worker
     // maps it onto a pre-generated thumbnail; omit it only when the full
     // original is genuinely needed (export, print, download).
+    //
+    // The object route is gated and an <img> cannot send a header, so the
+    // URL-carried token goes on here — the client's share token or the
+    // photographer's studio token, whichever filled CONFIG.SHARE_TOKEN.
     getImageUrl(photo, width) {
         if (!photo || !photo.id) return '';
-        const base = `${CONFIG.WORKER_URL}/${photo.id}`;
+        const base = this.objectUrl(photo.id, width);
+        const t = (typeof CONFIG !== 'undefined' && CONFIG.SHARE_TOKEN) || '';
+        if (!t) return base;
+        return `${base}${base.includes('?') ? '&' : '?'}t=${encodeURIComponent(t)}`;
+    }
+
+    // The bare object URL, for fetch() — which sends the real credential in a
+    // header and has nothing to gain from a token in the query string.
+    objectUrl(photoId, width) {
+        const base = `${CONFIG.WORKER_URL}/${photoId}`;
         return width ? `${base}?w=${width}` : base;
+    }
+
+    // Every Worker route this class touches is photographer-only now, so the
+    // bearer token goes on all of them, reads included.
+    _adminHeaders(extra) {
+        const h = { ...(extra || {}) };
+        const tok = (typeof CONFIG !== 'undefined' && CONFIG.PHOTOGRAPHER_TOKEN) || '';
+        if (tok) h['Authorization'] = `Bearer ${tok}`;
+        return h;
     }
 
     // 載入資料庫中的照片清單
@@ -37,8 +59,12 @@ class DriveManager {
             const loadingEl = document.getElementById('loadingState');
             if (loadingEl) loadingEl.style.display = 'flex';
 
+            // Every thumbnail below is built from CONFIG.SHARE_TOKEN, so the
+            // token has to be in hand before the URLs are written.
+            if (window.StudioToken) await window.StudioToken.ensure();
+
             const url = `${CONFIG.WORKER_URL}/?list=${encodeURIComponent(folderPath)}`;
-            const response = await fetch(url);
+            const response = await fetch(url, { headers: this._adminHeaders() });
             const result = await response.json();
 
             if (result && result.status === 'success') {
@@ -164,8 +190,8 @@ class DriveManager {
             for (let i = 0; i < photoList.length; i += batchSize) {
                 const batch = photoList.slice(i, i + batchSize);
                 await Promise.all(batch.map(async (photo) => {
-                    const url = this.getImageUrl(photo);
-                    const response = await fetch(url);
+                    const url = this.objectUrl(photo.id);
+                    const response = await fetch(url, { headers: this._adminHeaders() });
                     const blob = await response.blob();
                     zip.file(photo.name, blob);
                 }));

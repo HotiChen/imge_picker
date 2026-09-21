@@ -933,7 +933,7 @@ class App {
         node.isLoading = true;
         try {
             const url = `${CONFIG.WORKER_URL}/?list=${encodeURIComponent(node.path)}`;
-            const res = await fetch(url);
+            const res = await fetch(url, { headers: driveManager._adminHeaders() });
             const result = await res.json();
             node.children = (result.folders || []).map(fp => this._makeTreeNode(fp));
             node.isLoaded = true;
