@@ -2518,6 +2518,58 @@ await suite('the photographer can sign out of this browser',
     before: shareMock().attach,
   });
 
+// A token opening several folders that shows only the first is worse than one
+// that shows none: the client has no way to know the rest exist.
+await suite('multi-folder — a client sees every folder their token opens',
+  `${base}/index.html`,
+  async page => {
+    await page.waitForFunction(
+      () => !!document.getElementById('client-bar') &&
+            !/\u8b80\u53d6\u6b0a\u9650\u4e2d/.test(document.getElementById('client-scope')?.textContent || ''),
+      null, { timeout: 6000 }).catch(() => {});
+    const r = await page.evaluate(() => {
+      const picks = [...document.querySelectorAll('#client-scope [data-folder]')];
+      return {
+        count: picks.length,
+        labels: picks.map(el => el.dataset.folder),
+        landed: (typeof CONFIG !== 'undefined' && CONFIG.DEFAULT_FOLDER) || '',
+        scopeText: document.getElementById('client-scope')?.textContent || '',
+      };
+    });
+    const out = [];
+    const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+    ok('both folders are offered, not just the first',
+      r.count === 2, `${r.count}: ${JSON.stringify(r.scopeText).slice(0, 60)}`);
+    ok('in the order the photographer set',
+      JSON.stringify(r.labels) === JSON.stringify(['20260819/', '20260901/']),
+      JSON.stringify(r.labels));
+    ok('and the first is where the page lands',
+      r.landed === '20260819/', JSON.stringify(r.landed));
+
+    // switching must actually reload that folder, not just relabel the bar
+    const after = await page.evaluate(async () => {
+      document.querySelector('#client-scope [data-folder="20260901/"]')?.click();
+      await new Promise(r => setTimeout(r, 400));
+      return {
+        folder: (typeof CONFIG !== 'undefined' && CONFIG.DEFAULT_FOLDER) || '',
+        input: (document.getElementById('driveUrl') || {}).value || '',
+      };
+    });
+    ok('picking the second one switches to it',
+      after.folder === '20260901/', JSON.stringify(after.folder));
+    ok('and the path box follows', after.input === '20260901/', JSON.stringify(after.input));
+    return out;
+  },
+  {
+    initScript: () => {
+      sessionStorage.setItem('client_session', JSON.stringify({
+        token: 'sess', user: { name: 'A', email: 'a@b.c' },
+        permissions: { can_book: 0, can_upload: 0 },
+      }));
+    },
+    before: clientMock({ folders: ['20260819/', '20260901/'] }).attach,
+  });
+
 await browser.close();
 server.close();
 console.log(failed ? `\n${failed} failing` : '\nall passed');
