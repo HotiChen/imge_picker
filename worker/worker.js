@@ -90,6 +90,25 @@ const SHARE_MAX_LIFE_MS = 180 * 24 * 60 * 60 * 1000;
 const SHARE_TOUCH_AFTER_MS = 24 * 60 * 60 * 1000;
 const PREVIEW_CRAWLER = /line-poker|facebookexternalhit/i;
 
+// An <img> cannot send an Authorization header, so gating the object route
+// took every photographer-facing page down with it. They get a share_tokens
+// row of their own, minted with the real credential and carried in `?t=` the
+// same way. It reads the whole bucket, so what keeps it from being a second
+// master key is that it expires inside a working day and authorises nothing
+// but reads.
+const STUDIO_TTL_MS = 12 * 60 * 60 * 1000;
+// Handed back while this much life is left, so reloading pages all day does
+// not leave a day's worth of live credentials behind, and a page that gets one
+// at the eleventh hour still has an hour to load its tiles.
+const STUDIO_REUSE_MIN_MS = 60 * 60 * 1000;
+
+// The one place a studio token is told from a client's. A positive test, so a
+// row from a database that predates the column reads as the client link it is
+// rather than as a key to the bucket.
+function isStudioShare(share) {
+  return share.kind === 'studio';
+}
+
 function newShareToken() {
   const bytes = new Uint8Array(32);
   crypto.getRandomValues(bytes);
@@ -158,6 +177,10 @@ async function resolveShareToken(request, url, env) {
 // Sliding 90-day expiry, throttled to at most one write a day and skipped for
 // preview crawlers so a link nobody opened does not keep renewing itself.
 async function touchShareToken(share, request, env) {
+  // A studio token does not slide. Its twelve hours are the whole reason a
+  // leak through a log or a shared screen ages out on its own, and one that
+  // kept being used would renew itself forever.
+  if (isStudioShare(share)) return;
   if (PREVIEW_CRAWLER.test(request.headers.get('User-Agent') || '')) return;
   const now = Date.now();
   const seen = share.last_seen_at ? Date.parse(share.last_seen_at) : 0;
@@ -222,6 +245,30 @@ export default {
     if (request.method === 'GET' && url.pathname === '/api/auth/verify-admin') {
       if (isAdminToken(request, env)) return jsonOk({ ok: true });
       return jsonErr('Token 不正確', 401);
+    }
+
+    // POST /api/auth/studio-token — a read-only credential the photographer's
+    // own pages can put in an <img> src
+    if (request.method === 'POST' && url.pathname === '/api/auth/studio-token') {
+      if (!isAdminToken(request, env)) return jsonErr('Unauthorized', 401);
+      if (!env.DB) return jsonErr('DB not configured', 500);
+      const now = Date.now();
+      // both sides are ISO-8601 UTC so this compares as text; a hand-edited
+      // row in any other format simply is not reused
+      const live = await env.DB.prepare(
+        "SELECT token, expires_at FROM share_tokens WHERE kind = 'studio' AND revoked_at IS NULL AND expires_at > ? ORDER BY expires_at DESC LIMIT 1"
+      ).bind(new Date(now + STUDIO_REUSE_MIN_MS).toISOString()).first();
+      if (live) return jsonOk({ token: live.token, expires_at: live.expires_at });
+      const token = newShareToken();
+      const expiresAt = new Date(now + STUDIO_TTL_MS).toISOString();
+      // book_id is empty because the token belongs to no album, which keeps it
+      // out of every book route and out of the per-book revoke list. folders
+      // is empty so the kind check is not the only thing between this row and
+      // the bucket.
+      await env.DB.prepare(
+        "INSERT INTO share_tokens (token, book_id, kind, folders, created_at, expires_at) VALUES (?, '', 'studio', '[]', ?, ?)"
+      ).bind(token, new Date(now).toISOString(), expiresAt).run();
+      return jsonOk({ token, expires_at: expiresAt });
     }
 
     // POST /api/auth/register
@@ -414,7 +461,11 @@ export default {
       let bookShare = null;
       if (!admin) {
         bookShare = await share();
-        if (!bookShare || bookShare.book_id !== bookId) return jsonErr('Unauthorized', 401);
+        // a studio token reads objects; the editor loads books with fetch,
+        // which can carry the real credential in a header
+        if (!bookShare || isStudioShare(bookShare) || bookShare.book_id !== bookId) {
+          return jsonErr('Unauthorized', 401);
+        }
         await touchShareToken(bookShare, request, env);
       }
 
@@ -579,7 +630,9 @@ export default {
       let listShare = null;
       if (!isAdminToken(request, env)) {
         listShare = await share();
-        if (!listShare || !shareCovers(listShare, listPrefix)) return jsonErr('Unauthorized', 401);
+        if (!listShare || !(isStudioShare(listShare) || shareCovers(listShare, listPrefix))) {
+          return jsonErr('Unauthorized', 401);
+        }
         await touchShareToken(listShare, request, env);
       }
       try {
@@ -620,7 +673,9 @@ export default {
       let viaShare = false;
       if (!isAdminToken(request, env)) {
         const s = await share();
-        if (!s || !shareCovers(s, sourceKey(key))) return jsonErr('Unauthorized', 401);
+        if (!s || !(isStudioShare(s) || shareCovers(s, sourceKey(key)))) {
+          return jsonErr('Unauthorized', 401);
+        }
         await touchShareToken(s, request, env);
         viaShare = true;
       }

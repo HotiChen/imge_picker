@@ -31,6 +31,12 @@ CREATE TABLE IF NOT EXISTS share_tokens (
   created_at   TEXT NOT NULL,
   expires_at   TEXT NOT NULL,
   revoked_at   TEXT,
-  last_seen_at TEXT
+  last_seen_at TEXT,
+  -- 'client' for the album link above, 'studio' for the photographer's own
+  -- pages, which read everything and write nothing. Told apart by this column
+  -- and never by the shape of `folders`. Appended, because the CREATE above is
+  -- IF NOT EXISTS and a deployed database only gets it from a hand-run
+  --   ALTER TABLE share_tokens ADD COLUMN kind TEXT NOT NULL DEFAULT 'client';
+  kind         TEXT NOT NULL DEFAULT 'client'
 );
 CREATE INDEX IF NOT EXISTS idx_share_tokens_book ON share_tokens(book_id);
