@@ -2474,6 +2474,8 @@ await suite('the photographer can sign out of this browser',
     await page.waitForFunction(() => !!document.getElementById('studio-logout'),
       null, { timeout: 5000 }).catch(() => {});
     const present = await page.evaluate(() => !!document.getElementById('studio-logout'));
+    const inTopBar = await page.evaluate(() =>
+      !!document.querySelector('.header-right #studio-logout'));
 
     // the handler reloads; location.reload cannot be stubbed, so follow it
     // through and assert on the page that comes back
@@ -2492,6 +2494,10 @@ await suite('the photographer can sign out of this browser',
     const out = [];
     const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
     ok('there is a sign-out control', present === true, String(present));
+    // it first landed in .header-actions, the download row above the grid,
+    // where it was present, passing, and invisible to the person using it
+    ok('and it sits in the top bar, not among the download buttons',
+      inTopBar === true, String(inTopBar));
     ok('it forgets the stored credential', after.cleared === true, String(after.cleared));
     ok('the reloaded page holds no token', after.token === '', String(after.token.length));
     ok('and does not offer sign-out to someone already signed out',

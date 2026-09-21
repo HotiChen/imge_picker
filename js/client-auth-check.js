@@ -23,7 +23,10 @@
   // this page stores whatever is typed without checking it, so the first sign
   // of a typo is every tile failing.
   function addStudioLogout() {
-    const host = document.querySelector('.header-actions, header') || document.body;
+    // .header-right is the top bar beside 上傳 / 相本書 / the avatar.
+    // .header-actions is the row above the grid — 全選 / 下載 — where this
+    // button was landing among the download controls and going unnoticed.
+    const host = document.querySelector('.header-right') || document.body;
     const btn = document.createElement('button');
     btn.id = 'studio-logout';
     btn.className = 'btn btn-outline';
