@@ -55,10 +55,24 @@ async function getSessionUser(request, env) {
   const auth = request.headers.get('Authorization') || '';
   const token = auth.replace(/^Bearer\s+/i, '').trim();
   if (!token) return null;
+  // single quotes: a double-quoted 'now' is an identifier, and only SQLite's
+  // legacy fallback turns an unresolvable one back into a string. A build with
+  // that fallback off rejects the statement outright, which would make every
+  // signed-in client anonymous.
   const session = await env.DB.prepare(
-    'SELECT s.*, u.id as uid, u.email, u.name, u.folder_path, u.approved, p.can_book, p.can_upload FROM sessions s JOIN users u ON s.user_id = u.id LEFT JOIN permissions p ON p.user_id = u.id WHERE s.token = ? AND s.expires_at > datetime("now")'
+    "SELECT s.*, u.id as uid, u.email, u.name, u.folder_path, u.approved, p.can_book, p.can_upload FROM sessions s JOIN users u ON s.user_id = u.id LEFT JOIN permissions p ON p.user_id = u.id WHERE s.token = ? AND s.expires_at > datetime('now')"
   ).bind(token).first();
   return session;
+}
+
+// sessions.expires_at is written as 'YYYY-MM-DD HH:MM:SS' — UTC, but with
+// nothing in the text that says so, and Date.parse reads that shape as local
+// time. NaN for anything else, which then fails closed.
+function sessionExpiry(value) {
+  const text = String(value ?? '').trim();
+  if (!text) return NaN;
+  const zoned = /[Zz]$|[+-]\d\d:?\d\d$/.test(text);
+  return Date.parse(zoned ? text : text.replace(' ', 'T') + 'Z');
 }
 
 // ─── Admin auth check ────────────────────────────────────────────────────────
@@ -102,11 +116,32 @@ const STUDIO_TTL_MS = 12 * 60 * 60 * 1000;
 // at the eleventh hour still has an hour to load its tiles.
 const STUDIO_REUSE_MIN_MS = 60 * 60 * 1000;
 
+// And the same problem on the client's side of index.html: someone signed in
+// against D1 holds a session, which is neither the admin credential nor a
+// share token, so every tile and every listing refused them. They trade that
+// session for a row of their own, scoped to the one folder on their user
+// record. An hour, because the trade costs them nothing but a fetch and the
+// scope is a snapshot that must not go stale far behind the user row.
+const SESSION_TOKEN_TTL_MS = 60 * 60 * 1000;
+
 // The one place a studio token is told from a client's. A positive test, so a
 // row from a database that predates the column reads as the client link it is
 // rather than as a key to the bucket.
 function isStudioShare(share) {
   return share.kind === 'studio';
+}
+
+// Likewise positive, and for the same reason.
+function isSessionShare(share) {
+  return share.kind === 'session';
+}
+
+// The two kinds that are minted rather than sent. Whoever holds the credential
+// behind one can trade for another whenever they like, which is why neither
+// slides and why neither belongs on an album route — the album link is the
+// only kind its holder cannot renew.
+function isMintedShare(share) {
+  return isStudioShare(share) || isSessionShare(share);
 }
 
 function newShareToken() {
@@ -177,10 +212,12 @@ async function resolveShareToken(request, url, env) {
 // Sliding 90-day expiry, throttled to at most one write a day and skipped for
 // preview crawlers so a link nobody opened does not keep renewing itself.
 async function touchShareToken(share, request, env) {
-  // A studio token does not slide. Its twelve hours are the whole reason a
-  // leak through a log or a shared screen ages out on its own, and one that
-  // kept being used would renew itself forever.
-  if (isStudioShare(share)) return;
+  // A minted token does not slide. Its deadline is the whole reason a leak
+  // through a log or a shared screen ages out on its own, and one that kept
+  // being used would renew itself forever — for a client token, that would
+  // also keep its folder snapshot alive long after the photographer narrowed
+  // the user record it was taken from.
+  if (isMintedShare(share)) return;
   if (PREVIEW_CRAWLER.test(request.headers.get('User-Agent') || '')) return;
   const now = Date.now();
   const seen = share.last_seen_at ? Date.parse(share.last_seen_at) : 0;
@@ -269,6 +306,40 @@ export default {
         "INSERT INTO share_tokens (token, book_id, kind, folders, created_at, expires_at) VALUES (?, '', 'studio', '[]', ?, ?)"
       ).bind(token, new Date(now).toISOString(), expiresAt).run();
       return jsonOk({ token, expires_at: expiresAt });
+    }
+
+    // POST /api/auth/session-token — the client's half of the same trade: a
+    // D1 session, which fetch can send as a header, for a token an <img> can
+    // carry. Nothing is reused between calls: there is no column to key reuse
+    // on without a second migration, and keying it on the folder snapshot
+    // would hand two clients who share a folder the same credential.
+    if (request.method === 'POST' && url.pathname === '/api/auth/session-token') {
+      const session = await getSessionUser(request, env);
+      if (!session) return jsonErr('Unauthorized', 401);
+      if (!session.approved) return jsonErr('帳號待審核，請聯繫攝影師', 403);
+      // '' is what a fresh user row carries. Read as "everything" it would
+      // open every other client's wedding, and read as "nothing" it is a
+      // silent empty grid, so it is refused out loud instead.
+      const folder = String(session.folder_path ?? '').trim();
+      if (!folder) return jsonErr('尚未設定資料夾，請聯繫攝影師', 403);
+      // stored and handed back slash-terminated, because the client lists this
+      // string straight back as `?list=` and `20260819` is a different prefix
+      // from `20260819/` — the first one also reaches 20260819-other/
+      const folders = [folder.endsWith('/') ? folder : folder + '/'];
+      const now = Date.now();
+      // the token must not outlive the session it was traded for; a hand-edited
+      // expiry the SQL above let past is refused rather than guessed at
+      const sessionEnd = sessionExpiry(session.expires_at);
+      if (!Number.isFinite(sessionEnd) || sessionEnd <= now) return jsonErr('Unauthorized', 401);
+      const token = newShareToken();
+      const expiresAt = new Date(Math.min(now + SESSION_TOKEN_TTL_MS, sessionEnd)).toISOString();
+      // book_id '' for the same reason a studio row carries it: the token
+      // belongs to no album, which keeps it out of every book route and out of
+      // the per-book revoke list
+      await env.DB.prepare(
+        "INSERT INTO share_tokens (token, book_id, kind, folders, created_at, expires_at) VALUES (?, '', 'session', ?, ?, ?)"
+      ).bind(token, JSON.stringify(folders), new Date(now).toISOString(), expiresAt).run();
+      return jsonOk({ token, expires_at: expiresAt, folders });
     }
 
     // POST /api/auth/register
@@ -461,9 +532,10 @@ export default {
       let bookShare = null;
       if (!admin) {
         bookShare = await share();
-        // a studio token reads objects; the editor loads books with fetch,
-        // which can carry the real credential in a header
-        if (!bookShare || isStudioShare(bookShare) || bookShare.book_id !== bookId) {
+        // a minted token signs <img> URLs; every book route is driven by
+        // fetch, which can carry the real credential — the photographer's, or
+        // the client's D1 session — in a header instead
+        if (!bookShare || isMintedShare(bookShare) || bookShare.book_id !== bookId) {
           return jsonErr('Unauthorized', 401);
         }
         await touchShareToken(bookShare, request, env);
