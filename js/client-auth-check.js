@@ -87,9 +87,11 @@
     // accept only the photographer's credential, so clicking one asked a
     // client for a password that is not theirs to have. Hiding beats a
     // disabled button or a hover note — neither stops someone trying.
+    // Removed, not hidden: .btn carries display:inline-flex, and an author
+    // rule beats the UA stylesheet's [hidden] { display: none }, so setting
+    // the attribute left both buttons on screen and looking clickable.
     ['uploadPageBtn', 'openBookEditorBtn'].forEach(id => {
-      const el = document.getElementById(id);
-      if (el) el.hidden = true;
+      document.getElementById(id)?.remove();
     });
 
     // Show client info bar

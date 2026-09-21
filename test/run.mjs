@@ -2380,14 +2380,12 @@ await suite('a client is not shown the photographer\u2019s pages at all',
   async page => {
     await page.waitForFunction(() => !!document.getElementById('client-bar'), null, { timeout: 5000 });
     const r = await page.evaluate(() => {
-      // asserted on the attribute our own code sets, not on computed display:
-      // these buttons are already display:none in this harness for unrelated
-      // layout reasons, so a computed check passes before anything is built
-      const vis = id => {
-        const el = document.getElementById(id);
-        if (!el) return 'gone';
-        return el.hasAttribute('hidden') ? 'hidden' : 'shown';
-      };
+      // Three ways this assertion has already passed for the wrong reason:
+      // `!== 'shown'` passed when the id was missing, a computed display check
+      // passed because the harness hides these anyway, and a `hidden`
+      // attribute check passed while .btn's display:inline-flex kept them on
+      // screen. Gone from the DOM is the only state none of those reach.
+      const vis = id => document.getElementById(id) ? 'shown' : 'gone';
       return {
         upload: vis('uploadPageBtn'),
         book: vis('openBookEditorBtn'),
@@ -2399,8 +2397,8 @@ await suite('a client is not shown the photographer\u2019s pages at all',
     const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
     // clicking these asked a client for the photographer's password
     // 'gone' would pass a looser check while meaning the id was wrong
-    ok('the upload button is explicitly hidden for a client', r.upload === 'hidden', r.upload);
-    ok('and so is the album editor', r.book === 'hidden', r.book);
+    ok('the upload button is not in the page for a client', r.upload === 'gone', r.upload);
+    ok('nor is the album editor', r.book === 'gone', r.book);
     ok('and the bar does not explain a button that is gone',
       !r.bar.includes('\u7121\u6b0a\u9650'), r.bar.trim().slice(0, 60));
     return out;
@@ -2412,6 +2410,29 @@ await suite('a client is not shown the photographer\u2019s pages at all',
         permissions: { can_book: 0, can_upload: 0 },
       }));
     },
+    before: shareMock().attach,
+  });
+
+await suite('the photographer still gets those buttons',
+  `${base}/index.html`,
+  async page => {
+    await page.waitForFunction(() => !!window.app, null, { timeout: 5000 });
+    const r = await page.evaluate(() => ({
+      upload: !!document.getElementById('uploadPageBtn'),
+      book: !!document.getElementById('openBookEditorBtn'),
+      clientBar: !!document.getElementById('client-bar'),
+    }));
+    const out = [];
+    const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+    // without this, a typo in either id would remove nothing and the client
+    // suite would still read 'gone'
+    ok('the upload button is there for the photographer', r.upload === true, String(r.upload));
+    ok('and so is the album editor', r.book === true, String(r.book));
+    ok('and no client bar is shown', r.clientBar === false, String(r.clientBar));
+    return out;
+  },
+  {
+    initScript: () => sessionStorage.setItem('studio_token', 'adm'),
     before: shareMock().attach,
   });
 
