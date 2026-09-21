@@ -157,6 +157,57 @@ function newShareToken() {
   return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
+// ─── A client account's folders ──────────────────────────────────────────────
+// One account opens a set of folders, and the set lives in the single
+// `users.folder_path` TEXT column it has always had — share_tokens already
+// cost two hand-run ALTERs and a third is not worth a feature.
+//
+// JSON, for two reasons. Every separator anyone would reach for is a character
+// a folder name may contain: this photographer's folders read `2026/王, "小明"
+// 婚紗/`, which kills commas and quotes in one name. And `share_tokens.folders`
+// is already a JSON array, so the snapshot is written in the encoding it is
+// read back in.
+//
+// Anything that opens the way JSON does — `[`, `{` or `"` — is claimed as this
+// encoding and must parse as the array it should be. A value truncated to
+// `["20260819/` is one backspace in a text box away, and `{"folders": [...]}`
+// is what someone guessing the encoding in the D1 console writes; read as a
+// plain path either one names a folder that does not exist, and the client is
+// left staring at an empty grid with no explanation, which is the whole
+// failure being designed out. Only these three openers, never "does it parse":
+// `2026` is valid JSON and a real folder name. Everything else is the plain
+// string every account carries today. The cost is an account whose folder
+// genuinely starts with one of the three, which now has to be written as a
+// one-element set.
+//
+// Returns null — not [] — when the text cannot be read, because "no folders"
+// and "unreadable" are two different things to tell someone.
+function parseClientFolders(value) {
+  const text = String(value ?? '').trim();
+  if (!text) return [];
+  let raw;
+  if (/^[[{"]/.test(text)) {
+    try { raw = JSON.parse(text); } catch { return null; }
+    if (!Array.isArray(raw)) return null;
+    if (!raw.every(f => typeof f === 'string' && f.trim())) return null;
+  } else {
+    raw = [text];
+  }
+  // Canonicalised on the way out rather than on the way in, because what is
+  // already in the column was typed by hand: `20260819` and `20260819/` are
+  // different prefixes to R2 and the first one also reaches 20260819-other/.
+  // Deduped after that, so the two spellings are the one folder they name.
+  // Order is left as the photographer wrote it — the client page opens
+  // folders[0] by default, so it is a contract and not an artefact.
+  const out = [];
+  for (const f of raw) {
+    const trimmed = f.trim();
+    const slashed = trimmed.endsWith('/') ? trimmed : trimmed + '/';
+    if (!out.includes(slashed)) out.push(slashed);
+  }
+  return out;
+}
+
 // A token opens folders, not the bucket. The match has to land on a `/`
 // boundary or the folder `20260819/` also reaches `20260819-other/`, which is
 // a different client's wedding.
@@ -347,24 +398,32 @@ export default {
       const session = await getSessionUser(request, env);
       if (!session) return jsonErr('Unauthorized', 401);
       if (!session.approved) return jsonErr('帳號待審核，請聯繫攝影師', 403);
+      // Every folder on the account, each slash-terminated — the client
+      // lists these strings straight back as `?list=`, and `20260819` is a
+      // different prefix from `20260819/`, the first of which also reaches
+      // 20260819-other/.
+      const folders = parseClientFolders(session.folder_path);
+      // A column nobody can read is refused as loudly as an empty one, and
+      // with different wording: the photographer has to be told which of the
+      // two it is, and the client is the one carrying the message.
+      if (folders === null) return jsonErr('資料夾設定有誤，請聯繫攝影師', 403);
       // '' is what a fresh user row carries. Read as "everything" it would
       // open every other client's wedding, and read as "nothing" it is a
       // silent empty grid, so it is refused out loud instead.
-      const folder = String(session.folder_path ?? '').trim();
-      if (!folder) return jsonErr('尚未設定資料夾，請聯繫攝影師', 403);
-      // stored and handed back slash-terminated, because the client lists this
-      // string straight back as `?list=` and `20260819` is a different prefix
-      // from `20260819/` — the first one also reaches 20260819-other/
-      const folders = [folder.endsWith('/') ? folder : folder + '/'];
+      if (!folders.length) return jsonErr('尚未設定資料夾，請聯繫攝影師', 403);
       const now = Date.now();
       // the token must not outlive the session it was traded for; a hand-edited
       // expiry the SQL above let past is refused rather than guessed at
       const sessionEnd = sessionExpiry(session.expires_at);
       if (!Number.isFinite(sessionEnd) || sessionEnd <= now) return jsonErr('Unauthorized', 401);
       const foldersJson = JSON.stringify(folders);
-      // Keyed on the owner AND on the exact snapshot, so narrowing a client's
-      // folder_path takes effect at their next page load rather than whenever
-      // the old row happens to die. Two clients who share a folder still get a
+      // Keyed on the owner AND on the exact snapshot — the canonical set in
+      // the photographer's order, not the raw column — so narrowing a
+      // client's folders takes effect at their next page load rather than
+      // whenever the old row happens to die. Exact text equality is what
+      // matters now that the set can change: a narrowed set can never equal
+      // the wider string a live row was minted from, so the old set is not
+      // reachable through reuse. Two clients who share a folder still get a
       // row each, because the owner is part of the key.
       const live = await env.DB.prepare(
         "SELECT token, expires_at FROM share_tokens WHERE kind = 'session' AND user_id = ? AND folders = ? AND revoked_at IS NULL AND expires_at > ? ORDER BY expires_at DESC LIMIT 1"
@@ -435,7 +494,10 @@ export default {
       ).bind(token, user.id, expiresAt).run();
       return jsonOk({
         token,
-        user: { id: user.id, email: user.email, name: user.name, folder_path: user.folder_path || '' },
+        // folder_path is the raw column, kept for callers that predate the
+        // set; `folders` is what it means. upload.html and the book editor
+        // open folders[0], and the encoded text is not a folder path.
+        user: { id: user.id, email: user.email, name: user.name, folder_path: user.folder_path || '', folders: parseClientFolders(user.folder_path) },
         permissions: { can_book: !!user.can_book, can_upload: !!user.can_upload }
       });
     }
@@ -466,7 +528,7 @@ export default {
       const session = await getSessionUser(request, env);
       if (!session) return jsonErr('Unauthorized', 401);
       return jsonOk({
-        user: { id: session.uid, email: session.email, name: session.name, folder_path: session.folder_path || '' },
+        user: { id: session.uid, email: session.email, name: session.name, folder_path: session.folder_path || '', folders: parseClientFolders(session.folder_path) },
         permissions: { can_book: !!session.can_book, can_upload: !!session.can_upload }
       });
     }
@@ -482,7 +544,10 @@ export default {
       const { results } = await env.DB.prepare(
         'SELECT u.id, u.email, u.name, u.folder_path, u.approved, u.created_at, p.can_book, p.can_upload FROM users u LEFT JOIN permissions p ON p.user_id = u.id ORDER BY u.created_at DESC'
       ).all();
-      return jsonOk(results);
+      // The raw column rides along beside the parsed set so a value nobody can
+      // read — `folders: null` — can still be seen and repaired. Sending only
+      // the parse would leave the photographer editing a blank box.
+      return jsonOk(results.map(r => ({ ...r, folders: parseClientFolders(r.folder_path) })));
     }
 
     // PUT /api/admin/clients/:id/approve
@@ -503,11 +568,31 @@ export default {
       if (!userId) return jsonErr('Invalid user id');
       let body;
       try { body = await request.json(); } catch { return jsonErr('Invalid JSON'); }
-      const { can_book, can_upload, folder_path } = body || {};
+      const { can_book, can_upload, folder_path, folders } = body || {};
+      // Both halves are validated before either is written: a request that
+      // names a folder set we cannot store must not leave the permissions
+      // applied and the folders stale.
+      if (folders !== undefined &&
+          (!Array.isArray(folders) || !folders.every(f => typeof f === 'string' && f.trim()))) {
+        return jsonErr('folders must be an array of non-empty paths');
+      }
+      // A half-migrated caller sending the new array under the old field name
+      // would otherwise reach D1 as a bind of the wrong type.
+      if (folder_path !== undefined && typeof folder_path !== 'string') {
+        return jsonErr('folder_path must be a string');
+      }
       await env.DB.prepare(
         'INSERT INTO permissions (user_id, can_book, can_upload) VALUES (?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET can_book = excluded.can_book, can_upload = excluded.can_upload'
       ).bind(userId, can_book ? 1 : 0, can_upload ? 1 : 0).run();
-      if (folder_path !== undefined) {
+      // `folders` wins when both arrive. A UI mid-migration sends the picker's
+      // list alongside whatever is still sitting in the old text box, and the
+      // stale box must not be the one that lands.
+      if (folders !== undefined) {
+        await env.DB.prepare('UPDATE users SET folder_path = ? WHERE id = ?')
+          .bind(JSON.stringify(folders.map(f => f.trim())), userId).run();
+      } else if (folder_path !== undefined) {
+        // written through unchanged, so the old single-value caller reading a
+        // set out of the column and writing it back does not corrupt it
         await env.DB.prepare('UPDATE users SET folder_path = ? WHERE id = ?').bind(folder_path, userId).run();
       }
       return jsonOk({ success: true });

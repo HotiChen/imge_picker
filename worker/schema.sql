@@ -3,6 +3,12 @@ CREATE TABLE IF NOT EXISTS users (
   email TEXT UNIQUE NOT NULL,
   password_hash TEXT NOT NULL,
   name TEXT NOT NULL,
+  -- The folders this client may read. Either a plain path, which is every
+  -- account that predates the set and reads as the one folder it names, or a
+  -- JSON array of paths. Anything opening the way JSON does -- `[`, `{` or a
+  -- quote -- must parse as that array or the account is refused out loud
+  -- rather than shown an empty grid. See parseClientFolders in worker.js. No
+  -- DDL change: the set is in-band precisely so this column needs none.
   folder_path TEXT DEFAULT '',
   approved INTEGER DEFAULT 0,
   created_at TEXT DEFAULT (datetime('now'))
