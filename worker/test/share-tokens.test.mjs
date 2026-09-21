@@ -293,16 +293,25 @@ test('the photographer token still opens everything', async () => {
   })).status, 200);
 });
 
-test('an admin read is not marked private, a share-token read is', async () => {
+test('neither an admin read nor a share-token read is for a shared cache', async () => {
+  // this test used to pin the admin read as `public`. It is the photographer's
+  // own photo on a URL carrying no credential at all, so a proxy in the path
+  // would serve it to the next request that guessed the URL; each form now
+  // says private and varies on the credential it was actually authorised by.
   const env = setup();
   await seed(env);
   const admin = await call(env, '/20260819/a.jpg', { token: SECRET });
-  assert.match(admin.headers.get('Cache-Control'), /^public,/);
+  assert.match(admin.headers.get('Cache-Control'), /^private,/,
+    'a photographer’s photo must not be cached by a shared proxy either');
+  assert.match(admin.headers.get('Vary') || '', /Authorization/i);
   const client = await call(env, '/20260819/a.jpg?t=TK');
   assert.match(client.headers.get('Cache-Control'), /^private,/,
     'a shared-link photo must not be cached by a shared proxy');
+  assert.match(client.headers.get('Vary') || '', /X-Share-Token/i);
   // the rest of the caching contract is unchanged
-  assert.match(client.headers.get('Cache-Control'), /max-age=86400, stale-while-revalidate=604800/);
+  for (const res of [admin, client]) {
+    assert.match(res.headers.get('Cache-Control'), /max-age=86400, stale-while-revalidate=604800/);
+  }
 });
 
 // ─── sliding expiry, crawlers and the D1 write throttle ──────────────────────
@@ -679,10 +688,17 @@ test('nothing authorised by a share token is cacheable by a shared cache', async
   }
 });
 
-test('the photographer’s own book read is unchanged', async () => {
+test('the photographer’s own book read still revalidates, and is not for a shared cache', async () => {
+  // this used to pin exactly 'no-cache'. See books.test.mjs: no-cache says a
+  // stored response must be revalidated before it is served, not that it may
+  // not be stored, so `private` had to join it on the one response that hands
+  // back notifyUrl. Do not tighten this back on the reading that no-cache
+  // already means "do not cache" — it does not.
   const env = setup();
   const res = await call(env, '/api/books/b1', { token: SECRET });
-  assert.equal(res.headers.get('Cache-Control'), 'no-cache');
+  const cc = res.headers.get('Cache-Control');
+  assert.match(cc, /(^|[\s,])no-cache([\s,]|$)/);
+  assert.match(cc, /(^|[\s,])private([\s,]|$)/, `a shared cache may store the webhook secret: ${cc}`);
 });
 
 // ─── the header form of the token, on every route ────────────────────────────

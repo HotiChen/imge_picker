@@ -26,7 +26,13 @@ test('a saved album is never served from cache', async () => {
   // the old text size and crop until their browser cache expires
   const res = await call(withBook(), '/api/books/b1', { token: ADMIN });
   assert.equal(res.status, 200);
-  assert.equal(res.headers.get('Cache-Control'), 'no-cache');
+  // This used to pin exactly 'no-cache'. `private` was added in front, and it
+  // is not redundant: no-cache governs whether a stored response may be
+  // SERVED, not whether it may be STORED, and this body carries notifyUrl — a
+  // live webhook bearer secret — which a shared cache was entitled to keep.
+  // Match the directive rather than the whole string, so the revalidation this
+  // test is about stays pinned without freezing what sits beside it.
+  assert.match(res.headers.get('Cache-Control'), /(^|[\s,])no-cache([\s,]|$)/);
 });
 
 test('reading a book returns its stored contents', async () => {

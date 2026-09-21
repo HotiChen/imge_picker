@@ -123,6 +123,11 @@ const STUDIO_REUSE_MIN_MS = 60 * 60 * 1000;
 // record. An hour, because the trade costs them nothing but a fetch and the
 // scope is a snapshot that must not go stale far behind the user row.
 const SESSION_TOKEN_TTL_MS = 60 * 60 * 1000;
+// Handed back while this much life is left, so a client clicking around all
+// evening leaves a handful of rows rather than one per page load. Comfortably
+// above the five minutes the frontend treats as spent, or the two would
+// disagree about whether a token is worth using.
+const SESSION_REUSE_MIN_MS = 15 * 60 * 1000;
 
 // The one place a studio token is told from a client's. A positive test, so a
 // row from a database that predates the column reads as the client link it is
@@ -168,6 +173,17 @@ function shareCovers(share, path) {
   const segments = path.split('/');
   if (segments.includes('..') || segments.includes('.')) return false;
   return share.folders.some(f => folderCovers(f, path));
+}
+
+// Objects the Worker keeps for itself rather than serves as photos. The one
+// that matters is `_books/<id>.json`: it carries notifyUrl, a bearer webhook
+// secret that revoking a link does not revoke, and the whitelist projection on
+// GET /api/books/:id exists to keep it away from anything travelling in a URL.
+// The object route handed it back through a different door. No real photo key
+// starts with `_` — the listing hides those prefixes from the picker and the
+// upload route strips `_assets/` — so refusing the namespace costs nothing.
+function isInternalKey(key) {
+  return key.startsWith('_');
 }
 
 // Thumbnails live under `_thumbs/<width>/<key>.thumb`, so permission on one is
@@ -246,6 +262,10 @@ async function touchShareToken(share, request, env) {
 // say so.
 const SHARED_LINK_HEADERS = { 'Cache-Control': 'private, no-store', 'Vary': 'X-Share-Token' };
 
+// And the photographer's own reads carry no credential in the URL at all, so a
+// shared cache holding one would serve it to whoever asked for that URL next.
+const ADMIN_ONLY_HEADERS = { 'Cache-Control': 'private, no-store', 'Vary': 'Authorization' };
+
 // ─── JSON response helpers ───────────────────────────────────────────────────
 function jsonOk(data, status = 200, extraHeaders) {
   return new Response(JSON.stringify(data), {
@@ -295,24 +315,34 @@ export default {
       const live = await env.DB.prepare(
         "SELECT token, expires_at FROM share_tokens WHERE kind = 'studio' AND revoked_at IS NULL AND expires_at > ? ORDER BY expires_at DESC LIMIT 1"
       ).bind(new Date(now + STUDIO_REUSE_MIN_MS).toISOString()).first();
-      if (live) return jsonOk({ token: live.token, expires_at: live.expires_at });
-      const token = newShareToken();
-      const expiresAt = new Date(now + STUDIO_TTL_MS).toISOString();
-      // book_id is empty because the token belongs to no album, which keeps it
-      // out of every book route and out of the per-book revoke list. folders
-      // is empty so the kind check is not the only thing between this row and
-      // the bucket.
+      const token = live ? live.token : newShareToken();
+      const expiresAt = live ? live.expires_at : new Date(now + STUDIO_TTL_MS).toISOString();
+      if (!live) {
+        // book_id is empty because the token belongs to no album, which keeps
+        // it out of every book route and out of the per-book revoke list.
+        // folders is empty so the kind check is not the only thing between
+        // this row and the bucket.
+        await env.DB.prepare(
+          "INSERT INTO share_tokens (token, book_id, kind, folders, created_at, expires_at) VALUES (?, '', 'studio', '[]', ?, ?)"
+        ).bind(token, new Date(now).toISOString(), expiresAt).run();
+      }
+      // One live studio row at a time, whether we just issued it or handed
+      // back the one that was already there. Reuse is what keeps the picker
+      // and the editor open side by side on the same token, so it is the
+      // handed-back row that is spared here — superseding it instead would
+      // have the two pages revoke each other's token in turn. What reuse
+      // therefore cannot give is "a fresh login retires a leaked token": the
+      // leaked one IS the live one. POST /api/shares/minted/revoke-all is the
+      // control for that, and it does not wait on a page load.
       await env.DB.prepare(
-        "INSERT INTO share_tokens (token, book_id, kind, folders, created_at, expires_at) VALUES (?, '', 'studio', '[]', ?, ?)"
-      ).bind(token, new Date(now).toISOString(), expiresAt).run();
+        "UPDATE share_tokens SET revoked_at = ? WHERE kind = 'studio' AND revoked_at IS NULL AND token != ?"
+      ).bind(new Date(now).toISOString(), token).run();
       return jsonOk({ token, expires_at: expiresAt });
     }
 
     // POST /api/auth/session-token — the client's half of the same trade: a
     // D1 session, which fetch can send as a header, for a token an <img> can
-    // carry. Nothing is reused between calls: there is no column to key reuse
-    // on without a second migration, and keying it on the folder snapshot
-    // would hand two clients who share a folder the same credential.
+    // carry.
     if (request.method === 'POST' && url.pathname === '/api/auth/session-token') {
       const session = await getSessionUser(request, env);
       if (!session) return jsonErr('Unauthorized', 401);
@@ -331,14 +361,28 @@ export default {
       // expiry the SQL above let past is refused rather than guessed at
       const sessionEnd = sessionExpiry(session.expires_at);
       if (!Number.isFinite(sessionEnd) || sessionEnd <= now) return jsonErr('Unauthorized', 401);
+      const foldersJson = JSON.stringify(folders);
+      // Keyed on the owner AND on the exact snapshot, so narrowing a client's
+      // folder_path takes effect at their next page load rather than whenever
+      // the old row happens to die. Two clients who share a folder still get a
+      // row each, because the owner is part of the key.
+      const live = await env.DB.prepare(
+        "SELECT token, expires_at FROM share_tokens WHERE kind = 'session' AND user_id = ? AND folders = ? AND revoked_at IS NULL AND expires_at > ? ORDER BY expires_at DESC LIMIT 1"
+      ).bind(session.uid, foldersJson, new Date(now + SESSION_REUSE_MIN_MS).toISOString()).first();
+      // a row minted from this client's other, longer-lived session must not
+      // carry the session in front of us past its own end
+      if (live && Date.parse(live.expires_at) <= sessionEnd) {
+        return jsonOk({ token: live.token, expires_at: live.expires_at, folders });
+      }
       const token = newShareToken();
       const expiresAt = new Date(Math.min(now + SESSION_TOKEN_TTL_MS, sessionEnd)).toISOString();
       // book_id '' for the same reason a studio row carries it: the token
       // belongs to no album, which keeps it out of every book route and out of
-      // the per-book revoke list
+      // the per-book revoke list. user_id is what a logout and an account
+      // deletion find it by.
       await env.DB.prepare(
-        "INSERT INTO share_tokens (token, book_id, kind, folders, created_at, expires_at) VALUES (?, '', 'session', ?, ?, ?)"
-      ).bind(token, JSON.stringify(folders), new Date(now).toISOString(), expiresAt).run();
+        "INSERT INTO share_tokens (token, book_id, kind, user_id, folders, created_at, expires_at) VALUES (?, '', 'session', ?, ?, ?, ?)"
+      ).bind(token, session.uid, foldersJson, new Date(now).toISOString(), expiresAt).run();
       return jsonOk({ token, expires_at: expiresAt, folders });
     }
 
@@ -402,6 +446,15 @@ export default {
       const auth = request.headers.get('Authorization') || '';
       const token = auth.replace(/^Bearer\s+/i, '').trim();
       if (token) {
+        // The URL tokens minted from this account go with it. Without this a
+        // logout on a shared machine leaves an hour of readable photos in the
+        // browser's history. Keyed on user_id alone — the subquery yields NULL
+        // for a token that names no session, and `= NULL` matches nothing — and
+        // no other route ever writes that column, so it cannot reach an album
+        // link. Before the session row goes, or the subquery finds nobody.
+        await env.DB.prepare(
+          'DELETE FROM share_tokens WHERE user_id = (SELECT user_id FROM sessions WHERE token = ?)'
+        ).bind(token).run();
         await env.DB.prepare('DELETE FROM sessions WHERE token = ?').bind(token).run();
       }
       return jsonOk({ success: true });
@@ -466,10 +519,39 @@ export default {
       if (!env.DB) return jsonErr('DB not configured', 500);
       const userId = parseInt(pathParts[3]);
       if (!userId) return jsonErr('Invalid user id');
+      await env.DB.prepare('DELETE FROM share_tokens WHERE user_id = ?').bind(userId).run();
       await env.DB.prepare('DELETE FROM sessions WHERE user_id = ?').bind(userId).run();
       await env.DB.prepare('DELETE FROM permissions WHERE user_id = ?').bind(userId).run();
       await env.DB.prepare('DELETE FROM users WHERE id = ?').bind(userId).run();
       return jsonOk({ success: true });
+    }
+
+    // GET /api/shares/minted — the studio and client-session tokens that are
+    // live right now. Neither kind carries a book_id, so the per-album list
+    // below cannot show them and until this route nothing could: a photographer
+    // could not answer "what is out there holding my bucket open".
+    if (request.method === 'GET' && pathParts[0] === 'api' && pathParts[1] === 'shares' && pathParts[2] === 'minted' && !pathParts[3]) {
+      if (!isAdminToken(request, env)) return jsonErr('Unauthorized', 401);
+      if (!env.DB) return jsonErr('DB not configured', 500);
+      const { results } = await env.DB.prepare(
+        "SELECT token, kind, user_id, folders, created_at, expires_at FROM share_tokens WHERE kind IN ('studio', 'session') AND revoked_at IS NULL AND expires_at > ? ORDER BY created_at DESC"
+      ).bind(new Date().toISOString()).all();
+      return jsonOk(results);
+    }
+
+    // POST /api/shares/minted/revoke-all — what a photographer reaches for when
+    // they think the password leaked. Rotating PHOTOGRAPHER_TOKEN alone does
+    // not reach an already-minted token, and no other route could name one.
+    // The two minted kinds are named positively, so the album links sitting in
+    // clients' chats — which are the expensive thing to kill by accident — are
+    // spared, including every row that predates the kind column.
+    if (request.method === 'POST' && pathParts[0] === 'api' && pathParts[1] === 'shares' && pathParts[2] === 'minted' && pathParts[3] === 'revoke-all') {
+      if (!isAdminToken(request, env)) return jsonErr('Unauthorized', 401);
+      if (!env.DB) return jsonErr('DB not configured', 500);
+      const result = await env.DB.prepare(
+        "UPDATE share_tokens SET revoked_at = ? WHERE kind IN ('studio', 'session') AND revoked_at IS NULL"
+      ).bind(new Date().toISOString()).run();
+      return jsonOk({ ok: true, revoked: result.meta?.changes ?? 0 });
     }
 
     // POST /api/shares/:token/revoke — kill a link that went to the wrong chat
@@ -547,7 +629,12 @@ export default {
         const text = await obj.text();
         if (!bookShare) {
           return new Response(text, {
-            headers: { ...corsHeaders, 'Content-Type': 'application/json', 'Cache-Control': 'no-cache' }
+            // `no-cache` so a saved edit is never served stale, and `private`
+            // because this is the whole book, notifyUrl included: no-cache
+            // governs whether a stored response may be served, not whether it
+            // may be stored, so a shared cache would otherwise be entitled to
+            // keep a live webhook bearer secret on disk.
+            headers: { ...corsHeaders, 'Content-Type': 'application/json', 'Cache-Control': 'private, no-cache' }
           });
         }
         // The stored book carries notifyUrl — a bearer webhook the client
@@ -603,7 +690,15 @@ export default {
         const clientFolders = Array.isArray(book.clientFolders) ? book.clientFolders : [];
         if (Array.isArray(slots)) {
           for (const slot of slots) {
-            if (!slot || !slot.photoId) continue;
+            if (!slot) continue;
+            // folderCovers calls startsWith on this and shareCovers splits it,
+            // so a number or an array leaves the runtime to turn a TypeError
+            // into a 1101. A falsy one still means "clear the slot".
+            if (typeof slot.photoId !== 'string') {
+              if (slot.photoId) return jsonErr('無效的照片', 400);
+              continue;
+            }
+            if (!slot.photoId) continue;
             // the book's own policy, which applies to the photographer too
             if (clientFolders.length > 0 && !clientFolders.some(f => folderCovers(f, slot.photoId))) {
               return jsonErr('照片不在開放資料夾內', 403);
@@ -635,7 +730,7 @@ export default {
         return new Response(data, {
           headers: {
             ...corsHeaders, 'Content-Type': 'application/json',
-            ...(bookShare ? SHARED_LINK_HEADERS : {}),
+            ...(bookShare ? SHARED_LINK_HEADERS : ADMIN_ONLY_HEADERS),
           }
         });
       }
@@ -733,7 +828,7 @@ export default {
           return !name.startsWith('_');
         });
         return jsonOk({ status: 'success', data: files, folders }, 200,
-          listShare ? SHARED_LINK_HEADERS : undefined);
+          listShare ? SHARED_LINK_HEADERS : ADMIN_ONLY_HEADERS);
       } catch (e) {
         return jsonErr(e.message, 500);
       }
@@ -745,7 +840,11 @@ export default {
       let viaShare = false;
       if (!isAdminToken(request, env)) {
         const s = await share();
-        if (!s || !(isStudioShare(s) || shareCovers(s, sourceKey(key)))) {
+        // checked on the source key, so a thumbnail of a book is a book, and
+        // ahead of every kind — a studio token is unscoped, and a folder
+        // snapshot naming `_books/` would be one editor typo away
+        const source = sourceKey(key);
+        if (!s || isInternalKey(source) || !(isStudioShare(s) || shareCovers(s, source))) {
           return jsonErr('Unauthorized', 401);
         }
         await touchShareToken(s, request, env);
@@ -778,12 +877,13 @@ export default {
         headers.set('Access-Control-Allow-Origin', '*');
         headers.set('Accept-Ranges', 'bytes');
         // a re-upload reuses the same key, so revalidate rather than pin for a
-        // year; the conditional GET below makes revalidation a cheap 304
-        // `public` would let a shared proxy keep one client's photos and hand
-        // them to the next request that guessed the URL
-        headers.set('Cache-Control',
-          `${viaShare ? 'private' : 'public'}, max-age=86400, stale-while-revalidate=604800`);
-        if (viaShare) headers.set('Vary', 'X-Share-Token');
+        // year; the conditional GET below makes revalidation a cheap 304.
+        // `private` on both paths: a shared proxy would otherwise keep a photo
+        // and hand it to the next request that guessed the URL — the share
+        // form because the credential is in the query string, the admin form
+        // because there is no credential in the URL to tell the two apart by.
+        headers.set('Cache-Control', 'private, max-age=86400, stale-while-revalidate=604800');
+        headers.set('Vary', viaShare ? 'X-Share-Token' : 'Authorization');
 
         // onlyIf failed the precondition → R2 returns metadata with no body
         if (!('body' in object)) {

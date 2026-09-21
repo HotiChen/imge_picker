@@ -425,14 +425,22 @@ test('minting a studio token never hands back a client’s', async () => {
 
 // ─── the column does not exist on the live database yet ──────────────────────
 
+// Everything appended after last_seen_at arrives in one hand-run migration, so
+// "before it" is share_tokens without any of it. Scoped to that CREATE block:
+// user_id is a column on two other tables, and a whole-file strip quietly ate
+// the one on `sessions` instead.
 const PRE_MIGRATION = readFileSync(new URL('../schema.sql', import.meta.url), 'utf8')
-  .replace(/,\n(?:\s*--[^\n]*\n)*\s*kind\s+TEXT[^\n]*\n/, '\n');
+  .replace(/(CREATE TABLE IF NOT EXISTS share_tokens \([\s\S]*?last_seen_at TEXT),[\s\S]*?(\n\);)/, '$1$2')
+  .replace(/^CREATE INDEX[^\n]*share_tokens\(user_id\);\n/m, '');
+const PRE_SHARE_TOKENS = /CREATE TABLE IF NOT EXISTS share_tokens \(([\s\S]*?)\n\);/.exec(PRE_MIGRATION)[1];
 
-test('on a database that predates the kind column, minting fails loudly', async () => {
+test('on a database that predates the migration, minting fails loudly', async () => {
   // schema.sql is CREATE TABLE IF NOT EXISTS, so the deployed D1 keeps the old
-  // shape until the ALTER from 86dcdbb is run by hand. This needs no second
-  // migration of its own, but it does need that one.
-  assert.equal(/\bkind\b/.test(PRE_MIGRATION), false, 'the pre-migration schema still declares the column');
+  // shape until the ALTERs are run by hand. Both appended columns go in one
+  // migration, and until it runs the album links keep working and minting
+  // fails loudly rather than quietly handing out an unscoped row.
+  assert.equal(/\bkind\b/.test(PRE_SHARE_TOKENS), false, 'the pre-migration schema still declares kind');
+  assert.equal(/\buser_id\b/.test(PRE_SHARE_TOKENS), false, 'the pre-migration schema still declares user_id');
   const env = {
     imagepicker: fakeBucket(OBJECTS), PHOTOGRAPHER_TOKEN: SECRET,
     DB: fakeDB({ schema: PRE_MIGRATION }),

@@ -32,13 +32,22 @@ CREATE TABLE IF NOT EXISTS share_tokens (
   expires_at   TEXT NOT NULL,
   revoked_at   TEXT,
   last_seen_at TEXT,
+  -- Whose row this is, for a signed-in client's own token and nothing else;
+  -- NULL on every other row. It is the only thing that lets a logout or an
+  -- account deletion find the URL tokens that account was handed: those rows
+  -- carry no book_id, so the per-album list cannot see them either. Written
+  -- by one route, so a delete keyed on it alone cannot reach anything else.
+  -- Appended, because the CREATE above is IF NOT EXISTS and a deployed
+  -- database only gets it from a hand-run
+  --   ALTER TABLE share_tokens ADD COLUMN user_id INTEGER;
+  user_id      INTEGER,
   -- 'client' for the album link above, 'studio' for the photographer's own
   -- pages, which read everything, and 'session' for a signed-in client's own
   -- folder. The latter two are minted, read-only and write nothing; all three
   -- are told apart by this column and never by the shape of `folders`.
-  -- Appended, because the CREATE above is IF NOT EXISTS and a deployed
-  -- database only gets it from a hand-run
+  -- Appended for the same reason, from the same migration:
   --   ALTER TABLE share_tokens ADD COLUMN kind TEXT NOT NULL DEFAULT 'client';
   kind         TEXT NOT NULL DEFAULT 'client'
 );
 CREATE INDEX IF NOT EXISTS idx_share_tokens_book ON share_tokens(book_id);
+CREATE INDEX IF NOT EXISTS idx_share_tokens_user ON share_tokens(user_id);
