@@ -64,6 +64,27 @@
   /* Folder path input */
   .folder-input { background: var(--card); border: 1px solid var(--border); color: var(--ink-90); padding: 4px 8px; border-radius: 4px; font-size: 12px; font-family: 'IBM Plex Mono', monospace; width: 160px; outline: none; }
   .folder-input:focus { border-color: var(--accent); }
+  .folder-cell { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+  .folder-chip { display: inline-flex; align-items: center; gap: 4px; background: var(--card);
+    border: 1px solid var(--border); border-radius: 12px; padding: 2px 6px 2px 9px;
+    font-family: 'IBM Plex Mono', monospace; font-size: 11px; }
+  .folder-chip button { background: none; border: 0; color: var(--ink-60); cursor: pointer;
+    font-size: 13px; line-height: 1; padding: 0 2px; }
+  .folder-chip button:hover { color: var(--danger, #e05c5c); }
+  .folder-none { color: var(--ink-60); font-size: 12px; }
+  .folder-broken { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .folder-raw { font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: var(--ink-60); }
+  .picker-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 2000;
+    align-items: center; justify-content: center; display: flex; }
+  .picker-box { background: var(--card); border: 1px solid var(--border); border-radius: 8px;
+    width: min(520px, 92vw); max-height: 80vh; display: flex; flex-direction: column; }
+  .picker-head, .picker-foot { display: flex; align-items: center; gap: 10px; padding: 12px 16px; }
+  .picker-head { border-bottom: 1px solid var(--border); }
+  .picker-foot { border-top: 1px solid var(--border); justify-content: flex-end; }
+  .picker-head .btn-text { margin-left: auto; }
+  .picker-list { overflow-y: auto; padding: 8px 16px; flex: 1; min-height: 0; }
+  .folder-pick-row { display: flex; align-items: center; justify-content: space-between;
+    gap: 10px; padding: 5px 0; font-family: 'IBM Plex Mono', monospace; font-size: 12px; }
   
   /* Buttons */
   .btn { padding: 5px 12px; border-radius: 4px; border: none; cursor: pointer; font-size: 12px; font-weight: 500; font-family: inherit; transition: opacity 0.15s; }
@@ -306,6 +327,107 @@
     }
   }
 
+  // folders:null means the column will not parse. That is a different state
+  // from "none set", and the two look identical unless one of them says so —
+  // the account cannot be repaired by someone who thinks it is merely empty.
+  function folderCellHTML(c) {
+    if (c.folders === null || c.folders === undefined && c.folder_path && !Array.isArray(c.folders)) {
+      return `<div data-folders-broken class="folder-broken">
+        <span class="badge badge-pending">資料夾設定有誤</span>
+        <code class="folder-raw">${escHtml(c.folder_path || '')}</code>
+        <button class="btn btn-accent" data-add-folder type="button">重設</button>
+      </div>`;
+    }
+    const list = Array.isArray(c.folders) ? c.folders : [];
+    const chips = list.map(f => `
+      <span class="folder-chip" data-folder-chip="${escHtml(f)}">
+        ${escHtml(f)}<button type="button" data-remove-folder="${escHtml(f)}" title="移除">×</button>
+      </span>`).join('');
+    return `${chips || '<span class="folder-none">未設定</span>'}
+      <button class="btn btn-outline" data-add-folder type="button">＋</button>`;
+  }
+
+  function rowFolders(row) {
+    return [...row.querySelectorAll('[data-folder-chip]')].map(el => el.dataset.folderChip);
+  }
+
+  // Only `folders` is sent. The Worker lets folders win a tie, but a stale
+  // folder_path riding along would still land wherever that rule is not
+  // reached, and it overwrites silently.
+  async function saveFolders(userId, folders) {
+    const row = document.querySelector(`tr[data-id="${userId}"]`);
+    await patchPermissions(userId, {
+      can_book: !!row?.querySelector('input[data-perm="can_book"]')?.checked,
+      can_upload: !!row?.querySelector('input[data-perm="can_upload"]')?.checked,
+      folders,
+    });
+    await loadClients();
+  }
+
+  let pickerFor = null;
+  let pickerChosen = [];
+
+  let pickerWired = false;
+  async function openFolderPicker(userId) {
+    if (!pickerWired) { wireFolderPicker(); pickerWired = true; }
+    pickerFor = userId;
+    pickerChosen = [];
+    document.getElementById('folder-picker').style.display = 'flex';
+    await browseFolders('');
+  }
+
+  function wireFolderPicker() {
+  const overlay = document.getElementById('folder-picker');
+  const close = () => { overlay.style.display = 'none'; };
+  document.getElementById('folder-picker-close').addEventListener('click', close);
+  overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
+
+  overlay.addEventListener('change', e => {
+    const box = e.target.closest('[data-pick-folder]');
+    if (!box) return;
+    const f = box.dataset.pickFolder;
+    if (box.checked) { if (!pickerChosen.includes(f)) pickerChosen.push(f); }
+    else pickerChosen = pickerChosen.filter(x => x !== f);
+  });
+
+  overlay.addEventListener('click', e => {
+    const nav = e.target.closest('[data-browse]');
+    if (nav) { browseFolders(nav.dataset.browse); return; }
+    if (!e.target.closest('[data-confirm-folders]')) return;
+    const row = document.querySelector(`tr[data-id="${pickerFor}"]`);
+    // a repair starts from nothing; an add keeps what is already there
+    const existing = row && !row.querySelector('[data-folders-broken]') ? rowFolders(row) : [];
+    const merged = existing.concat(pickerChosen.filter(f => !existing.includes(f)));
+    close();
+    saveFolders(pickerFor, merged);
+  });
+  }
+
+  async function browseFolders(prefix) {
+    const box = document.getElementById('folder-picker-list');
+    box.innerHTML = '<div class="empty">載入中…</div>';
+    const token = getToken();
+    let folders = [];
+    try {
+      const r = await fetch(`${WORKER_URL}/?list=${encodeURIComponent(prefix)}`, {
+        headers: { 'Authorization': `Bearer ${token}` },
+      });
+      const data = await r.json();
+      folders = Array.isArray(data.folders) ? data.folders : [];
+    } catch (e) { /* shown as empty below */ }
+
+    document.getElementById('folder-picker-path').textContent = prefix || '（根目錄）';
+    const up = prefix ? `<button type="button" class="btn btn-outline" data-browse="${escHtml(
+      prefix.replace(/[^/]+\/$/, ''))}">← 上一層</button>` : '';
+    const rows = folders.map(f => `
+      <div class="folder-pick-row">
+        <label><input type="checkbox" data-pick-folder="${escHtml(f)}"
+          ${pickerChosen.includes(f) ? 'checked' : ''}> ${escHtml(f)}</label>
+        <button type="button" class="btn btn-text" data-browse="${escHtml(f)}">進入 →</button>
+      </div>`).join('');
+    box.innerHTML = up + (rows || '<div class="empty">這層沒有子資料夾</div>');
+  }
+
   function renderClients(clients) {
     const tbody = document.getElementById('clients-tbody');
     if (!clients || clients.length === 0) {
@@ -317,8 +439,7 @@
         <td>${escHtml(c.name)}</td>
         <td style="font-family:'IBM Plex Mono',monospace;font-size:12px;">${escHtml(c.email)}</td>
         <td>
-          <input class="folder-input" data-field="folder" value="${escHtml(c.folder_path || '')}"
-            placeholder="例: 2026/客戶名/" title="按 Enter 儲存">
+          <div class="folder-cell">${folderCellHTML(c)}</div>
         </td>
         <td>
           <label class="toggle">
@@ -353,30 +474,26 @@
         const userId = row.dataset.id;
         const perm = this.dataset.perm;
         const checked = this.checked;
-        const folderInput = row.querySelector('input[data-field="folder"]');
-        const folder_path = folderInput ? folderInput.value : '';
         const otherPerm = perm === 'can_book' ? 'can_upload' : 'can_book';
         const otherInput = row.querySelector(`input[data-perm="${otherPerm}"]`);
         const otherChecked = otherInput ? otherInput.checked : false;
         const body = {
           can_book: perm === 'can_book' ? checked : otherChecked,
           can_upload: perm === 'can_upload' ? checked : otherChecked,
-          folder_path
         };
         await patchPermissions(userId, body);
       });
     });
 
-    tbody.querySelectorAll('input[data-field="folder"]').forEach(input => {
-      input.addEventListener('keydown', async function(e) {
-        if (e.key !== 'Enter') return;
+    tbody.querySelectorAll('[data-add-folder]').forEach(btn => {
+      btn.addEventListener('click', () => openFolderPicker(btn.closest('tr').dataset.id));
+    });
+
+    tbody.querySelectorAll('[data-remove-folder]').forEach(btn => {
+      btn.addEventListener('click', async function () {
         const row = this.closest('tr');
-        const userId = row.dataset.id;
-        const canBook = row.querySelector('input[data-perm="can_book"]').checked;
-        const canUpload = row.querySelector('input[data-perm="can_upload"]').checked;
-        await patchPermissions(userId, { can_book: canBook, can_upload: canUpload, folder_path: this.value });
-        this.blur();
-        flashGreen(this);
+        const gone = this.dataset.removeFolder;
+        await saveFolders(row.dataset.id, rowFolders(row).filter(f => f !== gone));
       });
     });
 
@@ -434,5 +551,18 @@
   }
 })();
 </script>
+<div id="folder-picker" class="picker-overlay" style="display:none;">
+  <div class="picker-box">
+    <div class="picker-head">
+      <strong>選擇資料夾</strong>
+      <span id="folder-picker-path" class="folder-raw"></span>
+      <button type="button" class="btn btn-text" id="folder-picker-close">×</button>
+    </div>
+    <div id="folder-picker-list" class="picker-list"></div>
+    <div class="picker-foot">
+      <button type="button" class="btn btn-accent" data-confirm-folders>加入所選</button>
+    </div>
+  </div>
+</div>
 </body>
 </html>

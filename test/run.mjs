@@ -2219,18 +2219,28 @@ const MINTED_ROWS = [
 
 function adminMock(opts = {}) {
   const seen = [];
-  const state = { rows: opts.rows ?? MINTED_ROWS, revoked: opts.revoked ?? 2 };
+  const state = {
+    rows: opts.rows ?? MINTED_ROWS, revoked: opts.revoked ?? 2,
+    clients: opts.clients ?? [],
+    tree: opts.tree ?? { '': ['20260819/', '20260901/'], '20260819/': ['20260819/Anita/'] },
+  };
   const attach = async page => {
     await page.route('**/imagepicker.hotichen.workers.dev/**', async route => {
       const req = route.request();
       const u = new URL(req.url());
       const h = await req.allHeaders();
-      const rec = { path: u.pathname, method: req.method(), auth: h['authorization'] ?? null };
+      const rec = { path: u.pathname, method: req.method(), auth: h['authorization'] ?? null,
+                    list: u.searchParams.get('list'), body: req.postData() };
       seen.push(rec);
       const json = (body, status = 200) =>
         route.fulfill({ status, contentType: 'application/json', body });
       if (rec.auth !== 'Bearer adm') return json('{"error":"Unauthorized"}', 401);
-      if (u.pathname === '/api/admin/clients') return json('[]');
+      if (rec.list !== null) {
+        // the folder picker browses the bucket through the listing route
+        const kids = state.tree[rec.list] || [];
+        return json(JSON.stringify({ status: 'success', data: [], folders: kids }));
+      }
+      if (u.pathname === '/api/admin/clients') return json(JSON.stringify(state.clients));
       if (u.pathname === '/api/shares/minted') return json(JSON.stringify(state.rows));
       if (u.pathname === '/api/shares/minted/revoke-all')
         return json(JSON.stringify({ ok: true, revoked: state.revoked }));
@@ -2569,6 +2579,64 @@ await suite('multi-folder — a client sees every folder their token opens',
     },
     before: clientMock({ folders: ['20260819/', '20260901/'] }).attach,
   });
+
+{
+  const m = adminMock({ clients: [
+    { id: 1, name: 'A', email: 'a@b.c', approved: 1, can_book: 1, can_upload: 0,
+      folder_path: '["20260819/"]', folders: ['20260819/'] },
+    { id: 2, name: 'B', email: 'b@b.c', approved: 1, can_book: 0, can_upload: 0,
+      folder_path: '["oops', folders: null },
+  ] });
+  await suite('admin — folders are picked from the bucket, not typed',
+    `${base}/admin.html`,
+    async page => {
+      await page.waitForFunction(() => document.querySelectorAll('#clients-tbody tr').length >= 2,
+        null, { timeout: 6000 }).catch(() => {});
+      const before = await page.evaluate(() => ({
+        chips: [...document.querySelectorAll('tr[data-id="1"] [data-folder-chip]')]
+          .map(el => el.dataset.folderChip),
+        addBtn: !!document.querySelector('tr[data-id="1"] [data-add-folder]'),
+        // folders:null is a broken account only the photographer can repair
+        brokenFlagged: !!document.querySelector('tr[data-id="2"] [data-folders-broken]'),
+        brokenShowsRaw: (document.querySelector('tr[data-id="2"]')?.textContent || '')
+          .includes('["oops'),
+      }));
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      ok('the current folders show as a list', JSON.stringify(before.chips) === '["20260819/"]',
+        JSON.stringify(before.chips));
+      ok('there is a way to add one', before.addBtn === true, String(before.addBtn));
+      ok('an unparseable column is flagged, not shown as empty',
+        before.brokenFlagged === true, String(before.brokenFlagged));
+      ok('and the raw text is there to repair it from',
+        before.brokenShowsRaw === true, String(before.brokenShowsRaw));
+
+      // pick a second folder through the browser modal
+      const picked = await page.evaluate(async () => {
+        document.querySelector('tr[data-id="1"] [data-add-folder]')?.click();
+        await new Promise(r => setTimeout(r, 400));
+        const opt = [...document.querySelectorAll('[data-pick-folder]')]
+          .find(el => el.dataset.pickFolder === '20260901/');
+        if (!opt) return { opened: false };
+        opt.click();
+        await new Promise(r => setTimeout(r, 100));
+        document.querySelector('[data-confirm-folders]')?.click();
+        await new Promise(r => setTimeout(r, 400));
+        return { opened: true };
+      });
+      ok('the modal lists what is in the bucket', picked.opened === true, String(picked.opened));
+
+      const puts = m.seen.filter(r => r.method === 'PUT' && /permissions$/.test(r.path));
+      const last = puts.length ? JSON.parse(puts[puts.length - 1].body || '{}') : null;
+      ok('saving sends the set, not a typed string',
+        !!last && JSON.stringify(last.folders) === '["20260819/","20260901/"]',
+        JSON.stringify(last));
+      ok('and does not also send folder_path, which would win a tie the wrong way',
+        !!last && last.folder_path === undefined, JSON.stringify(last && last.folder_path));
+      return out;
+    },
+    { initScript: () => sessionStorage.setItem('studio_token', 'adm'), before: m.attach });
+}
 
 await browser.close();
 server.close();
