@@ -64,6 +64,33 @@
   /* Folder path input */
   .folder-input { background: var(--card); border: 1px solid var(--border); color: var(--ink-90); padding: 4px 8px; border-radius: 4px; font-size: 12px; font-family: 'IBM Plex Mono', monospace; width: 160px; outline: none; }
   .folder-input:focus { border-color: var(--accent); }
+  .folder-cell { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+  .folder-chip { display: inline-flex; align-items: center; gap: 4px; background: var(--card);
+    border: 1px solid var(--border); border-radius: 12px; padding: 2px 6px 2px 9px;
+    font-family: 'IBM Plex Mono', monospace; font-size: 11px; }
+  .folder-chip button { background: none; border: 0; color: var(--ink-60); cursor: pointer;
+    font-size: 13px; line-height: 1; padding: 0 2px; }
+  .folder-chip button:hover { color: var(--danger, #e05c5c); }
+  .folder-none { color: var(--ink-60); font-size: 12px; }
+  .folder-broken { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .folder-raw { font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: var(--ink-60); }
+  .picker-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 2000;
+    align-items: center; justify-content: center; display: flex; }
+  .picker-box { background: var(--card); border: 1px solid var(--border); border-radius: 8px;
+    width: min(520px, 92vw); max-height: 80vh; display: flex; flex-direction: column; }
+  .picker-head, .picker-foot { display: flex; align-items: center; gap: 10px; padding: 12px 16px; }
+  .picker-head { border-bottom: 1px solid var(--border); }
+  .picker-foot { border-top: 1px solid var(--border); justify-content: flex-end; }
+  .picker-head .btn-text { margin-left: auto; }
+  .picker-list { overflow-y: auto; padding: 8px 16px; flex: 1; min-height: 0; }
+  .folder-pick-row { display: flex; align-items: center; justify-content: space-between;
+    gap: 10px; padding: 5px 0; font-family: 'IBM Plex Mono', monospace; font-size: 12px; }
+  .folder-pick-row .badge { margin-left: auto; }
+  .folder-hint { color: var(--accent); font-size: 11px; }
+  .shoot-cell { display: flex; flex-direction: column; gap: 4px; align-items: flex-start; }
+  .shoot-cell .folder-input { width: 130px; }
+  .checkline { display: inline-flex; align-items: center; gap: 4px; color: var(--ink-55);
+    font-size: 11px; cursor: pointer; }
   
   /* Buttons */
   .btn { padding: 5px 12px; border-radius: 4px; border: none; cursor: pointer; font-size: 12px; font-weight: 500; font-family: inherit; transition: opacity 0.15s; }
@@ -147,6 +174,8 @@
           <tr>
             <th>姓名</th>
             <th>Email</th>
+            <th>拍攝日期</th>
+            <th>拍攝類型</th>
             <th>資料夾路徑</th>
             <th>相本書</th>
             <th>上傳</th>
@@ -155,13 +184,14 @@
           </tr>
         </thead>
         <tbody id="clients-tbody">
-          <tr><td colspan="7" class="empty">載入中…</td></tr>
+          <tr><td colspan="9" class="empty">載入中…</td></tr>
         </tbody>
       </table>
     </div>
   </main>
 </div>
 
+<script src="js/shoot-types.js?v=20260922b"></script>
 <script>
 (function() {
   const WORKER_URL = 'https://imagepicker.hotichen.workers.dev';
@@ -302,23 +332,198 @@
       renderClients(clients);
     } catch(e) {
       document.getElementById('clients-tbody').innerHTML =
-        `<tr><td colspan="7" class="empty">載入失敗：${e.message}</td></tr>`;
+        `<tr><td colspan="9" class="empty">載入失敗：${e.message}</td></tr>`;
     }
+  }
+
+  // folders:null means the column will not parse. That is a different state
+  // from "none set", and the two look identical unless one of them says so —
+  // the account cannot be repaired by someone who thinks it is merely empty.
+  function folderCellHTML(c) {
+    if (c.folders === null || c.folders === undefined && c.folder_path && !Array.isArray(c.folders)) {
+      return `<div data-folders-broken class="folder-broken">
+        <span class="badge badge-pending">資料夾設定有誤</span>
+        <code class="folder-raw">${escHtml(c.folder_path || '')}</code>
+        <button class="btn btn-accent" data-add-folder type="button">重設</button>
+      </div>`;
+    }
+    const list = Array.isArray(c.folders) ? c.folders : [];
+    const chips = list.map(f => `
+      <span class="folder-chip" data-folder-chip="${escHtml(f)}">
+        ${escHtml(f)}<button type="button" data-remove-folder="${escHtml(f)}" title="移除">×</button>
+      </span>`).join('');
+    return `${chips || '<span class="folder-none">未設定</span>'}
+      <button class="btn btn-outline" data-add-folder type="button">＋</button>`;
+  }
+
+  // 拍攝日期 has three states and a date input can show one of them, so the
+  // other two are said out loud beside it: '' is 未填 — nobody was asked, which
+  // is every account older than the column — and 未定 is the client answering
+  // that the day is not settled. Anything else in the column was hand-written
+  // into D1 and is shown raw rather than dropped on the floor.
+  function shootDateCellHTML(c) {
+    const v = c.shoot_date || '';
+    const tbd = v === SHOOT_DATE_TBD;
+    const iso = /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : '';
+    const raw = v && !tbd && !iso;
+    return `<div class="shoot-cell">
+      <input class="folder-input" type="date" data-shoot-date value="${escHtml(iso)}"${tbd ? ' disabled' : ''}>
+      <label class="checkline"><input type="checkbox" data-shoot-tbd${tbd ? ' checked' : ''}> ${escHtml(SHOOT_DATE_TBD)}</label>
+      <span class="folder-none" data-shoot-date-unfilled${v === '' ? '' : ' style="display:none"'}>未填</span>
+      ${raw ? `<code class="folder-raw" data-shoot-date-raw>${escHtml(v)}</code>` : ''}
+    </div>`;
+  }
+
+  // The categories come from js/shoot-types.js, so adding one is a line there
+  // and nothing here. A stored value that is not on the list was typed under
+  // 其他 — by the client or by an earlier list — and comes back as that.
+  function shootTypeCellHTML(c) {
+    const v = c.shoot_type || '';
+    const typed = v !== '' && !SHOOT_TYPES.includes(v);
+    const picked = typed ? SHOOT_TYPE_OTHER : v;
+    const options = [`<option value=""${picked === '' ? ' selected' : ''}>未填</option>`]
+      .concat(SHOOT_TYPES.map(t =>
+        `<option value="${escHtml(t)}"${t === picked ? ' selected' : ''}>${escHtml(t)}</option>`))
+      .join('');
+    return `<div class="shoot-cell">
+      <select class="folder-input" data-shoot-type>${options}</select>
+      <input class="folder-input" type="text" data-shoot-type-other placeholder="自行輸入"
+        value="${escHtml(typed ? v : '')}"${typed ? '' : ' style="display:none"'}>
+    </div>`;
+  }
+
+  // Only the shoot fields and the toggles as they stand. The Worker writes
+  // permissions from whatever body it is handed, and `folders` left out is
+  // `folders` left alone — sending the row's chips here would make a date
+  // correction a folder write too.
+  async function saveShoot(row) {
+    const tbd = row.querySelector('[data-shoot-tbd]');
+    const sel = row.querySelector('[data-shoot-type]');
+    const other = row.querySelector('[data-shoot-type-other]');
+    const shoot_date = tbd.checked ? SHOOT_DATE_TBD : row.querySelector('[data-shoot-date]').value;
+    const shoot_type = sel.value === SHOOT_TYPE_OTHER ? other.value.trim() : sel.value;
+    // the picker reads the date off the row, so an unsaved correction must not
+    // leave it suggesting folders for the old one
+    row.dataset.clientShootDate = shoot_date;
+    const mark = row.querySelector('[data-shoot-date-unfilled]');
+    if (mark) mark.style.display = shoot_date === '' ? '' : 'none';
+    await patchPermissions(row.dataset.id, {
+      can_book: !!row.querySelector('input[data-perm="can_book"]')?.checked,
+      can_upload: !!row.querySelector('input[data-perm="can_upload"]')?.checked,
+      shoot_date, shoot_type,
+    });
+  }
+
+  function rowFolders(row) {
+    return [...row.querySelectorAll('[data-folder-chip]')].map(el => el.dataset.folderChip);
+  }
+
+  // Only `folders` is sent. The Worker lets folders win a tie, but a stale
+  // folder_path riding along would still land wherever that rule is not
+  // reached, and it overwrites silently.
+  async function saveFolders(userId, folders) {
+    const row = document.querySelector(`tr[data-id="${userId}"]`);
+    await patchPermissions(userId, {
+      can_book: !!row?.querySelector('input[data-perm="can_book"]')?.checked,
+      can_upload: !!row?.querySelector('input[data-perm="can_upload"]')?.checked,
+      folders,
+    });
+    await loadClients();
+  }
+
+  let pickerFor = null;
+  let pickerChosen = [];
+  // The folders are named by date, so the client's shoot date is a strong hint
+  // about which one is theirs. Held for as long as the picker is open.
+  let pickerDate = '';
+  let pickerMatch = null;
+
+  let pickerWired = false;
+  async function openFolderPicker(userId) {
+    if (!pickerWired) { wireFolderPicker(); pickerWired = true; }
+    pickerFor = userId;
+    pickerChosen = [];
+    pickerDate = document.querySelector(`tr[data-id="${userId}"]`)?.dataset.clientShootDate || '';
+    pickerMatch = shootDateFolderMatcher(pickerDate);
+    document.getElementById('folder-picker').style.display = 'flex';
+    await browseFolders('');
+  }
+
+  function wireFolderPicker() {
+  const overlay = document.getElementById('folder-picker');
+  const close = () => { overlay.style.display = 'none'; };
+  document.getElementById('folder-picker-close').addEventListener('click', close);
+  overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
+
+  overlay.addEventListener('change', e => {
+    const box = e.target.closest('[data-pick-folder]');
+    if (!box) return;
+    const f = box.dataset.pickFolder;
+    if (box.checked) { if (!pickerChosen.includes(f)) pickerChosen.push(f); }
+    else pickerChosen = pickerChosen.filter(x => x !== f);
+  });
+
+  overlay.addEventListener('click', e => {
+    const nav = e.target.closest('[data-browse]');
+    if (nav) { browseFolders(nav.dataset.browse); return; }
+    if (!e.target.closest('[data-confirm-folders]')) return;
+    const row = document.querySelector(`tr[data-id="${pickerFor}"]`);
+    // a repair starts from nothing; an add keeps what is already there
+    const existing = row && !row.querySelector('[data-folders-broken]') ? rowFolders(row) : [];
+    const merged = existing.concat(pickerChosen.filter(f => !existing.includes(f)));
+    close();
+    saveFolders(pickerFor, merged);
+  });
+  }
+
+  async function browseFolders(prefix) {
+    const box = document.getElementById('folder-picker-list');
+    box.innerHTML = '<div class="empty">載入中…</div>';
+    const token = getToken();
+    let folders = [];
+    try {
+      const r = await fetch(`${WORKER_URL}/?list=${encodeURIComponent(prefix)}`, {
+        headers: { 'Authorization': `Bearer ${token}` },
+      });
+      const data = await r.json();
+      folders = Array.isArray(data.folders) ? data.folders : [];
+    } catch (e) { /* shown as empty below */ }
+
+    document.getElementById('folder-picker-path').textContent = prefix || '（根目錄）';
+    document.getElementById('folder-picker-head-hint').textContent =
+      pickerMatch ? `拍攝日期 ${pickerDate} 的資料夾排在最前面` : '';
+    // A hint, not a filter. The names are typed by hand, so the rule misses
+    // some and can point at another client who shot the same day; floating the
+    // matches to the top and saying why costs a scroll when it is wrong, where
+    // hiding the rest would cost the photographer the folder they wanted.
+    const matched = pickerMatch ? folders.filter(pickerMatch) : [];
+    const ordered = matched.concat(folders.filter(f => !matched.includes(f)));
+    const up = prefix ? `<button type="button" class="btn btn-outline" data-browse="${escHtml(
+      prefix.replace(/[^/]+\/$/, ''))}">← 上一層</button>` : '';
+    const rows = ordered.map(f => `
+      <div class="folder-pick-row"${matched.includes(f) ? ' data-date-match' : ''}>
+        <label><input type="checkbox" data-pick-folder="${escHtml(f)}"
+          ${pickerChosen.includes(f) ? 'checked' : ''}> ${escHtml(f)}</label>
+        ${matched.includes(f) ? '<span class="badge badge-approved">拍攝日相符</span>' : ''}
+        <button type="button" class="btn btn-text" data-browse="${escHtml(f)}">進入 →</button>
+      </div>`).join('');
+    box.innerHTML = up + (rows || '<div class="empty">這層沒有子資料夾</div>');
   }
 
   function renderClients(clients) {
     const tbody = document.getElementById('clients-tbody');
     if (!clients || clients.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="7" class="empty">尚無客戶</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="9" class="empty">尚無客戶</td></tr>';
       return;
     }
     tbody.innerHTML = clients.map(c => `
-      <tr data-id="${c.id}">
+      <tr data-id="${c.id}" data-client-shoot-date="${escHtml(c.shoot_date || '')}">
         <td>${escHtml(c.name)}</td>
         <td style="font-family:'IBM Plex Mono',monospace;font-size:12px;">${escHtml(c.email)}</td>
+        <td>${shootDateCellHTML(c)}</td>
+        <td>${shootTypeCellHTML(c)}</td>
         <td>
-          <input class="folder-input" data-field="folder" value="${escHtml(c.folder_path || '')}"
-            placeholder="例: 2026/客戶名/" title="按 Enter 儲存">
+          <div class="folder-cell">${folderCellHTML(c)}</div>
         </td>
         <td>
           <label class="toggle">
@@ -353,30 +558,52 @@
         const userId = row.dataset.id;
         const perm = this.dataset.perm;
         const checked = this.checked;
-        const folderInput = row.querySelector('input[data-field="folder"]');
-        const folder_path = folderInput ? folderInput.value : '';
         const otherPerm = perm === 'can_book' ? 'can_upload' : 'can_book';
         const otherInput = row.querySelector(`input[data-perm="${otherPerm}"]`);
         const otherChecked = otherInput ? otherInput.checked : false;
         const body = {
           can_book: perm === 'can_book' ? checked : otherChecked,
           can_upload: perm === 'can_upload' ? checked : otherChecked,
-          folder_path
         };
         await patchPermissions(userId, body);
       });
     });
 
-    tbody.querySelectorAll('input[data-field="folder"]').forEach(input => {
-      input.addEventListener('keydown', async function(e) {
-        if (e.key !== 'Enter') return;
+    tbody.querySelectorAll('[data-shoot-date], [data-shoot-tbd], [data-shoot-type], [data-shoot-type-other]')
+      .forEach(el => {
+        el.addEventListener('change', async function () {
+          const row = this.closest('tr');
+          if (this.hasAttribute('data-shoot-tbd')) {
+            const dateEl = row.querySelector('[data-shoot-date]');
+            dateEl.disabled = this.checked;
+            if (this.checked) dateEl.value = '';
+          }
+          if (this.hasAttribute('data-shoot-type')) {
+            const other = row.querySelector('[data-shoot-type-other]');
+            const isOther = this.value === SHOOT_TYPE_OTHER;
+            other.style.display = isOther ? '' : 'none';
+            if (isOther) {
+              other.focus();
+              // 其他 on its own is not a category. Saving here would store the
+              // empty box over whatever the client had said.
+              if (!other.value.trim()) return;
+            } else {
+              other.value = '';
+            }
+          }
+          await saveShoot(row);
+        });
+      });
+
+    tbody.querySelectorAll('[data-add-folder]').forEach(btn => {
+      btn.addEventListener('click', () => openFolderPicker(btn.closest('tr').dataset.id));
+    });
+
+    tbody.querySelectorAll('[data-remove-folder]').forEach(btn => {
+      btn.addEventListener('click', async function () {
         const row = this.closest('tr');
-        const userId = row.dataset.id;
-        const canBook = row.querySelector('input[data-perm="can_book"]').checked;
-        const canUpload = row.querySelector('input[data-perm="can_upload"]').checked;
-        await patchPermissions(userId, { can_book: canBook, can_upload: canUpload, folder_path: this.value });
-        this.blur();
-        flashGreen(this);
+        const gone = this.dataset.removeFolder;
+        await saveFolders(row.dataset.id, rowFolders(row).filter(f => f !== gone));
       });
     });
 
@@ -434,5 +661,19 @@
   }
 })();
 </script>
+<div id="folder-picker" class="picker-overlay" style="display:none;">
+  <div class="picker-box">
+    <div class="picker-head">
+      <strong>選擇資料夾</strong>
+      <span id="folder-picker-path" class="folder-raw"></span>
+      <span id="folder-picker-head-hint" class="folder-hint"></span>
+      <button type="button" class="btn btn-text" id="folder-picker-close">×</button>
+    </div>
+    <div id="folder-picker-list" class="picker-list"></div>
+    <div class="picker-foot">
+      <button type="button" class="btn btn-accent" data-confirm-folders>加入所選</button>
+    </div>
+  </div>
+</div>
 </body>
 </html>

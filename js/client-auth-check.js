@@ -177,12 +177,59 @@
       return;
     }
 
-    const folder = T.folders[0] || '';
+    const folders = Array.isArray(T.folders) ? T.folders.filter(Boolean) : [];
+    if (!folders.length) return;
+
+    // The token opens all of them. Showing only the first leaves the client no
+    // way to learn the rest exist, which is worse than showing none: they
+    // cannot even ask about what they cannot see.
+    // One folder reads as a label, the way it always has. Chips are for the
+    // case they exist for, and only then.
+    if (folders.length === 1) {
+      if (scopeEl) scopeEl.textContent = folders[0];
+      openFolder(folders[0], false);
+      return;
+    }
+
+    if (scopeEl) {
+      scopeEl.textContent = '';
+      folders.forEach((f, i) => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.dataset.folder = f;
+        b.textContent = f.replace(/\/$/, '').split('/').pop() || f;
+        b.title = f;
+        b.style.cssText = [
+          'background:transparent', 'border:0', 'padding:2px 6px',
+          'border-radius:3px', 'cursor:pointer', 'font:inherit', 'color:inherit',
+        ].join(';');
+        b.addEventListener('click', () => openFolder(f, true));
+        scopeEl.appendChild(b);
+        if (i < folders.length - 1) scopeEl.appendChild(document.createTextNode('·'));
+      });
+    }
+    openFolder(folders[0], false);
+  }
+
+  // Marks the active one and actually loads it — relabelling the bar without
+  // reloading would look like a working switch and show the wrong photos.
+  // `load` is false while setting up: a client who followed a link into a
+  // subfolder of their scope is already looking at it, and loading the first
+  // folder on top would yank them back to the root.
+  function openFolder(folder, load) {
     if (!folder) return;
-    if (scopeEl) scopeEl.textContent = folder;
+    const scopeEl = document.getElementById('client-scope');
+    if (scopeEl) {
+      scopeEl.querySelectorAll('[data-folder]').forEach(el => {
+        const on = el.dataset.folder === folder;
+        el.style.color = on ? '#e8e3da' : '';
+        el.style.background = on ? 'rgba(255,255,255,0.08)' : 'transparent';
+      });
+    }
     const folderInput = findFolderInput();
     if (folderInput) folderInput.value = folder;
     if (typeof CONFIG !== 'undefined') CONFIG.DEFAULT_FOLDER = folder;
+    if (load && window.app && typeof app.handleLoadPhotos === 'function') app.handleLoadPhotos(folder);
   }
 
   function showBlockedNotice(message) {

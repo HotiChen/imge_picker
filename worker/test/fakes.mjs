@@ -29,7 +29,13 @@ export function fakeBucket(initial = {}, { pageSize = 1000 } = {}) {
     async get(key, opts = {}) {
       const rec = store.get(key);
       if (!rec) return null;
-      const etag = `"${key}-v1"`;
+      // Real R2 hands back a quoted hex digest, so an etag is ASCII whatever
+      // the key holds. Interpolating the key raw made this fake the only
+      // thing in the system that could put a Chinese folder name in a header
+      // — which Headers.set rejects — and the Worker looked broken for keys
+      // it serves fine. Escaped rather than hashed so it stays injective and
+      // a failure still names the key.
+      const etag = `"${encodeURIComponent(key)}-v1"`;
       const meta = {
         key,
         httpEtag: etag,
