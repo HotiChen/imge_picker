@@ -39,6 +39,8 @@
   .register-toggle { text-align: center; color: var(--ink-55); font-size: 12px; margin-top: 12px; cursor: pointer; }
   .register-toggle span { color: var(--accent); }
   #register-section { display: none; margin-top: 0; }
+  .checkline { display: inline-flex; align-items: center; gap: 6px; color: var(--ink-55); font-size: 12px; margin-top: 8px; cursor: pointer; }
+  .field:disabled { opacity: 0.45; }
 </style>
 </head>
 <body>
@@ -79,6 +81,16 @@
       <label class="label" for="reg-password">密碼</label>
       <input id="reg-password" type="password" class="field" placeholder="至少 6 個字元">
     </div>
+    <div class="field-group">
+      <label class="label" for="reg-shoot-date">拍攝日期</label>
+      <input id="reg-shoot-date" type="date" class="field">
+      <label class="checkline"><input id="reg-shoot-tbd" type="checkbox"> 日期未定</label>
+    </div>
+    <div class="field-group">
+      <label class="label" for="reg-shoot-type">拍攝類型</label>
+      <select id="reg-shoot-type" class="field"><option value="">請選擇</option></select>
+      <input id="reg-shoot-type-other" type="text" class="field" placeholder="請輸入拍攝類型" style="display:none;margin-top:8px;">
+    </div>
     <button id="reg-btn" class="btn-primary">申請帳號</button>
     <div id="reg-err" class="err"></div>
     <div class="register-toggle" onclick="switchToLogin()">
@@ -87,6 +99,7 @@
   </div>
 </div>
 
+<script src="js/shoot-types.js?v=20260922b"></script>
 <script>
 (function() {
   const WORKER_URL = 'https://imagepicker.hotichen.workers.dev';
@@ -137,6 +150,35 @@
   document.getElementById('login-btn').addEventListener('click', doLogin);
   document.getElementById('login-password').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
 
+  // ── 拍攝日期 / 拍攝類型 ───────────────────────────────────────────────────
+  // What the photographer has been guessing at. The categories come from
+  // js/shoot-types.js, which is also where admin.html reads them.
+  const shootDate = document.getElementById('reg-shoot-date');
+  const shootTbd = document.getElementById('reg-shoot-tbd');
+  const shootType = document.getElementById('reg-shoot-type');
+  const shootOther = document.getElementById('reg-shoot-type-other');
+
+  for (const t of SHOOT_TYPES) {
+    const opt = document.createElement('option');
+    opt.value = t;
+    opt.textContent = t;
+    shootType.appendChild(opt);
+  }
+
+  shootType.addEventListener('change', () => {
+    const isOther = shootType.value === SHOOT_TYPE_OTHER;
+    shootOther.style.display = isOther ? 'block' : 'none';
+    if (isOther) shootOther.focus();
+  });
+
+  // Plenty of clients register before the day is settled. Without this they
+  // either invent a date or leave it blank, and a blank is indistinguishable
+  // from the accounts nobody ever asked.
+  shootTbd.addEventListener('change', () => {
+    shootDate.disabled = shootTbd.checked;
+    if (shootTbd.checked) shootDate.value = '';
+  });
+
   // ── Register ──────────────────────────────────────────────────────────────
   async function doRegister() {
     const name = document.getElementById('reg-name').value.trim();
@@ -144,8 +186,15 @@
     const password = document.getElementById('reg-password').value;
     const errEl = document.getElementById('reg-err');
     const btn = document.getElementById('reg-btn');
+    const shoot_date = shootTbd.checked ? SHOOT_DATE_TBD : shootDate.value;
+    const shoot_type = shootType.value === SHOOT_TYPE_OTHER ? shootOther.value.trim() : shootType.value;
     if (!name || !email || !password) { errEl.textContent = '請填寫所有欄位'; return; }
     if (password.length < 6) { errEl.textContent = '密碼至少 6 個字元'; return; }
+    if (!shoot_date) { errEl.textContent = '請選擇拍攝日期，或勾選日期未定'; return; }
+    if (!shoot_type) {
+      errEl.textContent = shootType.value === SHOOT_TYPE_OTHER ? '請填寫拍攝類型' : '請選擇拍攝類型';
+      return;
+    }
     errEl.textContent = '';
     btn.disabled = true;
     btn.textContent = '申請中…';
@@ -153,7 +202,7 @@
       const r = await fetch(`${WORKER_URL}/api/auth/register`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, email, password })
+        body: JSON.stringify({ name, email, password, shoot_date, shoot_type })
       });
       const data = await r.json();
       if (!r.ok) { errEl.textContent = data.error || '申請失敗'; btn.disabled = false; btn.textContent = '申請帳號'; return; }

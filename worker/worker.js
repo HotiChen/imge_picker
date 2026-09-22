@@ -208,6 +208,32 @@ function parseClientFolders(value) {
   return out;
 }
 
+// 拍攝日期 and 拍攝類型 live in two `users` columns that arrive in a hand-run
+// migration, and the deployed database has neither until the photographer
+// pastes it into the D1 console. Every statement naming one is therefore
+// written twice — once as it should be, once without — so a client can still
+// register and the client table still loads in the meantime. SQLite words the
+// two cases differently, hence both patterns.
+function isMissingColumn(e) {
+  return /no such column|has no column named/i.test(String(e?.message || ''));
+}
+
+// The account is worth more than the two answers: on a database that predates
+// the columns the client still gets an account, and the photographer asks for
+// the date again rather than the registration failing in front of them.
+async function insertUser(env, email, hash, name, shootDate, shootType) {
+  try {
+    return await env.DB.prepare(
+      'INSERT INTO users (email, password_hash, name, approved, shoot_date, shoot_type) VALUES (?, ?, ?, 0, ?, ?)'
+    ).bind(email, hash, name, shootDate, shootType).run();
+  } catch (e) {
+    if (!isMissingColumn(e)) throw e;
+    return await env.DB.prepare(
+      'INSERT INTO users (email, password_hash, name, approved) VALUES (?, ?, ?, 0)'
+    ).bind(email, hash, name).run();
+  }
+}
+
 // A token opens folders, not the bucket. The match has to land on a `/`
 // boundary or the folder `20260819/` also reaches `20260819-other/`, which is
 // a different client's wedding.
@@ -450,14 +476,17 @@ export default {
       if (!env.DB) return jsonErr('DB not configured', 500);
       let body;
       try { body = await request.json(); } catch { return jsonErr('Invalid JSON'); }
-      const { email, password, name } = body || {};
+      const { email, password, name, shoot_date, shoot_type } = body || {};
       if (!email || !password || !name) return jsonErr('email, password, name required');
+      // Optional, because a cached copy of the form predates them; typed,
+      // because anything else reaches D1 as a bind of the wrong kind.
+      if (shoot_date !== undefined && typeof shoot_date !== 'string') return jsonErr('shoot_date must be a string');
+      if (shoot_type !== undefined && typeof shoot_type !== 'string') return jsonErr('shoot_type must be a string');
       const emailLower = email.toLowerCase().trim();
       const hash = await hashPassword(password);
       try {
-        const result = await env.DB.prepare(
-          'INSERT INTO users (email, password_hash, name, approved) VALUES (?, ?, ?, 0)'
-        ).bind(emailLower, hash, name.trim()).run();
+        const result = await insertUser(env, emailLower, hash, name.trim(),
+          (shoot_date || '').trim(), (shoot_type || '').trim());
         const userId = result.meta.last_row_id;
         await env.DB.prepare(
           'INSERT INTO permissions (user_id, can_book, can_upload) VALUES (?, 0, 0)'
@@ -541,13 +570,30 @@ export default {
     if (request.method === 'GET' && url.pathname === '/api/admin/clients') {
       if (!isAdminToken(request, env)) return jsonErr('Unauthorized', 401);
       if (!env.DB) return jsonErr('DB not configured', 500);
-      const { results } = await env.DB.prepare(
-        'SELECT u.id, u.email, u.name, u.folder_path, u.approved, u.created_at, p.can_book, p.can_upload FROM users u LEFT JOIN permissions p ON p.user_id = u.id ORDER BY u.created_at DESC'
-      ).all();
+      const listSql = shoot =>
+        `SELECT u.id, u.email, u.name, u.folder_path, u.approved, u.created_at${shoot}, p.can_book, p.can_upload` +
+        ' FROM users u LEFT JOIN permissions p ON p.user_id = u.id ORDER BY u.created_at DESC';
+      let results;
+      try {
+        ({ results } = await env.DB.prepare(listSql(', u.shoot_date, u.shoot_type')).all());
+      } catch (e) {
+        if (!isMissingColumn(e)) throw e;
+        // Losing the whole client table over a column nobody has added yet is
+        // a worse failure than showing no shoot date, so the answers go and
+        // the table stays.
+        ({ results } = await env.DB.prepare(listSql('')).all());
+      }
       // The raw column rides along beside the parsed set so a value nobody can
       // read — `folders: null` — can still be seen and repaired. Sending only
       // the parse would leave the photographer editing a blank box.
-      return jsonOk(results.map(r => ({ ...r, folders: parseClientFolders(r.folder_path) })));
+      return jsonOk(results.map(r => ({
+        ...r,
+        folders: parseClientFolders(r.folder_path),
+        // one state for 未填 whether the row was never filled in or the
+        // column is not there yet — the page has nothing else to render
+        shoot_date: r.shoot_date || '',
+        shoot_type: r.shoot_type || '',
+      })));
     }
 
     // PUT /api/admin/clients/:id/approve
@@ -568,7 +614,7 @@ export default {
       if (!userId) return jsonErr('Invalid user id');
       let body;
       try { body = await request.json(); } catch { return jsonErr('Invalid JSON'); }
-      const { can_book, can_upload, folder_path, folders } = body || {};
+      const { can_book, can_upload, folder_path, folders, shoot_date, shoot_type } = body || {};
       // Both halves are validated before either is written: a request that
       // names a folder set we cannot store must not leave the permissions
       // applied and the folders stale.
@@ -580,6 +626,32 @@ export default {
       // would otherwise reach D1 as a bind of the wrong type.
       if (folder_path !== undefined && typeof folder_path !== 'string') {
         return jsonErr('folder_path must be a string');
+      }
+      if (shoot_date !== undefined && typeof shoot_date !== 'string') {
+        return jsonErr('shoot_date must be a string');
+      }
+      if (shoot_type !== undefined && typeof shoot_type !== 'string') {
+        return jsonErr('shoot_type must be a string');
+      }
+      // Written first, in one statement, and only for the fields that were
+      // sent. It is the one write here a database without the migration cannot
+      // run, and failing it after the permissions had landed would leave the
+      // request half-applied — the same reason the two validations above come
+      // before either write.
+      const shootSets = [];
+      const shootBinds = [];
+      if (shoot_date !== undefined) { shootSets.push('shoot_date = ?'); shootBinds.push(shoot_date.trim()); }
+      if (shoot_type !== undefined) { shootSets.push('shoot_type = ?'); shootBinds.push(shoot_type.trim()); }
+      if (shootSets.length) {
+        try {
+          await env.DB.prepare(`UPDATE users SET ${shootSets.join(', ')} WHERE id = ?`)
+            .bind(...shootBinds, userId).run();
+        } catch (e) {
+          if (!isMissingColumn(e)) throw e;
+          // The photographer is the only one who can fix this, and being told
+          // is the only way they learn the migration has not been run.
+          return jsonErr('拍攝日期／拍攝類型欄位尚未建立，請先執行 users 的 migration', 500);
+        }
       }
       await env.DB.prepare(
         'INSERT INTO permissions (user_id, can_book, can_upload) VALUES (?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET can_book = excluded.can_book, can_upload = excluded.can_upload'
