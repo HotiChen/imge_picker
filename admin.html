@@ -140,9 +140,22 @@
   .pd-diff { color: var(--ink-55); margin-top: 4px; word-break: break-word; }
   #project-detail-panel h4 { font-size: 13px; margin: 18px 0 8px; color: var(--ink-90); }
   #project-detail-panel h4 a.pd-link,
+  #project-detail-panel summary a.pd-link,
   #project-detail-panel td a.pd-link { color: var(--accent); text-decoration: none; }
   #project-detail-panel h4 a.pd-link:hover,
+  #project-detail-panel summary a.pd-link:hover,
   #project-detail-panel td a.pd-link:hover { text-decoration: underline; }
+  /* 目前選取 collapses by default (task: 專案選片) — the table underneath
+     can be long, and the photographer usually only wants the count + a
+     link into index.html?project=, not the whole list, every time. */
+  #project-detail-panel summary {
+    font-size: 13px; margin: 18px 0 8px; color: var(--ink-90);
+    cursor: pointer; list-style: none;
+  }
+  #project-detail-panel summary::-webkit-details-marker { display: none; }
+  #project-detail-panel summary::before { content: '▸ '; }
+  #project-detail-panel details[open] summary::before { content: '▾ '; }
+  #project-detail-panel summary a.pd-link { margin-left: 8px; }
 </style>
 </head>
 <body>
@@ -258,8 +271,8 @@
   </main>
 </div>
 
-<script src="js/shoot-types.js?v=20260928c"></script>
-<script src="js/build-version.js?v=20260928c"></script>
+<script src="js/shoot-types.js?v=20260928d"></script>
+<script src="js/build-version.js?v=20260928d"></script>
 <script>
 (function() {
   const WORKER_URL = 'https://imagepicker.hotichen.workers.dev';
@@ -818,12 +831,14 @@
       </div>
       <div id="pd-action-err" class="err"></div>
 
-      <h4><a class="pd-link" href="index.html?project=${encodeURIComponent(project.id)}">目前選取（${selected.length} 張）</a></h4>
-      <div class="table-wrap"><table><thead><tr><th>照片</th><th>♥</th><th>備註</th><th>選片人</th><th>更新時間</th></tr></thead>
-        <tbody>${selected.length ? selected.map(s => `<tr>
-          <td class="folder-raw"><a class="pd-link" href="index.html?project=${encodeURIComponent(project.id)}&amp;photo=${encodeURIComponent(s.photo_key)}">${escHtml(s.photo_key)}</a></td><td>♥</td><td>${escHtml(s.note || '')}</td>
-          <td>${escHtml(pickerNameOf(pickers, s.updated_by))}</td><td>${escHtml(fmtTime(s.updated_at))}</td>
-        </tr>`).join('') : '<tr><td colspan="5" class="empty">尚無選取</td></tr>'}</tbody></table></div>
+      <details id="pd-selections-details">
+        <summary>目前選取（${selected.length} 張） <a class="pd-link" href="index.html?project=${encodeURIComponent(project.id)}">看照片 →</a></summary>
+        <div class="table-wrap"><table><thead><tr><th>照片</th><th>♥</th><th>備註</th><th>選片人</th><th>更新時間</th></tr></thead>
+          <tbody>${selected.length ? selected.map(s => `<tr>
+            <td class="folder-raw"><a class="pd-link" href="index.html?project=${encodeURIComponent(project.id)}&amp;photo=${encodeURIComponent(s.photo_key)}">${escHtml(s.photo_key)}</a></td><td>♥</td><td>${escHtml(s.note || '')}</td>
+            <td>${escHtml(pickerNameOf(pickers, s.updated_by))}</td><td>${escHtml(fmtTime(s.updated_at))}</td>
+          </tr>`).join('') : '<tr><td colspan="5" class="empty">尚無選取</td></tr>'}</tbody></table></div>
+      </details>
 
       <h4>送出紀錄（新到舊）</h4>
       <div id="pd-submissions">${submissions.length ? submissions.map((s, i) => {

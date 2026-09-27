@@ -26,9 +26,15 @@
         app: null,
         photos: [],
         ownerName: null,
+        tokens: [],
 
         async start(app) {
             this.app = app;
+            this._trimSidebar();
+            this._trimBulkBar();
+            this._wireViewToggle();
+            this._wireDownloads();
+            this._wireCopyLinkBtn();
             const admin = (typeof CONFIG !== 'undefined' && CONFIG.PHOTOGRAPHER_TOKEN) || '';
             if (!admin) {
                 // Not a second login path: js/client-auth-check.js already
@@ -67,6 +73,11 @@
 
         _applyState(data) {
             this.ownerName = data.owner ? data.owner.name : null;
+            // GET /api/admin/projects/:id already returns these newest-first
+            // (worker.js: ORDER BY created_at DESC), each with a computed
+            // status — so the first 'live' one found here is the newest live
+            // link (task: 專案選片 — 複製選片連結).
+            this.tokens = Array.isArray(data.tokens) ? data.tokens : [];
             this.photos = (data.selections || [])
                 .filter(s => s.rating > 0)
                 .map(s => ({
@@ -75,8 +86,152 @@
                     rating: s.rating,
                     note: s.note || '',
                     uploaded: null,
+                    // list mode's "updated time" column (task: 專案選片 grid/list)
+                    updatedAt: s.updated_at || null,
                     hasAnnotations: false,
                 }));
+        },
+
+        // ── sidebar trim: this view is read-only and has no one folder ──────
+        // (task: 專案選片). Removed outright, not hidden — .btn/.toggle-btn
+        // carry display:inline-flex/flex, which beats the UA's [hidden]
+        // { display: none }, the same reason js/pick.js removes rather than
+        // hides its own studio-only controls.
+        _trimSidebar() {
+            // 01/SOURCE — nothing to type a path into; every photo already
+            // comes from the project's own picks (this.photos), across every
+            // folder it spans.
+            document.querySelector('.sidebar-section:first-child .input-group')?.remove();
+            // 02/RATING — every card here is already a pick (rating > 0) and
+            // no control may re-rate one, so filtering by star or by 已選 is
+            // meaningless.
+            document.querySelector('.star-filter')?.remove();
+            document.getElementById('filterSelectedBtn')?.remove();
+            // 03/FLAGS — placeholder unrelated to picks.
+            document.querySelector('.flags-grid')?.closest('.sidebar-section')?.remove();
+            // 04/ANNOTATION filter — annotation state isn't part of a guest's
+            // pick. 排序 (sort), underneath it in the same section, stays: it
+            // still orders the picks shown here.
+            document.querySelector('.toggle-group')?.remove();
+            // 05/DATA — 重設此資料夾 wipes a folder's ratings/notes; this view
+            // has no single folder to reset (this.photos spans every folder
+            // the project touched), and it would be wiping someone else's
+            // picks. 匯出備份 JSON / 清除所有快取 still make sense as-is.
+            document.getElementById('resetCurrentDataBtn')?.remove();
+        },
+
+        // The bulk-action bar's own star buttons + 清空評分 write ratings —
+        // app.js's setBulkRating() also refuses outright while this view is
+        // active (belt and suspenders), but removing the controls too keeps
+        // the bar honest about what it can do here. 下載選取/取消選取 stay.
+        _trimBulkBar() {
+            document.getElementById('bulkStars')?.remove();
+            document.querySelector('#bulkActionBar button[onclick="app.setBulkRating(0)"]')?.remove();
+        },
+
+        // ── downloads: 打包全部下載 / 下載選取 (task: 專案選片) ───────────────
+        // driveManager.photos stays empty here — loadPhotosFromFolder is never
+        // called for a project view — so both buttons are pointed at this
+        // project's own picks (this.photos) instead, across every folder.
+        // Simplest correct 下載選取: this view already shows nothing but
+        // picks and has no selection control any more (the checkbox is gone,
+        // see js/app.js createPhotoCard), so there is no meaningful subset to
+        // carve out — 下載選取 downloads exactly what 打包全部下載 does.
+        _wireDownloads() {
+            const self = this;
+            driveManager.downloadAllPhotos = function () {
+                return this.downloadPhotos(self.photos, `Project_${self.projectId}.zip`);
+            };
+            this.app.downloadSelected = function () {
+                return driveManager.downloadPhotos(self.photos, `Project_${self.projectId}.zip`);
+            };
+        },
+
+        // ── grid/list toggle (task: 專案選片) ────────────────────────────────
+        // Reuses the header's existing (until now decorative) 網格 button.
+        // Other modes are untouched: this listener/override only exists once
+        // ProjectViewController.start() runs, i.e. only in this view.
+        _wireViewToggle() {
+            this.viewMode = this._loadViewMode();
+            const btn = document.getElementById('headerViewBtn');
+            this._applyViewBtn(btn);
+            if (btn) btn.addEventListener('click', () => this._toggleViewMode(btn));
+
+            const origRender = this.app.renderPhotoGrid.bind(this.app);
+            this.app.renderPhotoGrid = () => {
+                const grid = document.getElementById('photoGrid');
+                if (grid) grid.classList.toggle('pv-list', this.viewMode === 'list');
+                if (this.viewMode === 'list') this._renderListView();
+                else origRender();
+            };
+        },
+
+        _toggleViewMode(btn) {
+            this.viewMode = this.viewMode === 'list' ? 'grid' : 'list';
+            this._saveViewMode(this.viewMode);
+            this._applyViewBtn(btn);
+            this.app.renderPhotoGrid();
+        },
+
+        _applyViewBtn(btn) {
+            if (btn) btn.textContent = this.viewMode === 'list' ? '列表' : '網格';
+        },
+
+        // Remembered per browser (task: 專案選片) — best-effort, never load
+        // bearing: a private window or blocked site data just falls back to
+        // the grid default.
+        _loadViewMode() {
+            try { return localStorage.getItem('pv_view_mode') === 'list' ? 'list' : 'grid'; }
+            catch (e) { return 'grid'; }
+        },
+        _saveViewMode(mode) {
+            try { localStorage.setItem('pv_view_mode', mode); } catch (e) { /* best effort */ }
+        },
+
+        _renderListView() {
+            const grid = document.getElementById('photoGrid');
+            const empty = document.getElementById('emptyState');
+            if (!grid) return;
+            grid.innerHTML = '';
+            const photos = this.app.filteredPhotos;
+            if (!photos.length) {
+                if (empty) empty.style.display = 'flex';
+                return;
+            }
+            if (empty) empty.style.display = 'none';
+            const frag = document.createDocumentFragment();
+            photos.forEach((photo, index) => frag.appendChild(this._createListRow(photo, index)));
+            grid.appendChild(frag);
+        },
+
+        // One row: small thumbnail, filename, note, updated time. Clicking
+        // anywhere on the row opens the same preview a grid card would.
+        _createListRow(photo, index) {
+            const row = document.createElement('div');
+            row.className = 'pv-list-row';
+            row.dataset.photoId = photo.id;
+            const thumbUrl = driveManager.getImageUrl(photo, 100);
+            row.innerHTML = `
+                <img src="${escapeHtml(thumbUrl)}" class="pv-list-thumb" loading="lazy" decoding="async" alt="">
+                <span class="pv-list-name">${escapeHtml(photo.name)}</span>
+                <span class="pv-list-note">${escapeHtml(photo.note || '')}</span>
+                <span class="pv-list-time">${escapeHtml(this._fmtTime(photo.updatedAt))}</span>
+            `;
+            row.addEventListener('click', () => this.app.openModal(index));
+            return row;
+        },
+
+        // The same Taipei "9/27 22:52" format admin.html's own fmtTime uses —
+        // duplicated rather than shared, since the two pages load independent
+        // script bundles.
+        _fmtTime(iso) {
+            if (!iso) return '';
+            const d = new Date(iso);
+            if (isNaN(d.getTime())) return '';
+            return new Intl.DateTimeFormat('zh-TW', {
+                timeZone: 'Asia/Taipei', month: 'numeric', day: 'numeric',
+                hour: '2-digit', minute: '2-digit', hour12: false,
+            }).format(d);
         },
 
         // The owner's name is guest-supplied — textContent only, never
@@ -89,6 +244,36 @@
             if (textEl) textEl.textContent = `${this.ownerName || '（尚無人認領）'} 的選片 · ${this.photos.length} 張`;
             if (link) link.href = `admin.html#project=${encodeURIComponent(this.projectId)}`;
             el.hidden = false;
+        },
+
+        // ── 複製選片連結 (task: 專案選片) — shares the project's own pick
+        // link, never a folder path. The click handler needs nothing from
+        // the fetch yet, so it can be wired up front, before this.tokens is
+        // even populated.
+        _wireCopyLinkBtn() {
+            const btn = document.getElementById('pvCopyLinkBtn');
+            if (btn) btn.addEventListener('click', () => this._copyPickLink());
+        },
+
+        async _copyPickLink() {
+            const live = this.tokens.find(t => t.status === 'live');
+            if (!live) {
+                if (typeof toast !== 'undefined') toast.warning('沒有有效連結，請到專案頁產生');
+                return;
+            }
+            try {
+                await navigator.clipboard.writeText(this._projectLink(live.token));
+                if (typeof toast !== 'undefined') toast.success('已複製選片連結');
+            } catch (e) {
+                if (typeof toast !== 'undefined') toast.error('複製失敗，請手動複製');
+            }
+        },
+
+        // The same shape as admin.html's own projectLink(token) — index.html
+        // sits beside admin.html, and the pick page needs nothing but ?t=.
+        _projectLink(token) {
+            const base = location.href.split('#')[0].split('?')[0];
+            return `${base}?t=${encodeURIComponent(token)}`;
         },
 
         loadGrid() {

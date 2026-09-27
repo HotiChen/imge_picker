@@ -4522,7 +4522,9 @@ await suite('admin — escHtml(0): a project with zero submissions shows 送出 
       await page.waitForSelector('#admin-view', { state: 'visible', timeout: 5000 });
       await page.waitForSelector('[data-open-project]', { timeout: 5000 });
       await page.click('[data-open-project]');
-      await page.waitForSelector('#project-detail-body table');
+      // The table lives inside a collapsed <details> by default (task: 專案選片
+      // — admin collapse), so it's attached but not visible until expanded.
+      await page.waitForSelector('#project-detail-body table', { state: 'attached' });
       await new Promise(r => setTimeout(r, 300));
 
       const r = await page.evaluate(payload => ({
@@ -5148,27 +5150,70 @@ await suite('desktop preview — arrow keys and mouse click still navigate/open 
       const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
       await page.waitForSelector('[data-open-project]', { timeout: 5000 });
       await page.click('[data-open-project]');
-      await page.waitForSelector('#project-detail-body table tbody tr');
+      // The table lives inside a collapsed <details> (task: 專案選片 — admin
+      // collapse), so its rows are attached but not visible until expanded.
+      await page.waitForSelector('#project-detail-body table tbody tr', { state: 'attached' });
 
       const r = await page.evaluate(() => {
-        const headingLink = document.querySelector('#project-detail-body h4 a');
+        const summary = document.querySelector('#project-detail-body summary');
+        const seeLink = summary && summary.querySelector('a.pd-link');
         const rowLinks = [...document.querySelectorAll('#project-detail-body table tbody tr a')];
         return {
-          headingHref: headingLink && headingLink.getAttribute('href'),
-          headingTarget: headingLink && headingLink.getAttribute('target'),
-          headingText: headingLink && headingLink.textContent,
+          summaryText: summary && summary.textContent,
+          seeHref: seeLink && seeLink.getAttribute('href'),
+          seeTarget: seeLink && seeLink.getAttribute('target'),
           rowHrefs: rowLinks.map(a => a.getAttribute('href')),
           rowCount: rowLinks.length,
         };
       });
-      ok('the heading links to index.html?project=<id>', r.headingHref === 'index.html?project=proj-1', r.headingHref);
-      ok('the heading still shows the count', /目前選取（2 張）/.test(r.headingText || ''), r.headingText);
-      ok('it is a plain same-tab link (no target=_blank)', !r.headingTarget, String(r.headingTarget));
+      ok('the summary shows the count', /目前選取（2 張）/.test(r.summaryText || ''), r.summaryText);
+      ok('看照片 → links to index.html?project=<id>', r.seeHref === 'index.html?project=proj-1', r.seeHref);
+      ok('it is a plain same-tab link (no target=_blank)', !r.seeTarget, String(r.seeTarget));
       ok('exactly the 2 rating>0 rows are links (not the zero-rated one)', r.rowCount === 2, String(r.rowCount));
       ok('one row links to its own photo key, encoded',
         r.rowHrefs.includes('index.html?project=proj-1&photo=20260819%2Fa.jpg'), JSON.stringify(r.rowHrefs));
       ok('the other, in a different folder, does too',
         r.rowHrefs.includes('index.html?project=proj-1&photo=20260901%2Fb.jpg'), JSON.stringify(r.rowHrefs));
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN });
+}
+
+{
+  const m = pickFakeWorker({ ownerName: 'Norah', projectId: 'proj-collapse' });
+  m.state.selections.set('20260819/a.jpg', { rating: 5, note: '', updated_by: 'picker-0', updated_at: '2026-01-01T00:00:00Z' });
+  await suite('admin — 專案選片：目前選取表格預設收合，展開後仍看得到表格',
+    `${base}/admin.html`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('[data-open-project]', { timeout: 5000 });
+      await page.click('[data-open-project]');
+      await page.waitForSelector('#pd-selections-details', { timeout: 5000 });
+
+      const openBefore = await page.evaluate(() => document.getElementById('pd-selections-details').open);
+      ok('collapsed by default', openBefore === false, String(openBefore));
+      // <details> hides its non-summary content without necessarily
+      // clearing getBoundingClientRect on it (Chrome's internal
+      // content-visibility mechanism keeps reporting a non-zero rect even
+      // though nothing paints) — Playwright's own actionability-grade
+      // isVisible() is the reliable "actually invisible" signal here, the
+      // same kind of trap this repo's [hidden]-vs-display:inline-flex bug
+      // note calls for.
+      ok('and the table is not actually visible either',
+        (await page.locator('#pd-selections-details table').isVisible()) === false);
+
+      // click near the left edge of the summary text, away from the 看照片
+      // link appended after it, so this exercises the disclosure toggle
+      // itself rather than navigating.
+      await page.click('#pd-selections-details summary', { position: { x: 5, y: 8 } });
+      const after = await page.evaluate(() => ({
+        open: document.getElementById('pd-selections-details').open,
+        rowCount: document.querySelectorAll('#pd-selections-details table tbody tr').length,
+      }));
+      ok('expanding opens it', after.open === true);
+      const rowVisible = await page.locator('#pd-selections-details table tbody tr').first().isVisible();
+      ok('the table is still there, with its row', after.rowCount === 1 && rowVisible === true, String(after.rowCount));
       return out;
     },
     { before: m.attach, initScript: ADMIN });
@@ -5264,6 +5309,16 @@ await suite('index.html — 專案選片：沒有 ?project= 時，攝影師模�
     const bannerHidden = await page.evaluate(() => document.getElementById('projectViewBanner').hidden);
     ok('its banner stays hidden', bannerHidden === true);
 
+    // task: 專案選片 sidebar trim only ever runs for ProjectViewController —
+    // the plain studio sidebar keeps LOAD + RATING untouched.
+    const sidebar = await page.evaluate(() => ({
+      driveUrl: !!document.getElementById('driveUrl'),
+      loadBtn: !!document.getElementById('loadPhotosBtn'),
+      starFilter: !!document.querySelector('.star-filter'),
+    }));
+    ok('the studio sidebar still has LOAD', sidebar.driveUrl && sidebar.loadBtn, JSON.stringify(sidebar));
+    ok('and RATING', sidebar.starFilter === true);
+
     await page.fill('#driveUrl', '20260819/');
     await page.click('#loadPhotosBtn');
     await page.waitForSelector('.photo-card', { timeout: 5000 });
@@ -5356,13 +5411,340 @@ await suite('index.html — 專案選片：沒有 ?project= 時，攝影師模�
       const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
       await page.waitForSelector('[data-open-project]', { timeout: 5000 });
       await page.click('[data-open-project]');
-      await page.waitForSelector('#project-detail-body table tbody tr');
+      // collapsed by default (task: 專案選片 — admin collapse); attached
+      // is enough here, the assertions below don't need it visible.
+      await page.waitForSelector('#project-detail-body table tbody tr', { state: 'attached' });
       const r = await page.evaluate(() => ({
         headers: [...document.querySelectorAll('#project-detail-body table thead th')].map(th => th.textContent),
         cell: document.querySelectorAll('#project-detail-body table tbody tr td')[1]?.textContent,
       }));
       ok('the header is ♥, not 星等', r.headers.includes('♥') && !r.headers.includes('星等'), JSON.stringify(r.headers));
       ok('the cell shows ♥', r.cell === '♥', r.cell);
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN });
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// index.html?project= — sidebar trim, read-only cards, downloads and the
+// grid/list toggle (task: 專案選片, second pass).
+// ═══════════════════════════════════════════════════════════════════════════
+
+{
+  const m = pickFakeWorker({ ownerName: 'Oscar', projectId: 'proj-trim' });
+  m.state.selections.set('20260819/a.jpg', { rating: 5, note: '', updated_by: 'picker-0', updated_at: '2026-01-01T00:00:00Z' });
+  await suite('index.html — 專案選片：側邊欄移除來源/星級/FLAGS/標註過濾，保留排序與備份（不含重設此資料夾）',
+    `${base}/index.html?project=proj-trim`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('.photo-card', { timeout: 5000 });
+      const r = await page.evaluate(() => ({
+        driveUrl: !!document.getElementById('driveUrl'),
+        loadBtn: !!document.getElementById('loadPhotosBtn'),
+        starFilter: !!document.querySelector('.star-filter'),
+        filterSelectedBtn: !!document.getElementById('filterSelectedBtn'),
+        flagsGrid: !!document.querySelector('.flags-grid'),
+        toggleGroup: !!document.querySelector('.toggle-group'),
+        sortSelect: !!document.getElementById('sortBy'),
+        backupBtn: !!document.getElementById('backupDataBtn'),
+        resetCurrentBtn: !!document.getElementById('resetCurrentDataBtn'),
+        resetAllBtn: !!document.getElementById('resetAllDataBtn'),
+        bulkStars: !!document.getElementById('bulkStars'),
+        clearRatingBtn: !!document.querySelector('#bulkActionBar button[onclick="app.setBulkRating(0)"]'),
+      }));
+      ok('SOURCE input removed', r.driveUrl === false);
+      ok('LOAD button removed', r.loadBtn === false);
+      ok('RATING star filter removed', r.starFilter === false);
+      ok('只看選取 removed', r.filterSelectedBtn === false);
+      ok('FLAGS section removed', r.flagsGrid === false);
+      ok('ANNOTATION filter removed', r.toggleGroup === false);
+      ok('sort is kept', r.sortSelect === true);
+      ok('匯出備份 JSON is kept', r.backupBtn === true);
+      ok('重設此資料夾 removed (dangerous here)', r.resetCurrentBtn === false);
+      ok('清除所有快取 is kept', r.resetAllBtn === true);
+      ok('bulk-star buttons removed (would write ratings)', r.bulkStars === false);
+      ok('清空評分 removed too', r.clearRatingBtn === false);
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN });
+}
+
+{
+  const m = pickFakeWorker({ ownerName: 'Petra', projectId: 'proj-ro' });
+  m.state.selections.set('20260819/noted.jpg', { rating: 5, note: '請保留這張', updated_by: 'picker-0', updated_at: '2026-09-27T14:52:00.000Z' });
+  m.state.selections.set('20260819/plain.jpg', { rating: 4, note: '', updated_by: 'picker-0', updated_at: '2026-01-01T00:00:00Z' });
+  await suite('index.html — 專案選片：卡片只有唯讀 ♥ 與 💬，沒有星級/勾選框，沒有控制項能寫入評分',
+    `${base}/index.html?project=proj-ro`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('.photo-card', { timeout: 5000 });
+      const r = await page.evaluate(() => ({
+        stars: document.querySelectorAll('.photo-card .star-rating').length,
+        selectBtns: document.querySelectorAll('.photo-card .select-toggle-btn').length,
+        clickableHearts: document.querySelectorAll('.photo-card button.pick-heart-btn').length,
+        readonlyHearts: document.querySelectorAll('.photo-card span.pick-heart-btn.on').length,
+        noteBadges: document.querySelectorAll('.photo-card .pv-note-badge').length,
+      }));
+      ok('no star rating control on any card', r.stars === 0, String(r.stars));
+      ok('no select checkbox either', r.selectBtns === 0, String(r.selectBtns));
+      ok('no clickable heart — every ♥ is read-only', r.clickableHearts === 0, String(r.clickableHearts));
+      ok('every card shows the read-only ♥', r.readonlyHearts === 2, String(r.readonlyHearts));
+      ok('exactly the noted photo gets the 💬 marker', r.noteBadges === 1, String(r.noteBadges));
+
+      // No control may write a rating — try the one shortcut that still
+      // reaches setBulkRating() even with the bulk-star buttons gone.
+      await page.click('#selectAllBtn');
+      await page.keyboard.press('5');
+      await page.waitForTimeout(200);
+      const ratingsAfter = await page.evaluate(() => {
+        const byId = {};
+        app.photos.forEach(p => { byId[p.id] = p.rating; });
+        return byId;
+      });
+      ok('ratings are unchanged after the bulk-rating keyboard shortcut',
+        ratingsAfter['20260819/noted.jpg'] === 5 && ratingsAfter['20260819/plain.jpg'] === 4,
+        JSON.stringify(ratingsAfter));
+      const stored = await page.evaluate(() => {
+        try { return JSON.parse(localStorage.getItem(CONFIG.STORAGE_KEYS.RATINGS) || '{}'); }
+        catch (e) { return {}; }
+      });
+      ok('nothing was persisted to localStorage either', !stored['20260819/plain.jpg'], JSON.stringify(stored));
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN });
+}
+
+{
+  const XSS_NOTE = '<img src=x onerror="window.__xssNote=1">';
+  const m = pickFakeWorker({ ownerName: 'Quincy', projectId: 'proj-note' });
+  m.state.selections.set('20260819/n.jpg', { rating: 5, note: XSS_NOTE, updated_by: 'picker-0', updated_at: '2026-09-27T14:52:00.000Z' });
+  await suite('index.html — 專案選片：preview 與 modal 顯示備註文字（escaped），沒有星星可點',
+    `${base}/index.html?project=proj-note`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('.photo-card', { timeout: 5000 });
+      await page.hover('.photo-card');
+      await page.waitForTimeout(250); // updatePreviewPane's own hover debounce
+      const r = await page.evaluate(() => ({
+        noteHidden: document.getElementById('pvPreviewNoteSection').hidden,
+        noteText: document.getElementById('pvPreviewNote').textContent,
+        injected: document.querySelectorAll('#pvPreviewNote img').length,
+        fired: !!window.__xssNote,
+        heartReadOnly: document.querySelectorAll('#previewStars span.pick-heart-btn.on').length,
+        heartClickable: document.querySelectorAll('#previewStars button.pick-heart-btn').length,
+        hintHidden: document.getElementById('previewStarsHint').hidden,
+      }));
+      ok('the note section is shown', r.noteHidden === false);
+      ok('the note text is there as text, not injected as an element',
+        r.noteText.includes(XSS_NOTE) && r.injected === 0, r.noteText);
+      ok('onerror never fired', r.fired === false);
+      ok('the preview heart is read-only (a span), not a button',
+        r.heartReadOnly === 1 && r.heartClickable === 0, JSON.stringify(r));
+      ok('the "按 1–5" hint is hidden — nothing here is keyed by number', r.hintHidden === true);
+
+      await page.click('.photo-card');
+      await page.waitForFunction(
+        () => document.getElementById('photoModal').classList.contains('active'), null, { timeout: 5000 });
+      const modal = await page.evaluate(() => ({
+        noteValue: document.getElementById('photoNote').value,
+        readOnly: document.getElementById('photoNote').readOnly,
+        mprHeart: document.querySelectorAll('#modalPhotoRating span.pick-heart-btn.on').length,
+      }));
+      ok('the modal note textarea shows the same text (via .value, never innerHTML)',
+        modal.noteValue === XSS_NOTE, modal.noteValue);
+      ok('and is read-only', modal.readOnly === true);
+      ok('the modal footer shows the read-only heart too', modal.mprHeart === 1, String(modal.mprHeart));
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN });
+}
+
+{
+  const m = pickFakeWorker({ ownerName: 'Rex', projectId: 'proj-dl' });
+  m.state.selections.set('20260819/a.jpg', { rating: 5, note: '', updated_by: 'picker-0', updated_at: '2026-01-01T00:00:00Z' });
+  m.state.selections.set('20260901/b.jpg', { rating: 3, note: '', updated_by: 'picker-0', updated_at: '2026-01-01T00:00:00Z' });
+  await suite('index.html — 專案選片：打包全部下載／下載選取 只打包這個專案跨資料夾的選片',
+    `${base}/index.html?project=proj-dl`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('.photo-card', { timeout: 5000 });
+      await page.evaluate(() => {
+        window.__zipFiles = [];
+        window.JSZip = function () {
+          this.file = (name) => window.__zipFiles.push(name);
+          this.generateAsync = async () => new Blob(['z']);
+        };
+      });
+
+      await page.click('#downloadAllBtn');
+      await page.waitForTimeout(400);
+      const filesAll = await page.evaluate(() => window.__zipFiles.slice());
+      ok('打包全部下載 packages exactly the project’s 2 picks, from both folders',
+        filesAll.length === 2 && filesAll.includes('a.jpg') && filesAll.includes('b.jpg'), JSON.stringify(filesAll));
+
+      await page.evaluate(() => { window.__zipFiles.length = 0; });
+      await page.click('#downloadSelectedHeaderBtn'); // no checkbox to pick a subset with — see js/project-view.js _wireDownloads
+      await page.waitForTimeout(400);
+      const filesSel = await page.evaluate(() => window.__zipFiles.slice());
+      ok('下載選取 downloads the same set (documented behaviour: 下載選取 = 全部選片)',
+        filesSel.length === 2 && filesSel.includes('a.jpg') && filesSel.includes('b.jpg'), JSON.stringify(filesSel));
+
+      const fetched = m.requests.filter(r => r.method === 'GET').map(r => r.path);
+      ok('both photos were actually fetched from their own folder, proving this is not driveManager.photos (which stays empty here)',
+        fetched.includes('/20260819/a.jpg') && fetched.includes('/20260901/b.jpg'), JSON.stringify(fetched));
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN });
+}
+
+{
+  const m = pickFakeWorker({ ownerName: 'Sara', projectId: 'proj-list' });
+  m.state.selections.set('20260819/a.jpg', { rating: 5, note: '備註A', updated_by: 'picker-0', updated_at: '2026-09-27T14:52:00.000Z' });
+  await suite('index.html — 專案選片：格狀/列表切換，列表顯示縮圖/檔名/備註/更新時間，並記住選擇',
+    `${base}/index.html?project=proj-list`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('.photo-card', { timeout: 5000 });
+      const before = await page.evaluate(() => document.getElementById('headerViewBtn').textContent.trim());
+      ok('starts in grid mode (網格)', before === '網格', before);
+
+      await page.click('#headerViewBtn');
+      await page.waitForSelector('.pv-list-row', { timeout: 5000 });
+      const r = await page.evaluate(() => {
+        const row = document.querySelector('.pv-list-row');
+        return {
+          btnText: document.getElementById('headerViewBtn').textContent.trim(),
+          gridHasListClass: document.getElementById('photoGrid').classList.contains('pv-list'),
+          cardCount: document.querySelectorAll('.photo-card').length,
+          rowCount: document.querySelectorAll('.pv-list-row').length,
+          thumb: !!row.querySelector('.pv-list-thumb'),
+          name: row.querySelector('.pv-list-name')?.textContent,
+          note: row.querySelector('.pv-list-note')?.textContent,
+          time: row.querySelector('.pv-list-time')?.textContent,
+        };
+      });
+      ok('the header button now reads 列表', r.btnText === '列表', r.btnText);
+      ok('the grid container gets the list layout class', r.gridHasListClass === true);
+      ok('grid cards are gone', r.cardCount === 0, String(r.cardCount));
+      ok('exactly one row', r.rowCount === 1, String(r.rowCount));
+      ok('the row has a thumbnail', r.thumb === true);
+      ok('and the filename', r.name === 'a.jpg', r.name);
+      ok('and the note', r.note === '備註A', r.note);
+      ok('and the updated time, in Taipei format, like admin.html', r.time === '9/27 22:52', r.time);
+
+      await page.click('.pv-list-row');
+      await page.waitForFunction(
+        () => document.getElementById('photoModal').classList.contains('active'), null, { timeout: 5000 });
+      ok('clicking a row opens the preview', true);
+      await page.click('#closeModal');
+
+      await page.reload();
+      await page.waitForSelector('.pv-list-row', { timeout: 5000 });
+      const afterReload = await page.evaluate(() => document.getElementById('headerViewBtn').textContent.trim());
+      ok('the choice is remembered across reload (localStorage)', afterReload === '列表', afterReload);
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN });
+}
+
+{
+  const m = pickFakeWorker({ ownerName: 'Tina', projectId: 'proj-btn' });
+  await suite('index.html — 專案選片：「← 回專案」是明顯的按鈕（仍是可 middle-click 的 <a>）',
+    `${base}/index.html?project=proj-btn`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('#projectViewBanner:not([hidden])', { timeout: 5000 });
+      const r = await page.evaluate(() => {
+        const el = document.getElementById('pvBackLink');
+        return { tag: el.tagName, cls: el.className, href: el.getAttribute('href') };
+      });
+      ok('it is a real <a>', r.tag === 'A', r.tag);
+      ok('styled with the existing .btn look, left of the banner text', r.cls.includes('btn') && r.cls.includes('btn-outline'), r.cls);
+      ok('href still resolves — middle-click / back-nav semantics stay intact',
+        r.href === 'admin.html#project=proj-btn', r.href);
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN });
+
+  await suite('index.html — 專案選片：手機版「← 回專案」至少 44px 高',
+    `${base}/index.html?project=proj-btn`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('#projectViewBanner:not([hidden])', { timeout: 5000 });
+      const box = await page.locator('#pvBackLink').boundingBox();
+      ok('at least 44px tall on a phone-width viewport', !!box && box.height >= 44, JSON.stringify(box));
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN, contextOptions: MOBILE });
+}
+
+{
+  const m = pickFakeWorker({ ownerName: 'Uma', projectId: 'proj-copylink', listToken: 'PICK-LIVE-1' });
+  await suite('index.html — 專案選片：複製選片連結 複製最新的有效挑選連結（不是資料夾）',
+    `${base}/index.html?project=proj-copylink`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+      await page.waitForSelector('#projectViewBanner:not([hidden])', { timeout: 5000 });
+      await page.click('#pvCopyLinkBtn');
+      await page.waitForTimeout(200);
+      const clip = await page.evaluate(() => navigator.clipboard.readText());
+      ok('copies index.html?t=<newest live token>', /index\.html\?t=PICK-LIVE-1$/.test(clip), clip);
+      const toastShown = await page.evaluate(() => document.querySelector('.toast-message')?.textContent);
+      ok('confirms with a success toast', toastShown === '已複製選片連結', toastShown);
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN });
+}
+
+{
+  // A revoked-only link is not "有效" either — this must actually check
+  // status, not just whether any token row exists at all.
+  const m = pickFakeWorker({ ownerName: 'Wade', projectId: 'proj-revoked' });
+  m.state.tokens[0].revoked_at = '2026-01-01T00:00:00.000Z';
+  await suite('index.html — 專案選片：只剩已撤銷的連結時，也算沒有有效連結',
+    `${base}/index.html?project=proj-revoked`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+      await page.waitForSelector('#projectViewBanner:not([hidden])', { timeout: 5000 });
+      await page.evaluate(() => navigator.clipboard.writeText('sentinel'));
+      await page.click('#pvCopyLinkBtn');
+      await page.waitForTimeout(200);
+      const toastShown = await page.evaluate(() => document.querySelector('.toast-message')?.textContent);
+      ok('shows 沒有有效連結，請到專案頁產生', toastShown === '沒有有效連結，請到專案頁產生', toastShown);
+      const clip = await page.evaluate(() => navigator.clipboard.readText());
+      ok('the revoked token was not copied', clip === 'sentinel', clip);
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN });
+}
+
+{
+  const m = pickFakeWorker({ ownerName: 'Vic', projectId: 'proj-nolink', listToken: null });
+  await suite('index.html — 專案選片：沒有有效連結時提示「沒有有效連結，請到專案頁產生」，不複製任何東西',
+    `${base}/index.html?project=proj-nolink`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+      await page.waitForSelector('#projectViewBanner:not([hidden])', { timeout: 5000 });
+      await page.evaluate(() => navigator.clipboard.writeText('sentinel'));
+      await page.click('#pvCopyLinkBtn');
+      await page.waitForTimeout(200);
+      const toastShown = await page.evaluate(() => document.querySelector('.toast-message')?.textContent);
+      ok('shows 沒有有效連結，請到專案頁產生', toastShown === '沒有有效連結，請到專案頁產生', toastShown);
+      const clip = await page.evaluate(() => navigator.clipboard.readText());
+      ok('nothing was copied — clipboard stays untouched', clip === 'sentinel', clip);
       return out;
     },
     { before: m.attach, initScript: ADMIN });
