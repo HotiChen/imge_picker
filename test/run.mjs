@@ -5863,7 +5863,13 @@ await suite('入口 — 未登入時看到品牌、三張特色卡與手機示�
     ok('the pitch line is on the page', (await page.textContent('body')).includes('讓客人在手機上輕鬆選片，你專心修圖'));
     const cardTitles = await page.$$eval('.feature-card h3', els => els.map(e => e.textContent));
     ok('three feature cards, in order', JSON.stringify(cardTitles) ===
-      JSON.stringify(['手機選片 ♥', '送出即通知', '選片進度一目了然']), JSON.stringify(cardTitles));
+      JSON.stringify(['傳連結，手機就能選', '送出即通知，加選自動算', '開始精修，選片就鎖定']), JSON.stringify(cardTitles));
+    const pitch = await page.textContent('.pitch');
+    ok('the sub-line adds to the headline instead of repeating it', !pitch.includes('讓客人在手機上輕鬆選片'), pitch);
+    ok('the secondary button is not underlined',
+      (await page.$eval('.btn-ghost', e => getComputedStyle(e).textDecorationLine)) === 'none');
+    ok('the mock tiles are not all the same colour',
+      new Set(await page.$$eval('.phone-tile', els => els.map(e => getComputedStyle(e).backgroundColor))).size >= 4);
     ok('a phone mock is built from CSS/markup, not an <img>',
       (await page.$('.phone-mock')) !== null && (await page.$('.phone-mock img')) === null);
     ok('no external script tags', (await page.$$eval('script[src]', els =>
