@@ -3238,7 +3238,9 @@ function pickFakeWorker(opts = {}) {
       owner_picker_id: null,
       phase: 'picking',
       modified_after_submit: 0,
+      archived_at: opts.archivedAt || null,
     },
+    deleted: false,
     pickers: new Map(),        // id -> {id, name, key, relationship, email}
     selections: new Map(),     // photo_key -> {rating, note, updated_by, updated_at}
     submissions: [],           // oldest first internally; served newest-first
@@ -3408,20 +3410,22 @@ function pickFakeWorker(opts = {}) {
         const owner = state.project.owner_picker_id ? state.pickers.get(state.project.owner_picker_id) : null;
         const subs = state.submissions;
         const live = liveToken();
-        return json({
-          projects: [{
-            id: state.project.id,
-            title: state.project.title,
-            phase: state.project.phase,
-            modified_after_submit: state.project.modified_after_submit,
-            owner_name: owner ? owner.name : null,
-            created_at: '2026-01-01T00:00:00.000Z',
-            submission_count: subs.length,
-            last_submitted_at: subs.length ? subs[subs.length - 1].created_at : null,
-            unnotified_submissions: unnotifiedCountFake(subs),
-            token: live ? live.token : null,
-          }],
-        });
+        const wantArchived = u.searchParams.get('archived') === '1';
+        const isArchived = !!state.project.archived_at;
+        const projects = (!state.deleted && (wantArchived ? isArchived : !isArchived)) ? [{
+          id: state.project.id,
+          title: state.project.title,
+          phase: state.project.phase,
+          modified_after_submit: state.project.modified_after_submit,
+          owner_name: owner ? owner.name : null,
+          created_at: '2026-01-01T00:00:00.000Z',
+          archived_at: state.project.archived_at,
+          submission_count: subs.length,
+          last_submitted_at: subs.length ? subs[subs.length - 1].created_at : null,
+          unnotified_submissions: unnotifiedCountFake(subs),
+          token: live ? live.token : null,
+        }] : [];
+        return json({ projects });
       }
 
       if (u.pathname === '/api/admin/projects' && method === 'POST') {
@@ -3451,12 +3455,35 @@ function pickFakeWorker(opts = {}) {
           unnotified_submissions: unnotifiedCountFake(state.submissions),
         });
       }
+      if (/^\/api\/admin\/projects\/[^/]+$/.test(u.pathname) && method === 'DELETE') {
+        if (state.submissions.length)
+          return json({ error: '已有送出紀錄，無法刪除（可改為封存）', code: 'has_submissions' }, 409);
+        state.deleted = true;
+        return json({ ok: true });
+      }
       if (/\/api\/admin\/projects\/[^/]+\/links$/.test(u.pathname) && method === 'POST') {
+        if (state.project.archived_at)
+          return json({ error: 'Project is archived; unarchive it first', code: 'archived' }, 409);
         const token = 'PICK-TOKEN-' + (state.tokens.length + 1);
         const created_at = new Date().toISOString();
         const expires_at = new Date(Date.now() + 90 * 86400000).toISOString();
         state.tokens.push({ token, created_at, expires_at, revoked_at: null });
         return json({ token, expires_at, created_at, status: 'live' }, 201);
+      }
+      if (/\/api\/admin\/projects\/[^/]+\/archive$/.test(u.pathname) && method === 'POST') {
+        let revoked = 0;
+        if (!state.project.archived_at) {
+          const at = new Date().toISOString();
+          state.project.archived_at = at;
+          for (const t of state.tokens) {
+            if (pickTokenStatusFake(t) === 'live') { t.revoked_at = at; revoked++; }
+          }
+        }
+        return json({ ok: true, archived_at: state.project.archived_at, revoked });
+      }
+      if (/\/api\/admin\/projects\/[^/]+\/unarchive$/.test(u.pathname) && method === 'POST') {
+        state.project.archived_at = null;
+        return json({ ok: true, archived_at: null });
       }
       if (/^\/api\/shares\/[^/]+\/revoke$/.test(u.pathname) && method === 'POST') {
         const tok = decodeURIComponent(u.pathname.split('/')[3]);
@@ -4918,6 +4945,188 @@ await suite('desktop preview — arrow keys and mouse click still navigate/open 
     return out;
   },
   { initScript: () => sessionStorage.setItem('studio_token', 'x'), before: mockWorker(3) });
+
+{
+  const m = pickFakeWorker({ ownerName: 'Amy', ownerKey: 'AMY-KEY' });
+  await suite('admin — 封存: confirm text, then 已封存 badge, 取消封存, and 產生新連結 hidden',
+    `${base}/admin.html`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('[data-open-project]', { timeout: 5000 });
+      await page.click('[data-open-project]');
+      await page.waitForSelector('#pd-archive-btn', { timeout: 5000 });
+
+      let dialogMsg = '';
+      page.once('dialog', d => { dialogMsg = d.message(); d.dismiss(); });
+      await page.click('#pd-archive-btn');
+      await page.waitForTimeout(200);
+      ok('confirm warns links go dead immediately, data is kept',
+        dialogMsg.includes('封存後連結會立即失效，資料會保留'), dialogMsg);
+      ok('dismissing the confirm does not call archive',
+        !m.requests.some(r => r.method === 'POST' && r.path.endsWith('/archive')));
+
+      page.once('dialog', d => d.accept());
+      await page.click('#pd-archive-btn');
+      await page.waitForSelector('#pd-unarchive-btn', { timeout: 5000 });
+      const after = await page.evaluate(() => ({
+        badge: document.querySelector('.pd-head')?.textContent.includes('已封存'),
+        newLinkBtn: !!document.getElementById('pd-new-link-btn'),
+        unarchiveBtn: !!document.getElementById('pd-unarchive-btn'),
+      }));
+      ok('shows 已封存 badge after archiving', after.badge);
+      ok('產生新連結 is hidden once archived', after.newLinkBtn === false);
+      ok('取消封存 replaces the 封存 button', after.unarchiveBtn);
+      ok('the archive endpoint was actually called',
+        m.requests.some(r => r.method === 'POST' && r.path.endsWith('/archive')));
+      ok('the live pick link is revoked in the same batch as the archive',
+        (await page.textContent('[data-token-row] .badge')) === '已撤銷',
+        await page.textContent('[data-token-row] .badge'));
+
+      await page.click('#pd-unarchive-btn');
+      await page.waitForSelector('#pd-archive-btn', { timeout: 5000 });
+      const restored = await page.evaluate(() => ({
+        badge: document.querySelector('.pd-head')?.textContent.includes('已封存'),
+        newLinkBtn: !!document.getElementById('pd-new-link-btn'),
+      }));
+      ok('取消封存 drops the 已封存 badge', restored.badge === false);
+      ok('產生新連結 comes back', restored.newLinkBtn);
+      ok('the unarchive endpoint was actually called',
+        m.requests.some(r => r.method === 'POST' && r.path.endsWith('/unarchive')));
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN });
+}
+
+{
+  const m = pickFakeWorker({ ownerName: 'Ben', ownerKey: 'BEN-KEY' });
+  await suite('admin — 封存 on an archived project: POST links 409s, and archived shows in the toggled list',
+    `${base}/admin.html`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('[data-open-project]', { timeout: 5000 });
+      await page.click('[data-open-project]');
+      await page.waitForSelector('#pd-archive-btn', { timeout: 5000 });
+      page.once('dialog', d => d.accept());
+      await page.click('#pd-archive-btn');
+      await page.waitForSelector('#pd-unarchive-btn', { timeout: 5000 });
+
+      const listEmpty = await page.evaluate(() =>
+        document.getElementById('proj-recent-list').textContent.includes('尚未建立過專案'));
+      ok('the default project list no longer shows the archived project', listEmpty);
+
+      await page.click('#proj-show-archived-toggle');
+      await page.waitForFunction(() =>
+        document.querySelectorAll('[data-project-row]').length === 1, null, { timeout: 5000 });
+      const shown = await page.evaluate(() => ({
+        badge: document.querySelector('[data-project-row]')?.textContent.includes('已封存'),
+      }));
+      ok('顯示已封存 toggle brings the archived project back with its badge', shown.badge);
+
+      await page.uncheck('#proj-show-archived-toggle');
+      await page.waitForFunction(() =>
+        document.getElementById('proj-recent-list').textContent.includes('尚未建立過專案'), null, { timeout: 5000 });
+      ok('unchecking it hides the archived project again', true);
+
+      // The button is hidden once archived, but the endpoint itself must
+      // still refuse a mint the way the real Worker does (docs/guest-picking.md).
+      const linkAttempt = await page.evaluate(async id => {
+        const r = await fetch(`https://imagepicker.hotichen.workers.dev/api/admin/projects/${id}/links`, {
+          method: 'POST', headers: { 'Authorization': 'Bearer adm' },
+        });
+        return { status: r.status, body: await r.json() };
+      }, m.state.project.id);
+      ok('POST .../links on an archived project is refused with 409 code:archived',
+        linkAttempt.status === 409 && linkAttempt.body.code === 'archived', JSON.stringify(linkAttempt));
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN });
+}
+
+{
+  const m = pickFakeWorker({ ownerName: 'Cara', ownerKey: 'CARA-KEY' });
+  await suite('admin — 封存／刪除: 刪除 only offered with 0 submissions, confirms, and clears the panel',
+    `${base}/admin.html`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('[data-open-project]', { timeout: 5000 });
+      await page.click('[data-open-project]');
+      await page.waitForSelector('#pd-reset-seat-btn', { timeout: 5000 });
+      ok('刪除 is offered when the project has 0 submissions', !!(await page.$('#pd-delete-btn')));
+
+      let dialogMsg = '';
+      page.once('dialog', d => { dialogMsg = d.message(); d.dismiss(); });
+      await page.click('#pd-delete-btn');
+      await page.waitForTimeout(200);
+      ok('confirm says it cannot be undone', dialogMsg.includes('確定刪除？此動作無法復原'), dialogMsg);
+      ok('dismissing the confirm does not call DELETE',
+        !m.requests.some(r => r.method === 'DELETE'));
+
+      page.once('dialog', d => d.accept());
+      await page.click('#pd-delete-btn');
+      await page.waitForSelector('#project-detail-panel', { state: 'hidden', timeout: 5000 });
+      ok('the panel is hidden after a successful delete', true);
+      ok('the DELETE endpoint was actually called',
+        m.requests.some(r => r.method === 'DELETE' && /\/api\/admin\/projects\/[^/]+$/.test(r.path)));
+      await page.waitForFunction(() =>
+        document.getElementById('proj-recent-list').textContent.includes('尚未建立過專案'), null, { timeout: 5000 });
+      ok('the project list refreshes to empty', true);
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN });
+}
+
+{
+  const m = pickFakeWorker({ ownerName: 'Dan', ownerKey: 'DAN-KEY' });
+  m.state.submissions.push(
+    { id: 's1', picker_id: 'picker-0', relationship: '本人', email: null,
+      photo_keys: ['20260819/p0.jpg'], count: 1, pick_limit: null, extra_price: null,
+      created_at: '2026-01-01T00:00:00Z', notified: 1 },
+  );
+  await suite('admin — 封存／刪除: 刪除 is hidden with submissions, and 409 has_submissions shows the fallback message',
+    `${base}/admin.html`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('[data-open-project]', { timeout: 5000 });
+      await page.click('[data-open-project]');
+      await page.waitForSelector('#pd-submissions .pd-submission', { timeout: 5000 });
+      ok('刪除 is not offered once the project has a submission', !(await page.$('#pd-delete-btn')));
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN });
+
+  // Exercise the 409 fallback message directly against the real endpoint
+  // shape (a submission landing between the button render and the click).
+  const m2 = pickFakeWorker({ ownerName: 'Eli', ownerKey: 'ELI-KEY' });
+  await suite('admin — 刪除 409 has_submissions shows 請改用封存',
+    `${base}/admin.html`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('[data-open-project]', { timeout: 5000 });
+      await page.click('[data-open-project]');
+      await page.waitForSelector('#pd-delete-btn', { timeout: 5000 });
+      // race a submission in right before the delete lands, like the real
+      // Worker's own gate re-check
+      m2.state.submissions.push({
+        id: 's1', picker_id: 'picker-0', relationship: '本人', email: null,
+        photo_keys: ['20260819/p0.jpg'], count: 1, pick_limit: null, extra_price: null,
+        created_at: '2026-01-01T00:00:00Z', notified: 1,
+      });
+      page.once('dialog', d => d.accept());
+      await page.click('#pd-delete-btn');
+      await page.waitForSelector('#pd-action-err:not(:empty)', { timeout: 5000 });
+      const errText = await page.textContent('#pd-action-err');
+      ok('shows the 已有送出紀錄，無法刪除，請改用封存 fallback', errText.includes('已有送出紀錄，無法刪除，請改用封存'), errText);
+      ok('the panel stays open (delete did not go through)',
+        await page.evaluate(() => getComputedStyle(document.getElementById('project-detail-panel')).display !== 'none'));
+      return out;
+    },
+    { before: m2.attach, initScript: ADMIN });
+}
 
 await browser.close();
 server.close();
