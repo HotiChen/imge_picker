@@ -22,6 +22,8 @@ const OTHER_ROUTES = p => [
   ['POST', '/api/admin/projects', { folders: [MINE] }],
   ['GET', `/api/admin/projects/${p.project.id}`],
   ['POST', `/api/admin/projects/${p.project.id}/reset-seat`],
+  ['POST', `/api/admin/projects/${p.project.id}/start-retouch`],
+  ['POST', `/api/admin/projects/${p.project.id}/reopen`],
   ['GET', '/api/shares/minted'],
   ['POST', '/api/shares/minted/revoke-all'],
   ['POST', `/api/shares/${p.token}/revoke`],

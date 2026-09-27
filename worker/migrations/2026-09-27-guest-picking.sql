@@ -13,7 +13,10 @@ CREATE TABLE IF NOT EXISTS projects (
   extra_price     INTEGER,
   owner_picker_id TEXT,
   created_at      TEXT NOT NULL,
-  photographer_id TEXT NOT NULL DEFAULT 'default'
+  photographer_id TEXT NOT NULL DEFAULT 'default',
+  phase           TEXT NOT NULL DEFAULT 'picking'
+                  CHECK (phase IN ('picking','submitted','retouching')),
+  modified_after_submit INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS pickers (
@@ -24,9 +27,7 @@ CREATE TABLE IF NOT EXISTS pickers (
   relationship TEXT,
   email        TEXT,
   user_id      INTEGER,
-  created_at   TEXT NOT NULL,
-  submitted_at TEXT,
-  submit_count INTEGER, submit_limit INTEGER, submit_price INTEGER
+  created_at   TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS selections (
@@ -38,6 +39,20 @@ CREATE TABLE IF NOT EXISTS selections (
   updated_at TEXT NOT NULL,
   PRIMARY KEY (project_id, photo_key)
 );
+
+CREATE TABLE IF NOT EXISTS submissions (
+  id           TEXT PRIMARY KEY,
+  project_id   TEXT NOT NULL,
+  picker_id    TEXT NOT NULL,
+  relationship TEXT NOT NULL,
+  email        TEXT,
+  photo_keys   TEXT NOT NULL,             -- JSON array, rating >= 1, key order
+  count        INTEGER NOT NULL,
+  pick_limit   INTEGER,                   -- the plan as it stood at submit
+  extra_price  INTEGER,
+  created_at   TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_submissions_project ON submissions(project_id, created_at);
 
 CREATE TABLE IF NOT EXISTS project_members (
   project_id  TEXT NOT NULL,

@@ -52,16 +52,19 @@ test('a submit records the count, limit and price as they stood', async () => {
   const picker = one(env, 'SELECT * FROM pickers');
   assert.equal(picker.relationship, '伴侶');
   assert.equal(picker.email, 'a@b.tw');
-  assert.equal(picker.submit_count, 3);
-  assert.equal(picker.submit_limit, 40);
-  assert.equal(picker.submit_price, 200);
-  assert.ok(picker.submitted_at);
+  const record = one(env, 'SELECT * FROM submissions');
+  assert.equal(record.relationship, '伴侶');
+  assert.equal(record.email, 'a@b.tw');
+  assert.equal(record.count, 3);
+  assert.equal(record.pick_limit, 40);
+  assert.equal(record.extra_price, 200);
+  assert.ok(record.created_at);
 
   // a snapshot: the photographer changing the plan later does not rewrite it
   env.DB._db.prepare('UPDATE projects SET pick_limit = 10, extra_price = 999').run();
-  const after = one(env, 'SELECT * FROM pickers');
-  assert.equal(after.submit_limit, 40);
-  assert.equal(after.submit_price, 200);
+  const after = one(env, 'SELECT * FROM submissions');
+  assert.equal(after.pick_limit, 40);
+  assert.equal(after.extra_price, 200);
 });
 
 test('over the limit is a warning, never a block', async () => {
@@ -72,7 +75,7 @@ test('over the limit is a warning, never a block', async () => {
   assert.equal(res.status, 200);
   assert.equal(json.count, 5);
   assert.equal(json.over, 3);
-  assert.equal(one(env, 'SELECT submit_count FROM pickers').submit_count, 5);
+  assert.equal(one(env, 'SELECT count FROM submissions').count, 5);
 });
 
 test('exactly at the limit is not over it', async () => {
@@ -89,10 +92,10 @@ test('with no limit nothing is ever over, and the snapshot says NULL', async () 
   const { json } = await submit(env, p, { relationship: '家人' });
   assert.equal(json.limit, null);
   assert.equal(json.over, 0);
-  const picker = one(env, 'SELECT * FROM pickers');
-  assert.equal(picker.submit_limit, null);
-  assert.equal(picker.submit_price, null);
-  assert.equal(picker.email, null, 'email is optional');
+  const record = one(env, 'SELECT * FROM submissions');
+  assert.equal(record.pick_limit, null);
+  assert.equal(record.extra_price, null);
+  assert.equal(record.email, null, 'email is optional');
 });
 
 test('only photos with at least one star are counted as picked', async () => {
@@ -104,7 +107,7 @@ test('only photos with at least one star are counted as picked', async () => {
   assert.equal((await submit(env, p, { relationship: '本人' })).json.count, 1);
 });
 
-test('a later submit replaces the record with the new count', async () => {
+test('a later submit adds a record with the new count', async () => {
   const env = mailEnv();
   const p = await claimed(env, { pick_limit: 10 });
   await picks(env, p, 2);
@@ -112,9 +115,9 @@ test('a later submit replaces the record with the new count', async () => {
   await picks(env, p, 4);
   const { json } = await submit(env, p, { relationship: '朋友' });
   assert.equal(json.count, 4);
-  const picker = one(env, 'SELECT * FROM pickers');
-  assert.equal(picker.submit_count, 4);
-  assert.equal(picker.relationship, '朋友');
+  const records = rows(env, 'SELECT * FROM submissions ORDER BY rowid');
+  assert.deepEqual(records.map(r => r.count), [2, 4]);
+  assert.equal(one(env, 'SELECT relationship FROM pickers').relationship, '朋友');
 });
 
 // ─── Rule 7: relationship and email ──────────────────────────────────────────
@@ -126,7 +129,7 @@ test('relationship is required and must be one of the five', async () => {
     const { res } = await submit(env, p, body);
     assert.equal(res.status, 400, JSON.stringify(body));
   }
-  assert.equal(one(env, 'SELECT submitted_at FROM pickers').submitted_at, null);
+  assert.equal(rows(env, 'SELECT * FROM submissions').length, 0);
   for (const relationship of RELATIONSHIPS) {
     assert.equal((await submit(env, p, { relationship })).res.status, 200, relationship);
   }
@@ -140,10 +143,11 @@ test('email is at most 254 characters and must look like an address', async () =
     const { res } = await submit(env, p, { relationship: '本人', email });
     assert.equal(res.status, 400, JSON.stringify(email));
   }
-  assert.equal(one(env, 'SELECT submitted_at FROM pickers').submitted_at, null);
+  assert.equal(rows(env, 'SELECT * FROM submissions').length, 0);
   assert.equal((await submit(env, p, { relationship: '本人', email: at254 })).res.status, 200);
   assert.equal((await submit(env, p, { relationship: '本人', email: '' })).res.status, 200);
   assert.equal(one(env, 'SELECT email FROM pickers').email, null, 'blank is no email');
+  assert.equal(one(env, 'SELECT email FROM submissions ORDER BY rowid DESC').email, null);
 });
 
 // ─── Rules 4 and 5 ───────────────────────────────────────────────────────────
@@ -158,7 +162,7 @@ test('no key, a wrong key, or a key from before a reset cannot submit', async ()
   assert.equal((await submit(env, p, { relationship: '本人' })).res.status, 403);
   await claim(env, p.token, '新的人');
   assert.equal((await submit(env, p, { relationship: '本人' })).res.status, 403);
-  assert.equal(rows(env, 'SELECT * FROM pickers WHERE submitted_at IS NOT NULL').length, 0);
+  assert.equal(rows(env, 'SELECT * FROM submissions').length, 0);
   assert.equal(env.NOTIFY_EMAIL.sent.length, 0);
 });
 
@@ -169,7 +173,7 @@ test('a revoked or expired link cannot submit', async () => {
   assert.equal((await submit(env, { ...p, token: 'EXP' }, { relationship: '本人' })).res.status, 401);
   env.DB._db.prepare('UPDATE share_tokens SET revoked_at = ? WHERE token = ?').run(days(-0.1), p.token);
   assert.equal((await submit(env, p, { relationship: '本人' })).res.status, 401);
-  assert.equal(one(env, 'SELECT submitted_at FROM pickers').submitted_at, null);
+  assert.equal(rows(env, 'SELECT * FROM submissions').length, 0);
   assert.equal(env.NOTIFY_EMAIL.sent.length, 0);
 });
 
@@ -245,7 +249,7 @@ test('a mailer that throws does not fail the submit', async () => {
   const { res, json } = await submit(env, p, { relationship: '本人' });
   assert.equal(res.status, 200);
   assert.equal(json.count, 2);
-  assert.ok(one(env, 'SELECT submitted_at FROM pickers').submitted_at);
+  assert.equal(rows(env, 'SELECT * FROM submissions').length, 1);
 });
 
 test('a mailer that throws synchronously does not fail the submit either', async () => {
@@ -288,10 +292,10 @@ test('a seat reset that lands between the owner check and the submit still wins'
   const p = await claimed(env);
   const prepare = env.DB.prepare.bind(env.DB);
   env.DB.prepare = sql => {
-    if (/^\s*UPDATE pickers/i.test(sql)) env.DB._db.prepare('UPDATE projects SET owner_picker_id = NULL').run();
+    if (/^\s*INSERT INTO submissions/i.test(sql)) env.DB._db.prepare('UPDATE projects SET owner_picker_id = NULL').run();
     return prepare(sql);
   };
   assert.equal((await submit(env, p, { relationship: '本人' })).res.status, 403);
-  assert.equal(one(env, 'SELECT submitted_at FROM pickers').submitted_at, null);
+  assert.equal(rows(env, 'SELECT * FROM submissions').length, 0);
   assert.equal(env.NOTIFY_EMAIL.sent.length, 0);
 });

@@ -111,10 +111,11 @@ test('the photographer sees the seat holder, the submit record and who set each 
   assert.equal(out.owner.name, '<b>王</b>小明', 'raw in JSON; the admin page escapes on render');
   assert.equal(out.owner.relationship, '本人');
   assert.equal(out.owner.email, 'a@b.tw');
-  assert.equal(out.owner.submit_count, 1);
-  assert.equal(out.owner.submit_limit, 40);
-  assert.equal(out.owner.submit_price, 200);
-  assert.ok(out.owner.submitted_at);
+  assert.equal(out.submissions.length, 1);
+  assert.equal(out.submissions[0].count, 1);
+  assert.equal(out.submissions[0].pick_limit, 40);
+  assert.equal(out.submissions[0].extra_price, 200);
+  assert.ok(out.submissions[0].created_at);
   assert.equal(out.selections.length, 1);
   assert.equal(out.selections[0].photo_key, '20260819/a.jpg');
   assert.equal(out.selections[0].note, '<i>放大</i>');
@@ -202,7 +203,7 @@ test('the migration file turns a deployed database into exactly what schema.sql 
   assert.doesNotMatch(deployed, /project_id|CREATE TABLE IF NOT EXISTS projects/, 'fixture still has the new schema');
   const migrated = fakeDB({ schema: deployed + '\n' + migration });
   const created = fakeDB({ schema: fresh });
-  const shape = db => ['share_tokens', 'projects', 'pickers', 'selections', 'project_members']
+  const shape = db => ['share_tokens', 'projects', 'pickers', 'selections', 'project_members', 'submissions']
     .map(t => [t, db._db.prepare(`PRAGMA table_info(${t})`).all()]);
   assert.deepEqual(shape(migrated), shape(created));
   // table_info cannot see a CHECK, so the role constraint is tried directly

@@ -352,6 +352,10 @@ const PICK_NOTE_MAX = 500;
 const PICK_KEYS_MAX = 500;
 const PICK_RATING_MAX = 5;
 const PICK_RELATIONSHIPS = ['本人', '伴侶', '家人', '朋友', '其他'];
+// The phases in which the owner may still save and submit. 'retouching' is the
+// photographer's; only the admin reopen route leaves it.
+const PICK_OPEN_PHASES = ['picking', 'submitted'];
+const PICK_OPEN_SQL = "('picking', 'submitted')";
 // One photographer today. Written by the Worker on every project so the data
 // is attributable from day one; a request body never chooses it.
 const DEFAULT_PHOTOGRAPHER_ID = 'default';
@@ -415,6 +419,19 @@ async function resolvePick(share, request, env) {
   return { project, picker, isOwner };
 }
 
+// 409 for a project the photographer has started retouching.
+function pickRetouching() {
+  return jsonOk({ error: '攝影師已開始修圖，無法再修改或送出', code: 'retouching' }, 409);
+}
+
+// A conditional write that changed nothing: either the phase moved to
+// retouching or the seat moved, since the checks before it. Re-read to say which.
+async function pickRefused(env, projectId, notOwner) {
+  const now = await env.DB.prepare('SELECT phase FROM projects WHERE id = ?').bind(projectId).first();
+  if (now && !PICK_OPEN_PHASES.includes(now.phase)) return pickRetouching();
+  return jsonErr(notOwner, 403);
+}
+
 async function pickOwnerName(env, projectId) {
   const row = await env.DB.prepare(
     'SELECT pk.name FROM projects p JOIN pickers pk ON pk.id = p.owner_picker_id WHERE p.id = ?'
@@ -430,35 +447,66 @@ function pickOverText(count, limit, price) {
     (price != null ? `，每張 NT$${price} 加挑費` : '');
 }
 
+// A submissions.photo_keys column back as an array; [] if it will not parse.
+function parsePhotoKeys(json) {
+  try {
+    const v = JSON.parse(json);
+    return Array.isArray(v) ? v : [];
+  } catch { return []; }
+}
+
+// What changed between two submissions, as photo keys. null when there is no
+// earlier submission to compare with.
+function pickDiff(current, previous) {
+  if (!previous) return null;
+  const now = new Set(current);
+  const before = new Set(previous);
+  return {
+    added: current.filter(k => !before.has(k)),
+    removed: previous.filter(k => !now.has(k)),
+  };
+}
+
 // Tells the photographer a guest submitted. Isolated so the transport can
 // change (Cloudflare send_email now, Resend later) without touching the route.
-// Everything the guest typed is escaped for the HTML part, and the subject is
-// forced onto one line. Missing configuration is a logged skip, not an error:
-// the submit is the guest's, and it must land whether or not mail is set up.
-async function sendPickNotification(env, project, picker) {
+// Everything the guest typed or picked is escaped for the HTML part, and the
+// subject is forced onto one line. Missing configuration is a logged skip, not
+// an error: the submit is the guest's, and it must land whether or not mail is
+// set up. `submission` is the row just written; `previous` the one before it
+// for this project (whoever made it), or null.
+async function sendPickNotification(env, project, picker, submission, previous) {
   if (!env.NOTIFY_EMAIL || !env.PHOTOGRAPHER_EMAIL) {
     console.warn('pick notification skipped: NOTIFY_EMAIL or PHOTOGRAPHER_EMAIL is not configured');
     return false;
   }
-  const count = picker.submit_count ?? 0;
-  const limit = picker.submit_limit;
-  const price = picker.submit_price;
+  const count = submission.count ?? 0;
+  const limit = submission.pick_limit;
+  const price = submission.extra_price;
   const title = project.title || '未命名專案';
   const fields = [
     ['專案', title],
     ['挑選人', picker.name],
-    ['關係', picker.relationship],
-    ['Email', picker.email || '（未填）'],
+    ['關係', submission.relationship],
+    ['Email', submission.email || '（未填）'],
     ['已選', `${count} 張`],
     ['方案', limit == null ? '不限張數' : `${limit} 張`],
   ];
   if (price != null) fields.push(['加挑單價', `NT$${price}`]);
   const warning = pickOverText(count, limit, price);
+  const diff = pickDiff(submission.photo_keys, previous?.photo_keys);
+  // [heading, keys] per non-empty side; a resubmit that changed nothing says so
+  const lists = diff ? [['新增', diff.added], ['移除', diff.removed]].filter(([, keys]) => keys.length) : [];
+  const same = diff && !lists.length ? '與上次相同' : '';
   const subject = `[選片完成] ${title} — ${picker.name}`.replace(/[\r\n]+/g, ' ');
-  const text = fields.map(([k, v]) => `${k}：${v}`).join('\n') + (warning ? `\n\n${warning}` : '');
+  const text = fields.map(([k, v]) => `${k}：${v}`).join('\n') + (warning ? `\n\n${warning}` : '') +
+    lists.map(([h, keys]) => `\n\n${h} ${keys.length} 張：\n` + keys.join('\n')).join('') +
+    (same ? `\n\n${same}` : '');
   const html = '<table>' +
     fields.map(([k, v]) => `<tr><th align="left">${escapeHtml(k)}</th><td>${escapeHtml(v)}</td></tr>`).join('') +
-    '</table>' + (warning ? `<p><strong>${escapeHtml(warning)}</strong></p>` : '');
+    '</table>' + (warning ? `<p><strong>${escapeHtml(warning)}</strong></p>` : '') +
+    lists.map(([h, keys]) => `<h3>${escapeHtml(h)} ${keys.length} 張</h3><ul>` +
+      keys.map(k => `<li>${escapeHtml(k)}</li>`).join('') + '</ul>').join('') +
+    (same ? `<p>${escapeHtml(same)}</p>` : '');
   await env.NOTIFY_EMAIL.send({
     to: env.PHOTOGRAPHER_EMAIL,
     from: env.NOTIFY_FROM || env.PHOTOGRAPHER_EMAIL,
@@ -862,8 +910,14 @@ export default {
       // key_hash is left out by name: it is the one column here that is a
       // credential's stand-in
       const { results: pickers } = await env.DB.prepare(
-        'SELECT id, name, relationship, email, user_id, created_at, submitted_at, submit_count, submit_limit, submit_price FROM pickers WHERE project_id = ? ORDER BY created_at'
+        'SELECT id, name, relationship, email, user_id, created_at FROM pickers WHERE project_id = ? ORDER BY created_at'
       ).bind(project.id).all();
+      // newest first; rowid breaks a tie inside one millisecond, since rows
+      // are only ever appended
+      const { results: submitted } = await env.DB.prepare(
+        'SELECT id, picker_id, relationship, email, photo_keys, count, pick_limit, extra_price, created_at FROM submissions WHERE project_id = ? ORDER BY created_at DESC, rowid DESC'
+      ).bind(project.id).all();
+      const submissions = submitted.map(r => ({ ...r, photo_keys: parsePhotoKeys(r.photo_keys) }));
       const { results: selections } = await env.DB.prepare(
         'SELECT photo_key, rating, note, updated_by, updated_at FROM selections WHERE project_id = ? ORDER BY photo_key'
       ).bind(project.id).all();
@@ -875,7 +929,7 @@ export default {
       return jsonOk({
         project: { ...project, folders },
         owner: pickers.find(p => p.id === project.owner_picker_id) || null,
-        pickers, selections, tokens,
+        pickers, selections, tokens, submissions,
       }, 200, ADMIN_ONLY_HEADERS);
     }
 
@@ -888,6 +942,34 @@ export default {
         .bind(pathParts[3]).run();
       if (!result.meta?.changes) return jsonErr('Not found', 404);
       return jsonOk({ ok: true });
+    }
+
+    // POST /api/admin/projects/:id/start-retouch — the photographer starts
+    // work on what was submitted; from here the guest's saves and submits are
+    // refused. Only from 'submitted' (a second press is a no-op): from
+    // 'picking' there is nothing to retouch yet.
+    // POST /api/admin/projects/:id/reopen — back to 'picking', from either
+    // later phase, so the guest can change their picks again. Submissions stay.
+    if (request.method === 'POST' && pathParts[0] === 'api' && pathParts[1] === 'admin' && pathParts[2] === 'projects' && pathParts[3] && !pathParts[5] &&
+        (pathParts[4] === 'start-retouch' || pathParts[4] === 'reopen')) {
+      if (!isAdminToken(request, env)) return jsonErr('Unauthorized', 401);
+      if (!env.DB) return jsonErr('DB not configured', 500);
+      const id = pathParts[3];
+      // each is one conditional UPDATE, so it cannot interleave with a save
+      // or a submit: those re-check the phase inside their own writes
+      const moved = pathParts[4] === 'start-retouch'
+        ? await env.DB.prepare(
+          "UPDATE projects SET phase = 'retouching' WHERE id = ? AND phase IN ('submitted', 'retouching')"
+        ).bind(id).run()
+        : await env.DB.prepare(
+          "UPDATE projects SET phase = 'picking', modified_after_submit = 0 WHERE id = ?"
+        ).bind(id).run();
+      if (!moved.meta?.changes) {
+        const exists = await env.DB.prepare('SELECT phase FROM projects WHERE id = ?').bind(id).first();
+        if (!exists) return jsonErr('Not found', 404);
+        return jsonOk({ error: '客人尚未送出，無法開始修圖', code: 'not_submitted', phase: exists.phase }, 409);
+      }
+      return jsonOk({ ok: true, phase: pathParts[4] === 'start-retouch' ? 'retouching' : 'picking' });
     }
 
     // GET /api/shares/minted — the studio and client-session tokens that are
@@ -949,12 +1031,19 @@ export default {
         const { results: selections } = await env.DB.prepare(
           'SELECT photo_key, rating, note FROM selections WHERE project_id = ? ORDER BY photo_key'
         ).bind(project.id).all();
+        // the owner learns when the project was last submitted and whether they
+        // changed anything since; a viewer only which phase it is in
+        const last = isOwner ? await env.DB.prepare(
+          'SELECT created_at FROM submissions WHERE project_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1'
+        ).bind(project.id).first() : null;
         return jsonOk({
           project: { id: project.id, title: project.title, pick_limit: project.pick_limit, extra_price: project.extra_price },
           folders: s.folders,
           owner: await pickOwnerName(env, project.id),
           is_owner: isOwner,
-          submitted_at: isOwner ? picker.submitted_at : null,
+          phase: project.phase,
+          ...(isOwner ? { modified_after_submit: project.modified_after_submit } : {}),
+          submitted_at: last ? last.created_at : null,
           selections,
         }, 200, SHARED_LINK_HEADERS);
       }
@@ -987,6 +1076,7 @@ export default {
       // PUT /api/pick/selections {upsert: [{photo_key, rating, note}], delete: [photo_key]}
       if (request.method === 'PUT' && route === 'selections') {
         if (!isOwner) return jsonErr('只有挑選人可以修改', 403);
+        if (!PICK_OPEN_PHASES.includes(project.phase)) return pickRetouching();
         let body;
         try { body = await request.json(); } catch { return jsonErr('Invalid JSON'); }
         if (!body || typeof body !== 'object' || Array.isArray(body)) return jsonErr('Invalid body');
@@ -1010,30 +1100,42 @@ export default {
           if (typeof k !== 'string') return jsonErr('Invalid item');
           if (!pickKeyAllowed(s, k)) return jsonErr('照片不在開放資料夾內', 403);
         }
+        if (!items.length && !remove.length) return jsonOk({ ok: true });
         // One statement per direction however many photos, because D1 caps the
-        // queries one invocation may run. Each re-checks the seat in the same
-        // statement, so a reset that lands after the check above still wins.
-        const seat = 'EXISTS (SELECT 1 FROM projects WHERE id = ? AND owner_picker_id = ?)';
+        // queries one invocation may run. They go as one batch, which D1 runs
+        // as a transaction, and every statement re-checks the seat and the
+        // phase itself: a seat reset or a start-retouch that lands after the
+        // checks above still wins, and wins for the whole save. The first
+        // statement is the gate: it raises modified_after_submit when the
+        // project was already submitted, and its row count says whether the
+        // save was allowed at all.
+        const gate = `EXISTS (SELECT 1 FROM projects WHERE id = ? AND owner_picker_id = ? AND phase IN ${PICK_OPEN_SQL})`;
+        const writes = [env.DB.prepare(
+          "UPDATE projects SET modified_after_submit = CASE WHEN phase = 'submitted' THEN 1 ELSE modified_after_submit END " +
+          `WHERE id = ? AND owner_picker_id = ? AND phase IN ${PICK_OPEN_SQL}`
+        ).bind(project.id, picker.id)];
         if (items.length) {
-          const wrote = await env.DB.prepare(
+          writes.push(env.DB.prepare(
             'INSERT INTO selections (project_id, photo_key, rating, note, updated_by, updated_at) ' +
             "SELECT ?, json_extract(value, '$.k'), json_extract(value, '$.r'), json_extract(value, '$.n'), ?, ? " +
-            `FROM json_each(?) WHERE ${seat} ` +
+            `FROM json_each(?) WHERE ${gate} ` +
             'ON CONFLICT(project_id, photo_key) DO UPDATE SET rating = excluded.rating, note = excluded.note, updated_by = excluded.updated_by, updated_at = excluded.updated_at'
-          ).bind(project.id, picker.id, new Date().toISOString(), JSON.stringify(items), project.id, picker.id).run();
-          if (!wrote.meta?.changes) return jsonErr('只有挑選人可以修改', 403);
+          ).bind(project.id, picker.id, new Date().toISOString(), JSON.stringify(items), project.id, picker.id));
         }
         if (remove.length) {
-          await env.DB.prepare(
-            `DELETE FROM selections WHERE project_id = ? AND photo_key IN (SELECT value FROM json_each(?)) AND ${seat}`
-          ).bind(project.id, JSON.stringify(remove), project.id, picker.id).run();
+          writes.push(env.DB.prepare(
+            `DELETE FROM selections WHERE project_id = ? AND photo_key IN (SELECT value FROM json_each(?)) AND ${gate}`
+          ).bind(project.id, JSON.stringify(remove), project.id, picker.id));
         }
+        const [allowed] = await env.DB.batch(writes);
+        if (!allowed.meta?.changes) return pickRefused(env, project.id, '只有挑選人可以修改');
         return jsonOk({ ok: true });
       }
 
       // POST /api/pick/submit {relationship, email?}
       if (request.method === 'POST' && route === 'submit') {
         if (!isOwner) return jsonErr('只有挑選人可以送出', 403);
+        if (!PICK_OPEN_PHASES.includes(project.phase)) return pickRetouching();
         let body;
         try { body = await request.json(); } catch { return jsonErr('Invalid JSON'); }
         const { relationship, email } = (body && typeof body === 'object') ? body : {};
@@ -1047,33 +1149,45 @@ export default {
             mail = trimmed;
           }
         }
-        // picked = at least one star, the same thing the grid counts
-        const counted = await env.DB.prepare(
-          'SELECT COUNT(*) AS n FROM selections WHERE project_id = ? AND rating > 0'
-        ).bind(project.id).first();
-        const count = counted?.n ?? 0;
+        // One transaction, every statement conditional on the seat and the
+        // phase. The snapshot is read inside the INSERT itself — picked = at
+        // least one star, the same thing the grid counts — together with the
+        // limit and price as they stand now: the record any extra-photo fee is
+        // charged from, which a later change to the plan must not rewrite.
+        const submissionId = crypto.randomUUID();
         const submittedAt = new Date().toISOString();
-        // the limit and price as they stand now: the record any extra-photo fee
-        // is charged from, which a later change to the plan must not rewrite
-        const done = await env.DB.prepare(
-          'UPDATE pickers SET relationship = ?, email = ?, submitted_at = ?, submit_count = ?, submit_limit = ?, submit_price = ? ' +
-          'WHERE id = ? AND id = (SELECT owner_picker_id FROM projects WHERE id = ?)'
-        ).bind(relationship, mail, submittedAt, count, project.pick_limit, project.extra_price, picker.id, project.id).run();
-        if (!done.meta?.changes) return jsonErr('只有挑選人可以送出', 403);
-        const record = {
-          ...picker, relationship, email: mail, submitted_at: submittedAt,
-          submit_count: count, submit_limit: project.pick_limit, submit_price: project.extra_price,
-        };
+        const open = `owner_picker_id = ? AND phase IN ${PICK_OPEN_SQL}`;
+        const picked = 'SELECT photo_key FROM selections WHERE project_id = p.id AND rating > 0 ORDER BY photo_key';
+        const [inserted] = await env.DB.batch([
+          env.DB.prepare(
+            'INSERT INTO submissions (id, project_id, picker_id, relationship, email, photo_keys, count, pick_limit, extra_price, created_at) ' +
+            `SELECT ?, p.id, ?, ?, ?, (SELECT json_group_array(photo_key) FROM (${picked})), (SELECT COUNT(*) FROM (${picked})), ` +
+            `p.pick_limit, p.extra_price, ? FROM projects p WHERE p.id = ? AND p.owner_picker_id = ? AND p.phase IN ${PICK_OPEN_SQL}`
+          ).bind(submissionId, picker.id, relationship, mail, submittedAt, project.id, picker.id),
+          // the latest contact info stays on the picker
+          env.DB.prepare(
+            `UPDATE pickers SET relationship = ?, email = ? WHERE id = ? AND EXISTS (SELECT 1 FROM projects WHERE id = ? AND ${open})`
+          ).bind(relationship, mail, picker.id, project.id, picker.id),
+          env.DB.prepare(
+            `UPDATE projects SET phase = 'submitted', modified_after_submit = 0 WHERE id = ? AND ${open}`
+          ).bind(project.id, picker.id),
+        ]);
+        if (!inserted.meta?.changes) return pickRefused(env, project.id, '只有挑選人可以送出');
+        // this row and the one before it, by insertion order, for the diff
+        const { results: lastTwo } = await env.DB.prepare(
+          'SELECT * FROM submissions WHERE project_id = ? AND rowid <= (SELECT rowid FROM submissions WHERE id = ?) ORDER BY rowid DESC LIMIT 2'
+        ).bind(project.id, submissionId).all();
+        const [record, previous] = lastTwo.map(r => ({ ...r, photo_keys: parsePhotoKeys(r.photo_keys) }));
         // the guest is not kept waiting on a mail server, and a mail server
         // that fails does not take the submit down with it
         const notify = Promise.resolve()
-          .then(() => sendPickNotification(env, project, record))
+          .then(() => sendPickNotification(env, project, picker, record, previous || null))
           .catch(e => console.error('pick notification failed:', e?.message || e));
         if (ctx?.waitUntil) ctx.waitUntil(notify); else await notify;
-        const limit = project.pick_limit;
+        const { count, pick_limit: limit, extra_price: price } = record;
         return jsonOk({
-          ok: true, submitted_at: submittedAt, count, limit, price: project.extra_price,
-          over: limit == null ? 0 : Math.max(0, count - limit),
+          ok: true, phase: 'submitted', submission_id: submissionId, submitted_at: submittedAt,
+          count, limit, price, over: limit == null ? 0 : Math.max(0, count - limit),
         });
       }
 

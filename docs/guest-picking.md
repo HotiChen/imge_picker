@@ -24,10 +24,39 @@ browser. This replaces the fake `submitJob()` in `js/app.js`.
   **optional**. Email is contact info only, never an identity key.
 - Over the plan's limit: warn, do not block —
   「方案 40 張精修，您已選 50 張，多 10 張，每張 NT$xxx 加挑費」.
-  Submit snapshots `pick_limit`, `extra_price`, and the count, as the record
-  the fee is charged from.
+- **Phases** (`projects.phase`): `picking` → `submitted` → `retouching`,
+  default `picking`.
+  - The owner saves in `picking` and `submitted`. A save while `submitted`
+    sets `projects.modified_after_submit = 1` and sends **no** email.
+  - Submit is allowed from `picking` or `submitted`: phase becomes
+    `submitted`, `modified_after_submit = 0`, email sent.
+  - In `retouching`, save and submit are refused with **409**
+    `{code: 'retouching'}` — also for a malformed request; a non-owner still
+    gets 403 first.
+  - The seat and phase checks live **inside** the writes: a save (gate
+    `UPDATE projects` + upsert + delete) and a submit (`INSERT submissions` +
+    `UPDATE pickers` + `UPDATE projects`) each go as one D1 `batch()`
+    (a transaction), every statement conditional on
+    `owner_picker_id = me AND phase IN ('picking','submitted')`. A seat reset
+    or start-retouch that lands after the route's reads still wins.
+  - Only admin routes move the phase otherwise: `start-retouch`
+    (`submitted` → `retouching`; from `picking` → 409 `not_submitted`; a
+    second press is a no-op 200) and `reopen` (`submitted`/`retouching` →
+    `picking`, clears `modified_after_submit`; already `picking` is a no-op 200).
+    `start-retouch` keeps `modified_after_submit` so the photographer sees
+    unsubmitted changes.
+  - `reset-seat` keeps the phase and every submission.
+- **Every submit appends a row to `submissions`** and nothing ever updates or
+  deletes one: the picker, relationship, email, the snapshot of photo keys
+  with rating ≥ 1 (JSON, key order), the count, and `pick_limit` /
+  `extra_price` as they stood — the record the fee is charged from. The
+  snapshot is read inside the same conditional `INSERT`. `pickers` keeps only
+  the latest relationship/email as contact info.
 - Photographer is notified by **email** on submit (send function isolated so
-  the transport can change: Cloudflare `send_email` now, Resend later).
+  the transport can change: Cloudflare `send_email` now, Resend later). From
+  the second submit on, the email lists the photo keys **added** and
+  **removed** since the previous submission of the project (whoever made it),
+  or says 與上次相同; every key is HTML-escaped.
 - Invites (editor / viewer) require the owner to be registered. **Deferred**;
   the schema allows it.
 - Holding the seat ≠ account-level ownership. Long-term storage and
@@ -36,7 +65,7 @@ browser. This replaces the fake `submitJob()` in `js/app.js`.
   `project_members`.** Only an admin route may.
 - The old registered-client + `users.folder_path` flow stays as is.
 
-## Schema (append-only migration)
+## Schema (migration not yet run in production; edited in place)
 
 ```sql
 CREATE TABLE IF NOT EXISTS projects (
@@ -47,7 +76,10 @@ CREATE TABLE IF NOT EXISTS projects (
   extra_price     INTEGER,                -- NT$ per extra photo, NULL = not shown
   owner_picker_id TEXT,                   -- NULL = seat free
   created_at      TEXT NOT NULL,
-  photographer_id TEXT NOT NULL DEFAULT 'default'  -- set server-side, never from the body
+  photographer_id TEXT NOT NULL DEFAULT 'default', -- set server-side, never from the body
+  phase           TEXT NOT NULL DEFAULT 'picking'
+                  CHECK (phase IN ('picking','submitted','retouching')),
+  modified_after_submit INTEGER NOT NULL DEFAULT 0 -- 1 = saved since last submit
 );
 CREATE TABLE IF NOT EXISTS pickers (
   id           TEXT PRIMARY KEY,
@@ -57,10 +89,21 @@ CREATE TABLE IF NOT EXISTS pickers (
   relationship TEXT,
   email        TEXT,
   user_id      INTEGER,
-  created_at   TEXT NOT NULL,
-  submitted_at TEXT,
-  submit_count INTEGER, submit_limit INTEGER, submit_price INTEGER
+  created_at   TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS submissions (       -- append-only, one row per submit
+  id           TEXT PRIMARY KEY,
+  project_id   TEXT NOT NULL,
+  picker_id    TEXT NOT NULL,
+  relationship TEXT NOT NULL,
+  email        TEXT,
+  photo_keys   TEXT NOT NULL,             -- JSON array, rating >= 1, key order
+  count        INTEGER NOT NULL,
+  pick_limit   INTEGER,                   -- plan as it stood at submit
+  extra_price  INTEGER,
+  created_at   TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_submissions_project ON submissions(project_id, created_at);
 CREATE TABLE IF NOT EXISTS selections (
   project_id TEXT NOT NULL,
   photo_key  TEXT NOT NULL,
@@ -85,12 +128,17 @@ ALTER TABLE share_tokens ADD COLUMN project_id TEXT;
 | Route | Auth | Purpose |
 |---|---|---|
 | `POST /api/admin/projects` | admin | create project + mint pick link |
-| `GET /api/admin/projects/:id` | admin | owner, submit record, selections with `updated_by` |
-| `POST /api/admin/projects/:id/reset-seat` | admin | free the seat (selections kept) |
-| `GET /api/pick/state` | pick token (+ key) | owner name, am-I-owner, limit/price, selections |
+| `GET /api/admin/projects/:id` | admin | project incl. `phase`, `modified_after_submit`; owner, pickers, selections with `updated_by`, tokens, `submissions` newest first (`photo_keys` parsed) |
+| `POST /api/admin/projects/:id/reset-seat` | admin | free the seat (selections, phase, submissions kept) |
+| `POST /api/admin/projects/:id/start-retouch` | admin | `submitted` → `retouching`; 409 `not_submitted` from `picking` |
+| `POST /api/admin/projects/:id/reopen` | admin | `submitted`/`retouching` → `picking`, flag cleared |
+| `GET /api/pick/state` | pick token (+ key) | owner name, am-I-owner, limit/price, selections, `phase`; owner also gets `modified_after_submit` and `submitted_at` (latest submission) |
 | `POST /api/pick/claim` `{name}` | pick token | atomic claim → `picker_key` |
-| `PUT /api/pick/selections` | token + key, owner only | batch upsert/delete |
-| `POST /api/pick/submit` `{relationship, email?}` | token + key, owner only | record + email |
+| `PUT /api/pick/selections` | token + key, owner only | batch upsert/delete; 409 `retouching`; raises the flag when `submitted` |
+| `POST /api/pick/submit` `{relationship, email?}` | token + key, owner only | append `submissions` row, phase → `submitted`, email with diff; 409 `retouching` |
+
+Admin routes check `isAdminToken` (the photographer token only; fails closed
+when unset). Pick, client, session and studio tokens are refused.
 
 ## Rules the tests must pin
 
@@ -105,3 +153,5 @@ ALTER TABLE share_tokens ADD COLUMN project_id TEXT;
 8. Admin pages and the notification email escape every guest-supplied string.
 9. `kind = 'pick'` tokens are refused by every route that isn't a pick route
    or a photo read inside their folders.
+10. In `retouching` no guest write lands, even one racing a start-retouch;
+    submissions are never rewritten; a save never emails.
