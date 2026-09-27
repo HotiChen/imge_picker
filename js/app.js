@@ -70,7 +70,11 @@ class App {
         const params = new URLSearchParams(window.location.search);
         const folderId = params.get('folder') || params.get('id');
         if (folderId) {
-            document.getElementById('driveUrl').value = folderId;
+            // Absent for a signed-in client opening this same magic link — the
+            // 資料夾 panel client-auth-check.js already removed it in favour of
+            // (docs/guest-picking.md) — so this is best-effort, not load-bearing.
+            const driveUrlInput = document.getElementById('driveUrl');
+            if (driveUrlInput) driveUrlInput.value = folderId;
 
             // 魔術連結模式 (客戶版 UI 最佳化)
             const firstSidebarSection = document.querySelector('.sidebar-section:first-child');

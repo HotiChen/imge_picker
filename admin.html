@@ -219,7 +219,7 @@
       </div>
     </div>
 
-    <h3 style="font-size:14px;margin-bottom:10px;">最近建立的專案（此瀏覽器）</h3>
+    <h3 style="font-size:14px;margin-bottom:10px;">選片專案列表</h3>
     <div id="proj-recent-list" style="margin-bottom:24px;"></div>
 
     <div id="project-detail-panel" class="panel" style="display:none;">
@@ -250,7 +250,7 @@
   </main>
 </div>
 
-<script src="js/shoot-types.js?v=20260927a"></script>
+<script src="js/shoot-types.js?v=20260927b"></script>
 <script>
 (function() {
   const WORKER_URL = 'https://imagepicker.hotichen.workers.dev';
@@ -290,7 +290,7 @@
     loadMinted();
     startAutoRefresh();
     renderProjectFolders();
-    renderRecentProjects();
+    loadProjectList();
   }
 
   // ── Minted tokens ─────────────────────────────────────────────────────────
@@ -588,13 +588,6 @@
   }
 
   // ── Guest picking — project admin (docs/guest-picking.md) ──────────────────
-  // There is no "list every project" route (only POST /api/admin/projects and
-  // GET /api/admin/projects/:id, per the API table), so what this browser has
-  // created is cached here purely as a client-side convenience. A project
-  // made from another browser is reachable only if the photographer still has
-  // its id — that gap is worth raising with Tim rather than working around
-  // silently.
-  const RECENT_PROJECTS_KEY = 'admin_recent_projects';
   let projectFolders = [];
   let currentProjectId = null;
 
@@ -614,28 +607,55 @@
     });
   }
 
-  function loadRecentProjects() {
-    try { return JSON.parse(localStorage.getItem(RECENT_PROJECTS_KEY) || '[]'); }
-    catch (e) { return []; }
-  }
-  function saveRecentProject(p) {
-    const list = loadRecentProjects().filter(x => x.id !== p.id);
-    list.unshift(p);
-    try { localStorage.setItem(RECENT_PROJECTS_KEY, JSON.stringify(list.slice(0, 30))); }
-    catch (e) { /* best effort — the link itself was already shown */ }
-  }
-  function renderRecentProjects() {
+  // GET /api/admin/projects — this photographer's projects, newest first,
+  // straight from the Worker (docs/guest-picking.md). Replaces the old
+  // per-browser localStorage cache: a project created on another browser
+  // (or another day) now shows up here too.
+  async function loadProjectList() {
     const box = document.getElementById('proj-recent-list');
     if (!box) return;
-    const list = loadRecentProjects();
-    if (!list.length) { box.innerHTML = '<div class="empty">尚未建立過專案</div>'; return; }
-    box.innerHTML = list.map(p => `
-      <div class="proj-recent-row">
-        <span>${escHtml(p.title || '（未命名）')}</span>
-        <button type="button" class="btn btn-outline" data-open-project="${escHtml(p.id)}">開啟</button>
+    try {
+      const r = await fetch(`${WORKER_URL}/api/admin/projects`, {
+        headers: { 'Authorization': `Bearer ${getToken()}` },
+      });
+      if (!r.ok) { box.innerHTML = `<div class="empty">讀取失敗（${r.status}）</div>`; return; }
+      const data = await r.json();
+      renderProjectList(Array.isArray(data.projects) ? data.projects : []);
+    } catch (e) {
+      box.innerHTML = '<div class="empty">無法連線到 Worker</div>';
+    }
+  }
+
+  function renderProjectList(projects) {
+    const box = document.getElementById('proj-recent-list');
+    if (!box) return;
+    if (!projects.length) { box.innerHTML = '<div class="empty">尚未建立過專案</div>'; return; }
+    box.innerHTML = projects.map(p => `
+      <div class="proj-recent-row" data-project-row="${escHtml(p.id)}">
+        <div>
+          <span>${escHtml(p.title || '（未命名）')}</span>
+          <span class="badge badge-approved">${escHtml(PHASE_LABEL[p.phase] || p.phase || '')}</span>
+          ${p.modified_after_submit ? '<span class="badge badge-pending">已修改</span>' : ''}
+          <div class="pd-owner" style="margin:2px 0 0;">
+            ${p.owner_name ? escHtml(p.owner_name) : '<span class="folder-none">尚無人認領</span>'}
+            · 送出 ${escHtml(p.submission_count)} 次
+          </div>
+        </div>
+        <div class="actions">
+          ${p.token ? `<button type="button" class="btn btn-outline" data-copy-link="${escHtml(p.token)}">複製連結</button>` : ''}
+          <button type="button" class="btn btn-outline" data-open-project="${escHtml(p.id)}">開啟</button>
+        </div>
       </div>`).join('');
     box.querySelectorAll('[data-open-project]').forEach(btn => {
       btn.addEventListener('click', () => openProjectDetail(btn.dataset.openProject));
+    });
+    box.querySelectorAll('[data-copy-link]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        try {
+          await navigator.clipboard.writeText(projectLink(btn.dataset.copyLink));
+          flashGreen(btn);
+        } catch (e) { /* clipboard unavailable — nothing else to fall back to here */ }
+      });
     });
   }
 
@@ -673,8 +693,7 @@
       const linkOut = document.getElementById('proj-link-output');
       linkOut.value = link;
       document.getElementById('proj-create-result').style.display = 'block';
-      saveRecentProject({ id: data.project.id, title: data.project.title, created_at: new Date().toISOString() });
-      renderRecentProjects();
+      await loadProjectList();
       document.getElementById('proj-title').value = '';
       document.getElementById('proj-pick-limit').value = '';
       document.getElementById('proj-extra-price').value = '';

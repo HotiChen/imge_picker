@@ -1764,7 +1764,10 @@ function clientMock(opts = {}) {
       if (rec.list !== null) {
         if (!rec.share || !state.minted.includes(rec.share) || !covers(rec.list))
           return json('{"error":"Unauthorized"}', 401);
-        return json(JSON.stringify({ status: 'success', folders: [], data: PHOTOS(state.photos) }));
+        // Distinct photos per folder, when a test needs to prove which one
+        // actually loaded rather than just which sidebar row looks active.
+        const data = opts.photosByFolder ? (opts.photosByFolder[rec.list] || []) : PHOTOS(state.photos);
+        return json(JSON.stringify({ status: 'success', folders: [], data }));
       }
 
       const source = rec.path.replace(/^\//, '');
@@ -1843,15 +1846,14 @@ const barText = page => page.evaluate(() => document.getElementById('client-bar'
       ok('the client bar names the folder they actually have', bar.includes(CLIENT_FOLDER), bar);
       ok('and no longer claims they have every folder', !bar.includes('所有資料夾'), bar);
 
-      // the box is read-only, so whatever is in it is what the client believes
-      // their album is called — and the stale folder_path is not it
-      const box = await page.evaluate(() => {
-        const el = document.getElementById('driveUrl');
-        return { value: el?.value, readOnly: el?.readOnly };
-      });
-      ok('the locked path box shows the same folder, not the one in the session',
-        box.value === CLIENT_FOLDER, JSON.stringify(box));
-      ok('and it is locked', box.readOnly === true, JSON.stringify(box));
+      // The path box is gone outright now — the left 資料夾 panel is the
+      // single source of truth for which folder the client is in.
+      ok('the old path box is gone from the DOM',
+        await page.evaluate(() => document.getElementById('driveUrl') === null));
+      const activeFolder = await page.evaluate(() =>
+        document.querySelector('#folderTree .tree-row.tree-active')?.dataset.folder);
+      ok('the left panel shows the same folder, not the stale one in the session',
+        activeFolder === CLIENT_FOLDER, String(activeFolder));
 
       // a second folder must not cost another credential
       await page.evaluate(() => app.handleLoadPhotos('20260819/sub/'));
@@ -2530,45 +2532,52 @@ await suite('the photographer can sign out of this browser',
   });
 
 // A token opening several folders that shows only the first is worse than one
-// that shows none: the client has no way to know the rest exist.
-await suite('multi-folder — a client sees every folder their token opens',
+// that shows none: the client has no way to know the rest exist. The switcher
+// now lives in the left 資料夾 panel, not a bottom-bar chip row, and the old
+// path box + LOAD button are gone outright.
+await suite('multi-folder — a client sees every folder their token opens, in the left panel',
   `${base}/index.html`,
   async page => {
     await page.waitForFunction(
-      () => !!document.getElementById('client-bar') &&
-            !/\u8b80\u53d6\u6b0a\u9650\u4e2d/.test(document.getElementById('client-scope')?.textContent || ''),
+      () => document.querySelectorAll('#folderTree .tree-row').length > 0,
       null, { timeout: 6000 }).catch(() => {});
-    const r = await page.evaluate(() => {
-      const picks = [...document.querySelectorAll('#client-scope [data-folder]')];
-      return {
-        count: picks.length,
-        labels: picks.map(el => el.dataset.folder),
-        landed: (typeof CONFIG !== 'undefined' && CONFIG.DEFAULT_FOLDER) || '',
-        scopeText: document.getElementById('client-scope')?.textContent || '',
-      };
-    });
+    const r = await page.evaluate(() => ({
+      inputGone: document.getElementById('driveUrl') === null,
+      loadBtnGone: document.getElementById('loadPhotosBtn') === null,
+      bottomChips: document.querySelectorAll('#client-scope [data-folder]').length,
+      rows: [...document.querySelectorAll('#folderTree .tree-row')].map(el => el.dataset.folder),
+      activeRows: [...document.querySelectorAll('#folderTree .tree-row.tree-active')].map(el => el.dataset.folder),
+      landed: (typeof CONFIG !== 'undefined' && CONFIG.DEFAULT_FOLDER) || '',
+      cards: document.querySelectorAll('.photo-card').length,
+    }));
     const out = [];
     const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
-    ok('both folders are offered, not just the first',
-      r.count === 2, `${r.count}: ${JSON.stringify(r.scopeText).slice(0, 60)}`);
-    ok('in the order the photographer set',
-      JSON.stringify(r.labels) === JSON.stringify(['20260819/', '20260901/']),
-      JSON.stringify(r.labels));
-    ok('and the first is where the page lands',
-      r.landed === '20260819/', JSON.stringify(r.landed));
+    ok('the old path input is gone from the DOM entirely', r.inputGone === true);
+    ok('and so is the LOAD button', r.loadBtnGone === true);
+    ok('no bottom-bar chips are left behind', r.bottomChips === 0, String(r.bottomChips));
+    ok('both folders are listed in the left panel, not just the first',
+      JSON.stringify(r.rows) === JSON.stringify(['20260819/', '20260901/']), JSON.stringify(r.rows));
+    ok('the first is where the page lands', r.landed === '20260819/', JSON.stringify(r.landed));
+    ok('and it is the one highlighted',
+      JSON.stringify(r.activeRows) === JSON.stringify(['20260819/']), JSON.stringify(r.activeRows));
+    ok('its (distinct) photos actually loaded', r.cards === 3, String(r.cards));
 
-    // switching must actually reload that folder, not just relabel the bar
-    const after = await page.evaluate(async () => {
-      document.querySelector('#client-scope [data-folder="20260901/"]')?.click();
-      await new Promise(r => setTimeout(r, 400));
-      return {
-        folder: (typeof CONFIG !== 'undefined' && CONFIG.DEFAULT_FOLDER) || '',
-        input: (document.getElementById('driveUrl') || {}).value || '',
-      };
-    });
-    ok('picking the second one switches to it',
-      after.folder === '20260901/', JSON.stringify(after.folder));
-    ok('and the path box follows', after.input === '20260901/', JSON.stringify(after.input));
+    // switching must actually reload that folder, not just relabel a row
+    await page.click('#folderTree .tree-row[data-folder="20260901/"]');
+    await page.waitForFunction(() => document.querySelectorAll('.photo-card').length === 1,
+      null, { timeout: 5000 });
+    const after = await page.evaluate(() => ({
+      folder: (typeof CONFIG !== 'undefined' && CONFIG.DEFAULT_FOLDER) || '',
+      rows: [...document.querySelectorAll('#folderTree .tree-row')].map(el => el.dataset.folder),
+      activeRows: [...document.querySelectorAll('#folderTree .tree-row.tree-active')].map(el => el.dataset.folder),
+      cardName: document.querySelector('.photo-card .photo-name')?.textContent,
+    }));
+    ok('picking the second one switches to it and loads its own photos',
+      after.folder === '20260901/' && after.cardName === 'r0.jpg', JSON.stringify(after));
+    ok('and the highlight follows, off the first',
+      JSON.stringify(after.activeRows) === JSON.stringify(['20260901/']), JSON.stringify(after.activeRows));
+    ok('the list is repainted, not appended to — still exactly the two folders',
+      JSON.stringify(after.rows) === JSON.stringify(['20260819/', '20260901/']), JSON.stringify(after.rows));
     return out;
   },
   {
@@ -2578,8 +2587,15 @@ await suite('multi-folder — a client sees every folder their token opens',
         permissions: { can_book: 0, can_upload: 0 },
       }));
     },
-    before: clientMock({ folders: ['20260819/', '20260901/'] }).attach,
+    before: clientMock({
+      folders: ['20260819/', '20260901/'],
+      photosByFolder: {
+        '20260819/': PHOTOS(3),
+        '20260901/': [{ id: '20260901/r0.jpg', name: 'r0.jpg', size: 9e6, rating: 0 }],
+      },
+    }).attach,
   });
+
 
 {
   const m = adminMock({ clients: [
@@ -3247,6 +3263,26 @@ function pickFakeWorker(opts = {}) {
         });
       }
 
+      if (u.pathname === '/api/admin/projects' && method === 'GET') {
+        const owner = state.project.owner_picker_id ? state.pickers.get(state.project.owner_picker_id) : null;
+        const subs = state.submissions;
+        return json({
+          projects: [{
+            id: state.project.id,
+            title: state.project.title,
+            phase: state.project.phase,
+            modified_after_submit: state.project.modified_after_submit,
+            owner_name: owner ? owner.name : null,
+            created_at: '2026-01-01T00:00:00.000Z',
+            submission_count: subs.length,
+            last_submitted_at: subs.length ? subs[subs.length - 1].created_at : null,
+            // 'listToken' lets a test cover the no-live-link case; unset
+            // defaults to a live link, matching the common case.
+            token: opts.listToken !== undefined ? opts.listToken : 'PICK-TOKEN',
+          }],
+        });
+      }
+
       if (u.pathname === '/api/admin/projects' && method === 'POST') {
         return json({
           project: {
@@ -3295,6 +3331,13 @@ function pickFakeWorker(opts = {}) {
           const prefix = u.searchParams.get('list') || '';
           const folders = opts.bucketFolders.filter(f => f.startsWith(prefix) && f !== prefix);
           return json({ status: 'success', folders, data: [] });
+        }
+        // Multi-folder pick projects: distinct photos per permitted folder,
+        // so a test can tell which one is actually on screen rather than
+        // just which one the sidebar claims is active.
+        if (opts.photosByFolder) {
+          const prefix = u.searchParams.get('list') || '';
+          return json({ status: 'success', folders: [], data: opts.photosByFolder[prefix] || [] });
         }
         return json({ status: 'success', folders: [], data: opts.photos || PHOTOS(3) });
       }
@@ -3564,6 +3607,137 @@ await suite('guest picking — the studio/client choice overlay and other modes 
     { before: m.attach });
 }
 
+{
+  // Distinct photos per folder, so 'which folder is on screen' is provable
+  // from the grid itself, not just from which sidebar row is marked active.
+  const m = pickFakeWorker({
+    ownerName: 'Fiona', ownerKey: 'FIONA-KEY',
+    folders: ['20260819/', '20260901/'],
+    photosByFolder: {
+      '20260819/': PHOTOS(3),
+      '20260901/': [{ id: '20260901/q0.jpg', name: 'q0.jpg', size: 9e6, rating: 0 }],
+    },
+  });
+  await suite('guest picking — multi-folder: the left 資料夾 panel lists every folder, switches between them, and the old path box/LOAD are gone',
+    `${base}/index.html?t=TOK`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('.photo-card', { timeout: 5000 });
+
+      ok('the old path input is gone from the DOM entirely',
+        await page.evaluate(() => document.getElementById('driveUrl') === null));
+      ok('and so is the LOAD button',
+        await page.evaluate(() => document.getElementById('loadPhotosBtn') === null));
+
+      const r1 = await page.evaluate(() => ({
+        rows: [...document.querySelectorAll('#folderTree .tree-row')].map(el => el.dataset.folder),
+        activeRows: [...document.querySelectorAll('#folderTree .tree-row.tree-active')].map(el => el.dataset.folder),
+        cards: document.querySelectorAll('.photo-card').length,
+        panelShown: getComputedStyle(document.getElementById('folderTreeContainer')).display !== 'none',
+      }));
+      ok('the panel is shown', r1.panelShown === true);
+      ok('both permitted folders are listed, in the token’s order',
+        JSON.stringify(r1.rows) === JSON.stringify(['20260819/', '20260901/']), JSON.stringify(r1.rows));
+      ok('the first folder loaded automatically', r1.cards === 3, String(r1.cards));
+      ok('and it is the one highlighted',
+        JSON.stringify(r1.activeRows) === JSON.stringify(['20260819/']), JSON.stringify(r1.activeRows));
+
+      await page.click('#folderTree .tree-row[data-folder="20260901/"]');
+      await page.waitForFunction(() => document.querySelectorAll('.photo-card').length === 1,
+        null, { timeout: 5000 });
+      const r2 = await page.evaluate(() => ({
+        rows: [...document.querySelectorAll('#folderTree .tree-row')].map(el => el.dataset.folder),
+        activeRows: [...document.querySelectorAll('#folderTree .tree-row.tree-active')].map(el => el.dataset.folder),
+        cardName: document.querySelector('.photo-card .photo-name')?.textContent,
+      }));
+      ok('clicking the other folder actually loads its (different) photos',
+        r2.cardName === 'q0.jpg', String(r2.cardName));
+      ok('and moves the highlight to it, off the first',
+        JSON.stringify(r2.activeRows) === JSON.stringify(['20260901/']), JSON.stringify(r2.activeRows));
+      ok('the list is repainted, not appended to — still exactly the two folders',
+        JSON.stringify(r2.rows) === JSON.stringify(['20260819/', '20260901/']), JSON.stringify(r2.rows));
+      return out;
+    },
+    { before: m.attach, initScript: () => localStorage.setItem('pick_key:TOK', 'FIONA-KEY') });
+}
+
+{
+  const m = pickFakeWorker({ ownerName: 'Gary', ownerKey: 'GARY-KEY' });
+  await suite('guest picking — the annotation toolbox is removed from the DOM (no server storage for it); notes and the photo canvas stay',
+    `${base}/index.html?t=TOK`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('.photo-card', { timeout: 5000 });
+      await page.click('.photo-card');
+      await page.waitForSelector('#photoModal.active', { timeout: 5000 });
+
+      const r = await page.evaluate(() => ({
+        toolButtons: document.querySelectorAll('.tool-btn').length,
+        colorPicker: document.querySelector('.color-picker'),
+        brushSlider: document.getElementById('brushSize'),
+        clearAllBtn: document.getElementById('clearAnnotationBtn'),
+        noteBox: document.getElementById('noteInputGroup'),
+        canvas: document.getElementById('photoCanvas'),
+      }));
+      ok('no tool buttons (select/pan/circle/eraser/undo/redo/delete) remain',
+        r.toolButtons === 0, String(r.toolButtons));
+      ok('the colour picker is gone', r.colorPicker === null);
+      ok('the brush-size slider is gone', r.brushSlider === null);
+      ok('the 清除全部 button is gone', r.clearAllBtn === null);
+      ok('the note box stays — notes are stored server-side (selections.note)',
+        r.noteBox !== null);
+      ok('the photo canvas itself stays — it is still the photo viewer',
+        r.canvas !== null);
+      return out;
+    },
+    { before: m.attach, initScript: () => localStorage.setItem('pick_key:TOK', 'GARY-KEY') });
+}
+
+// A studio session (photographer, via studio_token) must be completely
+// unaffected: the same path box + LOAD that guests and clients lose here is
+// still how a photographer opens an arbitrary folder in the bucket.
+await suite('photographer mode — the path box, LOAD button and folder tree are untouched',
+  `${base}/index.html`,
+  async page => {
+    const out = [];
+    const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+    await page.waitForFunction(() => !!document.getElementById('studio-logout'),
+      null, { timeout: 5000 }).catch(() => {});
+
+    const r = await page.evaluate(() => ({
+      inputPresent: !!document.getElementById('driveUrl'),
+      loadBtnPresent: !!document.getElementById('loadPhotosBtn'),
+      loadBtnShown: (() => {
+        const el = document.getElementById('loadPhotosBtn');
+        return !!el && getComputedStyle(el).display !== 'none';
+      })(),
+    }));
+    ok('the path input is still there', r.inputPresent === true);
+    ok('the LOAD button is still there', r.loadBtnPresent === true);
+    ok('and actually shown, not just present', r.loadBtnShown === true);
+
+    await page.fill('#driveUrl', '20260819/');
+    await page.click('#loadPhotosBtn');
+    await page.waitForSelector('.photo-card', { timeout: 5000 });
+    const cards = await page.evaluate(() => document.querySelectorAll('.photo-card').length);
+    ok('typing a path and clicking LOAD still loads photos, exactly as before',
+      cards === 3, String(cards));
+    return out;
+  },
+  {
+    initScript: () => {
+      try {
+        if (!localStorage.getItem('__seeded_studio2')) {
+          localStorage.setItem('__seeded_studio2', '1');
+          sessionStorage.setItem('studio_token', 'adm');
+        }
+      } catch (e) { /* private mode */ }
+    },
+    before: pickFakeWorker().attach,
+  });
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Admin — the guest-picking project panel (docs/guest-picking.md)
 // ═══════════════════════════════════════════════════════════════════════════
@@ -3613,6 +3787,71 @@ await suite('guest picking — the studio/client choice overlay and other modes 
 }
 
 {
+  // GET /api/admin/projects replaces the per-browser localStorage cache —
+  // this project is never seeded into this browser at all, only served by
+  // the fake Worker's list route, which is the point.
+  const XSS_TITLE = '"><img src=x onerror="window.__xssTitle=1">';
+  const XSS_OWNER = '"><img src=x onerror="window.__xssOwner=1">';
+  const m = pickFakeWorker({ title: XSS_TITLE, ownerName: XSS_OWNER });
+  m.state.submissions.push(
+    { id: 's1', picker_id: 'picker-0', relationship: '本人', email: null,
+      photo_keys: ['20260819/p0.jpg'], count: 1, pick_limit: null, extra_price: null,
+      created_at: '2026-01-01T00:00:00Z' },
+  );
+  m.state.project.phase = 'submitted';
+  m.state.project.modified_after_submit = 1;
+  await suite('admin — project list: read from GET /api/admin/projects, not a localStorage cache; phase/owner/modified/submission badges, a copy-link, and escaping',
+    `${base}/admin.html`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('[data-project-row]', { timeout: 5000 });
+
+      ok('no localStorage cache is written or read',
+        await page.evaluate(() => localStorage.getItem('admin_recent_projects') === null));
+
+      const r = await page.evaluate(() => {
+        const row = document.querySelector('[data-project-row]');
+        return {
+          text: row.textContent,
+          injected: document.querySelectorAll('img[src="x"]').length,
+          hasCopyBtn: !!row.querySelector('[data-copy-link]'),
+        };
+      });
+      ok('惡意標題／認領人姓名沒有變成元素', r.injected === 0, `注入了 ${r.injected} 個 img`);
+      ok('title shown as text, unescaped payload intact', r.text.includes(XSS_TITLE), r.text);
+      ok('owner shown as text, unescaped payload intact', r.text.includes(XSS_OWNER), r.text);
+      ok('the phase badge is shown', r.text.includes('已送出'), r.text);
+      ok('the modified-since-submit badge is shown', r.text.includes('已修改'), r.text);
+      ok('the submission count is shown', r.text.includes('1'), r.text);
+      ok('a copy-link button is offered when the project has a live token', r.hasCopyBtn === true);
+
+      await page.click('[data-open-project]');
+      await page.waitForSelector('#project-detail-panel', { state: 'visible', timeout: 5000 });
+      ok('clicking it opens the existing detail view',
+        await page.evaluate(() => document.getElementById('project-detail-panel').style.display !== 'none'));
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN });
+}
+
+{
+  // No live pick link (revoked/expired/never minted): no copy-link button.
+  const m = pickFakeWorker({ listToken: null });
+  await suite('admin — project list: no copy-link button when the project has no live token',
+    `${base}/admin.html`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('[data-project-row]', { timeout: 5000 });
+      const hasCopyBtn = await page.evaluate(() => !!document.querySelector('[data-copy-link]'));
+      ok('no copy-link button is rendered', hasCopyBtn === false);
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN });
+}
+
+{
   const m = pickFakeWorker({ ownerName: 'Grace' });
   m.state.selections.set('20260819/p0.jpg', { rating: 5, note: '', updated_by: 'picker-0', updated_at: '2026-01-01T00:00:00Z' });
   m.state.selections.set('20260819/p1.jpg', { rating: 0, note: '', updated_by: 'picker-0', updated_at: '2026-01-01T00:00:00Z' });
@@ -3631,14 +3870,9 @@ await suite('guest picking — the studio/client choice overlay and other modes 
       const out = [];
       const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
       await page.waitForSelector('#admin-view', { state: 'visible', timeout: 5000 });
-      // seeded the way a real create would leave it, then opened exactly as
-      // clicking 開啟 does — there is no list-all endpoint to read this back
-      // from (see the API-gap note above pickFakeWorker)
-      await page.evaluate(async (id) => {
-        localStorage.setItem('admin_recent_projects', JSON.stringify([{ id, title: 'T 專案', created_at: new Date().toISOString() }]));
-      }, m.state.project.id);
-      await page.reload({ waitUntil: 'load' });
-      await page.waitForSelector('#admin-view', { state: 'visible', timeout: 5000 });
+      // opened straight from the real GET /api/admin/projects list — no
+      // localStorage cache and no reload needed for it to show up
+      await page.waitForSelector('[data-open-project]', { timeout: 5000 });
       await page.click('[data-open-project]');
       await page.waitForSelector('#project-detail-panel', { state: 'visible' });
       await page.waitForSelector('#pd-submissions .pd-submission');
@@ -3674,11 +3908,7 @@ await suite('guest picking — the studio/client choice overlay and other modes 
       const out = [];
       const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
       await page.waitForSelector('#admin-view', { state: 'visible', timeout: 5000 });
-      await page.evaluate((id) => {
-        localStorage.setItem('admin_recent_projects', JSON.stringify([{ id, title: 'T', created_at: new Date().toISOString() }]));
-      }, m.state.project.id);
-      await page.reload({ waitUntil: 'load' });
-      await page.waitForSelector('#admin-view', { state: 'visible', timeout: 5000 });
+      await page.waitForSelector('[data-open-project]', { timeout: 5000 });
       await page.click('[data-open-project]');
       await page.waitForSelector('#pd-download-btn');
 
@@ -3731,11 +3961,7 @@ await suite('guest picking — the studio/client choice overlay and other modes 
       const out = [];
       const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
       await page.waitForSelector('#admin-view', { state: 'visible', timeout: 5000 });
-      await page.evaluate((id) => {
-        localStorage.setItem('admin_recent_projects', JSON.stringify([{ id, title: 'T', created_at: new Date().toISOString() }]));
-      }, m.state.project.id);
-      await page.reload({ waitUntil: 'load' });
-      await page.waitForSelector('#admin-view', { state: 'visible', timeout: 5000 });
+      await page.waitForSelector('[data-open-project]', { timeout: 5000 });
       await page.click('[data-open-project]');
       await page.waitForSelector('#project-detail-body table');
       await new Promise(r => setTimeout(r, 300));

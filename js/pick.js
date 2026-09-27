@@ -146,8 +146,8 @@
             this.app = app;
             if (typeof CONFIG !== 'undefined') CONFIG.SHARE_TOKEN = this.token;
             this._hideStudioOnlyUI();
-            const firstSidebarSection = document.querySelector('.sidebar-section:first-child');
-            if (firstSidebarSection) firstSidebarSection.style.display = 'none';
+            this._removeSourceControls();
+            this._removeAnnotationToolbox();
             this._wireHooks(app);
             this._wireSubmitModal();
             this._wireBannerHint();
@@ -239,6 +239,57 @@
             ['uploadPageBtn', 'openBookEditorBtn'].forEach(id => document.getElementById(id)?.remove());
         },
 
+        // 01/SOURCE's path box + LOAD button are the studio's own way to type
+        // a path; a guest has no path to type — their folders come from the
+        // token (this.folders). Removed, not hidden: .btn carries
+        // display:inline-flex, which beats the UA's [hidden] { display: none
+        // }. The 資料夾 panel underneath stays — renderFolderPanel fills it.
+        _removeSourceControls() {
+            document.querySelector('.sidebar-section:first-child .input-group')?.remove();
+        },
+
+        // The drawing toolbox (tools, colour, brush size, clear-all) has
+        // nowhere to save to: `selections` has a `note` column but no
+        // annotations column, and guests are never minted a studio token to
+        // write one through anyway. The note box and the canvas itself
+        // (still the photo viewer) stay.
+        _removeAnnotationToolbox() {
+            document.querySelector('.tool-buttons')?.remove();
+            document.querySelector('.color-picker')?.remove();
+            document.querySelector('.slider-group')?.remove();
+            document.querySelector('.modal-actions')?.remove();
+        },
+
+        // The left 資料夾 panel: every folder this link opens, one click to
+        // load it, the current one highlighted. Re-rendered after every load
+        // (see _wireHooks) so it survives app.js's own subfolder-tree render,
+        // which targets this same container.
+        renderFolderPanel() {
+            const container = document.getElementById('folderTreeContainer');
+            const list = document.getElementById('folderTree');
+            if (!container || !list) return;
+            if (!this.folders.length) { container.style.display = 'none'; return; }
+            container.style.display = 'block';
+            const current = (typeof driveManager !== 'undefined') ? driveManager.currentFolderId : '';
+            list.innerHTML = '';
+            this.folders.forEach(f => {
+                const row = document.createElement('div');
+                row.className = 'tree-row' + (f === current ? ' tree-active' : '');
+                row.dataset.folder = f;
+                const icon = document.createElement('span');
+                icon.className = 'tree-icon';
+                icon.textContent = '📁';
+                const label = document.createElement('span');
+                label.className = 'tree-label';
+                label.textContent = f.replace(/\/$/, '').split('/').pop() || f;
+                label.title = f;
+                row.appendChild(icon);
+                row.appendChild(label);
+                row.addEventListener('click', () => this.app.handleLoadPhotos(f));
+                list.appendChild(row);
+            });
+        },
+
         _showFatalError(msg) {
             const empty = document.getElementById('emptyState');
             const loading = document.getElementById('loadingState');
@@ -275,6 +326,7 @@
                 await this.flush();
                 await origLoad(path);
                 this.applyServerSelections();
+                this.renderFolderPanel();
             };
         },
 
