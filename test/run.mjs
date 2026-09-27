@@ -120,7 +120,14 @@ async function pinchTouch(page, selector, cx, cy, startDist, endDist, steps = 6)
   await touchSequence(page, selector, seq);
 }
 
+// ONLY=<text> runs just the suites whose name contains that text, for quick
+// iterations while developing; run everything before a commit or merge.
+const ONLY = process.env.ONLY || '';
+let ran = 0;
+
 async function suite(name, url, run, { initScript, before, contextOptions } = {}) {
+  if (ONLY && !name.includes(ONLY)) return;
+  ran++;
   const context = await browser.newContext({ viewport: { width: 1500, height: 950 }, ...contextOptions });
   if (initScript) await context.addInitScript(initScript);
   const page = await context.newPage();
@@ -4914,5 +4921,8 @@ await suite('desktop preview — arrow keys and mouse click still navigate/open 
 
 await browser.close();
 server.close();
+// A filter that matches nothing must not read as a pass.
+if (!ran) { failed++; console.log(`\nFAIL  ONLY=${JSON.stringify(ONLY)} matched no suite`); }
+if (ONLY) console.log(`\n(ONLY=${JSON.stringify(ONLY)}: ${ran} suites ran, the rest were skipped)`);
 console.log(failed ? `\n${failed} failing` : '\nall passed');
 process.exit(failed ? 1 : 0);
