@@ -139,6 +139,10 @@
   .pd-submission:first-child { border-top: none; }
   .pd-diff { color: var(--ink-55); margin-top: 4px; word-break: break-word; }
   #project-detail-panel h4 { font-size: 13px; margin: 18px 0 8px; color: var(--ink-90); }
+  #project-detail-panel h4 a.pd-link,
+  #project-detail-panel td a.pd-link { color: var(--accent); text-decoration: none; }
+  #project-detail-panel h4 a.pd-link:hover,
+  #project-detail-panel td a.pd-link:hover { text-decoration: underline; }
 </style>
 </head>
 <body>
@@ -253,7 +257,7 @@
   </main>
 </div>
 
-<script src="js/shoot-types.js?v=20260928b"></script>
+<script src="js/shoot-types.js?v=20260928c"></script>
 <script>
 (function() {
   const WORKER_URL = 'https://imagepicker.hotichen.workers.dev';
@@ -294,6 +298,16 @@
     startAutoRefresh();
     renderProjectFolders();
     loadProjectList();
+    restoreProjectFromHash();
+  }
+
+  // index.html?project=<id> links back to `#project=<id>` (openProjectDetail
+  // sets it). Reopens that same project's detail on the way back in, whether
+  // this is a fresh load after Back/the phone back gesture, or just this
+  // browser still holding an old link from earlier.
+  function restoreProjectFromHash() {
+    const m = /^#project=(.+)$/.exec(location.hash);
+    if (m) openProjectDetail(decodeURIComponent(m[1]));
   }
 
   // ── Minted tokens ─────────────────────────────────────────────────────────
@@ -749,6 +763,12 @@
     const panel = document.getElementById('project-detail-panel');
     const body = document.getElementById('project-detail-body');
     if (!panel || !body) return;
+    // index.html?project=<id> links back here with a plain <a> (same tab),
+    // so the browser Back button / phone back gesture returns to admin.html
+    // rather than closing it. The hash is what lets this page reopen the same
+    // detail on that return, whether the browser replays it from bfcache or
+    // does a fresh load (restoreProjectFromHash, called from showAdmin()).
+    history.replaceState(null, '', '#project=' + encodeURIComponent(id));
     panel.style.display = 'block';
     body.innerHTML = '<div class="empty">載入中…</div>';
     try {
@@ -796,11 +816,11 @@
       </div>
       <div id="pd-action-err" class="err"></div>
 
-      <h4>目前選取（${selected.length} 張）</h4>
-      <div class="table-wrap"><table><thead><tr><th>照片</th><th>星等</th><th>備註</th><th>選片人</th><th>更新時間</th></tr></thead>
+      <h4><a class="pd-link" href="index.html?project=${encodeURIComponent(project.id)}">目前選取（${selected.length} 張）</a></h4>
+      <div class="table-wrap"><table><thead><tr><th>照片</th><th>♥</th><th>備註</th><th>選片人</th><th>更新時間</th></tr></thead>
         <tbody>${selected.length ? selected.map(s => `<tr>
-          <td class="folder-raw">${escHtml(s.photo_key)}</td><td>${escHtml(s.rating)}</td><td>${escHtml(s.note || '')}</td>
-          <td>${escHtml(pickerNameOf(pickers, s.updated_by))}</td><td>${escHtml(s.updated_at || '')}</td>
+          <td class="folder-raw"><a class="pd-link" href="index.html?project=${encodeURIComponent(project.id)}&amp;photo=${encodeURIComponent(s.photo_key)}">${escHtml(s.photo_key)}</a></td><td>♥</td><td>${escHtml(s.note || '')}</td>
+          <td>${escHtml(pickerNameOf(pickers, s.updated_by))}</td><td>${escHtml(fmtTime(s.updated_at))}</td>
         </tr>`).join('') : '<tr><td colspan="5" class="empty">尚無選取</td></tr>'}</tbody></table></div>
 
       <h4>送出紀錄（新到舊）</h4>
@@ -811,7 +831,7 @@
           : (!diff.added.length && !diff.removed.length ? '<div class="pd-diff">與上次相同</div>'
             : `<div class="pd-diff">${diff.added.length ? `新增 ${diff.added.length} 張：${diff.added.map(escHtml).join('、')}` : ''}${diff.added.length && diff.removed.length ? '<br>' : ''}${diff.removed.length ? `移除 ${diff.removed.length} 張：${diff.removed.map(escHtml).join('、')}` : ''}</div>`);
         return `<div class="pd-submission">
-          <div><strong>${escHtml(s.created_at)}</strong> — ${escHtml(pickerNameOf(pickers, s.picker_id))}
+          <div><strong>${escHtml(fmtTime(s.created_at))}</strong> — ${escHtml(pickerNameOf(pickers, s.picker_id))}
             （${escHtml(s.relationship)}${s.email ? ' · ' + escHtml(s.email) : ''}）— ${escHtml(s.count)} 張${s.pick_limit != null ? ` / 上限 ${escHtml(s.pick_limit)}` : ''}
             ${!s.notified ? '<span class="badge badge-pending">未寄信</span>' : ''}</div>
           ${diffHtml}
@@ -846,12 +866,10 @@
     document.getElementById('pd-reopen-btn').addEventListener('click', () => projectAction('reopen'));
     document.getElementById('pd-archive-btn')?.addEventListener('click', async () => {
       if (!confirm('封存後連結會立即失效，資料會保留')) return;
-      await projectAction('archive');
-      await loadProjectList();
+      await projectAction('archive'); // refreshes the list too, see projectAction
     });
     document.getElementById('pd-unarchive-btn')?.addEventListener('click', async () => {
       await projectAction('unarchive');
-      await loadProjectList();
     });
     document.getElementById('pd-delete-btn')?.addEventListener('click', async function () {
       const errEl = document.getElementById('pd-action-err');
@@ -871,6 +889,7 @@
         }
         document.getElementById('project-detail-panel').style.display = 'none';
         currentProjectId = null;
+        history.replaceState(null, '', location.pathname + location.search);
         await loadProjectList();
       } catch (e) {
         if (errEl) errEl.textContent = '無法連線到 Worker';
@@ -933,7 +952,11 @@
       });
       const data = await r.json().catch(() => ({}));
       if (!r.ok) { if (errEl) errEl.textContent = data.error || `失敗（${r.status}）`; return; }
-      await openProjectDetail(currentProjectId);
+      // The list shows the same phase/modified badges as the detail panel —
+      // refreshing only the panel left the list showing 已送出 while the
+      // detail already said 精修中. Every action that can change them has to
+      // bring the list along too, not just the panel that triggered it.
+      await Promise.all([openProjectDetail(currentProjectId), loadProjectList()]);
     } catch (e) {
       if (errEl) errEl.textContent = '無法連線到 Worker';
     }
@@ -1108,6 +1131,19 @@
     // null/undefined are the only values meant to render as empty.
     const s = (str === null || str === undefined) ? '' : str;
     return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+
+  // D1 timestamps come back as raw UTC ISO strings; Tim reads them in Taipei.
+  // "9/27 22:52" rather than "2026-09-27T14:52:00.000Z" — no year (every one
+  // of these is recent) and no seconds (nobody needs them here).
+  function fmtTime(iso) {
+    if (!iso) return '';
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return String(iso);
+    return new Intl.DateTimeFormat('zh-TW', {
+      timeZone: 'Asia/Taipei', month: 'numeric', day: 'numeric',
+      hour: '2-digit', minute: '2-digit', hour12: false,
+    }).format(d);
   }
 
   // Runs last, now that every function and `let` above it is initialised —

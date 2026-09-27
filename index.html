@@ -13,7 +13,7 @@
     <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 
     <!-- Stylesheets -->
-    <link rel="stylesheet" href="css/styles.css?v=20260928b">
+    <link rel="stylesheet" href="css/styles.css?v=20260928c">
 
     <!-- Shows a startup error on screen instead of leaving a blank page.
          Stays inline and first so it is listening before anything else runs. -->
@@ -100,6 +100,15 @@
             <span id="pickBannerHintText"></span>
             <span>請攝影師重設</span>
         </div>
+    </div>
+
+    <!-- Photographer project view (js/project-view.js) — index.html?project=<id>,
+         reached with a plain <a> from admin.html's project detail page. The
+         owner's name is guest-supplied and is set via textContent only. -->
+    <div id="projectViewBanner" class="pick-banner" hidden>
+        <span id="pvBannerText" class="pick-banner-line"></span>
+        <span class="pick-banner-line" aria-hidden="true">·</span>
+        <a id="pvBackLink" class="pick-banner-line" href="admin.html">← 回專案</a>
     </div>
 
     <!-- Guest picking — the free-seat name prompt. Blocks the page until a
@@ -610,19 +619,20 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 
     <!-- Scripts -->
-    <script src="js/build-version.js?v=20260928b"></script>
-    <script src="js/config.js?v=20260928b"></script>
-    <script src="js/studio-token.js?v=20260928b"></script>
-    <script src="js/session-token.js?v=20260928b"></script>
-    <script src="js/pick.js?v=20260928b"></script>
-    <script src="js/client-auth-check.js?v=20260928b"></script>
-    <script src="js/toast.js?v=20260928b"></script>
-    <script src="js/logger.js?v=20260928b"></script>
-    <script src="js/diagnostics.js?v=20260928b"></script>
-    <script src="js/drive.js?v=20260928b"></script>
-    <script src="js/annotation.js?v=20260928b"></script>
-    <script src="js/rating.js?v=20260928b"></script>
-    <script src="js/app.js?v=20260928b"></script>
+    <script src="js/build-version.js?v=20260928c"></script>
+    <script src="js/config.js?v=20260928c"></script>
+    <script src="js/studio-token.js?v=20260928c"></script>
+    <script src="js/session-token.js?v=20260928c"></script>
+    <script src="js/pick.js?v=20260928c"></script>
+    <script src="js/project-view.js?v=20260928c"></script>
+    <script src="js/client-auth-check.js?v=20260928c"></script>
+    <script src="js/toast.js?v=20260928c"></script>
+    <script src="js/logger.js?v=20260928c"></script>
+    <script src="js/diagnostics.js?v=20260928c"></script>
+    <script src="js/drive.js?v=20260928c"></script>
+    <script src="js/annotation.js?v=20260928c"></script>
+    <script src="js/rating.js?v=20260928c"></script>
+    <script src="js/app.js?v=20260928c"></script>
 </body>
 
 </html>

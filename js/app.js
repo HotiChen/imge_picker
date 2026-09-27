@@ -74,6 +74,14 @@ class App {
             return;
         }
 
+        // Photographer project view (js/project-view.js) — index.html?project=<id>,
+        // reached from admin.html. Same "owns the page" rule as PickController
+        // above: nothing below this runs for it.
+        if (window.ProjectViewController && ProjectViewController.active) {
+            await ProjectViewController.start(this);
+            return;
+        }
+
         const params = new URLSearchParams(window.location.search);
         const folderId = params.get('folder') || params.get('id');
         if (folderId) {
