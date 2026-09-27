@@ -4323,7 +4323,9 @@ await suite('photographer mode — the path box, LOAD button and folder tree are
       }));
       ok('shows the current owner', r.owner.includes('Grace'), r.owner);
       ok('shows the phase', r.phaseBadge === '已送出', r.phaseBadge);
-      ok('submissions are newest first', /2026-01-02/.test(r.submissionBlocks[0]) && /2026-01-01/.test(r.submissionBlocks[1]),
+      // times render in Asia/Taipei (task: 時間格式), not the raw UTC ISO —
+      // 2026-01-0{1,2}T00:00:00Z is 08:00 Taipei the same calendar day
+      ok('submissions are newest first', /1\/2 08:00/.test(r.submissionBlocks[0]) && /1\/1 08:00/.test(r.submissionBlocks[1]),
         JSON.stringify(r.submissionBlocks));
       ok('the newest submission’s diff names what changed since the previous one',
         r.submissionBlocks[0].includes('新增') && r.submissionBlocks[0].includes('p0.jpg') &&
@@ -5127,6 +5129,256 @@ await suite('desktop preview — arrow keys and mouse click still navigate/open 
     },
     { before: m2.attach, initScript: ADMIN });
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Admin → photos — admin.html's project detail links to index.html?project=,
+// index.html shows just that project's picks, and same-tab Back returns to
+// the same detail (task: 專案選片).
+// ═══════════════════════════════════════════════════════════════════════════
+
+{
+  const m = pickFakeWorker({ ownerName: 'Grace' });
+  m.state.selections.set('20260819/a.jpg', { rating: 5, note: '', updated_by: 'picker-0', updated_at: '2026-01-01T00:00:00Z' });
+  m.state.selections.set('20260901/b.jpg', { rating: 3, note: '', updated_by: 'picker-0', updated_at: '2026-01-01T00:00:00Z' });
+  m.state.selections.set('20260819/zero.jpg', { rating: 0, note: '', updated_by: 'picker-0', updated_at: '2026-01-01T00:00:00Z' });
+  await suite('admin — 專案選片：「目前選取」標題與每張照片都連到 index.html?project=（同分頁的純 <a>）',
+    `${base}/admin.html`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('[data-open-project]', { timeout: 5000 });
+      await page.click('[data-open-project]');
+      await page.waitForSelector('#project-detail-body table tbody tr');
+
+      const r = await page.evaluate(() => {
+        const headingLink = document.querySelector('#project-detail-body h4 a');
+        const rowLinks = [...document.querySelectorAll('#project-detail-body table tbody tr a')];
+        return {
+          headingHref: headingLink && headingLink.getAttribute('href'),
+          headingTarget: headingLink && headingLink.getAttribute('target'),
+          headingText: headingLink && headingLink.textContent,
+          rowHrefs: rowLinks.map(a => a.getAttribute('href')),
+          rowCount: rowLinks.length,
+        };
+      });
+      ok('the heading links to index.html?project=<id>', r.headingHref === 'index.html?project=proj-1', r.headingHref);
+      ok('the heading still shows the count', /目前選取（2 張）/.test(r.headingText || ''), r.headingText);
+      ok('it is a plain same-tab link (no target=_blank)', !r.headingTarget, String(r.headingTarget));
+      ok('exactly the 2 rating>0 rows are links (not the zero-rated one)', r.rowCount === 2, String(r.rowCount));
+      ok('one row links to its own photo key, encoded',
+        r.rowHrefs.includes('index.html?project=proj-1&photo=20260819%2Fa.jpg'), JSON.stringify(r.rowHrefs));
+      ok('the other, in a different folder, does too',
+        r.rowHrefs.includes('index.html?project=proj-1&photo=20260901%2Fb.jpg'), JSON.stringify(r.rowHrefs));
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN });
+}
+
+{
+  const m = pickFakeWorker({ ownerName: 'Henry', projectId: 'proj-42' });
+  await suite('admin — 專案選片：開啟詳細頁會把 id 寫進網址的 #project=',
+    `${base}/admin.html`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('[data-open-project]', { timeout: 5000 });
+      await page.click('[data-open-project]');
+      await page.waitForSelector('#project-detail-panel', { state: 'visible' });
+      const hash = await page.evaluate(() => location.hash);
+      ok('opening the detail sets #project=<id>', hash === '#project=proj-42', hash);
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN });
+}
+
+{
+  const m = pickFakeWorker({ ownerName: 'Henry', projectId: 'proj-42' });
+  await suite('admin — 專案選片：admin.html#project=<id> 開啟時自動重開該專案（模擬從 index.html 上一頁回來）',
+    `${base}/admin.html#project=proj-42`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('#project-detail-panel', { state: 'visible', timeout: 5000 });
+      const text = await page.evaluate(() => document.getElementById('project-detail-body').textContent);
+      ok('the right project’s detail opened without clicking anything', text.includes('Henry'), text);
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN });
+}
+
+{
+  const m = pickFakeWorker({ ownerName: 'Ivy', projectId: 'proj-7' });
+  m.state.selections.set('20260819/a.jpg', { rating: 5, note: '', updated_by: 'picker-0', updated_at: '2026-01-01T00:00:00Z' });
+  m.state.selections.set('20260901/b.jpg', { rating: 3, note: '', updated_by: 'picker-0', updated_at: '2026-01-01T00:00:00Z' });
+  m.state.selections.set('20260819/zero.jpg', { rating: 0, note: '', updated_by: 'picker-0', updated_at: '2026-01-01T00:00:00Z' });
+  await suite('index.html — 專案選片模式（?project=）：只顯示已選相片，橫跨資料夾，並顯示 banner',
+    `${base}/index.html?project=proj-7`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('.photo-card', { timeout: 5000 });
+      const r = await page.evaluate(() => ({
+        cardCount: document.querySelectorAll('.photo-card').length,
+        ids: [...document.querySelectorAll('.photo-card')].map(c => c.dataset.photoId),
+        bannerHidden: document.getElementById('projectViewBanner').hidden,
+        bannerText: document.getElementById('pvBannerText').textContent,
+        backHref: document.getElementById('pvBackLink').getAttribute('href'),
+      }));
+      ok('only the 2 rating>0 selections are shown, not the zero-rated one', r.cardCount === 2, String(r.cardCount));
+      ok('one is from each folder', r.ids.includes('20260819/a.jpg') && r.ids.includes('20260901/b.jpg'), JSON.stringify(r.ids));
+      ok('the banner is shown', r.bannerHidden === false);
+      ok('names the owner and the count', r.bannerText.includes('Ivy') && r.bannerText.includes('2'), r.bannerText);
+      ok('links back to the same project on admin.html', r.backHref === 'admin.html#project=proj-7', r.backHref);
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN });
+}
+
+{
+  const m = pickFakeWorker({ ownerName: 'Jack', projectId: 'proj-8' });
+  m.state.selections.set('20260819/pick-me.jpg', { rating: 4, note: '', updated_by: 'picker-0', updated_at: '2026-01-01T00:00:00Z' });
+  await suite('index.html — 專案選片模式：?photo= 直接開啟該張的預覽',
+    `${base}/index.html?project=proj-8&photo=${encodeURIComponent('20260819/pick-me.jpg')}`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('.photo-card', { timeout: 5000 });
+      await page.waitForFunction(
+        () => document.getElementById('photoModal').classList.contains('active'),
+        null, { timeout: 5000 });
+      const name = await page.evaluate(() => document.getElementById('modalPhotoName').textContent);
+      ok('the preview modal opens directly on that photo', name === 'pick-me.jpg', name);
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN });
+}
+
+await suite('index.html — 專案選片：沒有 ?project= 時，攝影師模式完全不受影響',
+  `${base}/index.html`,
+  async page => {
+    const out = [];
+    const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+    await page.waitForFunction(() => !!window.app, null, { timeout: 5000 });
+    const active = await page.evaluate(() => !!(window.ProjectViewController && ProjectViewController.active));
+    ok('ProjectViewController is not active', active === false);
+    const bannerHidden = await page.evaluate(() => document.getElementById('projectViewBanner').hidden);
+    ok('its banner stays hidden', bannerHidden === true);
+
+    await page.fill('#driveUrl', '20260819/');
+    await page.click('#loadPhotosBtn');
+    await page.waitForSelector('.photo-card', { timeout: 5000 });
+    const cards = await page.evaluate(() => document.querySelectorAll('.photo-card').length);
+    ok('the ordinary path box + LOAD flow is untouched', cards === 3, String(cards));
+    return out;
+  },
+  { initScript: ADMIN, before: pickFakeWorker().attach });
+
+{
+  const XSS_OWNER = '"><img src=x onerror="window.__xssPV=1">';
+  const m = pickFakeWorker({ ownerName: XSS_OWNER, projectId: 'proj-9' });
+  m.state.selections.set('20260819/p0.jpg', { rating: 1, note: '', updated_by: 'picker-0', updated_at: '2026-01-01T00:00:00Z' });
+  await suite('index.html — 專案選片模式：banner 裡的認領人姓名沒有變成元素',
+    `${base}/index.html?project=proj-9`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('.photo-card', { timeout: 5000 });
+      const r = await page.evaluate(() => ({
+        fired: !!window.__xssPV,
+        injected: document.querySelectorAll('img[src="x"]').length,
+        shown: document.getElementById('pvBannerText').textContent,
+      }));
+      ok('沒有變成元素', r.injected === 0, `注入了 ${r.injected} 個 img`);
+      ok('onerror 沒有執行', r.fired === false);
+      ok('姓名仍照原樣顯示在文字裡', r.shown.includes(XSS_OWNER), r.shown);
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN });
+}
+
+{
+  const m = pickFakeWorker({ ownerName: 'Kelly' });
+  m.state.project.phase = 'submitted';
+  await suite('admin — 專案選片：開始精修後，列表徽章也一起更新（不是只有詳細頁）',
+    `${base}/admin.html`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('[data-open-project]', { timeout: 5000 });
+      await page.click('[data-open-project]');
+      await page.waitForSelector('#pd-start-retouch-btn', { timeout: 5000 });
+      await page.click('#pd-start-retouch-btn');
+      await page.waitForFunction(
+        () => document.querySelector('.pd-head .badge')?.textContent === '精修中',
+        null, { timeout: 5000 });
+      const listText = await page.evaluate(() => document.querySelector('[data-project-row]').textContent);
+      ok('the list row picks up 精修中 too, not just the detail panel', listText.includes('精修中'), listText);
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN });
+}
+
+{
+  const m = pickFakeWorker({ ownerName: 'Leo' });
+  m.state.submissions.push({
+    id: 's1', picker_id: 'picker-0', relationship: '本人', email: null,
+    photo_keys: ['20260819/p0.jpg'], count: 1, pick_limit: null, extra_price: null,
+    created_at: '2026-09-27T14:52:00.000Z',
+  });
+  m.state.selections.set('20260819/p0.jpg', { rating: 5, note: '', updated_by: 'picker-0', updated_at: '2026-09-27T14:52:00.000Z' });
+  await suite('admin — 專案選片：時間顯示轉為 Asia/Taipei（9/27 22:52，不是原始 ISO）',
+    `${base}/admin.html`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('[data-open-project]', { timeout: 5000 });
+      await page.click('[data-open-project]');
+      await page.waitForSelector('#pd-submissions .pd-submission');
+      const r = await page.evaluate(() => ({
+        submission: document.querySelector('.pd-submission').textContent,
+        selectionRow: document.querySelector('#project-detail-body table tbody tr').textContent,
+      }));
+      ok('the submission time is shown in Taipei time, not raw ISO',
+        r.submission.includes('9/27 22:52') && !r.submission.includes('2026-09-27T'), r.submission);
+      ok('the selection’s updated time is too', r.selectionRow.includes('9/27 22:52'), r.selectionRow);
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN });
+}
+
+{
+  const m = pickFakeWorker({ ownerName: 'Mona' });
+  m.state.selections.set('20260819/p0.jpg', { rating: 5, note: '', updated_by: 'picker-0', updated_at: '2026-01-01T00:00:00Z' });
+  await suite('admin — 專案選片：選取表格的「星等」欄改成 ♥',
+    `${base}/admin.html`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('[data-open-project]', { timeout: 5000 });
+      await page.click('[data-open-project]');
+      await page.waitForSelector('#project-detail-body table tbody tr');
+      const r = await page.evaluate(() => ({
+        headers: [...document.querySelectorAll('#project-detail-body table thead th')].map(th => th.textContent),
+        cell: document.querySelectorAll('#project-detail-body table tbody tr td')[1]?.textContent,
+      }));
+      ok('the header is ♥, not 星等', r.headers.includes('♥') && !r.headers.includes('星等'), JSON.stringify(r.headers));
+      ok('the cell shows ♥', r.cell === '♥', r.cell);
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN });
+}
+
+await suite('版本號 — admin shows the asset version it loaded',
+  `${base}/admin.html`,
+  async page => {
+    await page.waitForFunction(() => (document.getElementById('buildVersion') || {}).textContent, null, { timeout: 5000 }).catch(() => {});
+    const text = await page.evaluate(() => { const el = document.getElementById('buildVersion'); return el ? el.textContent : null; });
+    const inHeader = await page.evaluate(() => !!document.querySelector('header #buildVersion'));
+    return [
+      `${/^v\d{8}[a-z]?$/.test(text || '') ? 'ok  ' : 'FAIL'}  the header names the version   [${text}]`,
+      `${inHeader ? 'ok  ' : 'FAIL'}  and it sits in the header`,
+    ];
+  });
 
 await browser.close();
 server.close();
