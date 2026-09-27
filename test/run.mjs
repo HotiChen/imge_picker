@@ -5368,6 +5368,18 @@ await suite('index.html — 專案選片：沒有 ?project= 時，攝影師模�
     { before: m.attach, initScript: ADMIN });
 }
 
+await suite('版本號 — admin shows the asset version it loaded',
+  `${base}/admin.html`,
+  async page => {
+    await page.waitForFunction(() => (document.getElementById('buildVersion') || {}).textContent, null, { timeout: 5000 }).catch(() => {});
+    const text = await page.evaluate(() => { const el = document.getElementById('buildVersion'); return el ? el.textContent : null; });
+    const inHeader = await page.evaluate(() => !!document.querySelector('header #buildVersion'));
+    return [
+      `${/^v\d{8}[a-z]?$/.test(text || '') ? 'ok  ' : 'FAIL'}  the header names the version   [${text}]`,
+      `${inHeader ? 'ok  ' : 'FAIL'}  and it sits in the header`,
+    ];
+  });
+
 await browser.close();
 server.close();
 // A filter that matches nothing must not read as a pass.
