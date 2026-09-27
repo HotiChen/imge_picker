@@ -275,6 +275,7 @@
                 return;
             }
             this._applyState(data);
+            this._renderStudioHeader();
             this._updateSubmitButton();
 
             if (!this.isOwner && this.ownerName === null) {
@@ -301,6 +302,38 @@
             this.selections = new Map(
                 (data.selections || []).map(s => [s.photo_key, { rating: s.rating || 0, note: s.note || '' }])
             );
+            this.studio = data.studio || null;
+        },
+
+        // Header branding for a guest pick link (docs/dashboard-settings.md):
+        // GET /api/pick/state's studio.{name, booking_url, has_logo}. Every
+        // value here is guest-untrusted server data — name/alt go through
+        // textContent, the logo is loaded by property assignment (never
+        // built into an HTML string), and the booking link's href is set
+        // only when it starts with https://, so anything else (or nothing)
+        // leaves the link hidden with its href untouched.
+        _renderStudioHeader() {
+            const studio = this.studio;
+            if (!studio) return;
+            if (studio.name) {
+                const nameEl = document.querySelector('.logo-name');
+                if (nameEl) nameEl.textContent = studio.name;
+            }
+            if (studio.has_logo) {
+                const markEl = document.querySelector('.logo-mark');
+                if (markEl) {
+                    const img = document.createElement('img');
+                    img.className = 'logo-mark-img';
+                    img.alt = studio.name || 'Studio logo';
+                    img.src = `${CONFIG.WORKER_URL}/api/studio/logo`;
+                    markEl.replaceWith(img);
+                }
+            }
+            const link = document.getElementById('studioBookingLink');
+            if (link && typeof studio.booking_url === 'string' && studio.booking_url.startsWith('https://')) {
+                link.href = studio.booking_url;
+                link.hidden = false;
+            }
         },
 
         _updateSubmitButton() {

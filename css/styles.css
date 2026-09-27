@@ -169,12 +169,29 @@ body {
   flex-shrink: 0;
 }
 
+/* A studio's own logo (guest pick page, docs/dashboard-settings.md) replaces
+   the "選" mark — same box, an <img> instead of text. */
+.logo-mark-img {
+  width: 22px;
+  height: 22px;
+  object-fit: contain;
+  flex-shrink: 0;
+  border-radius: 2px;
+  background: var(--card);
+}
+
 .logo-name {
   font-size: 14px;
   font-weight: 600;
   color: var(--ink);
   white-space: nowrap;
   flex-shrink: 0;
+}
+
+/* 預約拍攝 — only shown to a guest whose studio has an https booking_url set
+   (js/pick.js, _renderStudioHeader). */
+#studioBookingLink {
+  white-space: nowrap;
 }
 
 .logo-label {

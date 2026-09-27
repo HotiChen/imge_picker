@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Studio Dashboard — 儀表板</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #15120d;
+    --surface: #1d1a14;
+    --card: #221f18;
+    --card-hi: #2b271e;
+    --accent: #e5a448;
+    --accent-dim: rgba(229,164,72,.16);
+    --ink-90: #e8e3da;
+    --ink-70: rgba(232,227,218,.72);
+    --ink-55: #8c8375;
+    --rule: #2e2a22;
+    --border: #3a3528;
+    --danger: #e05c5c;
+    --success: #4caf7d;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--ink-90); font-family: 'IBM Plex Sans', sans-serif; font-size: 14px; min-height: 100vh; }
+  .mono { font-family: 'IBM Plex Mono', monospace; }
+
+  header { background: var(--surface); border-bottom: 1px solid var(--rule); padding: 0 24px; display: flex; align-items: center; gap: 16px; height: 52px; }
+  header .brand { color: var(--accent); font-family: 'IBM Plex Mono', monospace; font-size: 13px; letter-spacing: 0.15em; }
+  header .subtitle { color: var(--ink-55); font-size: 12px; }
+  header .spacer { flex: 1; }
+  .btn-logout { background: transparent; border: 1px solid var(--border); color: var(--ink-55); padding: 5px 12px; border-radius: 4px; cursor: pointer; font-size: 12px; font-family: inherit; }
+  .btn-logout:hover { border-color: var(--danger); color: var(--danger); }
+
+  /* ── Shared side menu (js/side-nav.js) — also in admin.html / settings.html */
+  .app-shell { display: flex; align-items: stretch; min-height: calc(100vh - 52px); }
+  .side-nav { width: 190px; flex-shrink: 0; background: var(--surface); border-right: 1px solid var(--rule); padding: 20px 14px; }
+  .side-nav-brand { color: var(--ink-55); font-size: 10px; letter-spacing: 0.2em; padding: 0 10px 12px; border-bottom: 1px solid var(--rule); margin-bottom: 10px; }
+  .side-nav-list { display: flex; flex-direction: column; gap: 2px; }
+  .side-nav-item { display: block; text-align: left; background: none; border: none; color: var(--ink-70); text-decoration: none; padding: 9px 10px; border-radius: 5px; font-size: 13px; font-family: inherit; cursor: pointer; }
+  .side-nav-item:hover { background: var(--card); color: var(--ink-90); }
+  .side-nav-item.active { background: var(--accent-dim); color: var(--accent); font-weight: 600; }
+  .side-nav-logout { margin-top: 14px; border-top: 1px solid var(--rule); padding-top: 14px; color: var(--ink-55); }
+  .side-nav-logout:hover { color: var(--danger); background: none; }
+
+  main { flex: 1; min-width: 0; padding: 24px; max-width: 1000px; }
+  h2 { font-size: 16px; font-weight: 600; margin-bottom: 14px; }
+
+  .stat-cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 28px; }
+  .stat-card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 16px 18px; }
+  .stat-card .n { font-size: 28px; font-weight: 700; font-family: 'IBM Plex Mono', monospace; color: var(--accent); }
+  .stat-card .label { font-size: 12px; color: var(--ink-55); margin-top: 4px; }
+
+  .panel { border: 1px solid var(--border); border-radius: 6px; background: var(--surface); margin-bottom: 24px; }
+  .panel-body { padding: 18px 20px; }
+
+  /* per-month bar chart — pure CSS, no chart library */
+  .chart-legend { display: flex; gap: 16px; font-size: 11px; color: var(--ink-55); margin-bottom: 14px; }
+  .chart-legend .sw { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 5px; vertical-align: middle; }
+  .sw-created { background: var(--accent); }
+  .sw-delivered { background: var(--success); }
+  .chart { display: flex; align-items: flex-end; gap: 6px; height: 140px; }
+  .chart-col { flex: 1; display: flex; align-items: flex-end; justify-content: center; gap: 2px; height: 100%; min-width: 0; }
+  .chart-bar { width: 40%; border-radius: 2px 2px 0 0; min-height: 1px; }
+  .chart-bar.created { background: var(--accent); }
+  .chart-bar.delivered { background: var(--success); }
+  .chart-labels { display: flex; gap: 6px; margin-top: 6px; }
+  .chart-labels span { flex: 1; text-align: center; font-size: 9px; color: var(--ink-55); font-family: 'IBM Plex Mono', monospace; white-space: nowrap; }
+
+  .todo-list { list-style: none; }
+  .todo-list li { display: flex; justify-content: space-between; align-items: center; padding: 10px 0; border-top: 1px solid var(--rule); font-size: 13px; }
+  .todo-list li:first-child { border-top: none; }
+  .todo-list a { color: var(--accent); text-decoration: none; font-size: 12px; }
+  .todo-list a:hover { text-decoration: underline; }
+  .todo-empty { color: var(--ink-55); font-size: 13px; padding: 6px 0; }
+
+  .recent-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 0; border-top: 1px solid var(--rule); font-size: 13px; }
+  .recent-row:first-child { border-top: none; }
+  .recent-row a { color: var(--ink-90); text-decoration: none; }
+  .recent-row a:hover { color: var(--accent); }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-family: 'IBM Plex Mono', monospace; }
+  .badge-pending { background: rgba(229,164,72,0.15); color: var(--accent); }
+  .badge-approved { background: rgba(76,175,125,0.15); color: var(--success); }
+  .empty { text-align: center; padding: 24px 0; color: var(--ink-55); font-size: 13px; }
+</style>
+</head>
+<body>
+
+<header>
+  <span class="brand">STUDIO</span>
+  <span class="subtitle">儀表板</span>
+  <span id="buildVersion"></span>
+  <span class="spacer"></span>
+  <button class="btn-logout" id="logout-btn">登出</button>
+</header>
+
+<div class="app-shell">
+  <aside id="sideNav" class="side-nav"></aside>
+  <main>
+    <h2>總覽</h2>
+    <div class="stat-cards">
+      <div class="stat-card"><div class="n" id="stat-picking">–</div><div class="label">選片中</div></div>
+      <div class="stat-card"><div class="n" id="stat-submitted">–</div><div class="label">已送出</div></div>
+      <div class="stat-card"><div class="n" id="stat-retouching">–</div><div class="label">精修中</div></div>
+      <div class="stat-card"><div class="n" id="stat-delivered">–</div><div class="label">已交付</div></div>
+    </div>
+
+    <h2>每月新增 / 交付</h2>
+    <div class="panel">
+      <div class="panel-body">
+        <div class="chart-legend">
+          <span><span class="sw sw-created"></span>新增</span>
+          <span><span class="sw sw-delivered"></span>交付</span>
+        </div>
+        <div class="chart" id="stat-chart"><div class="empty">載入中…</div></div>
+        <div class="chart-labels" id="stat-chart-labels"></div>
+      </div>
+    </div>
+
+    <h2>待處理</h2>
+    <div class="panel">
+      <div class="panel-body">
+        <ul class="todo-list" id="todo-list"><li class="todo-empty">載入中…</li></ul>
+      </div>
+    </div>
+
+    <h2>最近專案</h2>
+    <div class="panel">
+      <div class="panel-body">
+        <div id="recent-projects"><div class="empty">載入中…</div></div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<script src="js/build-version.js?v=20260928e"></script>
+<script src="js/side-nav.js?v=20260928e"></script>
+<script>
+(function () {
+  const WORKER_URL = 'https://imagepicker.hotichen.workers.dev';
+  const TOKEN_KEY = 'studio_token';
+  const PHASE_LABEL = { picking: '選片中', submitted: '已送出', retouching: '精修中' };
+
+  // Unauthenticated → home.html, before any fetch is even attempted.
+  const token = SideNav.requireToken();
+  if (!token) { /* requireToken() already redirected */ }
+  else {
+    SideNav.render(document.getElementById('sideNav'), 'dashboard', SideNav.logoutToHome);
+    document.getElementById('logout-btn').addEventListener('click', SideNav.logoutToHome);
+
+    function escHtml(s) {
+      return String(s == null ? '' : s).replace(/[&<>"']/g, c => (
+        { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+      ));
+    }
+
+    async function authedGet(path) {
+      const r = await fetch(`${WORKER_URL}${path}`, { headers: { 'Authorization': `Bearer ${token}` } });
+      if (r.status === 401) { SideNav.logoutToHome(); return null; }
+      if (!r.ok) throw new Error(`${r.status}`);
+      return r.json();
+    }
+
+    function renderStats(s) {
+      const byPhase = s.by_phase || {};
+      document.getElementById('stat-picking').textContent = byPhase.picking ?? 0;
+      document.getElementById('stat-submitted').textContent = byPhase.submitted ?? 0;
+      document.getElementById('stat-retouching').textContent = byPhase.retouching ?? 0;
+      document.getElementById('stat-delivered').textContent = s.delivered ?? 0;
+
+      const months = Array.isArray(s.per_month) ? s.per_month : [];
+      const chart = document.getElementById('stat-chart');
+      const labels = document.getElementById('stat-chart-labels');
+      if (!months.length) {
+        chart.innerHTML = '<div class="empty">尚無資料</div>';
+        labels.innerHTML = '';
+      } else {
+        const max = Math.max(1, ...months.map(m => Math.max(m.created || 0, m.delivered || 0)));
+        chart.innerHTML = months.map(m => {
+          const cH = Math.round((m.created || 0) / max * 100);
+          const dH = Math.round((m.delivered || 0) / max * 100);
+          return `<div class="chart-col" title="${escHtml(m.month)} 新增 ${escHtml(m.created)}、交付 ${escHtml(m.delivered)}">
+            <div class="chart-bar created" style="height:${cH}%"></div>
+            <div class="chart-bar delivered" style="height:${dH}%"></div>
+          </div>`;
+        }).join('');
+        labels.innerHTML = months.map(m => `<span>${escHtml((m.month || '').slice(5))}</span>`).join('');
+      }
+
+      const todo = s.todo || {};
+      const items = [
+        { n: todo.submitted_not_retouching || 0, label: '個專案已送出但尚未開始精修' },
+        { n: todo.unnotified_submissions || 0, label: '次送出尚未寄信通知' },
+        { n: todo.modified_after_submit || 0, label: '個專案送出後又被修改' },
+      ].filter(i => i.n > 0);
+      const list = document.getElementById('todo-list');
+      list.innerHTML = items.length
+        ? items.map(i => `<li><span>${escHtml(i.n)} ${escHtml(i.label)}</span><a href="admin.html#projects">查看 →</a></li>`).join('')
+        : '<li class="todo-empty">目前沒有待處理事項</li>';
+    }
+
+    function renderRecent(projects) {
+      const box = document.getElementById('recent-projects');
+      const list = (projects || []).slice(0, 5);
+      box.innerHTML = list.length
+        ? list.map(p => `<div class="recent-row">
+            <a href="admin.html#project=${encodeURIComponent(p.id)}">${escHtml(p.title || '（未命名）')}</a>
+            <span>
+              <span class="badge badge-approved">${escHtml(PHASE_LABEL[p.phase] || p.phase || '')}</span>
+              ${p.delivered_at ? '<span class="badge badge-pending">已交付</span>' : ''}
+            </span>
+          </div>`).join('')
+        : '<div class="empty">尚未建立過專案</div>';
+    }
+
+    (async function load() {
+      try {
+        const stats = await authedGet('/api/admin/stats');
+        if (stats) renderStats(stats);
+      } catch (e) {
+        document.getElementById('stat-chart').innerHTML = '<div class="empty">讀取失敗</div>';
+      }
+      try {
+        const data = await authedGet('/api/admin/projects');
+        if (data) renderRecent(data.projects);
+      } catch (e) {
+        document.getElementById('recent-projects').innerHTML = '<div class="empty">讀取失敗</div>';
+      }
+    })();
+  }
+})();
+</script>
+</body>
+</html>
