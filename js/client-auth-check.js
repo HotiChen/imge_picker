@@ -47,7 +47,70 @@
     return store.get('studio_token');
   }
 
+  // ── folder switcher: every folder this client's token opens, listed in the
+  // left 資料夾 panel (docs/guest-picking.md — the same panel js/pick.js uses
+  // for guests, and the same one app.js normally fills with the subfolder
+  // tree of whichever folder is loaded). Populated once the mint answers
+  // (applyScope), and re-rendered after every later load — including one a
+  // client reaches by drilling into a subfolder from the photo grid — so it
+  // is never lost to app.js's own tree render, which targets this same
+  // container.
+  let permittedFolders = [];
+
+  function renderFolderPanel(current) {
+    const container = document.getElementById('folderTreeContainer');
+    const list = document.getElementById('folderTree');
+    if (!container || !list) return;
+    if (!permittedFolders.length) { container.style.display = 'none'; return; }
+    container.style.display = 'block';
+    list.innerHTML = '';
+    permittedFolders.forEach(f => {
+      const row = document.createElement('div');
+      row.className = 'tree-row' + (f === current ? ' tree-active' : '');
+      row.dataset.folder = f;
+      const icon = document.createElement('span');
+      icon.className = 'tree-icon';
+      icon.textContent = '📁';
+      const label = document.createElement('span');
+      label.className = 'tree-label';
+      label.textContent = f.replace(/\/$/, '').split('/').pop() || f;
+      label.title = f;
+      row.appendChild(icon);
+      row.appendChild(label);
+      row.addEventListener('click', () => selectFolder(f));
+      list.appendChild(row);
+    });
+    const scopeEl = document.getElementById('client-scope');
+    if (scopeEl) scopeEl.textContent = current || '';
+  }
+
+  function selectFolder(folder) {
+    if (!folder) return;
+    if (typeof CONFIG !== 'undefined') CONFIG.DEFAULT_FOLDER = folder;
+    if (window.app && typeof app.handleLoadPhotos === 'function') app.handleLoadPhotos(folder);
+  }
+
+  // Wrapped once app exists, mirroring js/pick.js's own hook on the same
+  // method: every load repaints this list with the newly current folder
+  // highlighted, whether the load was triggered by clicking a row here, by
+  // app.js's own initial scope()-driven load, or by drilling into a subfolder
+  // from the grid.
+  function wireFolderPanelRerender() {
+    if (!window.app || app.__folderPanelWired) return;
+    app.__folderPanelWired = true;
+    const orig = app.handleLoadPhotos.bind(app);
+    app.handleLoadPhotos = async (path) => {
+      await orig(path);
+      renderFolderPanel(driveManager.currentFolderId || path);
+    };
+  }
+
   document.addEventListener('DOMContentLoaded', function () {
+    // A pick link (index.html?t=...) owns the page — see js/pick.js. Neither
+    // the studio/client choice overlay nor a stray studio_token in this same
+    // browser has anything to do with a guest opening it from LINE.
+    if (window.PickController && window.PickController.active) return;
+
     const clientSession = getClientSession();
     const studioToken = getStudioToken();
 
@@ -65,26 +128,18 @@
     }
   });
 
-  function findFolderInput() {
-    return document.getElementById('folderPath') || document.getElementById('folder-path') ||
-      document.querySelector('input[type="text"][placeholder*="料夾"]') ||
-      document.querySelector('input[type="text"][placeholder*="folder"]');
-  }
-
   function applyClientRestrictions(session) {
     const { user, permissions } = session;
 
-    // Lock the path box. What goes in it is settled by the mint below, not by
-    // the folder_path in this session: that was snapshotted at login and an
-    // admin may have narrowed the account since, and it is whatever they typed
-    // — `20260819` without the slash is a prefix the Worker refuses, because
-    // it would also reach 20260819-other/.
-    const folderInput = findFolderInput();
-    if (folderInput) {
-      folderInput.readOnly = true;
-      folderInput.style.opacity = '0.7';
-      folderInput.style.cursor = 'not-allowed';
-    }
+    // Remove the path box and LOAD button outright, not merely lock them: a
+    // client has nothing to type there (what loads is settled by the mint
+    // below, via the left 資料夾 panel, not by the folder_path in this
+    // session, which was snapshotted at login and may since have been
+    // narrowed), and a read-only box still looks like a control worth trying.
+    // Removed rather than hidden for the same reason uploadPageBtn /
+    // openBookEditorBtn below are: .btn carries display:inline-flex, which
+    // beats the UA stylesheet's [hidden] { display: none }.
+    document.querySelector('.sidebar-section:first-child .input-group')?.remove();
 
     // A client has no use for these and cannot use them either: both pages
     // accept only the photographer's credential, so clicking one asked a
@@ -182,54 +237,14 @@
 
     // The token opens all of them. Showing only the first leaves the client no
     // way to learn the rest exist, which is worse than showing none: they
-    // cannot even ask about what they cannot see.
-    // One folder reads as a label, the way it always has. Chips are for the
-    // case they exist for, and only then.
-    if (folders.length === 1) {
-      if (scopeEl) scopeEl.textContent = folders[0];
-      openFolder(folders[0], false);
-      return;
-    }
-
-    if (scopeEl) {
-      scopeEl.textContent = '';
-      folders.forEach((f, i) => {
-        const b = document.createElement('button');
-        b.type = 'button';
-        b.dataset.folder = f;
-        b.textContent = f.replace(/\/$/, '').split('/').pop() || f;
-        b.title = f;
-        b.style.cssText = [
-          'background:transparent', 'border:0', 'padding:2px 6px',
-          'border-radius:3px', 'cursor:pointer', 'font:inherit', 'color:inherit',
-        ].join(';');
-        b.addEventListener('click', () => openFolder(f, true));
-        scopeEl.appendChild(b);
-        if (i < folders.length - 1) scopeEl.appendChild(document.createTextNode('·'));
-      });
-    }
-    openFolder(folders[0], false);
-  }
-
-  // Marks the active one and actually loads it — relabelling the bar without
-  // reloading would look like a working switch and show the wrong photos.
-  // `load` is false while setting up: a client who followed a link into a
-  // subfolder of their scope is already looking at it, and loading the first
-  // folder on top would yank them back to the root.
-  function openFolder(folder, load) {
-    if (!folder) return;
-    const scopeEl = document.getElementById('client-scope');
-    if (scopeEl) {
-      scopeEl.querySelectorAll('[data-folder]').forEach(el => {
-        const on = el.dataset.folder === folder;
-        el.style.color = on ? '#e8e3da' : '';
-        el.style.background = on ? 'rgba(255,255,255,0.08)' : 'transparent';
-      });
-    }
-    const folderInput = findFolderInput();
-    if (folderInput) folderInput.value = folder;
-    if (typeof CONFIG !== 'undefined') CONFIG.DEFAULT_FOLDER = folder;
-    if (load && window.app && typeof app.handleLoadPhotos === 'function') app.handleLoadPhotos(folder);
+    // cannot even ask about what they cannot see. Switching now lives in the
+    // left 資料夾 panel (renderFolderPanel) rather than a bottom-bar chip row;
+    // this bar just names where the client currently is.
+    permittedFolders = folders;
+    if (typeof CONFIG !== 'undefined') CONFIG.DEFAULT_FOLDER = folders[0];
+    wireFolderPanelRerender();
+    renderFolderPanel(folders[0]);
+    if (scopeEl) scopeEl.textContent = folders[0];
   }
 
   function showBlockedNotice(message) {

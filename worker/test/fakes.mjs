@@ -170,6 +170,20 @@ export function fakeDB({ schema } = {}) {
     // statements issued vs rows actually changed: under parallel requests only
     // the second is a meaningful bound
     _changed: () => rowsChanged,
+    // D1's batch() runs its statements as one transaction: all of them land or
+    // none does, and nothing else runs in between
+    async batch(statements) {
+      db.exec('BEGIN');
+      try {
+        const out = [];
+        for (const s of statements) out.push(await s.run());
+        db.exec('COMMIT');
+        return out;
+      } catch (e) {
+        db.exec('ROLLBACK');
+        throw e;
+      }
+    },
     prepare(sql) {
       const stmt = db.prepare(sql); // throws on malformed SQL, exactly as D1 does
       return {

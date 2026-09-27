@@ -70,7 +70,107 @@ CREATE TABLE IF NOT EXISTS share_tokens (
   -- are told apart by this column and never by the shape of `folders`.
   -- Appended for the same reason, from the same migration:
   --   ALTER TABLE share_tokens ADD COLUMN kind TEXT NOT NULL DEFAULT 'client';
-  kind         TEXT NOT NULL DEFAULT 'client'
+  -- A fourth kind, 'pick', is the guest-picking link (docs/guest-picking.md):
+  -- sent like 'client', but it opens the /api/pick routes and photo reads
+  -- inside its folders and nothing else.
+  kind         TEXT NOT NULL DEFAULT 'client',
+  -- The project a 'pick' row belongs to; NULL on every other kind. Appended
+  -- for the same reason as the two above, from a hand-run
+  --   ALTER TABLE share_tokens ADD COLUMN project_id TEXT;
+  -- (worker/migrations/2026-09-27-guest-picking.sql has the whole paste).
+  project_id   TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_share_tokens_book ON share_tokens(book_id);
 CREATE INDEX IF NOT EXISTS idx_share_tokens_user ON share_tokens(user_id);
+
+-- ─── Guest picking (docs/guest-picking.md) ─────────────────────────────────
+-- New tables, so a deployed database gets them from the same migration file
+-- as the column above: worker/migrations/2026-09-27-guest-picking.sql.
+
+-- One shoot, one link. `folders` is the JSON array the link's snapshot was
+-- taken from. owner_picker_id is the seat: NULL is free, and the only write
+-- that fills it is the conditional UPDATE in POST /api/pick/claim, which is
+-- what makes two simultaneous claims produce exactly one owner.
+CREATE TABLE IF NOT EXISTS projects (
+  id              TEXT PRIMARY KEY,
+  title           TEXT NOT NULL DEFAULT '',
+  folders         TEXT NOT NULL,          -- JSON array
+  pick_limit      INTEGER,                -- NULL = no limit
+  extra_price     INTEGER,                -- NT$ per extra photo, NULL = not shown
+  owner_picker_id TEXT,                   -- NULL = seat free
+  created_at      TEXT NOT NULL,
+  -- Whose project this is. One photographer today, so every row is
+  -- 'default'; it is here so the data is attributable from the first row,
+  -- before any multi-photographer auth exists. Set by the Worker, never taken
+  -- from a request body.
+  photographer_id TEXT NOT NULL DEFAULT 'default',
+  -- picking → submitted → retouching. The guest saves in the first two and
+  -- submits from them; in retouching nothing the guest does writes. Only the
+  -- admin routes start-retouch and reopen move it anywhere but 'submitted'.
+  phase           TEXT NOT NULL DEFAULT 'picking'
+                  CHECK (phase IN ('picking','submitted','retouching')),
+  -- 1 = the owner saved after the last submit and has not submitted again.
+  -- A save never emails; this is how the photographer finds out.
+  modified_after_submit INTEGER NOT NULL DEFAULT 0,
+  -- when the photographer was last emailed about a submit; a submit
+  -- inside ten minutes of it is recorded but not mailed. NULL = never.
+  last_notified_at TEXT
+);
+
+-- Everyone who ever held the seat. key_hash is the SHA-256 of the bearer key
+-- handed out once at claim; the key itself is never stored. relationship and
+-- email are the latest contact info the picker gave at submit; the submit
+-- record itself is a row in `submissions`.
+CREATE TABLE IF NOT EXISTS pickers (
+  id           TEXT PRIMARY KEY,
+  project_id   TEXT NOT NULL,
+  key_hash     TEXT NOT NULL,             -- SHA-256 of the bearer key
+  name         TEXT NOT NULL,
+  relationship TEXT,
+  email        TEXT,
+  user_id      INTEGER,
+  created_at   TEXT NOT NULL
+);
+
+-- One list per project, so a seat reset never loses a pick. updated_by is the
+-- picker id, for the photographer's view.
+CREATE TABLE IF NOT EXISTS selections (
+  project_id TEXT NOT NULL,
+  photo_key  TEXT NOT NULL,
+  rating     INTEGER NOT NULL DEFAULT 0,
+  note       TEXT NOT NULL DEFAULT '',
+  updated_by TEXT NOT NULL,               -- picker id
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (project_id, photo_key)
+);
+
+-- One row per submit, never updated or deleted: the record an extra-photo
+-- fee is charged from, and what the next submit's email is diffed against.
+-- The snapshot is taken in the same statement that checks the seat and the
+-- phase, so it is exactly the list that was submitted.
+CREATE TABLE IF NOT EXISTS submissions (
+  id           TEXT PRIMARY KEY,
+  project_id   TEXT NOT NULL,
+  picker_id    TEXT NOT NULL,
+  relationship TEXT NOT NULL,
+  email        TEXT,
+  photo_keys   TEXT NOT NULL,             -- JSON array, rating >= 1, key order
+  count        INTEGER NOT NULL,
+  pick_limit   INTEGER,                   -- the plan as it stood at submit
+  extra_price  INTEGER,
+  created_at   TEXT NOT NULL,
+  -- 1 = the photographer was emailed about this submit; 0 = throttled,
+  -- unchanged since the last email, or the mail failed / is not set up
+  notified     INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_submissions_project ON submissions(project_id, created_at);
+
+-- Deferred feature (invites), table now. Nothing reached through a link or a
+-- claim writes this table; only an admin route may write role = 'owner'.
+CREATE TABLE IF NOT EXISTS project_members (
+  project_id  TEXT NOT NULL,
+  user_id     INTEGER NOT NULL,
+  role        TEXT NOT NULL CHECK (role IN ('owner','editor','viewer')),
+  approved_at TEXT,
+  PRIMARY KEY (project_id, user_id)
+);

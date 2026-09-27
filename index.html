@@ -13,7 +13,7 @@
     <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 
     <!-- Stylesheets -->
-    <link rel="stylesheet" href="css/styles.css?v=20260922b">
+    <link rel="stylesheet" href="css/styles.css?v=20260927c">
 
     <!-- Shows a startup error on screen instead of leaving a blank page.
          Stays inline and first so it is listening before anything else runs. -->
@@ -79,12 +79,40 @@
         </div>
 
         <div class="header-right">
+            <span id="pickCounter" class="pick-counter" hidden>
+                <span id="pickCounterMain"></span>
+                <span id="pickCounterWarn" class="pick-counter-warn" hidden></span>
+            </span>
             <button id="submitJobBtn" class="btn btn-success" style="display: none;">✅ 完成挑圖</button>
             <a href="upload.html" class="btn btn-outline" id="uploadPageBtn">⬆ 上傳</a>
             <button id="openBookEditorBtn" class="btn btn-outline">📖 相本書</button>
             <div class="user-avatar-circle" id="userAvatarStudio">HC</div>
         </div>
     </header>
+
+    <!-- Guest picking (docs/guest-picking.md) — someone else holding the seat,
+         or a phase notice for the owner. Every line is set via textContent in
+         js/pick.js: an owner's name is guest-supplied and must never become
+         markup. -->
+    <div id="pickBanner" class="pick-banner" hidden>
+        <div id="pickBannerLines"></div>
+        <div id="pickBannerHint" class="pick-banner-hint" hidden>
+            <span id="pickBannerHintText"></span>
+            <span>請攝影師重設</span>
+        </div>
+    </div>
+
+    <!-- Guest picking — the free-seat name prompt. Blocks the page until a
+         name is given or the seat turns out to already be taken. -->
+    <div id="pickClaimOverlay" class="pick-claim-overlay" hidden>
+        <div class="pick-claim-card">
+            <div class="pick-claim-title">開始選片</div>
+            <div id="pickClaimProject" class="pick-claim-project"></div>
+            <input id="pickNameInput" type="text" class="input" placeholder="請輸入您的姓名" maxlength="50">
+            <button id="pickClaimBtn" class="btn btn-primary btn-block">開始選片</button>
+            <div id="pickClaimErr" class="pick-claim-err"></div>
+        </div>
+    </div>
 
     <!-- Main Content -->
     <main class="main-content">
@@ -153,6 +181,15 @@
                 <button class="btn btn-outline btn-block" id="filterSelectedBtn" style="margin-top:8px; font-size:10px;">
                     🧺 只看選取 (<span id="selectedCountBadge">0</span>)
                 </button>
+                <!-- Guest picking (docs/guest-picking.md) — filled and shown by
+                     js/pick.js in place of the star filter + 只看選取 above,
+                     which pick.js removes from the DOM for a guest. Other
+                     modes never unhide this. -->
+                <div id="pickFilterBar" class="pick-filter-bar" hidden>
+                    <button type="button" class="pick-filter-btn active" data-pick-filter="all">全部</button>
+                    <button type="button" class="pick-filter-btn" data-pick-filter="selected">♥ 已選 (<span id="pickFilterSelectedCount">0</span>)</button>
+                    <button type="button" class="pick-filter-btn" data-pick-filter="unselected">未選</button>
+                </div>
             </div>
 
             <!-- 03 / FLAGS (placeholder — Phase 2 will wire these) -->
@@ -516,6 +553,40 @@
         </div>
     </div>
 
+    <!-- Guest picking — the real submit, replacing the old fake submitJob().
+         Every field here is rendered back only through textContent/value, and
+         relationship comes from the fixed <option> list below, never typed. -->
+    <div id="pickSubmitModal" class="modal">
+        <div class="modal-overlay"></div>
+        <div class="modal-content pick-submit-content">
+            <h3>送出選片結果</h3>
+            <div class="pick-field">
+                <label for="pickSubmitName">姓名</label>
+                <input id="pickSubmitName" type="text" class="input" maxlength="50" readonly>
+            </div>
+            <div class="pick-field">
+                <label for="pickSubmitRelationship">與新人的關係 <span class="pick-required">*</span></label>
+                <select id="pickSubmitRelationship" class="select">
+                    <option value="">請選擇</option>
+                    <option value="本人">本人</option>
+                    <option value="伴侶">伴侶</option>
+                    <option value="家人">家人</option>
+                    <option value="朋友">朋友</option>
+                    <option value="其他">其他</option>
+                </select>
+            </div>
+            <div class="pick-field">
+                <label for="pickSubmitEmail">Email（選填）</label>
+                <input id="pickSubmitEmail" type="email" class="input" maxlength="254">
+            </div>
+            <div id="pickSubmitErr" class="pick-claim-err"></div>
+            <div class="pick-submit-actions">
+                <button id="pickSubmitCancelBtn" class="btn btn-outline">取消</button>
+                <button id="pickSubmitConfirmBtn" class="btn btn-success">確認送出</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Global Loading Modal -->
     <div id="loadingModal" class="modal">
         <div class="modal-overlay"></div>
@@ -539,18 +610,19 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 
     <!-- Scripts -->
-    <script src="js/build-version.js?v=20260922b"></script>
-    <script src="js/config.js?v=20260922b"></script>
-    <script src="js/studio-token.js?v=20260922b"></script>
-    <script src="js/session-token.js?v=20260922b"></script>
-    <script src="js/client-auth-check.js?v=20260922b"></script>
-    <script src="js/toast.js?v=20260922b"></script>
-    <script src="js/logger.js?v=20260922b"></script>
-    <script src="js/diagnostics.js?v=20260922b"></script>
-    <script src="js/drive.js?v=20260922b"></script>
-    <script src="js/annotation.js?v=20260922b"></script>
-    <script src="js/rating.js?v=20260922b"></script>
-    <script src="js/app.js?v=20260922b"></script>
+    <script src="js/build-version.js?v=20260927c"></script>
+    <script src="js/config.js?v=20260927c"></script>
+    <script src="js/studio-token.js?v=20260927c"></script>
+    <script src="js/session-token.js?v=20260927c"></script>
+    <script src="js/pick.js?v=20260927c"></script>
+    <script src="js/client-auth-check.js?v=20260927c"></script>
+    <script src="js/toast.js?v=20260927c"></script>
+    <script src="js/logger.js?v=20260927c"></script>
+    <script src="js/diagnostics.js?v=20260927c"></script>
+    <script src="js/drive.js?v=20260927c"></script>
+    <script src="js/annotation.js?v=20260927c"></script>
+    <script src="js/rating.js?v=20260927c"></script>
+    <script src="js/app.js?v=20260927c"></script>
 </body>
 
 </html>

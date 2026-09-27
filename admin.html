@@ -120,6 +120,25 @@
   .panel-note { color: #8c8375; font-size: 12px; line-height: 1.7; margin: 0 0 8px; }
   .panel-note strong { color: #e8e3da; font-weight: 600; }
   .panel-result { color: #8c8375; font-size: 12px; margin-left: 10px; }
+
+  /* Guest picking — docs/guest-picking.md */
+  .pick-admin-field { margin-bottom: 12px; max-width: 420px; }
+  .pick-admin-field label { display: block; font-size: 12px; color: var(--ink-55); margin-bottom: 5px; }
+  .pick-admin-row { display: flex; gap: 16px; flex-wrap: wrap; }
+  .pick-admin-row .pick-admin-field { flex: 1; min-width: 180px; }
+  .pick-admin-result { margin-top: 14px; font-size: 12px; color: var(--ink-55); }
+  .pick-admin-link-row { display: flex; gap: 8px; margin-top: 6px; }
+  .pick-admin-link-row .field { font-family: 'IBM Plex Mono', monospace; font-size: 11px; }
+  .proj-recent-row { display: flex; align-items: center; justify-content: space-between;
+    gap: 10px; padding: 8px 14px; background: var(--surface); border: 1px solid var(--rule);
+    border-radius: 6px; margin-bottom: 6px; font-size: 13px; }
+  .pd-head { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
+  .pd-owner { color: var(--ink-55); font-size: 13px; margin-bottom: 14px; }
+  .pd-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; }
+  .pd-submission { padding: 10px 0; border-top: 1px solid var(--rule); font-size: 12px; }
+  .pd-submission:first-child { border-top: none; }
+  .pd-diff { color: var(--ink-55); margin-top: 4px; word-break: break-word; }
+  #project-detail-panel h4 { font-size: 13px; margin: 18px 0 8px; color: var(--ink-90); }
 </style>
 </head>
 <body>
@@ -167,6 +186,46 @@
       </div>
     </div>
 
+    <h2>選片專案（Guest Picking）</h2>
+    <div id="project-create-panel" class="panel">
+      <div class="panel-body">
+        <div class="pick-admin-field">
+          <label for="proj-title">標題</label>
+          <input id="proj-title" class="field" type="text" placeholder="例如：王小明 &amp; 陳小美 婚紗">
+        </div>
+        <div class="pick-admin-field">
+          <label>資料夾</label>
+          <div id="proj-folders-cell" class="folder-cell"></div>
+        </div>
+        <div class="pick-admin-row">
+          <div class="pick-admin-field">
+            <label for="proj-pick-limit">精修張數上限（留空 = 不限）</label>
+            <input id="proj-pick-limit" class="field" type="number" min="0" step="1">
+          </div>
+          <div class="pick-admin-field">
+            <label for="proj-extra-price">加選單價 NT$（留空 = 不顯示）</label>
+            <input id="proj-extra-price" class="field" type="number" min="0" step="1">
+          </div>
+        </div>
+        <button id="proj-create-btn" class="btn btn-accent" type="button">建立專案並產生連結</button>
+        <div id="proj-create-err" class="err"></div>
+        <div id="proj-create-result" class="pick-admin-result" style="display:none;">
+          <div>連結已建立，傳給客人開始選片：</div>
+          <div class="pick-admin-link-row">
+            <input id="proj-link-output" class="field" readonly>
+            <button id="proj-copy-link-btn" class="btn btn-outline" type="button">複製連結</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <h3 style="font-size:14px;margin-bottom:10px;">選片專案列表</h3>
+    <div id="proj-recent-list" style="margin-bottom:24px;"></div>
+
+    <div id="project-detail-panel" class="panel" style="display:none;">
+      <div class="panel-body" id="project-detail-body"></div>
+    </div>
+
     <h2>客戶列表</h2>
     <div class="table-wrap">
       <table id="clients-table">
@@ -191,7 +250,7 @@
   </main>
 </div>
 
-<script src="js/shoot-types.js?v=20260922b"></script>
+<script src="js/shoot-types.js?v=20260927c"></script>
 <script>
 (function() {
   const WORKER_URL = 'https://imagepicker.hotichen.workers.dev';
@@ -230,6 +289,8 @@
     loadClients();
     loadMinted();
     startAutoRefresh();
+    renderProjectFolders();
+    loadProjectList();
   }
 
   // ── Minted tokens ─────────────────────────────────────────────────────────
@@ -288,11 +349,6 @@
     adminView.style.display = 'none';
     loginView.style.display = 'flex';
   });
-
-  // Check if already logged in
-  if (getToken()) {
-    showAdmin();
-  }
 
   // ── Auto-refresh ──────────────────────────────────────────────────────────
   function startAutoRefresh() {
@@ -437,14 +493,29 @@
   // about which one is theirs. Held for as long as the picker is open.
   let pickerDate = '';
   let pickerMatch = null;
+  // 'client' (the row's folder_path) or 'project' (a new pick project's
+  // folders, guest-picking.md) — same overlay, different confirm target.
+  let pickerMode = 'client';
 
   let pickerWired = false;
   async function openFolderPicker(userId) {
     if (!pickerWired) { wireFolderPicker(); pickerWired = true; }
+    pickerMode = 'client';
     pickerFor = userId;
     pickerChosen = [];
     pickerDate = document.querySelector(`tr[data-id="${userId}"]`)?.dataset.clientShootDate || '';
     pickerMatch = shootDateFolderMatcher(pickerDate);
+    document.getElementById('folder-picker').style.display = 'flex';
+    await browseFolders('');
+  }
+
+  async function openProjectFolderPicker() {
+    if (!pickerWired) { wireFolderPicker(); pickerWired = true; }
+    pickerMode = 'project';
+    pickerFor = null;
+    pickerChosen = projectFolders.slice();
+    pickerDate = '';
+    pickerMatch = null;
     document.getElementById('folder-picker').style.display = 'flex';
     await browseFolders('');
   }
@@ -467,6 +538,12 @@
     const nav = e.target.closest('[data-browse]');
     if (nav) { browseFolders(nav.dataset.browse); return; }
     if (!e.target.closest('[data-confirm-folders]')) return;
+    if (pickerMode === 'project') {
+      projectFolders = pickerChosen.slice();
+      close();
+      renderProjectFolders();
+      return;
+    }
     const row = document.querySelector(`tr[data-id="${pickerFor}"]`);
     // a repair starts from nothing; an add keeps what is already there
     const existing = row && !row.querySelector('[data-folders-broken]') ? rowFolders(row) : [];
@@ -508,6 +585,326 @@
         <button type="button" class="btn btn-text" data-browse="${escHtml(f)}">進入 →</button>
       </div>`).join('');
     box.innerHTML = up + (rows || '<div class="empty">這層沒有子資料夾</div>');
+  }
+
+  // ── Guest picking — project admin (docs/guest-picking.md) ──────────────────
+  let projectFolders = [];
+  let currentProjectId = null;
+
+  function renderProjectFolders() {
+    const cell = document.getElementById('proj-folders-cell');
+    if (!cell) return;
+    const chips = projectFolders.map(f => `
+      <span class="folder-chip" data-folder-chip="${escHtml(f)}">${escHtml(f)}<button type="button" data-remove-proj-folder="${escHtml(f)}" title="移除">×</button></span>`).join('');
+    cell.innerHTML = (chips || '<span class="folder-none">尚未選擇</span>') +
+      '<button id="proj-pick-folders-btn" class="btn btn-outline" type="button">選擇資料夾</button>';
+    cell.querySelector('#proj-pick-folders-btn').addEventListener('click', openProjectFolderPicker);
+    cell.querySelectorAll('[data-remove-proj-folder]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        projectFolders = projectFolders.filter(f => f !== btn.dataset.removeProjFolder);
+        renderProjectFolders();
+      });
+    });
+  }
+
+  // GET /api/admin/projects — this photographer's projects, newest first,
+  // straight from the Worker (docs/guest-picking.md). Replaces the old
+  // per-browser localStorage cache: a project created on another browser
+  // (or another day) now shows up here too.
+  async function loadProjectList() {
+    const box = document.getElementById('proj-recent-list');
+    if (!box) return;
+    try {
+      const r = await fetch(`${WORKER_URL}/api/admin/projects`, {
+        headers: { 'Authorization': `Bearer ${getToken()}` },
+      });
+      if (!r.ok) { box.innerHTML = `<div class="empty">讀取失敗（${r.status}）</div>`; return; }
+      const data = await r.json();
+      renderProjectList(Array.isArray(data.projects) ? data.projects : []);
+    } catch (e) {
+      box.innerHTML = '<div class="empty">無法連線到 Worker</div>';
+    }
+  }
+
+  function renderProjectList(projects) {
+    const box = document.getElementById('proj-recent-list');
+    if (!box) return;
+    if (!projects.length) { box.innerHTML = '<div class="empty">尚未建立過專案</div>'; return; }
+    box.innerHTML = projects.map(p => `
+      <div class="proj-recent-row" data-project-row="${escHtml(p.id)}">
+        <div>
+          <span>${escHtml(p.title || '（未命名）')}</span>
+          <span class="badge badge-approved">${escHtml(PHASE_LABEL[p.phase] || p.phase || '')}</span>
+          ${p.modified_after_submit ? '<span class="badge badge-pending">已修改</span>' : ''}
+          ${p.unnotified_submissions ? `<span class="badge badge-pending">${escHtml(p.unnotified_submissions)} 次送出未寄信</span>` : ''}
+          <div class="pd-owner" style="margin:2px 0 0;">
+            ${p.owner_name ? escHtml(p.owner_name) : '<span class="folder-none">尚無人認領</span>'}
+            · 送出 ${escHtml(p.submission_count)} 次
+          </div>
+        </div>
+        <div class="actions">
+          ${p.token ? `<button type="button" class="btn btn-outline" data-copy-link="${escHtml(p.token)}">複製連結</button>` : ''}
+          <button type="button" class="btn btn-outline" data-open-project="${escHtml(p.id)}">開啟</button>
+        </div>
+      </div>`).join('');
+    box.querySelectorAll('[data-open-project]').forEach(btn => {
+      btn.addEventListener('click', () => openProjectDetail(btn.dataset.openProject));
+    });
+    box.querySelectorAll('[data-copy-link]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        try {
+          await navigator.clipboard.writeText(projectLink(btn.dataset.copyLink));
+          flashGreen(btn);
+        } catch (e) { /* clipboard unavailable — nothing else to fall back to here */ }
+      });
+    });
+  }
+
+  function projectLink(token) {
+    // index.html sits beside admin.html; the pick page needs nothing but ?t=.
+    const base = location.href.replace(/admin\.html.*$/, 'index.html');
+    return `${base}?t=${encodeURIComponent(token)}`;
+  }
+
+  document.getElementById('proj-create-btn')?.addEventListener('click', async function () {
+    const errEl = document.getElementById('proj-create-err');
+    errEl.textContent = '';
+    if (!projectFolders.length) { errEl.textContent = '請至少選擇一個資料夾'; return; }
+    const title = document.getElementById('proj-title').value.trim();
+    const limitRaw = document.getElementById('proj-pick-limit').value.trim();
+    const priceRaw = document.getElementById('proj-extra-price').value.trim();
+    const pick_limit = limitRaw === '' ? null : parseInt(limitRaw, 10);
+    const extra_price = priceRaw === '' ? null : parseInt(priceRaw, 10);
+    if (pick_limit !== null && (!Number.isInteger(pick_limit) || pick_limit < 0)) {
+      errEl.textContent = '精修張數上限需為 0 以上整數'; return;
+    }
+    if (extra_price !== null && (!Number.isInteger(extra_price) || extra_price < 0)) {
+      errEl.textContent = '加選單價需為 0 以上整數'; return;
+    }
+    this.disabled = true;
+    try {
+      const r = await fetch(`${WORKER_URL}/api/admin/projects`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${getToken()}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title, folders: projectFolders, pick_limit, extra_price }),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) { errEl.textContent = data.error || `建立失敗（${r.status}）`; return; }
+      const link = projectLink(data.token);
+      const linkOut = document.getElementById('proj-link-output');
+      linkOut.value = link;
+      document.getElementById('proj-create-result').style.display = 'block';
+      await loadProjectList();
+      document.getElementById('proj-title').value = '';
+      document.getElementById('proj-pick-limit').value = '';
+      document.getElementById('proj-extra-price').value = '';
+      projectFolders = [];
+      renderProjectFolders();
+      await openProjectDetail(data.project.id);
+    } catch (e) {
+      errEl.textContent = '無法連線到 Worker';
+    } finally {
+      this.disabled = false;
+    }
+  });
+
+  document.getElementById('proj-copy-link-btn')?.addEventListener('click', async function () {
+    const val = document.getElementById('proj-link-output').value;
+    try {
+      await navigator.clipboard.writeText(val);
+      flashGreen(document.getElementById('proj-link-output'));
+    } catch (e) { /* clipboard unavailable — the link is already on screen, selectable */ }
+  });
+
+  function pickerNameOf(pickers, id) {
+    const p = (pickers || []).find(x => x.id === id);
+    return p ? p.name : '（未知）';
+  }
+
+  // What changed between two submissions, by photo key — the same comparison
+  // worker.js's pickDiff makes for the notification email, redone here since
+  // the admin view has no email to read it off.
+  function projectDiff(current, previous) {
+    const now = new Set(current || []);
+    const before = new Set(previous || []);
+    return {
+      added: (current || []).filter(k => !before.has(k)),
+      removed: (previous || []).filter(k => !now.has(k)),
+    };
+  }
+
+  async function openProjectDetail(id) {
+    currentProjectId = id;
+    const panel = document.getElementById('project-detail-panel');
+    const body = document.getElementById('project-detail-body');
+    if (!panel || !body) return;
+    panel.style.display = 'block';
+    body.innerHTML = '<div class="empty">載入中…</div>';
+    try {
+      const r = await fetch(`${WORKER_URL}/api/admin/projects/${encodeURIComponent(id)}`, {
+        headers: { 'Authorization': `Bearer ${getToken()}` },
+      });
+      if (!r.ok) { body.innerHTML = `<div class="empty">讀取失敗（${r.status}）</div>`; return; }
+      renderProjectDetail(await r.json());
+    } catch (e) {
+      body.innerHTML = '<div class="empty">無法連線到 Worker</div>';
+    }
+  }
+
+  const PHASE_LABEL = { picking: '選片中', submitted: '已送出', retouching: '精修中' };
+
+  const TOKEN_STATUS_LABEL = { live: '有效', revoked: '已撤銷', expired: '已過期' };
+
+  function renderProjectDetail(data) {
+    const body = document.getElementById('project-detail-body');
+    const project = data.project || {};
+    const pickers = data.pickers || [];
+    const submissions = data.submissions || [];
+    const tokens = data.tokens || [];
+    const selected = (data.selections || []).filter(s => s.rating > 0);
+    const ownerName = data.owner ? data.owner.name : null;
+
+    body.innerHTML = `
+      <div class="pd-head">
+        <h3>${escHtml(project.title || '（未命名）')}</h3>
+        <span class="badge badge-approved">${escHtml(PHASE_LABEL[project.phase] || project.phase || '')}</span>
+        ${project.modified_after_submit ? '<span class="badge badge-pending">已修改，尚未重新送出</span>' : ''}
+        ${data.unnotified_submissions ? `<span class="badge badge-pending">${escHtml(data.unnotified_submissions)} 次送出未寄信</span>` : ''}
+      </div>
+      <div class="pd-owner">目前挑選人：${ownerName ? escHtml(ownerName) : '<span class="folder-none">尚無人認領</span>'}</div>
+      <div class="pd-actions">
+        <button id="pd-reset-seat-btn" class="btn btn-ghost" type="button">重設主人</button>
+        <button id="pd-start-retouch-btn" class="btn btn-accent" type="button">開始精修</button>
+        <button id="pd-reopen-btn" class="btn btn-ghost" type="button">開放修改</button>
+        <button id="pd-download-btn" class="btn btn-outline" type="button">下載選片</button>
+      </div>
+      <div id="pd-action-err" class="err"></div>
+
+      <h4>目前選取（${selected.length} 張）</h4>
+      <div class="table-wrap"><table><thead><tr><th>照片</th><th>星等</th><th>備註</th><th>選片人</th><th>更新時間</th></tr></thead>
+        <tbody>${selected.length ? selected.map(s => `<tr>
+          <td class="folder-raw">${escHtml(s.photo_key)}</td><td>${escHtml(s.rating)}</td><td>${escHtml(s.note || '')}</td>
+          <td>${escHtml(pickerNameOf(pickers, s.updated_by))}</td><td>${escHtml(s.updated_at || '')}</td>
+        </tr>`).join('') : '<tr><td colspan="5" class="empty">尚無選取</td></tr>'}</tbody></table></div>
+
+      <h4>送出紀錄（新到舊）</h4>
+      <div id="pd-submissions">${submissions.length ? submissions.map((s, i) => {
+        const prev = submissions[i + 1];
+        const diff = prev ? projectDiff(s.photo_keys, prev.photo_keys) : null;
+        const diffHtml = !diff ? '<div class="pd-diff">（第一次送出）</div>'
+          : (!diff.added.length && !diff.removed.length ? '<div class="pd-diff">與上次相同</div>'
+            : `<div class="pd-diff">${diff.added.length ? `新增 ${diff.added.length} 張：${diff.added.map(escHtml).join('、')}` : ''}${diff.added.length && diff.removed.length ? '<br>' : ''}${diff.removed.length ? `移除 ${diff.removed.length} 張：${diff.removed.map(escHtml).join('、')}` : ''}</div>`);
+        return `<div class="pd-submission">
+          <div><strong>${escHtml(s.created_at)}</strong> — ${escHtml(pickerNameOf(pickers, s.picker_id))}
+            （${escHtml(s.relationship)}${s.email ? ' · ' + escHtml(s.email) : ''}）— ${escHtml(s.count)} 張${s.pick_limit != null ? ` / 上限 ${escHtml(s.pick_limit)}` : ''}
+            ${!s.notified ? '<span class="badge badge-pending">未寄信</span>' : ''}</div>
+          ${diffHtml}
+        </div>`;
+      }).join('') : '<div class="empty">尚無送出紀錄</div>'}</div>
+
+      <h4>挑選人</h4>
+      <div id="pd-pickers">${pickers.length ? pickers.map(p => `<div>${escHtml(p.name)}${p.relationship ? `（${escHtml(p.relationship)}）` : ''}${p.email ? ' · ' + escHtml(p.email) : ''}${data.owner && data.owner.id === p.id ? ' <span class="badge badge-approved">目前選片中</span>' : ''}</div>`).join('') : '<div class="empty">尚無挑選人</div>'}</div>
+
+      <h4>挑選連結</h4>
+      <div id="pd-tokens">${tokens.length ? tokens.map(t => `
+        <div class="proj-recent-row" data-token-row="${escHtml(t.token)}">
+          <div>
+            <code class="folder-raw">${escHtml(t.token)}</code>
+            <span class="badge ${t.status === 'live' ? 'badge-approved' : 'badge-pending'}">${escHtml(TOKEN_STATUS_LABEL[t.status] || t.status)}</span>
+          </div>
+          <div class="actions">
+            ${t.status === 'live' ? `
+              <button type="button" class="btn btn-outline" data-copy-link="${escHtml(t.token)}">複製連結</button>
+              <button type="button" class="btn btn-danger" data-revoke-token="${escHtml(t.token)}">撤銷</button>` : ''}
+          </div>
+        </div>`).join('') : '<div class="empty">尚無連結</div>'}</div>
+      <button id="pd-new-link-btn" class="btn btn-outline" type="button" style="margin-top:8px;">產生新連結</button>
+      <div id="pd-link-err" class="err"></div>
+    `;
+
+    document.getElementById('pd-reset-seat-btn').addEventListener('click', async () => {
+      if (!confirm('確定要重設選片人嗎？選取結果與送出紀錄都會保留。\n新的主人會接手目前所有選片，並可修改或刪除')) return;
+      await projectAction('reset-seat');
+    });
+    document.getElementById('pd-start-retouch-btn').addEventListener('click', () => projectAction('start-retouch'));
+    document.getElementById('pd-reopen-btn').addEventListener('click', () => projectAction('reopen'));
+    body.querySelectorAll('[data-copy-link]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        try {
+          await navigator.clipboard.writeText(projectLink(btn.dataset.copyLink));
+          flashGreen(btn);
+        } catch (e) { /* clipboard unavailable — nothing else to fall back to here */ }
+      });
+    });
+    body.querySelectorAll('[data-revoke-token]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        if (!confirm('確定要撤銷這個連結嗎？撤銷後這個連結就無法再開啟。')) return;
+        const errEl = document.getElementById('pd-link-err');
+        if (errEl) errEl.textContent = '';
+        try {
+          const r = await fetch(`${WORKER_URL}/api/shares/${encodeURIComponent(btn.dataset.revokeToken)}/revoke`, {
+            method: 'POST', headers: { 'Authorization': `Bearer ${getToken()}` },
+          });
+          if (!r.ok) { const d = await r.json().catch(() => ({})); if (errEl) errEl.textContent = d.error || `失敗（${r.status}）`; return; }
+          await openProjectDetail(currentProjectId);
+        } catch (e) {
+          if (errEl) errEl.textContent = '無法連線到 Worker';
+        }
+      });
+    });
+    document.getElementById('pd-new-link-btn')?.addEventListener('click', async function () {
+      const errEl = document.getElementById('pd-link-err');
+      if (errEl) errEl.textContent = '';
+      this.disabled = true;
+      try {
+        const r = await fetch(`${WORKER_URL}/api/admin/projects/${encodeURIComponent(currentProjectId)}/links`, {
+          method: 'POST', headers: { 'Authorization': `Bearer ${getToken()}` },
+        });
+        const linkData = await r.json().catch(() => ({}));
+        if (!r.ok) { if (errEl) errEl.textContent = linkData.error || `失敗（${r.status}）`; return; }
+        await openProjectDetail(currentProjectId);
+        try { await navigator.clipboard.writeText(projectLink(linkData.token)); } catch (e) { /* best effort */ }
+      } catch (e) {
+        if (errEl) errEl.textContent = '無法連線到 Worker';
+      } finally {
+        this.disabled = false;
+      }
+    });
+    document.getElementById('pd-download-btn').addEventListener('click', () => downloadSelectedKeys(project, selected));
+  }
+
+  async function projectAction(action) {
+    const errEl = document.getElementById('pd-action-err');
+    if (errEl) errEl.textContent = '';
+    try {
+      const r = await fetch(`${WORKER_URL}/api/admin/projects/${encodeURIComponent(currentProjectId)}/${action}`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${getToken()}` },
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) { if (errEl) errEl.textContent = data.error || `失敗（${r.status}）`; return; }
+      await openProjectDetail(currentProjectId);
+    } catch (e) {
+      if (errEl) errEl.textContent = '無法連線到 Worker';
+    }
+  }
+
+  function downloadSelectedKeys(project, selected) {
+    const keys = selected.map(s => s.photo_key);
+    const askRetouch = confirm(`共 ${keys.length} 張。要同時標記為開始精修嗎？`);
+    const blob = new Blob([keys.join('\n') + (keys.length ? '\n' : '')], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${(project.title || 'project').replace(/[\\/:*?"<>|]/g, '_')}-selected.txt`;
+    // attached, and the URL outlives the click by a beat — revoking it (or an
+    // unattached anchor) immediately can lose the download's filename in some
+    // engines, since the click only schedules the download asynchronously
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+    if (askRetouch) projectAction('start-retouch');
   }
 
   function renderClients(clients) {
@@ -657,7 +1054,16 @@
   }
 
   function escHtml(str) {
-    return String(str || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    // str || '' turns 0 (a rating, a count) into '' — blank instead of "0".
+    // null/undefined are the only values meant to render as empty.
+    const s = (str === null || str === undefined) ? '' : str;
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+
+  // Runs last, now that every function and `let` above it is initialised —
+  // showAdmin() reaches into most of them (renderProjectFolders included).
+  if (getToken()) {
+    showAdmin();
   }
 })();
 </script>
