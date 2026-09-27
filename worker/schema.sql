@@ -114,7 +114,15 @@ CREATE TABLE IF NOT EXISTS projects (
   modified_after_submit INTEGER NOT NULL DEFAULT 0,
   -- when the photographer was last emailed about a submit; a submit
   -- inside ten minutes of it is recorded but not mailed. NULL = never.
-  last_notified_at TEXT
+  last_notified_at TEXT,
+  -- when the photographer archived the project; NULL = active. An archived
+  -- project is off the default list and every link to it is refused (by this
+  -- column as well as by the links' own revoked_at). Appended, because the
+  -- CREATE above is IF NOT EXISTS and a database that already ran the
+  -- guest-picking migration only gets it from a hand-run
+  --   ALTER TABLE projects ADD COLUMN archived_at TEXT;
+  -- (worker/migrations/2026-09-28-project-archive.sql).
+  archived_at     TEXT
 );
 
 -- Everyone who ever held the seat. key_hash is the SHA-256 of the bearer key

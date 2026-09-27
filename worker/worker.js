@@ -307,6 +307,20 @@ async function resolveShareToken(request, url, env) {
   let folders;
   try { folders = JSON.parse(row.folders); } catch { return null; }
   if (!Array.isArray(folders)) return null;
+  // A pick link opens nothing once its project is archived or gone, whatever
+  // its own row says: the archive revokes every link too, and this is the
+  // second lock, for a link revived by hand or minted afterwards. The column
+  // is named in the WHERE so a database the archive migration has not reached
+  // refuses pick links (the query throws) instead of ignoring the archive;
+  // album links never get here. The row is kept for resolvePick.
+  if (isPickShare(row) && row.project_id) {
+    let project;
+    try {
+      project = await env.DB.prepare('SELECT * FROM projects WHERE id = ? AND archived_at IS NULL').bind(row.project_id).first();
+    } catch { return null; }
+    if (!project) return null;
+    return { ...row, folders, project };
+  }
   return { ...row, folders };
 }
 
@@ -434,11 +448,11 @@ function pickFolders(value) {
 // The project behind a pick token and, when the request carries a picker key,
 // the picker it belongs to. The key is looked up by its hash and only within
 // the token's own project, so a key from another project finds nobody. null
-// for anything that is not a live pick link to a project that still exists.
+// for anything that is not a live pick link to a project that still exists
+// and is not archived — resolveShareToken already read that project.
 async function resolvePick(share, request, env) {
-  if (!share || !isPickShare(share) || !share.project_id) return null;
-  const project = await env.DB.prepare('SELECT * FROM projects WHERE id = ?').bind(share.project_id).first();
-  if (!project) return null;
+  if (!share || !isPickShare(share) || !share.project) return null;
+  const { project } = share;
   const key = request.headers.get('X-Picker-Key') || '';
   let picker = null;
   if (key) {
@@ -461,8 +475,10 @@ function pickRetouching() {
 // phase still hold and it was the selection cap. Re-read to say which.
 // `cap`: {pickerId, refused()} — when the seat and phase still hold, the
 // write's own cap is what refused it, and refused() builds that 409.
+// An archive that landed in between answers like the dead link it now is.
 async function pickRefused(env, projectId, notOwner, cap = null) {
-  const now = await env.DB.prepare('SELECT phase, owner_picker_id FROM projects WHERE id = ?').bind(projectId).first();
+  const now = await env.DB.prepare('SELECT phase, owner_picker_id, archived_at FROM projects WHERE id = ?').bind(projectId).first();
+  if (now?.archived_at) return jsonErr('Unauthorized', 401);
   if (now && !PICK_OPEN_PHASES.includes(now.phase)) return pickRetouching();
   if (now && cap && now.owner_picker_id === cap.pickerId) return cap.refused();
   return jsonErr(notOwner, 403);
@@ -960,14 +976,16 @@ export default {
     // owner id cannot put another project's guest name on this row. "Live"
     // is what resolveShareToken would accept: not revoked, not expired, and
     // inside the ceiling counted from created_at (ISO strings compare in
-    // time order).
+    // time order). Archived projects are left out; `?archived=1` lists only
+    // them (any other value is the default view).
     if (request.method === 'GET' && url.pathname === '/api/admin/projects') {
       if (!isAdminToken(request, env)) return jsonErr('Unauthorized', 401);
       if (!env.DB) return jsonErr('DB not configured', 500);
       const now = Date.now();
+      const archivedFilter = params.get('archived') === '1' ? 'p.archived_at IS NOT NULL' : 'p.archived_at IS NULL';
       const { results } = await env.DB.prepare(
         `SELECT p.id, p.title, p.phase, p.modified_after_submit,
-                o.name AS owner_name, p.created_at,
+                o.name AS owner_name, p.created_at, p.archived_at,
                 (SELECT COUNT(*) FROM submissions s WHERE s.project_id = p.id) AS submission_count,
                 (SELECT MAX(s.created_at) FROM submissions s WHERE s.project_id = p.id) AS last_submitted_at,
                 ${PICK_UNNOTIFIED_SQL} AS unnotified_submissions,
@@ -977,7 +995,7 @@ export default {
                   ORDER BY t.created_at DESC LIMIT 1) AS token
            FROM projects p
            LEFT JOIN pickers o ON o.id = p.owner_picker_id AND o.project_id = p.id
-          WHERE p.photographer_id = ?3
+          WHERE p.photographer_id = ?3 AND ${archivedFilter}
           ORDER BY p.created_at DESC, p.rowid DESC
           LIMIT 200`
       ).bind(
@@ -1071,6 +1089,75 @@ export default {
       return jsonOk({ ok: true, phase: pathParts[4] === 'start-retouch' ? 'retouching' : 'picking' });
     }
 
+    // POST /api/admin/projects/:id/archive — the shoot is done: off the list,
+    // and every live pick link to it revoked in the same batch as the stamp.
+    // The stamp alone already refuses the links (resolveShareToken); the
+    // revoke is so they read as dead in the detail view and stay dead after
+    // an unarchive. Selections and submissions stay. A second archive keeps
+    // the first stamp. The revoke is gated on the project being this
+    // photographer's, so an unknown id changes nothing.
+    // POST /api/admin/projects/:id/unarchive — back on the list. The links
+    // stay revoked; POST .../links mints a new one.
+    if (request.method === 'POST' && pathParts[0] === 'api' && pathParts[1] === 'admin' && pathParts[2] === 'projects' && pathParts[3] && !pathParts[5] &&
+        (pathParts[4] === 'archive' || pathParts[4] === 'unarchive')) {
+      if (!isAdminToken(request, env)) return jsonErr('Unauthorized', 401);
+      if (!env.DB) return jsonErr('DB not configured', 500);
+      const id = pathParts[3];
+      if (pathParts[4] === 'unarchive') {
+        const result = await env.DB.prepare('UPDATE projects SET archived_at = NULL WHERE id = ? AND photographer_id = ?')
+          .bind(id, DEFAULT_PHOTOGRAPHER_ID).run();
+        if (!result.meta?.changes) return jsonErr('Not found', 404);
+        return jsonOk({ ok: true, archived_at: null }, 200, ADMIN_ONLY_HEADERS);
+      }
+      const at = new Date().toISOString();
+      const [stamped, revoked] = await env.DB.batch([
+        env.DB.prepare('UPDATE projects SET archived_at = COALESCE(archived_at, ?) WHERE id = ? AND photographer_id = ?')
+          .bind(at, id, DEFAULT_PHOTOGRAPHER_ID),
+        env.DB.prepare(
+          "UPDATE share_tokens SET revoked_at = ? WHERE kind = 'pick' AND project_id = ? AND revoked_at IS NULL " +
+          'AND EXISTS (SELECT 1 FROM projects WHERE id = ? AND photographer_id = ?)'
+        ).bind(at, id, id, DEFAULT_PHOTOGRAPHER_ID),
+      ]);
+      if (!stamped.meta?.changes) return jsonErr('Not found', 404);
+      const row = await env.DB.prepare('SELECT archived_at FROM projects WHERE id = ? AND photographer_id = ?')
+        .bind(id, DEFAULT_PHOTOGRAPHER_ID).first();
+      return jsonOk({ ok: true, archived_at: row?.archived_at ?? at, revoked: revoked.meta?.changes ?? 0 }, 200, ADMIN_ONLY_HEADERS);
+    }
+
+    // DELETE /api/admin/projects/:id — only a project nobody ever submitted:
+    // a submission is the record a fee is charged from and is never deleted.
+    // One batch, and every statement re-checks "this photographer's, and no
+    // submission" itself, so a submit that lands after the check below makes
+    // the whole batch a no-op instead of orphaning its row or losing it. The
+    // project row goes last because the others' gate reads it. R2 is never
+    // touched: the photos belong to the shoot, not to the project.
+    if (request.method === 'DELETE' && pathParts[0] === 'api' && pathParts[1] === 'admin' && pathParts[2] === 'projects' && pathParts[3] && !pathParts[4]) {
+      if (!isAdminToken(request, env)) return jsonErr('Unauthorized', 401);
+      if (!env.DB) return jsonErr('DB not configured', 500);
+      const id = pathParts[3];
+      const hasSubmissions = () => jsonOk({ error: '已有送出紀錄，無法刪除（可改為封存）', code: 'has_submissions' }, 409);
+      const found = await env.DB.prepare(
+        'SELECT EXISTS (SELECT 1 FROM submissions WHERE project_id = ?1) AS submitted FROM projects WHERE id = ?1 AND photographer_id = ?2'
+      ).bind(id, DEFAULT_PHOTOGRAPHER_ID).first();
+      if (!found) return jsonErr('Not found', 404);
+      if (found.submitted) return hasSubmissions();
+      const gate = 'EXISTS (SELECT 1 FROM projects WHERE id = ?1 AND photographer_id = ?2) AND NOT EXISTS (SELECT 1 FROM submissions WHERE project_id = ?1)';
+      const del = sql => env.DB.prepare(`${sql} AND ${gate}`).bind(id, DEFAULT_PHOTOGRAPHER_ID);
+      const results = await env.DB.batch([
+        del('DELETE FROM selections WHERE project_id = ?1'),
+        del('DELETE FROM pickers WHERE project_id = ?1'),
+        del('DELETE FROM project_members WHERE project_id = ?1'),
+        del("DELETE FROM share_tokens WHERE kind = 'pick' AND project_id = ?1"),
+        del('DELETE FROM projects WHERE id = ?1'),
+      ]);
+      if (!results[4].meta?.changes) {
+        const still = await env.DB.prepare('SELECT id FROM projects WHERE id = ? AND photographer_id = ?')
+          .bind(id, DEFAULT_PHOTOGRAPHER_ID).first();
+        return still ? hasSubmissions() : jsonErr('Not found', 404);
+      }
+      return jsonOk({ ok: true }, 200, ADMIN_ONLY_HEADERS);
+    }
+
     // POST /api/admin/projects/:id/links — a fresh pick link for a project
     // whose link leaked or was revoked. Same snapshot as the project (not the
     // old link's, not the body's), same expiry as at creation. The old links
@@ -1078,16 +1165,21 @@ export default {
     if (request.method === 'POST' && pathParts[0] === 'api' && pathParts[1] === 'admin' && pathParts[2] === 'projects' && pathParts[3] && pathParts[4] === 'links' && !pathParts[5]) {
       if (!isAdminToken(request, env)) return jsonErr('Unauthorized', 401);
       if (!env.DB) return jsonErr('DB not configured', 500);
-      const project = await env.DB.prepare('SELECT id, title, folders FROM projects WHERE id = ? AND photographer_id = ?')
+      const project = await env.DB.prepare('SELECT id, title, folders, archived_at FROM projects WHERE id = ? AND photographer_id = ?')
         .bind(pathParts[3], DEFAULT_PHOTOGRAPHER_ID).first();
       if (!project) return jsonErr('Not found', 404);
+      const archivedErr = () => jsonOk({ error: 'Project is archived; unarchive it first', code: 'archived' }, 409);
+      if (project.archived_at) return archivedErr();
       const token = newShareToken();
       const now = Date.now();
       const createdAt = new Date(now).toISOString();
       const expiresAt = new Date(now + SHARE_TTL_MS).toISOString();
-      await env.DB.prepare(
-        "INSERT INTO share_tokens (token, book_id, label, kind, project_id, folders, created_at, expires_at) VALUES (?, '', ?, 'pick', ?, ?, ?, ?)"
-      ).bind(token, project.title, project.id, project.folders, createdAt, expiresAt).run();
+      // Gated on the project still being open, so an archive landing between
+      // the read above and this write leaves no live link behind it.
+      const minted = await env.DB.prepare(
+        "INSERT INTO share_tokens (token, book_id, label, kind, project_id, folders, created_at, expires_at) SELECT ?, '', ?, 'pick', ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM projects WHERE id = ? AND archived_at IS NULL)"
+      ).bind(token, project.title, project.id, project.folders, createdAt, expiresAt, project.id).run();
+      if (!minted.meta || !minted.meta.changes) return archivedErr();
       return jsonOk({ token, expires_at: expiresAt, created_at: createdAt, status: 'live' }, 201, ADMIN_ONLY_HEADERS);
     }
 
@@ -1185,10 +1277,13 @@ export default {
         // first and writing it second would let two guests tapping at once
         // both read it free and both believe they hold it.
         const won = await env.DB.prepare(
-          'UPDATE projects SET owner_picker_id = ? WHERE id = ? AND owner_picker_id IS NULL'
+          'UPDATE projects SET owner_picker_id = ? WHERE id = ? AND owner_picker_id IS NULL AND archived_at IS NULL'
         ).bind(pickerId, project.id).run();
         if (!won.meta?.changes) {
           await env.DB.prepare('DELETE FROM pickers WHERE id = ?').bind(pickerId).run();
+          // archived since the link was checked: the link is dead now
+          const still = await env.DB.prepare('SELECT archived_at FROM projects WHERE id = ?').bind(project.id).first();
+          if (still?.archived_at) return jsonErr('Unauthorized', 401);
           return jsonOk({ error: '已有人在挑選', owner: await pickOwnerName(env, project.id) }, 409);
         }
         return jsonOk({ picker_key: key, picker_id: pickerId, owner: name });
@@ -1255,7 +1350,7 @@ export default {
           '(SELECT COUNT(*) FROM (SELECT photo_key FROM selections WHERE project_id = ?1 UNION SELECT value FROM json_each(?3)) ' +
           `WHERE photo_key ${notRemoved}) ` +
           '<= MAX(?7, (SELECT COUNT(*) FROM selections WHERE project_id = ?1))';
-        const open = `id = ?1 AND owner_picker_id = ?2 AND phase IN ${PICK_OPEN_SQL} AND ${starsFit} AND ${rowsFit}`;
+        const open = `id = ?1 AND owner_picker_id = ?2 AND phase IN ${PICK_OPEN_SQL} AND archived_at IS NULL AND ${starsFit} AND ${rowsFit}`;
         const gate = `EXISTS (SELECT 1 FROM projects WHERE ${open})`;
         const gateArgs = [project.id, picker.id, upsertKeys, removeKeys, PICK_MAX_SELECTIONS, JSON.stringify(items), PICK_MAX_ROWS];
         const writes = [env.DB.prepare(
@@ -1323,7 +1418,7 @@ export default {
         // both sides built by json_group_array over keys in the same order
         const repeat = `(SELECT photo_keys FROM submissions WHERE project_id = p.id ORDER BY rowid DESC LIMIT 1) IS ${snapshot}`;
         const room = `(SELECT COUNT(*) FROM submissions WHERE project_id = p.id) < ${PICK_MAX_SUBMISSIONS}`;
-        const open = `p.id = ? AND p.owner_picker_id = ? AND p.phase IN ${PICK_OPEN_SQL}`;
+        const open = `p.id = ? AND p.owner_picker_id = ? AND p.phase IN ${PICK_OPEN_SQL} AND p.archived_at IS NULL`;
         const [inserted, , moved] = await env.DB.batch([
           env.DB.prepare(
             'INSERT INTO submissions (id, project_id, picker_id, relationship, email, photo_keys, count, pick_limit, extra_price, created_at) ' +

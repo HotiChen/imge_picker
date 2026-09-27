@@ -220,6 +220,9 @@
     </div>
 
     <h3 style="font-size:14px;margin-bottom:10px;">選片專案列表</h3>
+    <label style="font-size:13px;display:inline-flex;align-items:center;gap:6px;margin-bottom:8px;">
+      <input type="checkbox" id="proj-show-archived-toggle"> 顯示已封存
+    </label>
     <div id="proj-recent-list" style="margin-bottom:24px;"></div>
 
     <div id="project-detail-panel" class="panel" style="display:none;">
@@ -250,7 +253,7 @@
   </main>
 </div>
 
-<script src="js/shoot-types.js?v=20260928a"></script>
+<script src="js/shoot-types.js?v=20260928b"></script>
 <script>
 (function() {
   const WORKER_URL = 'https://imagepicker.hotichen.workers.dev';
@@ -611,11 +614,18 @@
   // straight from the Worker (docs/guest-picking.md). Replaces the old
   // per-browser localStorage cache: a project created on another browser
   // (or another day) now shows up here too.
+  let showArchivedProjects = false;
+  document.getElementById('proj-show-archived-toggle')?.addEventListener('change', function () {
+    showArchivedProjects = this.checked;
+    loadProjectList();
+  });
+
   async function loadProjectList() {
     const box = document.getElementById('proj-recent-list');
     if (!box) return;
     try {
-      const r = await fetch(`${WORKER_URL}/api/admin/projects`, {
+      const qs = showArchivedProjects ? '?archived=1' : '';
+      const r = await fetch(`${WORKER_URL}/api/admin/projects${qs}`, {
         headers: { 'Authorization': `Bearer ${getToken()}` },
       });
       if (!r.ok) { box.innerHTML = `<div class="empty">讀取失敗（${r.status}）</div>`; return; }
@@ -635,6 +645,7 @@
         <div>
           <span>${escHtml(p.title || '（未命名）')}</span>
           <span class="badge badge-approved">${escHtml(PHASE_LABEL[p.phase] || p.phase || '')}</span>
+          ${p.archived_at ? '<span class="badge badge-pending">已封存</span>' : ''}
           ${p.modified_after_submit ? '<span class="badge badge-pending">已修改</span>' : ''}
           ${p.unnotified_submissions ? `<span class="badge badge-pending">${escHtml(p.unnotified_submissions)} 次送出未寄信</span>` : ''}
           <div class="pd-owner" style="margin:2px 0 0;">
@@ -768,6 +779,7 @@
       <div class="pd-head">
         <h3>${escHtml(project.title || '（未命名）')}</h3>
         <span class="badge badge-approved">${escHtml(PHASE_LABEL[project.phase] || project.phase || '')}</span>
+        ${project.archived_at ? '<span class="badge badge-pending">已封存</span>' : ''}
         ${project.modified_after_submit ? '<span class="badge badge-pending">已修改，尚未重新送出</span>' : ''}
         ${data.unnotified_submissions ? `<span class="badge badge-pending">${escHtml(data.unnotified_submissions)} 次送出未寄信</span>` : ''}
       </div>
@@ -777,6 +789,10 @@
         <button id="pd-start-retouch-btn" class="btn btn-accent" type="button">開始精修</button>
         <button id="pd-reopen-btn" class="btn btn-ghost" type="button">開放修改</button>
         <button id="pd-download-btn" class="btn btn-outline" type="button">下載選片</button>
+        ${project.archived_at
+          ? '<button id="pd-unarchive-btn" class="btn btn-ghost" type="button">取消封存</button>'
+          : '<button id="pd-archive-btn" class="btn btn-ghost" type="button">封存</button>'}
+        ${!submissions.length ? '<button id="pd-delete-btn" class="btn btn-danger" type="button">刪除</button>' : ''}
       </div>
       <div id="pd-action-err" class="err"></div>
 
@@ -818,7 +834,7 @@
               <button type="button" class="btn btn-danger" data-revoke-token="${escHtml(t.token)}">撤銷</button>` : ''}
           </div>
         </div>`).join('') : '<div class="empty">尚無連結</div>'}</div>
-      <button id="pd-new-link-btn" class="btn btn-outline" type="button" style="margin-top:8px;">產生新連結</button>
+      ${project.archived_at ? '' : '<button id="pd-new-link-btn" class="btn btn-outline" type="button" style="margin-top:8px;">產生新連結</button>'}
       <div id="pd-link-err" class="err"></div>
     `;
 
@@ -828,6 +844,40 @@
     });
     document.getElementById('pd-start-retouch-btn').addEventListener('click', () => projectAction('start-retouch'));
     document.getElementById('pd-reopen-btn').addEventListener('click', () => projectAction('reopen'));
+    document.getElementById('pd-archive-btn')?.addEventListener('click', async () => {
+      if (!confirm('封存後連結會立即失效，資料會保留')) return;
+      await projectAction('archive');
+      await loadProjectList();
+    });
+    document.getElementById('pd-unarchive-btn')?.addEventListener('click', async () => {
+      await projectAction('unarchive');
+      await loadProjectList();
+    });
+    document.getElementById('pd-delete-btn')?.addEventListener('click', async function () {
+      const errEl = document.getElementById('pd-action-err');
+      if (errEl) errEl.textContent = '';
+      if (!confirm('確定刪除？此動作無法復原')) return;
+      this.disabled = true;
+      try {
+        const r = await fetch(`${WORKER_URL}/api/admin/projects/${encodeURIComponent(currentProjectId)}`, {
+          method: 'DELETE',
+          headers: { 'Authorization': `Bearer ${getToken()}` },
+        });
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok) {
+          if (errEl) errEl.textContent = data.code === 'has_submissions'
+            ? '已有送出紀錄，無法刪除，請改用封存' : (data.error || `失敗（${r.status}）`);
+          return;
+        }
+        document.getElementById('project-detail-panel').style.display = 'none';
+        currentProjectId = null;
+        await loadProjectList();
+      } catch (e) {
+        if (errEl) errEl.textContent = '無法連線到 Worker';
+      } finally {
+        this.disabled = false;
+      }
+    });
     body.querySelectorAll('[data-copy-link]').forEach(btn => {
       btn.addEventListener('click', async () => {
         try {
