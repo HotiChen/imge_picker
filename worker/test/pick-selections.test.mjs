@@ -28,8 +28,14 @@ test('the owner saves picks, and state hands them back to anyone holding the lin
   assert.ok(stored[0].updated_at);
   assert.equal(stored[1].note, '', 'a missing note is empty, not NULL');
 
+  // notes are the owner's: a viewer gets picks and ratings only
   const viewer = await (await pick(env, 'GET', 'state', p.token)).json();
   assert.deepEqual(viewer.selections, [
+    { photo_key: A, rating: 5 },
+    { photo_key: B, rating: 2 },
+  ]);
+  const owner = await (await pick(env, 'GET', 'state', p.token, { key: p.key })).json();
+  assert.deepEqual(owner.selections, [
     { photo_key: A, rating: 5, note: '放大這張' },
     { photo_key: B, rating: 2, note: '' },
   ]);

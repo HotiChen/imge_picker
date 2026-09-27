@@ -111,7 +111,10 @@ CREATE TABLE IF NOT EXISTS projects (
                   CHECK (phase IN ('picking','submitted','retouching')),
   -- 1 = the owner saved after the last submit and has not submitted again.
   -- A save never emails; this is how the photographer finds out.
-  modified_after_submit INTEGER NOT NULL DEFAULT 0
+  modified_after_submit INTEGER NOT NULL DEFAULT 0,
+  -- when the photographer was last emailed about a submit; a submit
+  -- inside ten minutes of it is recorded but not mailed. NULL = never.
+  last_notified_at TEXT
 );
 
 -- Everyone who ever held the seat. key_hash is the SHA-256 of the bearer key
@@ -155,7 +158,10 @@ CREATE TABLE IF NOT EXISTS submissions (
   count        INTEGER NOT NULL,
   pick_limit   INTEGER,                   -- the plan as it stood at submit
   extra_price  INTEGER,
-  created_at   TEXT NOT NULL
+  created_at   TEXT NOT NULL,
+  -- 1 = the photographer was emailed about this submit; 0 = throttled,
+  -- unchanged since the last email, or the mail failed / is not set up
+  notified     INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_submissions_project ON submissions(project_id, created_at);
 

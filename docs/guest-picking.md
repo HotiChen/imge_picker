@@ -54,9 +54,37 @@ browser. This replaces the fake `submitJob()` in `js/app.js`.
   the latest relationship/email as contact info.
 - Photographer is notified by **email** on submit (send function isolated so
   the transport can change: Cloudflare `send_email` now, Resend later). From
-  the second submit on, the email lists the photo keys **added** and
-  **removed** since the previous submission of the project (whoever made it),
-  or says 與上次相同; every key is HTML-escaped.
+  the second email on, it lists the photo keys **added** and **removed** since
+  the last submission the photographer was **emailed** about (whoever made
+  it), so a later email carries everything they were not told; every key is
+  HTML-escaped.
+- **Email throttle**: at most one notification per project per 10 minutes
+  (`projects.last_notified_at`, claimed by one conditional `UPDATE ... WHERE
+  last_notified_at IS NULL OR last_notified_at <= now-10min`, so two racing
+  submits send one), and none for a submit whose photo-key set equals the
+  last **emailed** submission's (such a submit does not use up the slot). The
+  submission row is **always** written; only the email is skipped.
+  `submissions.notified` is 1 once its email was handed to the mailer (0 when
+  throttled, unchanged, failed or mail not configured); admin shows
+  `unnotified_submissions` = submissions newer than the last notified one
+  (all of them if none), so a burst's last submit that was never mailed gets
+  a badge.
+- **Selection caps** (constants in `worker.js`, change them there only):
+  `PICK_MAX_SELECTIONS = 500` starred rows (rating ≥ 1, what submit counts;
+  un-starring = upsert rating 0 frees a slot) and `PICK_MAX_ROWS = 1000` rows
+  of any rating per project. Checked inside every statement of the save batch
+  against the state the save would leave (existing rows overwritten by the
+  upserts, minus the deletes), so concurrent saves cannot pass it. A save that
+  would exceed either → **409** `{code: 'selection_cap', max: 500}` or
+  `{code: 'row_cap', max: 1000}`, nothing written. A project already over a cap
+  (constant lowered) can still re-rate, un-star and delete — just not grow.
+- **Notes are the owner's**: `/api/pick/state` returns `note` only to the
+  current seat holder; everyone else gets `{photo_key, rating}` per selection.
+  Admin sees notes.
+- **Lost / leaked link**: `POST /api/admin/projects/:id/links` mints a new pick
+  link (snapshot = `projects.folders`, 90-day expiry like creation); the old
+  one is killed with the ordinary `POST /api/shares/:token/revoke`. Old and new
+  links reach the same project and seat.
 - Invites (editor / viewer) require the owner to be registered. **Deferred**;
   the schema allows it.
 - Holding the seat ≠ account-level ownership. Long-term storage and
@@ -79,7 +107,8 @@ CREATE TABLE IF NOT EXISTS projects (
   photographer_id TEXT NOT NULL DEFAULT 'default', -- set server-side, never from the body
   phase           TEXT NOT NULL DEFAULT 'picking'
                   CHECK (phase IN ('picking','submitted','retouching')),
-  modified_after_submit INTEGER NOT NULL DEFAULT 0 -- 1 = saved since last submit
+  modified_after_submit INTEGER NOT NULL DEFAULT 0, -- 1 = saved since last submit
+  last_notified_at TEXT                   -- last notification email; NULL = never
 );
 CREATE TABLE IF NOT EXISTS pickers (
   id           TEXT PRIMARY KEY,
@@ -101,7 +130,8 @@ CREATE TABLE IF NOT EXISTS submissions (       -- append-only, one row per submi
   count        INTEGER NOT NULL,
   pick_limit   INTEGER,                   -- plan as it stood at submit
   extra_price  INTEGER,
-  created_at   TEXT NOT NULL
+  created_at   TEXT NOT NULL,
+  notified     INTEGER NOT NULL DEFAULT 0 -- 1 = the photographer was emailed about it
 );
 CREATE INDEX IF NOT EXISTS idx_submissions_project ON submissions(project_id, created_at);
 CREATE TABLE IF NOT EXISTS selections (
@@ -128,18 +158,22 @@ ALTER TABLE share_tokens ADD COLUMN project_id TEXT;
 | Route | Auth | Purpose |
 |---|---|---|
 | `POST /api/admin/projects` | admin | create project + mint pick link |
-| `GET /api/admin/projects` | admin | `{projects: [{id, title, phase, modified_after_submit, owner_name, created_at, submission_count, last_submitted_at, token}]}` newest first, this photographer only (`photographer_id = 'default'`), ≤ 200 rows, one SQL query; `owner_name` null when the seat is free; `token` is the newest live pick link (not revoked, not expired, inside the 180-day ceiling) or null |
-| `GET /api/admin/projects/:id` | admin | project incl. `phase`, `modified_after_submit`; owner, pickers, selections with `updated_by`, tokens, `submissions` newest first (`photo_keys` parsed) |
+| `GET /api/admin/projects` | admin | `{projects: [{id, title, phase, modified_after_submit, owner_name, created_at, submission_count, last_submitted_at, unnotified_submissions, token}]}` newest first, this photographer only (`photographer_id = 'default'`), ≤ 200 rows, one SQL query; `owner_name` null when the seat is free; `token` is the newest live pick link (not revoked, not expired, inside the 180-day ceiling) or null |
+| `GET /api/admin/projects/:id` | admin | project incl. `phase`, `modified_after_submit`, `last_notified_at`; owner, pickers, selections with `updated_by` and `note`, `tokens` (every pick link, newest first: `{token, created_at, expires_at, revoked_at, last_seen_at, status: 'live'\|'revoked'\|'expired'}`), `submissions` newest first (`photo_keys` parsed, `notified` 0/1), `unnotified_submissions` |
+| `POST /api/admin/projects/:id/links` | admin | mint a new pick link → 201 `{token, expires_at, created_at, status: 'live'}` |
+| `POST /api/shares/:token/revoke` | admin | revoke any link, pick links included → `{ok: true}`; 404 if unknown or already revoked |
 | `POST /api/admin/projects/:id/reset-seat` | admin | free the seat (selections, phase, submissions kept) |
 | `POST /api/admin/projects/:id/start-retouch` | admin | `submitted` → `retouching`; 409 `not_submitted` from `picking` |
 | `POST /api/admin/projects/:id/reopen` | admin | `submitted`/`retouching` → `picking`, flag cleared |
-| `GET /api/pick/state` | pick token (+ key) | owner name, am-I-owner, limit/price, selections, `phase`; owner also gets `modified_after_submit` and `submitted_at` (latest submission) |
+| `GET /api/pick/state` | pick token (+ key) | owner name, am-I-owner, limit/price, selections, `phase`; owner also gets `modified_after_submit`, `submitted_at` (latest submission) and each selection's `note` (viewers get `{photo_key, rating}` only) |
 | `POST /api/pick/claim` `{name}` | pick token | atomic claim → `picker_key` |
-| `PUT /api/pick/selections` | token + key, owner only | batch upsert/delete; 409 `retouching`; raises the flag when `submitted` |
-| `POST /api/pick/submit` `{relationship, email?}` | token + key, owner only | append `submissions` row, phase → `submitted`, email with diff; 409 `retouching` |
+| `PUT /api/pick/selections` | token + key, owner only | batch upsert/delete; 400 `invalid_photo_key`; 409 `retouching` / `selection_cap` / `row_cap`; raises the flag when `submitted` |
+| `POST /api/pick/submit` `{relationship, email?}` | token + key, owner only | append `submissions` row, phase → `submitted`, email with diff (throttled, see above); 409 `retouching` |
 
 Admin routes check `isAdminToken` (the photographer token only; fails closed
-when unset). Pick, client, session and studio tokens are refused.
+when unset). Pick, client, session and studio tokens are refused. Every
+`/api/admin/projects/:id…` route also filters on `photographer_id =
+DEFAULT_PHOTOGRAPHER_ID`: another photographer's project is 404 and untouched.
 
 ## Rules the tests must pin
 
@@ -150,9 +184,16 @@ when unset). Pick, client, session and studio tokens are refused.
 5. Non-owner (no key, wrong key, key from before a reset) → save and submit refused.
 6. Concurrent claims → exactly one owner.
 7. Limits: name ≤ 50, email ≤ 254, note ≤ 500, relationship from the fixed list,
-   ≤ 500 keys per save request.
+   ≤ 500 keys per save request; `photo_key` ≤ 256 characters (not UTF-16
+   units), no control characters (U+0000–U+001F, U+007F–U+009F, U+2028,
+   U+2029), not ending in `/` → 400 `invalid_photo_key` (upserts and deletes);
+   ≤ 500 starred / ≤ 1000 total selections per project, atomic.
 8. Admin pages and the notification email escape every guest-supplied string.
 9. `kind = 'pick'` tokens are refused by every route that isn't a pick route
    or a photo read inside their folders.
 10. In `retouching` no guest write lands, even one racing a start-retouch;
     submissions are never rewritten; a save never emails.
+11. At most one email per project per 10 minutes, none for an unchanged
+    photo set; the submission row is always recorded.
+12. Notes reach only the seat holder and admin.
+13. Admin project routes are scoped to this photographer's projects.

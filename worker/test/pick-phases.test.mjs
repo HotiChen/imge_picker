@@ -34,6 +34,10 @@ const phaseOf = env => one(env, 'SELECT phase, modified_after_submit AS m FROM p
 const submissions = env => rows(env, 'SELECT * FROM submissions ORDER BY rowid');
 const selectionRows = env => rows(env, 'SELECT photo_key, rating, note FROM selections ORDER BY photo_key');
 
+// the photographer was last mailed long ago: the ten-minute throttle is not
+// what these tests are about (pick-hardening.test.mjs pins it)
+const rewind = env => env.DB._db.prepare('UPDATE projects SET last_notified_at = NULL').run();
+
 // makes `sql` run the moment the Worker prepares a statement matching `re` —
 // after every read the route does, before the write itself executes
 function landBefore(env, re, sql) {
@@ -65,7 +69,7 @@ test('the submit snapshot lives in submissions, not on pickers', () => {
   const cols = rows(env, 'PRAGMA table_info(pickers)').map(c => c.name);
   for (const gone of ['submit_count', 'submit_limit', 'submit_price']) assert.ok(!cols.includes(gone), gone);
   assert.deepEqual(rows(env, 'PRAGMA table_info(submissions)').map(c => c.name), [
-    'id', 'project_id', 'picker_id', 'relationship', 'email', 'photo_keys', 'count', 'pick_limit', 'extra_price', 'created_at',
+    'id', 'project_id', 'picker_id', 'relationship', 'email', 'photo_keys', 'count', 'pick_limit', 'extra_price', 'created_at', 'notified',
   ]);
 });
 
@@ -143,6 +147,7 @@ test('the resubmit email lists what was added and removed since the last submit'
   }
   await save(env, p.token, p.key, { upsert: [{ photo_key: C, rating: 2 }, { photo_key: A, rating: 0 }] });
   assert.equal(mailer.sent.length, 1, 'a save sends nothing');
+  rewind(env);
   await submit(env, p);
   assert.equal(mailer.sent.length, 2);
   const { text, html } = mailer.sent[1];
@@ -156,15 +161,16 @@ test('the resubmit email lists what was added and removed since the last submit'
   assert.ok(text.indexOf('20260819/a.jpg') > text.indexOf('移除'));
 });
 
-test('a resubmit with nothing changed says so rather than listing nothing', async () => {
+test('a resubmit with nothing changed is recorded but not mailed', async () => {
   const mailer = fakeMailer();
   const env = mailEnv(mailer);
   const p = await claimed(env);
   await save(env, p.token, p.key, { upsert: [{ photo_key: A, rating: 1 }] });
   await submit(env, p);
-  await submit(env, p);
-  assert.match(mailer.sent[1].text, /與上次相同/);
-  assert.doesNotMatch(mailer.sent[1].text, /新增|移除/);
+  rewind(env);
+  assert.equal((await submit(env, p)).res.status, 200);
+  assert.equal(submissions(env).length, 2);
+  assert.equal(mailer.sent.length, 1);
 });
 
 test('the diff compares with the previous submission even when someone else made it', async () => {
@@ -176,6 +182,7 @@ test('the diff compares with the previous submission even when someone else made
   await admin(env, p.project.id, 'reset-seat');
   const { key } = await claim(env, p.token, '王太太');
   await save(env, p.token, key, { upsert: [{ photo_key: B, rating: 1 }] });
+  rewind(env);
   await submit(env, { ...p, key });
   assert.match(mailer.sent[1].text, /新增[^]*20260819\/b\.jpg/);
   assert.doesNotMatch(mailer.sent[1].text, /移除/);
@@ -190,6 +197,7 @@ test('photo keys in the diff are HTML-escaped', async () => {
   await save(env, p.token, p.key, { upsert: [{ photo_key: evilOut, rating: 1 }] });
   await submit(env, p);
   await save(env, p.token, p.key, { upsert: [{ photo_key: evilIn, rating: 1 }], delete: [evilOut] });
+  rewind(env);
   await submit(env, p);
   const { html } = mailer.sent[1];
   assert.doesNotMatch(html, /<img|<svg/i);
@@ -542,6 +550,7 @@ test('the diff is against the submission before this one, even if another lands 
   landBefore(env, /^\s*SELECT \* FROM submissions/i,
     `INSERT INTO submissions (id, project_id, picker_id, relationship, photo_keys, count, created_at) VALUES ('late', '${p.project.id}', 'x', '本人', '["${C}"]', 1, 'z')`);
   await save(env, p.token, p.key, { upsert: [{ photo_key: B, rating: 1 }] });
+  rewind(env);
   await submit(env, p);
   const { text } = mailer.sent[1];
   assert.match(text, /新增[^]*20260819\/b\.jpg/);

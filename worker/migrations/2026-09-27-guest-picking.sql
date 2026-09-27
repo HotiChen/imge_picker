@@ -16,7 +16,8 @@ CREATE TABLE IF NOT EXISTS projects (
   photographer_id TEXT NOT NULL DEFAULT 'default',
   phase           TEXT NOT NULL DEFAULT 'picking'
                   CHECK (phase IN ('picking','submitted','retouching')),
-  modified_after_submit INTEGER NOT NULL DEFAULT 0
+  modified_after_submit INTEGER NOT NULL DEFAULT 0,
+  last_notified_at TEXT
 );
 
 CREATE TABLE IF NOT EXISTS pickers (
@@ -50,7 +51,8 @@ CREATE TABLE IF NOT EXISTS submissions (
   count        INTEGER NOT NULL,
   pick_limit   INTEGER,                   -- the plan as it stood at submit
   extra_price  INTEGER,
-  created_at   TEXT NOT NULL
+  created_at   TEXT NOT NULL,
+  notified     INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_submissions_project ON submissions(project_id, created_at);
 

@@ -81,6 +81,7 @@ test('each project shows phase, flag, seat holder, submits and its live link', a
     created_at: created,
     submission_count: 2,
     last_submitted_at: latest,
+    unnotified_submissions: 2, // no mail binding here, so neither was emailed
     token: p.token,
   });
   assert.doesNotMatch(JSON.stringify(projects), /key_hash|folders|photo_keys/);
