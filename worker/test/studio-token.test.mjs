@@ -281,9 +281,11 @@ test('a studio token is not listed among an album’s client links', async () =>
 
 // ─── the column does not exist on the live database yet ──────────────────────
 
-// the column and the comment block that introduces it, comma and all
+// the column and the comment block that introduces it, comma and all, and
+// every column appended after it (project_id): a database that predates the
+// kind column predates those too
 const PRE_MIGRATION = readFileSync(new URL('../schema.sql', import.meta.url), 'utf8')
-  .replace(/,\n(?:\s*--[^\n]*\n)*\s*kind\s+TEXT[^\n]*\n/, '\n');
+  .replace(/,\n(?:\s*--[^\n]*\n)*\s*kind\s+TEXT[\s\S]*?(\n\);)/, '$1');
 
 test('a database that predates the kind column still serves client links', async () => {
   // schema.sql is CREATE TABLE IF NOT EXISTS, so the deployed D1 keeps the old

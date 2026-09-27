@@ -149,6 +149,14 @@ function isMintedShare(share) {
   return isStudioShare(share) || isSessionShare(share);
 }
 
+// The guest-picking link (docs/guest-picking.md). Sent over LINE like an album
+// link, so it slides like one, but it opens the /api/pick routes and photo
+// reads inside its own folders and nothing else. Positive for the same reason
+// as the two above.
+function isPickShare(share) {
+  return share.kind === 'pick';
+}
+
 function newShareToken() {
   const bytes = new Uint8Array(32);
   crypto.getRandomValues(bytes);
@@ -331,6 +339,132 @@ async function touchShareToken(share, request, env) {
       'UPDATE share_tokens SET last_seen_at = ?, expires_at = ? WHERE token = ? AND (last_seen_at IS NULL OR last_seen_at < ?)'
     ).bind(share.last_seen_at, share.expires_at, share.token, cutoff).run();
   } catch { /* a missed bump just means the next visit tries again */ }
+}
+
+// ─── Guest picking ───────────────────────────────────────────────────────────
+// One link per shoot (a share_tokens row, kind 'pick'). Opening it claims
+// nothing — LINE's crawler opens it too. The first person to POST a name takes
+// the seat and gets a picker key, once; only its SHA-256 is stored. Holding the
+// seat is what lets a browser save and submit; everyone else only looks.
+const PICK_NAME_MAX = 50;
+const PICK_EMAIL_MAX = 254;
+const PICK_NOTE_MAX = 500;
+const PICK_KEYS_MAX = 500;
+const PICK_RATING_MAX = 5;
+const PICK_RELATIONSHIPS = ['本人', '伴侶', '家人', '朋友', '其他'];
+// One photographer today. Written by the Worker on every project so the data
+// is attributable from day one; a request body never chooses it.
+const DEFAULT_PHOTOGRAPHER_ID = 'default';
+
+// Characters, not UTF-16 units, so an emoji is one of the fifty.
+const charCount = s => [...s].length;
+
+async function sha256Hex(text) {
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+function escapeHtml(value) {
+  return String(value ?? '').replace(/[&<>"']/g, c => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+  ));
+}
+
+// A photo a pick link may name: inside the token's snapshot, and never one of
+// the Worker's own `_` objects, whatever the snapshot says.
+function pickKeyAllowed(share, key) {
+  return typeof key === 'string' && !isInternalKey(key) && shareCovers(share, key);
+}
+
+// The folders a project is created with, canonicalised the way
+// parseClientFolders does it. null when any of them could not name a photo
+// folder: `/` would open the bucket, `_` is the Worker's own, and `.`/`..`
+// never match a real key.
+function pickFolders(value) {
+  if (!Array.isArray(value) || !value.length) return null;
+  const out = [];
+  for (const f of value) {
+    if (typeof f !== 'string' || !f.trim()) return null;
+    const trimmed = f.trim();
+    const slashed = trimmed.endsWith('/') ? trimmed : trimmed + '/';
+    if (slashed.startsWith('/') || isInternalKey(slashed)) return null;
+    const segments = slashed.split('/');
+    if (segments.includes('..') || segments.includes('.')) return null;
+    if (!out.includes(slashed)) out.push(slashed);
+  }
+  return out;
+}
+
+// The project behind a pick token and, when the request carries a picker key,
+// the picker it belongs to. The key is looked up by its hash and only within
+// the token's own project, so a key from another project finds nobody. null
+// for anything that is not a live pick link to a project that still exists.
+async function resolvePick(share, request, env) {
+  if (!share || !isPickShare(share) || !share.project_id) return null;
+  const project = await env.DB.prepare('SELECT * FROM projects WHERE id = ?').bind(share.project_id).first();
+  if (!project) return null;
+  const key = request.headers.get('X-Picker-Key') || '';
+  let picker = null;
+  if (key) {
+    picker = await env.DB.prepare('SELECT * FROM pickers WHERE key_hash = ? AND project_id = ?')
+      .bind(await sha256Hex(key), project.id).first();
+  }
+  // a key from before a seat reset still finds its picker row; it is the seat
+  // that says whether that picker is the owner
+  const isOwner = !!picker && project.owner_picker_id === picker.id;
+  return { project, picker, isOwner };
+}
+
+async function pickOwnerName(env, projectId) {
+  const row = await env.DB.prepare(
+    'SELECT pk.name FROM projects p JOIN pickers pk ON pk.id = p.owner_picker_id WHERE p.id = ?'
+  ).bind(projectId).first();
+  return row ? row.name : null;
+}
+
+// Over the plan's limit is a warning the guest reads, never a block.
+function pickOverText(count, limit, price) {
+  if (limit == null || count <= limit) return '';
+  const over = count - limit;
+  return `方案 ${limit} 張精修，您已選 ${count} 張，多 ${over} 張` +
+    (price != null ? `，每張 NT$${price} 加挑費` : '');
+}
+
+// Tells the photographer a guest submitted. Isolated so the transport can
+// change (Cloudflare send_email now, Resend later) without touching the route.
+// Everything the guest typed is escaped for the HTML part, and the subject is
+// forced onto one line. Missing configuration is a logged skip, not an error:
+// the submit is the guest's, and it must land whether or not mail is set up.
+async function sendPickNotification(env, project, picker) {
+  if (!env.NOTIFY_EMAIL || !env.PHOTOGRAPHER_EMAIL) {
+    console.warn('pick notification skipped: NOTIFY_EMAIL or PHOTOGRAPHER_EMAIL is not configured');
+    return false;
+  }
+  const count = picker.submit_count ?? 0;
+  const limit = picker.submit_limit;
+  const price = picker.submit_price;
+  const title = project.title || '未命名專案';
+  const fields = [
+    ['專案', title],
+    ['挑選人', picker.name],
+    ['關係', picker.relationship],
+    ['Email', picker.email || '（未填）'],
+    ['已選', `${count} 張`],
+    ['方案', limit == null ? '不限張數' : `${limit} 張`],
+  ];
+  if (price != null) fields.push(['加挑單價', `NT$${price}`]);
+  const warning = pickOverText(count, limit, price);
+  const subject = `[選片完成] ${title} — ${picker.name}`.replace(/[\r\n]+/g, ' ');
+  const text = fields.map(([k, v]) => `${k}：${v}`).join('\n') + (warning ? `\n\n${warning}` : '');
+  const html = '<table>' +
+    fields.map(([k, v]) => `<tr><th align="left">${escapeHtml(k)}</th><td>${escapeHtml(v)}</td></tr>`).join('') +
+    '</table>' + (warning ? `<p><strong>${escapeHtml(warning)}</strong></p>` : '');
+  await env.NOTIFY_EMAIL.send({
+    to: env.PHOTOGRAPHER_EMAIL,
+    from: env.NOTIFY_FROM || env.PHOTOGRAPHER_EMAIL,
+    subject, html, text,
+  });
+  return true;
 }
 
 // A share link is a URL sitting in a chat thread. Its responses must not land
@@ -683,6 +817,79 @@ export default {
       return jsonOk({ success: true });
     }
 
+    // POST /api/admin/projects — a guest-picking project and its one link
+    if (request.method === 'POST' && url.pathname === '/api/admin/projects') {
+      if (!isAdminToken(request, env)) return jsonErr('Unauthorized', 401);
+      if (!env.DB) return jsonErr('DB not configured', 500);
+      let body;
+      try { body = await request.json(); } catch { return jsonErr('Invalid JSON'); }
+      const { title = '', folders, pick_limit = null, extra_price = null } = body || {};
+      if (typeof title !== 'string') return jsonErr('title must be a string');
+      const snapshot = pickFolders(folders);
+      if (!snapshot) return jsonErr('folders must be a non-empty array of photo folders');
+      for (const [name, v] of [['pick_limit', pick_limit], ['extra_price', extra_price]]) {
+        if (v !== null && !(Number.isInteger(v) && v >= 0)) return jsonErr(`${name} must be a whole number from 0`);
+      }
+      const id = crypto.randomUUID();
+      const token = newShareToken();
+      const now = Date.now();
+      const createdAt = new Date(now).toISOString();
+      const expiresAt = new Date(now + SHARE_TTL_MS).toISOString();
+      const foldersJson = JSON.stringify(snapshot);
+      const cleanTitle = title.trim().slice(0, 200);
+      await env.DB.prepare(
+        'INSERT INTO projects (id, title, folders, pick_limit, extra_price, created_at, photographer_id) VALUES (?, ?, ?, ?, ?, ?, ?)'
+      ).bind(id, cleanTitle, foldersJson, pick_limit, extra_price, createdAt, DEFAULT_PHOTOGRAPHER_ID).run();
+      // book_id '' keeps it off every book route and out of the per-album
+      // list; the kind keeps it off everything else that is not a pick route
+      await env.DB.prepare(
+        "INSERT INTO share_tokens (token, book_id, label, kind, project_id, folders, created_at, expires_at) VALUES (?, '', ?, 'pick', ?, ?, ?, ?)"
+      ).bind(token, cleanTitle, id, foldersJson, createdAt, expiresAt).run();
+      return jsonOk({
+        project: { id, title: cleanTitle, folders: snapshot, pick_limit, extra_price, photographer_id: DEFAULT_PHOTOGRAPHER_ID },
+        token, expires_at: expiresAt,
+      }, 201);
+    }
+
+    // GET /api/admin/projects/:id — the seat holder, every submit record and
+    // who set each pick. Guest strings go out raw in JSON; admin.html escapes
+    // them when it renders.
+    if (request.method === 'GET' && pathParts[0] === 'api' && pathParts[1] === 'admin' && pathParts[2] === 'projects' && pathParts[3] && !pathParts[4]) {
+      if (!isAdminToken(request, env)) return jsonErr('Unauthorized', 401);
+      if (!env.DB) return jsonErr('DB not configured', 500);
+      const project = await env.DB.prepare('SELECT * FROM projects WHERE id = ?').bind(pathParts[3]).first();
+      if (!project) return jsonErr('Not found', 404);
+      // key_hash is left out by name: it is the one column here that is a
+      // credential's stand-in
+      const { results: pickers } = await env.DB.prepare(
+        'SELECT id, name, relationship, email, user_id, created_at, submitted_at, submit_count, submit_limit, submit_price FROM pickers WHERE project_id = ? ORDER BY created_at'
+      ).bind(project.id).all();
+      const { results: selections } = await env.DB.prepare(
+        'SELECT photo_key, rating, note, updated_by, updated_at FROM selections WHERE project_id = ? ORDER BY photo_key'
+      ).bind(project.id).all();
+      const { results: tokens } = await env.DB.prepare(
+        "SELECT token, created_at, expires_at, revoked_at, last_seen_at FROM share_tokens WHERE kind = 'pick' AND project_id = ? ORDER BY created_at DESC"
+      ).bind(project.id).all();
+      let folders = null;
+      try { folders = JSON.parse(project.folders); } catch {}
+      return jsonOk({
+        project: { ...project, folders },
+        owner: pickers.find(p => p.id === project.owner_picker_id) || null,
+        pickers, selections, tokens,
+      }, 200, ADMIN_ONLY_HEADERS);
+    }
+
+    // POST /api/admin/projects/:id/reset-seat — the guest lost their browser.
+    // Frees the seat; the selections belong to the project and stay.
+    if (request.method === 'POST' && pathParts[0] === 'api' && pathParts[1] === 'admin' && pathParts[2] === 'projects' && pathParts[3] && pathParts[4] === 'reset-seat') {
+      if (!isAdminToken(request, env)) return jsonErr('Unauthorized', 401);
+      if (!env.DB) return jsonErr('DB not configured', 500);
+      const result = await env.DB.prepare('UPDATE projects SET owner_picker_id = NULL WHERE id = ?')
+        .bind(pathParts[3]).run();
+      if (!result.meta?.changes) return jsonErr('Not found', 404);
+      return jsonOk({ ok: true });
+    }
+
     // GET /api/shares/minted — the studio and client-session tokens that are
     // live right now. Neither kind carries a book_id, so the per-album list
     // below cannot show them and until this route nothing could: a photographer
@@ -720,6 +927,157 @@ export default {
       ).bind(new Date().toISOString(), pathParts[2]).run();
       if (!result.meta?.changes) return jsonErr('Not found', 404);
       return jsonOk({ ok: true });
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // PICK ROUTES — a guest reaches these with a pick link, and nothing else
+    // reaches them. Ahead of the book routes and, for PUT, of the upload
+    // route, which would otherwise take `PUT /api/pick/selections` as a key.
+    // ═══════════════════════════════════════════════════════════════════════
+
+    if (pathParts[0] === 'api' && pathParts[1] === 'pick') {
+      if (!env.DB) return jsonErr('DB not configured', 500);
+      const s = await share();
+      const ctxPick = await resolvePick(s, request, env);
+      if (!ctxPick) return jsonErr('Unauthorized', 401);
+      const { project, picker, isOwner } = ctxPick;
+      const route = pathParts.slice(2).join('/');
+
+      // GET /api/pick/state — what anyone holding the link may see
+      if (request.method === 'GET' && route === 'state') {
+        await touchShareToken(s, request, env);
+        const { results: selections } = await env.DB.prepare(
+          'SELECT photo_key, rating, note FROM selections WHERE project_id = ? ORDER BY photo_key'
+        ).bind(project.id).all();
+        return jsonOk({
+          project: { id: project.id, title: project.title, pick_limit: project.pick_limit, extra_price: project.extra_price },
+          folders: s.folders,
+          owner: await pickOwnerName(env, project.id),
+          is_owner: isOwner,
+          submitted_at: isOwner ? picker.submitted_at : null,
+          selections,
+        }, 200, SHARED_LINK_HEADERS);
+      }
+
+      // POST /api/pick/claim {name} — take the seat
+      if (request.method === 'POST' && route === 'claim') {
+        let body;
+        try { body = await request.json(); } catch { return jsonErr('Invalid JSON'); }
+        const name = typeof body?.name === 'string' ? body.name.trim() : '';
+        if (!name || charCount(name) > PICK_NAME_MAX) return jsonErr(`請輸入 1–${PICK_NAME_MAX} 字的名字`);
+        const pickerId = crypto.randomUUID();
+        // returned once and never stored: the row keeps its hash
+        const key = newShareToken();
+        await env.DB.prepare(
+          'INSERT INTO pickers (id, project_id, key_hash, name, created_at) VALUES (?, ?, ?, ?, ?)'
+        ).bind(pickerId, project.id, await sha256Hex(key), name, new Date().toISOString()).run();
+        // The whole claim is this one conditional statement. Checking the seat
+        // first and writing it second would let two guests tapping at once
+        // both read it free and both believe they hold it.
+        const won = await env.DB.prepare(
+          'UPDATE projects SET owner_picker_id = ? WHERE id = ? AND owner_picker_id IS NULL'
+        ).bind(pickerId, project.id).run();
+        if (!won.meta?.changes) {
+          await env.DB.prepare('DELETE FROM pickers WHERE id = ?').bind(pickerId).run();
+          return jsonOk({ error: '已有人在挑選', owner: await pickOwnerName(env, project.id) }, 409);
+        }
+        return jsonOk({ picker_key: key, picker_id: pickerId, owner: name });
+      }
+
+      // PUT /api/pick/selections {upsert: [{photo_key, rating, note}], delete: [photo_key]}
+      if (request.method === 'PUT' && route === 'selections') {
+        if (!isOwner) return jsonErr('只有挑選人可以修改', 403);
+        let body;
+        try { body = await request.json(); } catch { return jsonErr('Invalid JSON'); }
+        if (!body || typeof body !== 'object' || Array.isArray(body)) return jsonErr('Invalid body');
+        const upsert = body.upsert ?? [];
+        const remove = body.delete ?? [];
+        if (!Array.isArray(upsert) || !Array.isArray(remove)) return jsonErr('upsert and delete must be arrays');
+        if (upsert.length + remove.length > PICK_KEYS_MAX) return jsonErr(`一次最多 ${PICK_KEYS_MAX} 張`);
+        // every item is checked before anything is written, so a refused save
+        // leaves nothing half-applied
+        const items = [];
+        for (const item of upsert) {
+          if (!item || typeof item !== 'object' || typeof item.photo_key !== 'string') return jsonErr('Invalid item');
+          const rating = item.rating === undefined ? 0 : item.rating;
+          if (!Number.isInteger(rating) || rating < 0 || rating > PICK_RATING_MAX) return jsonErr('Invalid rating');
+          const note = item.note === undefined ? '' : item.note;
+          if (typeof note !== 'string' || charCount(note) > PICK_NOTE_MAX) return jsonErr(`備註最多 ${PICK_NOTE_MAX} 字`);
+          if (!pickKeyAllowed(s, item.photo_key)) return jsonErr('照片不在開放資料夾內', 403);
+          items.push({ k: item.photo_key, r: rating, n: note });
+        }
+        for (const k of remove) {
+          if (typeof k !== 'string') return jsonErr('Invalid item');
+          if (!pickKeyAllowed(s, k)) return jsonErr('照片不在開放資料夾內', 403);
+        }
+        // One statement per direction however many photos, because D1 caps the
+        // queries one invocation may run. Each re-checks the seat in the same
+        // statement, so a reset that lands after the check above still wins.
+        const seat = 'EXISTS (SELECT 1 FROM projects WHERE id = ? AND owner_picker_id = ?)';
+        if (items.length) {
+          const wrote = await env.DB.prepare(
+            'INSERT INTO selections (project_id, photo_key, rating, note, updated_by, updated_at) ' +
+            "SELECT ?, json_extract(value, '$.k'), json_extract(value, '$.r'), json_extract(value, '$.n'), ?, ? " +
+            `FROM json_each(?) WHERE ${seat} ` +
+            'ON CONFLICT(project_id, photo_key) DO UPDATE SET rating = excluded.rating, note = excluded.note, updated_by = excluded.updated_by, updated_at = excluded.updated_at'
+          ).bind(project.id, picker.id, new Date().toISOString(), JSON.stringify(items), project.id, picker.id).run();
+          if (!wrote.meta?.changes) return jsonErr('只有挑選人可以修改', 403);
+        }
+        if (remove.length) {
+          await env.DB.prepare(
+            `DELETE FROM selections WHERE project_id = ? AND photo_key IN (SELECT value FROM json_each(?)) AND ${seat}`
+          ).bind(project.id, JSON.stringify(remove), project.id, picker.id).run();
+        }
+        return jsonOk({ ok: true });
+      }
+
+      // POST /api/pick/submit {relationship, email?}
+      if (request.method === 'POST' && route === 'submit') {
+        if (!isOwner) return jsonErr('只有挑選人可以送出', 403);
+        let body;
+        try { body = await request.json(); } catch { return jsonErr('Invalid JSON'); }
+        const { relationship, email } = (body && typeof body === 'object') ? body : {};
+        if (!PICK_RELATIONSHIPS.includes(relationship)) return jsonErr('請選擇與新人的關係');
+        let mail = null;
+        if (email !== undefined && email !== null) {
+          if (typeof email !== 'string') return jsonErr('Invalid email');
+          const trimmed = email.trim();
+          if (trimmed) {
+            if (charCount(trimmed) > PICK_EMAIL_MAX || !/^[^\s@]+@[^\s@]+$/.test(trimmed)) return jsonErr('Email 格式不正確');
+            mail = trimmed;
+          }
+        }
+        // picked = at least one star, the same thing the grid counts
+        const counted = await env.DB.prepare(
+          'SELECT COUNT(*) AS n FROM selections WHERE project_id = ? AND rating > 0'
+        ).bind(project.id).first();
+        const count = counted?.n ?? 0;
+        const submittedAt = new Date().toISOString();
+        // the limit and price as they stand now: the record any extra-photo fee
+        // is charged from, which a later change to the plan must not rewrite
+        const done = await env.DB.prepare(
+          'UPDATE pickers SET relationship = ?, email = ?, submitted_at = ?, submit_count = ?, submit_limit = ?, submit_price = ? ' +
+          'WHERE id = ? AND id = (SELECT owner_picker_id FROM projects WHERE id = ?)'
+        ).bind(relationship, mail, submittedAt, count, project.pick_limit, project.extra_price, picker.id, project.id).run();
+        if (!done.meta?.changes) return jsonErr('只有挑選人可以送出', 403);
+        const record = {
+          ...picker, relationship, email: mail, submitted_at: submittedAt,
+          submit_count: count, submit_limit: project.pick_limit, submit_price: project.extra_price,
+        };
+        // the guest is not kept waiting on a mail server, and a mail server
+        // that fails does not take the submit down with it
+        const notify = Promise.resolve()
+          .then(() => sendPickNotification(env, project, record))
+          .catch(e => console.error('pick notification failed:', e?.message || e));
+        if (ctx?.waitUntil) ctx.waitUntil(notify); else await notify;
+        const limit = project.pick_limit;
+        return jsonOk({
+          ok: true, submitted_at: submittedAt, count, limit, price: project.extra_price,
+          over: limit == null ? 0 : Math.max(0, count - limit),
+        });
+      }
+
+      return jsonErr('Not found', 404);
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -774,7 +1132,8 @@ export default {
         // a minted token signs <img> URLs; every book route is driven by
         // fetch, which can carry the real credential — the photographer's, or
         // the client's D1 session — in a header instead
-        if (!bookShare || isMintedShare(bookShare) || bookShare.book_id !== bookId) {
+        // nor is a pick link an album link, whatever its book_id says
+        if (!bookShare || isMintedShare(bookShare) || isPickShare(bookShare) || bookShare.book_id !== bookId) {
           return jsonErr('Unauthorized', 401);
         }
         await touchShareToken(bookShare, request, env);
