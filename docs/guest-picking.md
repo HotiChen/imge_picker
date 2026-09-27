@@ -128,6 +128,7 @@ ALTER TABLE share_tokens ADD COLUMN project_id TEXT;
 | Route | Auth | Purpose |
 |---|---|---|
 | `POST /api/admin/projects` | admin | create project + mint pick link |
+| `GET /api/admin/projects` | admin | `{projects: [{id, title, phase, modified_after_submit, owner_name, created_at, submission_count, last_submitted_at, token}]}` newest first, this photographer only (`photographer_id = 'default'`), ≤ 200 rows, one SQL query; `owner_name` null when the seat is free; `token` is the newest live pick link (not revoked, not expired, inside the 180-day ceiling) or null |
 | `GET /api/admin/projects/:id` | admin | project incl. `phase`, `modified_after_submit`; owner, pickers, selections with `updated_by`, tokens, `submissions` newest first (`photo_keys` parsed) |
 | `POST /api/admin/projects/:id/reset-seat` | admin | free the seat (selections, phase, submissions kept) |
 | `POST /api/admin/projects/:id/start-retouch` | admin | `submitted` → `retouching`; 409 `not_submitted` from `picking` |

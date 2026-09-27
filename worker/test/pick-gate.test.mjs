@@ -20,6 +20,7 @@ const OTHER_ROUTES = p => [
   ['PUT', '/api/admin/clients/1/permissions', { can_book: true }],
   ['DELETE', '/api/admin/clients/1'],
   ['POST', '/api/admin/projects', { folders: [MINE] }],
+  ['GET', '/api/admin/projects'],
   ['GET', `/api/admin/projects/${p.project.id}`],
   ['POST', `/api/admin/projects/${p.project.id}/reset-seat`],
   ['POST', `/api/admin/projects/${p.project.id}/start-retouch`],

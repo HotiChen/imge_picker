@@ -899,6 +899,40 @@ export default {
       }, 201);
     }
 
+    // GET /api/admin/projects — the photographer's list, newest first. One
+    // statement: the seat holder by join, the submit tally and the live link
+    // by correlated subquery, so a long list costs no more round trips than a
+    // short one. The owner join also checks the picker's project, so a stray
+    // owner id cannot put another project's guest name on this row. "Live"
+    // is what resolveShareToken would accept: not revoked, not expired, and
+    // inside the ceiling counted from created_at (ISO strings compare in
+    // time order).
+    if (request.method === 'GET' && url.pathname === '/api/admin/projects') {
+      if (!isAdminToken(request, env)) return jsonErr('Unauthorized', 401);
+      if (!env.DB) return jsonErr('DB not configured', 500);
+      const now = Date.now();
+      const { results } = await env.DB.prepare(
+        `SELECT p.id, p.title, p.phase, p.modified_after_submit,
+                o.name AS owner_name, p.created_at,
+                (SELECT COUNT(*) FROM submissions s WHERE s.project_id = p.id) AS submission_count,
+                (SELECT MAX(s.created_at) FROM submissions s WHERE s.project_id = p.id) AS last_submitted_at,
+                (SELECT t.token FROM share_tokens t
+                  WHERE t.kind = 'pick' AND t.project_id = p.id AND t.revoked_at IS NULL
+                    AND t.expires_at > ?1 AND t.created_at > ?2
+                  ORDER BY t.created_at DESC LIMIT 1) AS token
+           FROM projects p
+           LEFT JOIN pickers o ON o.id = p.owner_picker_id AND o.project_id = p.id
+          WHERE p.photographer_id = ?3
+          ORDER BY p.created_at DESC, p.rowid DESC
+          LIMIT 200`
+      ).bind(
+        new Date(now).toISOString(),
+        new Date(now - SHARE_MAX_LIFE_MS).toISOString(),
+        DEFAULT_PHOTOGRAPHER_ID,
+      ).all();
+      return jsonOk({ projects: results }, 200, ADMIN_ONLY_HEADERS);
+    }
+
     // GET /api/admin/projects/:id — the seat holder, every submit record and
     // who set each pick. Guest strings go out raw in JSON; admin.html escapes
     // them when it renders.
