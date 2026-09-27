@@ -48,6 +48,11 @@
   }
 
   document.addEventListener('DOMContentLoaded', function () {
+    // A pick link (index.html?t=...) owns the page — see js/pick.js. Neither
+    // the studio/client choice overlay nor a stray studio_token in this same
+    // browser has anything to do with a guest opening it from LINE.
+    if (window.PickController && window.PickController.active) return;
+
     const clientSession = getClientSession();
     const studioToken = getStudioToken();
 

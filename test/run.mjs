@@ -9,6 +9,7 @@
 //   node --test "worker/test/*.test.mjs"
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
 import { extname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -3103,6 +3104,656 @@ const lastPut = m => {
       ok('a corrected date is the one the picker keys on',
         fixed.head.includes('2026-09-01') && JSON.stringify(fixed.marked) === '["20260901/"]',
         `${fixed.head} / ${JSON.stringify(fixed.marked)}`);
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN });
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Guest picking (docs/guest-picking.md) — index.html?t=<pick token> and the
+// admin.html project panel. The fake below mirrors the real routes' request
+// and response shapes exactly (field names, status codes, error bodies) as
+// worker.js implements them — see resolvePick/claim/selections/submit and
+// the /api/admin/projects* routes — so a fake that drifts from the real API
+// is the failure mode this suite exists to catch.
+// ═══════════════════════════════════════════════════════════════════════════
+
+const PICK_RELATIONSHIPS = ['本人', '伴侶', '家人', '朋友', '其他'];
+
+function pickFakeWorker(opts = {}) {
+  const state = {
+    project: {
+      id: opts.projectId || 'proj-1',
+      title: opts.title ?? 'T 專案',
+      pick_limit: opts.pickLimit ?? null,
+      extra_price: opts.extraPrice ?? null,
+      folders: opts.folders || ['20260819/'],
+      owner_picker_id: null,
+      phase: 'picking',
+      modified_after_submit: 0,
+    },
+    pickers: new Map(),        // id -> {id, name, key, relationship, email}
+    selections: new Map(),     // photo_key -> {rating, note, updated_by, updated_at}
+    submissions: [],           // oldest first internally; served newest-first
+  };
+  if (opts.ownerName) {
+    const id = 'picker-0';
+    state.pickers.set(id, { id, name: opts.ownerName, key: opts.ownerKey || 'OWNER-KEY' });
+    state.project.owner_picker_id = id;
+  }
+  const requests = [];
+
+  function findByKey(key) {
+    for (const p of state.pickers.values()) if (p.key === key) return p;
+    return null;
+  }
+
+  const attach = async page => {
+    await page.route('**/imagepicker.hotichen.workers.dev/**', async route => {
+      const req = route.request();
+      const u = new URL(req.url());
+      const method = req.method();
+      const h = await req.allHeaders();
+      const shareTok = u.searchParams.get('t') || h['x-share-token'] || '';
+      const pickerKey = h['x-picker-key'] || '';
+      let body = null;
+      try { body = JSON.parse(req.postData() || 'null'); } catch (e) { /* not JSON */ }
+      requests.push({ method, path: u.pathname, t: shareTok, key: pickerKey, body });
+      const json = (data, status = 200) =>
+        route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(data) });
+
+      if (u.pathname === '/api/pick/state' && method === 'GET') {
+        const picker = pickerKey ? findByKey(pickerKey) : null;
+        const isOwner = !!picker && state.project.owner_picker_id === picker.id;
+        const ownerPicker = state.project.owner_picker_id ? state.pickers.get(state.project.owner_picker_id) : null;
+        const subs = state.submissions;
+        const resp = {
+          project: {
+            id: state.project.id, title: state.project.title,
+            pick_limit: state.project.pick_limit, extra_price: state.project.extra_price,
+          },
+          folders: state.project.folders,
+          owner: ownerPicker ? ownerPicker.name : null,
+          is_owner: isOwner,
+          phase: state.project.phase,
+          submitted_at: subs.length ? subs[subs.length - 1].created_at : null,
+          selections: Array.from(state.selections.entries())
+            .map(([photo_key, s]) => ({ photo_key, rating: s.rating, note: s.note })),
+        };
+        if (isOwner) resp.modified_after_submit = state.project.modified_after_submit;
+        return json(resp);
+      }
+
+      if (u.pathname === '/api/pick/claim' && method === 'POST') {
+        const name = typeof body?.name === 'string' ? body.name.trim() : '';
+        if (!name || name.length > 50) return json({ error: '請輸入 1–50 字的名字' }, 400);
+        if (state.project.owner_picker_id) {
+          const owner = state.pickers.get(state.project.owner_picker_id);
+          return json({ error: '已有人在挑選', owner: owner ? owner.name : null }, 409);
+        }
+        const id = 'picker-' + (state.pickers.size + 1);
+        const key = 'KEY-' + id;
+        state.pickers.set(id, { id, name, key });
+        state.project.owner_picker_id = id;
+        return json({ picker_key: key, picker_id: id, owner: name });
+      }
+
+      if (u.pathname === '/api/pick/selections' && method === 'PUT') {
+        if (!['picking', 'submitted'].includes(state.project.phase))
+          return json({ error: '攝影師已開始修圖，無法再修改或送出', code: 'retouching' }, 409);
+        const picker = pickerKey ? findByKey(pickerKey) : null;
+        const isOwner = !!picker && state.project.owner_picker_id === picker.id;
+        if (!isOwner) return json({ error: '只有挑選人可以修改' }, 403);
+        const now = new Date().toISOString();
+        if (state.project.phase === 'submitted') state.project.modified_after_submit = 1;
+        (body?.upsert || []).forEach(item => {
+          state.selections.set(item.photo_key,
+            { rating: item.rating, note: item.note || '', updated_by: picker.id, updated_at: now });
+        });
+        (body?.delete || []).forEach(k => state.selections.delete(k));
+        return json({ ok: true });
+      }
+
+      if (u.pathname === '/api/pick/submit' && method === 'POST') {
+        if (!['picking', 'submitted'].includes(state.project.phase))
+          return json({ error: '攝影師已開始修圖，無法再修改或送出', code: 'retouching' }, 409);
+        const picker = pickerKey ? findByKey(pickerKey) : null;
+        const isOwner = !!picker && state.project.owner_picker_id === picker.id;
+        if (!isOwner) return json({ error: '只有挑選人可以送出' }, 403);
+        if (!PICK_RELATIONSHIPS.includes(body?.relationship)) return json({ error: '請選擇與新人的關係' }, 400);
+        let mail = null;
+        if (body.email !== undefined && body.email !== null && body.email !== '') {
+          if (!/^[^\s@]+@[^\s@]+$/.test(body.email)) return json({ error: 'Email 格式不正確' }, 400);
+          mail = body.email;
+        }
+        const photo_keys = Array.from(state.selections.entries())
+          .filter(([, s]) => s.rating > 0).map(([k]) => k).sort();
+        const submission = {
+          id: 'sub-' + (state.submissions.length + 1), picker_id: picker.id,
+          relationship: body.relationship, email: mail, photo_keys, count: photo_keys.length,
+          pick_limit: state.project.pick_limit, extra_price: state.project.extra_price,
+          created_at: new Date(Date.now() + state.submissions.length).toISOString(),
+        };
+        state.submissions.push(submission);
+        state.project.phase = 'submitted';
+        state.project.modified_after_submit = 0;
+        picker.relationship = body.relationship;
+        picker.email = mail;
+        const limit = state.project.pick_limit;
+        return json({
+          ok: true, phase: 'submitted', submission_id: submission.id, submitted_at: submission.created_at,
+          count: submission.count, limit, price: state.project.extra_price,
+          over: limit == null ? 0 : Math.max(0, submission.count - limit),
+        });
+      }
+
+      if (u.pathname === '/api/admin/projects' && method === 'POST') {
+        return json({
+          project: {
+            id: state.project.id, title: body.title || '', folders: body.folders,
+            pick_limit: body.pick_limit ?? null, extra_price: body.extra_price ?? null,
+            photographer_id: 'default',
+          },
+          token: 'PICK-TOKEN', expires_at: '2027-01-01T00:00:00.000Z',
+        }, 201);
+      }
+      if (/^\/api\/admin\/projects\/[^/]+$/.test(u.pathname) && method === 'GET') {
+        const pickers = Array.from(state.pickers.values()).map(p => ({
+          id: p.id, name: p.name, relationship: p.relationship || null,
+          email: p.email || null, user_id: null, created_at: '2026-01-01T00:00:00.000Z',
+        }));
+        const selections = Array.from(state.selections.entries())
+          .map(([photo_key, s]) => ({ photo_key, rating: s.rating, note: s.note, updated_by: s.updated_by, updated_at: s.updated_at }));
+        const submissions = state.submissions.slice().reverse();
+        const owner = state.project.owner_picker_id ? state.pickers.get(state.project.owner_picker_id) : null;
+        return json({
+          project: { ...state.project },
+          owner: owner ? { id: owner.id, name: owner.name } : null,
+          pickers, selections, tokens: [], submissions,
+        });
+      }
+      if (/\/api\/admin\/projects\/[^/]+\/reset-seat$/.test(u.pathname) && method === 'POST') {
+        state.project.owner_picker_id = null;
+        return json({ ok: true });
+      }
+      if (/\/api\/admin\/projects\/[^/]+\/start-retouch$/.test(u.pathname) && method === 'POST') {
+        if (state.project.phase === 'picking')
+          return json({ error: '客人尚未送出，無法開始修圖', code: 'not_submitted', phase: 'picking' }, 409);
+        state.project.phase = 'retouching';
+        return json({ ok: true, phase: 'retouching' });
+      }
+      if (/\/api\/admin\/projects\/[^/]+\/reopen$/.test(u.pathname) && method === 'POST') {
+        state.project.phase = 'picking';
+        state.project.modified_after_submit = 0;
+        return json({ ok: true, phase: 'picking' });
+      }
+
+      if (u.searchParams.has('list')) {
+        // the admin create-project folder picker browses the bucket itself,
+        // not a pick token's own (single-folder) grid — a distinct fixture
+        if (opts.bucketFolders) {
+          const prefix = u.searchParams.get('list') || '';
+          const folders = opts.bucketFolders.filter(f => f.startsWith(prefix) && f !== prefix);
+          return json({ status: 'success', folders, data: [] });
+        }
+        return json({ status: 'success', folders: [], data: opts.photos || PHOTOS(3) });
+      }
+      route.fulfill({ status: 200, contentType: 'image/png', body: PIXEL });
+    });
+  };
+  return { state, attach, requests, findByKey };
+}
+
+await suite('guest picking — a free seat blocks on a name, then loads an editable grid',
+  `${base}/index.html?t=TOK`,
+  async page => {
+    const out = [];
+    const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+
+    await page.waitForSelector('#pickClaimOverlay:not([hidden])', { timeout: 5000 });
+    ok('the claim overlay is shown while the seat is free', true);
+    ok('the submit button stays hidden until claimed',
+      await page.evaluate(() => getComputedStyle(document.getElementById('submitJobBtn')).display === 'none'));
+
+    await page.fill('#pickNameInput', 'Alice');
+    await page.click('#pickClaimBtn');
+    await page.waitForSelector('#pickClaimOverlay', { state: 'hidden', timeout: 5000 });
+    await page.waitForSelector('.photo-card', { timeout: 5000 });
+    // the `hidden` IDL property passing is not enough on its own — this
+    // codebase has a real case of a same-specificity CSS rule beating
+    // [hidden] { display: none }, so the actual computed style is what
+    // has to be checked (see .btn / display:inline-flex, and this overlay
+    // hit the identical bug during development)
+    ok('and it is actually invisible, not just carrying the attribute',
+      await page.evaluate(() => getComputedStyle(document.getElementById('pickClaimOverlay')).display === 'none'));
+    // and provably not intercepting clicks either, by actually using a
+    // control underneath it
+    await page.locator('.photo-card').first().locator('.select-toggle-btn').click({ timeout: 3000 });
+
+    const storedKey = await page.evaluate(() => localStorage.getItem('pick_key:TOK'));
+    ok('the picker key is stored in localStorage, keyed by the link', storedKey === 'KEY-picker-1', String(storedKey));
+
+    const r = await page.evaluate(() => ({
+      cards: document.querySelectorAll('.photo-card').length,
+      stars: document.querySelectorAll('.photo-card .star-rating').length,
+      selectBtns: document.querySelectorAll('.photo-card .select-toggle-btn').length,
+      submitShown: getComputedStyle(document.getElementById('submitJobBtn')).display !== 'none',
+    }));
+    ok('the grid loaded', r.cards === 3, String(r.cards));
+    ok('the owner gets a rating control on every card', r.stars === 3, String(r.stars));
+    ok('the owner gets a select control on every card', r.selectBtns === 3, String(r.selectBtns));
+    ok('完成挑圖 is shown once this browser owns the seat', r.submitShown === true);
+    return out;
+  },
+  { before: pickFakeWorker().attach });
+
+{
+  const m = pickFakeWorker({ ownerName: 'Bob' });
+  await suite('guest picking — someone else’s seat is view-only: no rating or selecting controls, banner names them',
+    `${base}/index.html?t=TOK`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+
+      ok('no claim overlay — the seat is already taken',
+        await page.evaluate(() => document.getElementById('pickClaimOverlay').hidden === true));
+      ok('and it is actually invisible, not just carrying the attribute',
+        await page.evaluate(() => getComputedStyle(document.getElementById('pickClaimOverlay')).display === 'none'));
+      await page.waitForSelector('.photo-card', { timeout: 5000 });
+
+      const r = await page.evaluate(() => ({
+        bannerHidden: document.getElementById('pickBanner').hidden,
+        bannerText: document.getElementById('pickBannerLines').textContent,
+        hintHidden: document.getElementById('pickBannerHint').hidden,
+        hintText: document.getElementById('pickBannerHintText').textContent,
+        cards: document.querySelectorAll('.photo-card').length,
+        stars: document.querySelectorAll('.photo-card .star-rating').length,
+        selectBtns: document.querySelectorAll('.photo-card .select-toggle-btn').length,
+        submitShown: getComputedStyle(document.getElementById('submitJobBtn')).display !== 'none',
+      }));
+      ok('the banner names the current owner', !r.bannerHidden && r.bannerText.includes('此相簿由 Bob 選片中'), r.bannerText);
+      ok('and offers the "is this you" hint', !r.hintHidden && r.hintText === '你是 Bob 嗎？', r.hintText);
+      ok('a login button is offered', await page.evaluate(() => !!document.getElementById('pickBannerLoginBtn')));
+      ok('browsing still works — the grid loads', r.cards === 3, String(r.cards));
+      ok('but no rating control exists in the DOM (removed, not hidden)', r.stars === 0, String(r.stars));
+      ok('and no select control either', r.selectBtns === 0, String(r.selectBtns));
+      ok('完成挑圖 stays hidden for a viewer', r.submitShown === false);
+      return out;
+    },
+    { before: m.attach });
+}
+
+{
+  const m = pickFakeWorker({ ownerName: 'Alice', ownerKey: 'ALICE-KEY', pickLimit: 1, extraPrice: 50 });
+  await suite('guest picking — ratings autosave debounced and batched, and the counter warns over the limit',
+    `${base}/index.html?t=TOK`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('.photo-card', { timeout: 5000 });
+
+      const card = i => page.locator('.photo-card').nth(i);
+      await card(0).locator('.star[data-value="3"]').click();
+      // still inside the debounce window — nothing sent yet
+      await page.waitForTimeout(200);
+      ok('a rating change is debounced, not sent immediately',
+        !m.requests.some(r => r.method === 'PUT'), JSON.stringify(m.requests.filter(r => r.method === 'PUT')));
+
+      await page.waitForTimeout(900);
+      const put1 = m.requests.filter(r => r.method === 'PUT' && r.path === '/api/pick/selections');
+      ok('the batched PUT lands after the debounce window carrying the picker key',
+        put1.length === 1 && put1[0].key === 'ALICE-KEY' &&
+        JSON.stringify(put1[0].body) === JSON.stringify({ upsert: [{ photo_key: '20260819/p0.jpg', rating: 3, note: '' }], delete: [] }),
+        JSON.stringify(put1));
+
+      const counter1 = await page.evaluate(() => document.getElementById('pickCounterMain').textContent);
+      ok('the counter shows the plan’s limit', counter1 === '已選 1 / 1', counter1);
+      ok('no over-limit warning yet',
+        await page.evaluate(() => document.getElementById('pickCounterWarn').hidden === true));
+
+      await card(1).locator('.star[data-value="4"]').click();
+      await page.waitForTimeout(1000);
+      const counter2 = await page.evaluate(() => document.getElementById('pickCounterMain').textContent);
+      ok('the counter now reads 2', counter2 === '已選 2 / 1', counter2);
+      const warn = await page.evaluate(() => ({
+        hidden: document.getElementById('pickCounterWarn').hidden,
+        text: document.getElementById('pickCounterWarn').textContent,
+      }));
+      ok('warns over the limit, with the per-photo fee, and never blocks anything',
+        !warn.hidden && warn.text === '方案 1 張精修，您已選 2 張，多 1 張，每張 NT$50 加挑費', warn.text);
+      return out;
+    },
+    {
+      before: m.attach,
+      initScript: () => localStorage.setItem('pick_key:TOK', 'ALICE-KEY'),
+    });
+}
+
+{
+  const m = pickFakeWorker({ ownerName: 'Carol', ownerKey: 'CAROL-KEY' });
+  await suite('guest picking — submit shows the server’s real errors, then a real success, then the submitted phase',
+    `${base}/index.html?t=TOK`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('.photo-card', { timeout: 5000 });
+
+      await page.click('#submitJobBtn');
+      await page.waitForSelector('#pickSubmitModal.active', { timeout: 5000 });
+      const nameVal = await page.inputValue('#pickSubmitName');
+      ok('the name is prefilled from the claimed seat', nameVal === 'Carol', nameVal);
+
+      // relationship left unset — the server, not a made-up client message,
+      // is what says so
+      await page.click('#pickSubmitConfirmBtn');
+      await page.waitForTimeout(300);
+      const err1 = await page.textContent('#pickSubmitErr');
+      ok('a missing relationship is refused with the server’s own message',
+        err1 === '請選擇與新人的關係', err1);
+
+      await page.selectOption('#pickSubmitRelationship', '朋友');
+      await page.fill('#pickSubmitEmail', 'not-an-email');
+      await page.click('#pickSubmitConfirmBtn');
+      await page.waitForTimeout(300);
+      const err2 = await page.textContent('#pickSubmitErr');
+      ok('a malformed email is refused with the server’s own message',
+        err2 === 'Email 格式不正確', err2);
+
+      await page.fill('#pickSubmitEmail', '');
+      await page.click('#pickSubmitConfirmBtn');
+      await page.waitForTimeout(300);
+      const closed = await page.evaluate(() => !document.getElementById('pickSubmitModal').classList.contains('active'));
+      ok('a valid submit closes the modal', closed);
+
+      // the last one — the two refused attempts before it posted too
+      const submitReqs = m.requests.filter(r => r.method === 'POST' && r.path === '/api/pick/submit');
+      const submitReq = submitReqs[submitReqs.length - 1];
+      ok('and the successful attempt actually posted relationship + no email',
+        submitReq && submitReq.body.relationship === '朋友' && !submitReq.body.email,
+        JSON.stringify(submitReq));
+
+      const banner = await page.evaluate(() => document.getElementById('pickBannerLines').textContent);
+      ok('the phase banner now says 已送出', banner.includes('已送出'), banner);
+
+      // saving again while submitted must not block, and must raise the
+      // "modified since submit" notice (docs/guest-picking.md)
+      await page.locator('.photo-card').nth(0).locator('.star[data-value="2"]').click();
+      await page.waitForTimeout(1000);
+      const banner2 = await page.evaluate(() => document.getElementById('pickBannerLines').textContent);
+      ok('a save after submit shows 已修改，請重新送出', banner2.includes('已修改，請重新送出'), banner2);
+      return out;
+    },
+    { before: m.attach, initScript: () => localStorage.setItem('pick_key:TOK', 'CAROL-KEY') });
+}
+
+{
+  const m = pickFakeWorker({ ownerName: 'Dora', ownerKey: 'DORA-KEY' });
+  await suite('guest picking — retouching starting mid-session locks the owner out and removes the controls',
+    `${base}/index.html?t=TOK`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('.photo-card', { timeout: 5000 });
+
+      ok('editable at first', await page.evaluate(() =>
+        document.querySelectorAll('.photo-card .star-rating').length === 3));
+
+      // the photographer starts retouching in another tab while this one is
+      // mid-session; the next save is refused with 409 retouching
+      m.state.project.phase = 'retouching';
+      await page.locator('.photo-card').nth(0).locator('.star[data-value="1"]').click();
+      await page.waitForTimeout(1000);
+
+      const r = await page.evaluate(() => ({
+        banner: document.getElementById('pickBannerLines').textContent,
+        stars: document.querySelectorAll('.photo-card .star-rating').length,
+        selectBtns: document.querySelectorAll('.photo-card .select-toggle-btn').length,
+        submitShown: getComputedStyle(document.getElementById('submitJobBtn')).display !== 'none',
+      }));
+      ok('shows the LINE-contact notice', r.banner.includes('攝影師已安排精修，如需修改請透過 LINE 聯絡攝影師'), r.banner);
+      ok('every rating control is gone from the DOM', r.stars === 0, String(r.stars));
+      ok('every select control is gone from the DOM', r.selectBtns === 0, String(r.selectBtns));
+
+      // submitJob() itself must also refuse, not just the autosave path
+      await page.evaluate(() => window.app.submitJob());
+      await page.waitForTimeout(200);
+      ok('and the submit modal does not open',
+        await page.evaluate(() => !document.getElementById('pickSubmitModal').classList.contains('active')));
+      return out;
+    },
+    { before: m.attach, initScript: () => localStorage.setItem('pick_key:TOK', 'DORA-KEY') });
+}
+
+await suite('guest picking — the studio/client choice overlay and other modes are untouched without ?t=',
+  `${base}/index.html`,
+  async page => {
+    const out = [];
+    const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+    ok('PickController exists but is inactive', await page.evaluate(() =>
+      !!window.PickController && window.PickController.active === false));
+    ok('the pick counter never appears in a mode that never turns it on',
+      await page.evaluate(() => getComputedStyle(document.getElementById('pickCounter')).display === 'none'));
+    ok('the studio/client choice overlay still appears',
+      await page.waitForSelector('#auth-overlay', { timeout: 5000 }).then(() => true, () => false));
+    return out;
+  },
+  { before: mockWorker(1) });
+
+{
+  const XSS_NAME = '"><img src=x onerror="window.__xss=1">';
+  const m = pickFakeWorker({ ownerName: XSS_NAME });
+  await suite('guest picking — 惡意姓名 escaping（seat-holder banner）',
+    `${base}/index.html?t=TOK`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('.photo-card', { timeout: 5000 });
+      await new Promise(r => setTimeout(r, 300));
+      const r = await page.evaluate(payload => ({
+        fired: !!window.__xss,
+        injected: document.querySelectorAll('img[src="x"]').length,
+        bannerText: document.getElementById('pickBannerLines').textContent,
+        hintText: document.getElementById('pickBannerHintText').textContent,
+      }), XSS_NAME);
+      ok('惡意姓名沒有變成元素', r.injected === 0, `注入了 ${r.injected} 個 img`);
+      ok('onerror 沒有執行', r.fired === false, String(r.fired));
+      ok('banner 仍照原樣顯示姓名', r.bannerText.includes(XSS_NAME), JSON.stringify(r.bannerText));
+      ok('hint 仍照原樣顯示姓名', r.hintText.includes(XSS_NAME), JSON.stringify(r.hintText));
+      return out;
+    },
+    { before: m.attach });
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Admin — the guest-picking project panel (docs/guest-picking.md)
+// ═══════════════════════════════════════════════════════════════════════════
+
+{
+  const m = pickFakeWorker({ bucketFolders: ['20260819/', '20260901/'] });
+  await suite('admin — create a pick project via the existing folder picker, and get a link back',
+    `${base}/admin.html`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('#admin-view', { state: 'visible', timeout: 5000 });
+
+      await page.fill('#proj-title', 'Wei & Lin 婚紗');
+      await page.click('#proj-pick-folders-btn');
+      await page.waitForSelector('#folder-picker', { state: 'visible' });
+      await page.waitForSelector('[data-pick-folder]');
+      await page.click('[data-pick-folder]');
+      await page.click('[data-confirm-folders]');
+      await page.waitForSelector('#folder-picker', { state: 'hidden' });
+
+      const chipCount = await page.locator('#proj-folders-cell .folder-chip').count();
+      ok('the chosen folder is shown as a chip', chipCount === 1, String(chipCount));
+
+      await page.fill('#proj-pick-limit', '40');
+      await page.fill('#proj-extra-price', '300');
+      await page.click('#proj-create-btn');
+      await page.waitForSelector('#proj-create-result', { state: 'visible', timeout: 5000 });
+
+      const createReq = m.requests.find(r => r.method === 'POST' && r.path === '/api/admin/projects');
+      ok('posted title, folders and the plan',
+        createReq && createReq.body.title === 'Wei & Lin 婚紗' &&
+        Array.isArray(createReq.body.folders) && createReq.body.folders.length === 1 &&
+        createReq.body.pick_limit === 40 && createReq.body.extra_price === 300,
+        JSON.stringify(createReq));
+
+      const link = await page.inputValue('#proj-link-output');
+      ok('the guest link carries the pick token', /[?&]t=PICK-TOKEN(&|$)/.test(link), link);
+      ok('and points at index.html', /index\.html\?/.test(link), link);
+
+      const projectPanelShown = await page.evaluate(() =>
+        document.getElementById('project-detail-panel').style.display !== 'none');
+      ok('the new project opens its detail view right away', projectPanelShown);
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN });
+}
+
+{
+  const m = pickFakeWorker({ ownerName: 'Grace' });
+  m.state.selections.set('20260819/p0.jpg', { rating: 5, note: '', updated_by: 'picker-0', updated_at: '2026-01-01T00:00:00Z' });
+  m.state.selections.set('20260819/p1.jpg', { rating: 0, note: '', updated_by: 'picker-0', updated_at: '2026-01-01T00:00:00Z' });
+  m.state.submissions.push(
+    { id: 's1', picker_id: 'picker-0', relationship: '本人', email: null,
+      photo_keys: ['20260819/p2.jpg'], count: 1, pick_limit: null, extra_price: null,
+      created_at: '2026-01-01T00:00:00Z' },
+    { id: 's2', picker_id: 'picker-0', relationship: '本人', email: 'a@b.com',
+      photo_keys: ['20260819/p0.jpg'], count: 1, pick_limit: null, extra_price: null,
+      created_at: '2026-01-02T00:00:00Z' },
+  );
+  m.state.project.phase = 'submitted'; // a real submit is what moves the phase; seeding submissions directly does not
+  await suite('admin — project detail: owner, phase, submissions newest-first with a diff, current selections, actions',
+    `${base}/admin.html`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('#admin-view', { state: 'visible', timeout: 5000 });
+      // seeded the way a real create would leave it, then opened exactly as
+      // clicking 開啟 does — there is no list-all endpoint to read this back
+      // from (see the API-gap note above pickFakeWorker)
+      await page.evaluate(async (id) => {
+        localStorage.setItem('admin_recent_projects', JSON.stringify([{ id, title: 'T 專案', created_at: new Date().toISOString() }]));
+      }, m.state.project.id);
+      await page.reload({ waitUntil: 'load' });
+      await page.waitForSelector('#admin-view', { state: 'visible', timeout: 5000 });
+      await page.click('[data-open-project]');
+      await page.waitForSelector('#project-detail-panel', { state: 'visible' });
+      await page.waitForSelector('#pd-submissions .pd-submission');
+
+      const r = await page.evaluate(() => ({
+        owner: document.querySelector('.pd-owner').textContent,
+        phaseBadge: document.querySelector('.pd-head .badge').textContent,
+        submissionBlocks: [...document.querySelectorAll('.pd-submission')].map(b => b.textContent),
+        selectionRows: document.querySelectorAll('#project-detail-body table tbody tr').length,
+      }));
+      ok('shows the current owner', r.owner.includes('Grace'), r.owner);
+      ok('shows the phase', r.phaseBadge === '已送出', r.phaseBadge);
+      ok('submissions are newest first', /2026-01-02/.test(r.submissionBlocks[0]) && /2026-01-01/.test(r.submissionBlocks[1]),
+        JSON.stringify(r.submissionBlocks));
+      ok('the newest submission’s diff names what changed since the previous one',
+        r.submissionBlocks[0].includes('新增') && r.submissionBlocks[0].includes('p0.jpg') &&
+        r.submissionBlocks[0].includes('移除') && r.submissionBlocks[0].includes('p2.jpg'),
+        r.submissionBlocks[0]);
+      ok('current selections only lists rating > 0 (one row, not the zero-rated one)',
+        r.selectionRows === 1, String(r.selectionRows));
+
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN });
+}
+
+{
+  const m = pickFakeWorker({ ownerName: 'Henry' });
+  m.state.selections.set('20260819/p0.jpg', { rating: 5, note: '', updated_by: 'picker-0', updated_at: '2026-01-01T00:00:00Z' });
+  await suite('admin — 下載選片 asks whether to start retouching too',
+    `${base}/admin.html`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('#admin-view', { state: 'visible', timeout: 5000 });
+      await page.evaluate((id) => {
+        localStorage.setItem('admin_recent_projects', JSON.stringify([{ id, title: 'T', created_at: new Date().toISOString() }]));
+      }, m.state.project.id);
+      await page.reload({ waitUntil: 'load' });
+      await page.waitForSelector('#admin-view', { state: 'visible', timeout: 5000 });
+      await page.click('[data-open-project]');
+      await page.waitForSelector('#pd-download-btn');
+
+      // Playwright/headless Chromium does not reliably report a blob: URL
+      // download's real filename through suggestedFilename() (reproduced in
+      // isolation: it comes back as the literal string "download" even for a
+      // plain ASCII name), so the anchor's own `download` attribute — what
+      // the app actually set — is captured directly instead.
+      await page.evaluate(() => {
+        window.__lastDownloadName = null;
+        const orig = document.body.appendChild.bind(document.body);
+        document.body.appendChild = (el) => {
+          if (el.tagName === 'A' && el.download) window.__lastDownloadName = el.download;
+          return orig(el);
+        };
+      });
+
+      let dialogMsg = '';
+      page.once('dialog', d => { dialogMsg = d.message(); d.accept(); });
+      const [download] = await Promise.all([
+        page.waitForEvent('download'),
+        page.click('#pd-download-btn'),
+      ]);
+      ok('asks about starting retouching', dialogMsg.includes('要同時標記為開始精修嗎'), dialogMsg);
+      const namedFile = await page.evaluate(() => window.__lastDownloadName);
+      ok('offers a .txt file', (namedFile || '').endsWith('.txt'), namedFile);
+      const path = await download.path();
+      const content = readFileSync(path, 'utf8');
+      ok('the file lists the selected key(s)', content.includes('20260819/p0.jpg'), content);
+
+      await page.waitForTimeout(300);
+      const startReq = m.requests.find(r => r.method === 'POST' && r.path.endsWith('/start-retouch'));
+      ok('accepting the dialog also starts retouching', !!startReq, JSON.stringify(m.requests));
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN });
+}
+
+{
+  const XSS_NAME = '"><img src=x onerror="window.__xss=1">';
+  const m = pickFakeWorker({ ownerName: XSS_NAME });
+  m.state.pickers.get('picker-0').relationship = XSS_NAME;
+  m.state.pickers.get('picker-0').email = XSS_NAME;
+  m.state.selections.set('20260819/p0.jpg', { rating: 3, note: XSS_NAME, updated_by: 'picker-0', updated_at: '2026-01-01T00:00:00Z' });
+  m.state.submissions.push({ id: 's1', picker_id: 'picker-0', relationship: XSS_NAME, email: XSS_NAME,
+    photo_keys: ['20260819/p0.jpg'], count: 1, pick_limit: null, extra_price: null, created_at: '2026-01-01T00:00:00Z' });
+  await suite('admin — 惡意姓名／關係／Email／備註 escaping（專案詳細頁）',
+    `${base}/admin.html`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('#admin-view', { state: 'visible', timeout: 5000 });
+      await page.evaluate((id) => {
+        localStorage.setItem('admin_recent_projects', JSON.stringify([{ id, title: 'T', created_at: new Date().toISOString() }]));
+      }, m.state.project.id);
+      await page.reload({ waitUntil: 'load' });
+      await page.waitForSelector('#admin-view', { state: 'visible', timeout: 5000 });
+      await page.click('[data-open-project]');
+      await page.waitForSelector('#project-detail-body table');
+      await new Promise(r => setTimeout(r, 300));
+
+      const r = await page.evaluate(payload => ({
+        fired: !!window.__xss,
+        injected: document.querySelectorAll('img[src="x"]').length,
+        ownerShown: document.querySelector('.pd-owner').textContent.includes(payload),
+        pickersShown: document.getElementById('pd-pickers').textContent.includes(payload),
+        submissionsShown: document.getElementById('pd-submissions').textContent.includes(payload),
+        selectionsShown: document.querySelector('#project-detail-body table').textContent.includes(payload),
+      }), XSS_NAME);
+      ok('惡意字串沒有變成元素', r.injected === 0, `注入了 ${r.injected} 個 img`);
+      ok('onerror 沒有執行', r.fired === false, String(r.fired));
+      ok('owner 仍照原樣顯示', r.ownerShown);
+      ok('pickers 清單仍照原樣顯示', r.pickersShown);
+      ok('送出紀錄仍照原樣顯示', r.submissionsShown);
+      ok('目前選取（備註）仍照原樣顯示', r.selectionsShown);
       return out;
     },
     { before: m.attach, initScript: ADMIN });

@@ -59,6 +59,14 @@ class App {
     }
 
     async checkUrlParams() {
+        // Guest picking (docs/guest-picking.md) owns the page when opened with
+        // ?t=<pick token>; it does its own loading (js/pick.js) and none of the
+        // ordinary ?folder=/?id= or session-scope flow below applies.
+        if (window.PickController && PickController.active) {
+            await PickController.start(this);
+            return;
+        }
+
         const params = new URLSearchParams(window.location.search);
         const folderId = params.get('folder') || params.get('id');
         if (folderId) {
@@ -636,6 +644,19 @@ class App {
 
     // [新功能] 客戶提交挑圖結果
     async submitJob() {
+        // Guest picking replaces this whole method with a real submit
+        // (POST /api/pick/submit); every other mode keeps the fake one below.
+        if (window.PickController && PickController.active) {
+            if (!PickController.canEdit()) {
+                toast.warning(PickController.phase === 'retouching'
+                    ? '攝影師已安排精修，如需修改請透過 LINE 聯絡攝影師'
+                    : '目前無法送出');
+                return;
+            }
+            PickController.openSubmitModal();
+            return;
+        }
+
         const stats = { total: this.photos.length, rated: 0, annotated: 0, 0: 0, 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
         this.photos.forEach(p => {
             if (p.rating > 0) stats.rated++;
@@ -708,6 +729,15 @@ class App {
         card.className = `photo-card ${isSelected ? 'selected' : ''}`;
         card.dataset.photoId = photo.id;
 
+        // Guest picking (docs/guest-picking.md): a viewer — nobody has claimed
+        // the seat yet is never shown a grid at all, but someone else's seat,
+        // or the owner's once retouching starts, gets no rating or selection
+        // control. Removed outright, not hidden: .btn carries
+        // display:inline-flex, which beats the UA's [hidden] { display: none
+        // }, the same reason client-auth-check.js removes rather than hides
+        // its own buttons for a client.
+        const canEdit = !window.PickController || !PickController.active || PickController.canEdit();
+
         const imageUrl = driveManager.getImageUrl(photo, 400);
         card.innerHTML = `
             <div class="photo-image-container">
@@ -715,7 +745,7 @@ class App {
                 <div class="photo-overlay">
                     ${photo.hasAnnotations ? '<span class="photo-badge">✎</span>' : ''}
                 </div>
-                <div class="select-toggle-btn" title="選取此照片"></div>
+                ${canEdit ? '<div class="select-toggle-btn" title="選取此照片"></div>' : ''}
             </div>
             <div class="photo-info-section">
                 <div class="photo-name">${escapeHtml(photo.name)}</div>
@@ -723,15 +753,19 @@ class App {
             </div>
         `;
 
-        const rc = card.querySelector('.rating-container');
-        rc.appendChild(ratingManager.createStarRating(photo.rating, photo.id, true));
+        if (canEdit) {
+            const rc = card.querySelector('.rating-container');
+            rc.appendChild(ratingManager.createStarRating(photo.rating, photo.id, true));
+        }
 
         // 專門處理右上角勾勾的點擊
         const selectBtn = card.querySelector('.select-toggle-btn');
-        selectBtn.addEventListener('click', (e) => {
-            e.stopPropagation(); // 阻止觸發開 Modal
-            this.toggleSelection(photo.id, index, e.shiftKey, true);
-        });
+        if (selectBtn) {
+            selectBtn.addEventListener('click', (e) => {
+                e.stopPropagation(); // 阻止觸發開 Modal
+                this.toggleSelection(photo.id, index, e.shiftKey, true);
+            });
+        }
 
         card.addEventListener('mouseenter', () => {
             // sweeping the mouse across the grid would otherwise queue one
@@ -743,8 +777,10 @@ class App {
         card.addEventListener('click', (e) => {
             if (e.target.closest('.star-rating')) return; // 點星星不開彈窗
 
-            // 判斷是否為批量選取操作 (Ctrl, Cmd, 或 Shift)
-            if (e.ctrlKey || e.metaKey || e.shiftKey) {
+            // 判斷是否為批量選取操作 (Ctrl, Cmd, 或 Shift) — a viewer has no
+            // selection to batch, so the modifier falls through to a plain
+            // open instead of silently doing nothing
+            if (canEdit && (e.ctrlKey || e.metaKey || e.shiftKey)) {
                 e.preventDefault();
                 this.toggleSelection(photo.id, index, e.shiftKey, (e.ctrlKey || e.metaKey));
             } else {
@@ -802,11 +838,15 @@ class App {
 
         document.getElementById('photoModal').classList.add('active');
         document.getElementById('modalPhotoName').textContent = photo.name;
-        document.getElementById('photoNote').value = photo.note || '';
+        const noteEl = document.getElementById('photoNote');
+        noteEl.value = photo.note || '';
+
+        const canEdit = !window.PickController || !PickController.active || PickController.canEdit();
+        noteEl.readOnly = !canEdit;
 
         const mpr = document.getElementById('modalPhotoRating');
         mpr.innerHTML = '';
-        mpr.appendChild(ratingManager.createStarRating(photo.rating, photo.id, true));
+        if (canEdit) mpr.appendChild(ratingManager.createStarRating(photo.rating, photo.id, true));
 
         this.updateModalNavigation();
 
