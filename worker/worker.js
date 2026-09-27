@@ -1316,8 +1316,10 @@ export default {
       const row = await env.DB.prepare('SELECT phase, delivered_at FROM projects WHERE id = ? AND photographer_id = ?')
         .bind(id, DEFAULT_PHOTOGRAPHER_ID).first();
       if (!row) return jsonErr('Not found', 404);
-      if (!result.meta?.changes) {
-        return jsonOk({ error: '尚未開始修圖，無法標記為已交付', code: 'not_retouching', phase: row.phase }, 409);
+      // No change, or a reopen landed between the write and this read and
+      // cleared the stamp: either way the project is not delivered now.
+      if (!result.meta?.changes || !row.delivered_at) {
+        return jsonOk({ error: '尚未開始修圖，無法標記為已交付', code: 'not_retouching', phase: row.phase }, 409, ADMIN_ONLY_HEADERS);
       }
       return jsonOk({ ok: true, delivered_at: row.delivered_at }, 200, ADMIN_ONLY_HEADERS);
     }

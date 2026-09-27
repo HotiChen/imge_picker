@@ -559,3 +559,29 @@ test('the dashboard migration: fresh == archive-era database + it', () => {
   const twice = fakeDB({ schema: deployed + '\n' + migration });
   twice._db.exec(migration.replace(/ALTER TABLE[^;]*;/, ''));
 });
+
+test('a reopen landing between deliver\'s write and its read is a 409, not ok with a null stamp', async () => {
+  const env = setup();
+  const p = await retouching(env);
+  const prepare = env.DB.prepare.bind(env.DB);
+  let done = false;
+  env.DB.prepare = s => {
+    if (!done && /^SELECT phase, delivered_at FROM projects/.test(s)) {
+      done = true;
+      env.DB._db.prepare("UPDATE projects SET phase = 'picking', delivered_at = NULL").run();
+    }
+    return prepare(s);
+  };
+  const res = await admin(env, p.project.id, 'deliver');
+  assert.equal(res.status, 409);
+  assert.equal((await res.json()).code, 'not_retouching');
+  assert.match(res.headers.get('Cache-Control') || '', /no-store/);
+});
+
+test('a refused deliver is not cached either', async () => {
+  const env = setup();
+  const p = await claimed(env);
+  const res = await admin(env, p.project.id, 'deliver');
+  assert.equal(res.status, 409);
+  assert.match(res.headers.get('Cache-Control') || '', /no-store/);
+});
