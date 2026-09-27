@@ -14,6 +14,26 @@ class DriveManager {
         return Promise.resolve();
     }
 
+    // The widths the Worker actually pre-generates thumbnails at (upload.html
+    // THUMB_SIZES). ?w= picks the smallest bucket >= the requested width, so
+    // asking for anything else just wastes a round trip on a size the Worker
+    // has to re-derive from a bigger bucket anyway.
+    static PREVIEW_BUCKETS = [400, 1200, 1600];
+
+    // Mobile task: responsive preview width. min(1600, ceil(viewport width *
+    // devicePixelRatio)) rounded UP to the nearest bucket the Worker has, so
+    // a 390px/DPR3 phone asks for 1200 and a 1500px/DPR1 desktop keeps 1600.
+    // Grid thumbnails are unaffected — createPhotoCard always asks for 400.
+    previewWidth(viewportWidth, dpr) {
+        const vw = viewportWidth != null ? viewportWidth : (window.innerWidth || 1600);
+        const scale = dpr != null ? dpr : (window.devicePixelRatio || 1);
+        const want = Math.min(1600, Math.ceil(vw * scale));
+        for (const bucket of DriveManager.PREVIEW_BUCKETS) {
+            if (bucket >= want) return bucket;
+        }
+        return DriveManager.PREVIEW_BUCKETS[DriveManager.PREVIEW_BUCKETS.length - 1];
+    }
+
     // width: pixel width the image will actually be displayed at. The Worker
     // maps it onto a pre-generated thumbnail; omit it only when the full
     // original is genuinely needed (export, print, download).

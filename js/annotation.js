@@ -1,4 +1,21 @@
 // Image Annotation System (選圖軟體 功能回傳版 - 支援編號、縮放、平移與自動儲存)
+
+// Mobile preview gestures (docs task: mobile gestures). Only ever engaged
+// while the 'pan' tool is active — the default, and in guest pick mode the
+// only tool that exists at all (the toolbox is removed). Any other tool
+// (select/circle/eraser) keeps the original touch-draws-like-a-mouse
+// behaviour untouched, so a photographer's touch annotation workflow never
+// changes.
+const GESTURE_SWIPE_NAV_PX = 50;     // horizontal swipe → prev/next
+const GESTURE_SWIPE_CLOSE_PX = 80;   // vertical swipe down → close
+const GESTURE_TAP_TOLERANCE_PX = 10; // more movement than this isn't a tap
+const GESTURE_DOUBLE_TAP_MS = 400;   // max gap between two taps
+const GESTURE_DOUBLE_TAP_PX = 40;    // max drift between two taps' positions
+
+function gestureTouchDist(a, b) {
+    return Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+}
+
 class AnnotationManager {
     constructor() {
         this.canvas = null;
@@ -28,6 +45,14 @@ class AnnotationManager {
         this.isMovingAnnotation = false;
         this.moveStartX = 0;
         this.moveStartY = 0;
+
+        // Mobile preview gestures — single-finger and two-finger state,
+        // and the last completed tap (for double-tap detection).
+        this._touch = null;
+        this._pinch = null;
+        this._lastTapTime = 0;
+        this._lastTapX = 0;
+        this._lastTapY = 0;
     }
 
     // 初始化畫布
@@ -44,10 +69,13 @@ class AnnotationManager {
         // 滾輪縮放
         this.canvas.addEventListener('wheel', this.handleWheel.bind(this));
 
-        // 觸控支援
-        this.canvas.addEventListener('touchstart', this.handleTouch.bind(this));
-        this.canvas.addEventListener('touchmove', this.handleTouch.bind(this));
-        this.canvas.addEventListener('touchend', this.stopDrawing.bind(this));
+        // 觸控支援 — { passive: false } so preventDefault() on a pan-tool
+        // swipe/pinch actually stops the page (and iOS Safari's own
+        // pinch-zoom / pull-to-refresh) from also reacting to it.
+        this.canvas.addEventListener('touchstart', this.handleTouchStart.bind(this), { passive: false });
+        this.canvas.addEventListener('touchmove', this.handleTouchMove.bind(this), { passive: false });
+        this.canvas.addEventListener('touchend', this.handleTouchEnd.bind(this), { passive: false });
+        this.canvas.addEventListener('touchcancel', this.handleTouchEnd.bind(this), { passive: false });
 
         // 監聽視窗縮放
         window.addEventListener('resize', () => {
@@ -103,8 +131,9 @@ class AnnotationManager {
                 reject(error);
             };
 
-            // R2 直接使用 URL，不需 Auth Header
-            img.src = driveManager.getImageUrl(photo, 1600);
+            // R2 直接使用 URL，不需 Auth Header — width is responsive (mobile
+            // task: min(1600, viewport*dpr) rounded up to a server bucket).
+            img.src = driveManager.getImageUrl(photo, driveManager.previewWidth());
         });
     }
 
@@ -424,6 +453,136 @@ class AnnotationManager {
         this.canvas.dispatchEvent(mouseEvent);
     }
 
+    // ── Mobile preview gestures ──────────────────────────────────────────
+    // Engaged only for the 'pan' tool (see the constants block above); any
+    // other tool falls straight back to the original mouse-synthesis touch
+    // handling so drawing/erasing/selecting by touch is unchanged.
+    handleTouchStart(e) {
+        if (this.currentTool !== 'pan') { this.handleTouch(e); return; }
+        e.preventDefault();
+        if (e.touches.length >= 2) {
+            this._touch = null;
+            const [a, b] = e.touches;
+            this._pinch = {
+                startDist: gestureTouchDist(a, b),
+                startZoom: this.zoom,
+                cx: (a.clientX + b.clientX) / 2,
+                cy: (a.clientY + b.clientY) / 2,
+            };
+            return;
+        }
+        this._pinch = null;
+        const t = e.touches[0];
+        this._touch = {
+            startX: t.clientX, startY: t.clientY,
+            lastX: t.clientX, lastY: t.clientY,
+            moved: false,
+            panning: this.zoom > 1, // zoomed in → one-finger drag pans, not swipe-nav
+        };
+    }
+
+    handleTouchMove(e) {
+        if (this.currentTool !== 'pan') { this.handleTouch(e); return; }
+        e.preventDefault();
+        if (e.touches.length >= 2 && this._pinch) {
+            const [a, b] = e.touches;
+            const ratio = gestureTouchDist(a, b) / (this._pinch.startDist || 1);
+            const newZoom = Math.max(this.minZoom, Math.min(this.maxZoom, this._pinch.startZoom * ratio));
+            const rect = this.canvas.getBoundingClientRect();
+            this.setZoomAbsolute(newZoom, this._pinch.cx - rect.left, this._pinch.cy - rect.top);
+            return;
+        }
+        if (!this._touch) return;
+        const t = e.touches[0];
+        if (!t) return;
+        const dx = t.clientX - this._touch.startX;
+        const dy = t.clientY - this._touch.startY;
+        if (Math.abs(dx) > GESTURE_TAP_TOLERANCE_PX || Math.abs(dy) > GESTURE_TAP_TOLERANCE_PX) {
+            this._touch.moved = true;
+        }
+        if (this._touch.panning) {
+            this.panX += t.clientX - this._touch.lastX;
+            this.panY += t.clientY - this._touch.lastY;
+            this.redraw();
+        }
+        // Always the latest point, panning or not — handleTouchEnd's
+        // swipe/tap distance is measured from here, not from touchstart's
+        // own copy, which only panning updated before this fix.
+        this._touch.lastX = t.clientX;
+        this._touch.lastY = t.clientY;
+    }
+
+    handleTouchEnd(e) {
+        if (this.currentTool !== 'pan') { this.stopDrawing(e); return; }
+        e.preventDefault();
+        if (this._pinch) { this._pinch = null; return; }
+        const touch = this._touch;
+        this._touch = null;
+        if (!touch || touch.panning) return; // a pinch, or a pan drag — not a tap/swipe
+
+        const dx = touch.lastX - touch.startX;
+        const dy = touch.lastY - touch.startY;
+        const adx = Math.abs(dx), ady = Math.abs(dy);
+
+        // Swipe down to close — dominant vertical, downward, past threshold.
+        if (ady >= GESTURE_SWIPE_CLOSE_PX && ady > adx && dy > 0) {
+            if (window.app) window.app.closeModal();
+            return;
+        }
+        // Swipe left/right to navigate — dominant horizontal, past threshold.
+        // A mostly-vertical move never lands here even past 50px, because
+        // adx > ady is required.
+        if (adx >= GESTURE_SWIPE_NAV_PX && adx > ady) {
+            if (window.app) window.app.navigatePhoto(dx > 0 ? -1 : 1);
+            return;
+        }
+        if (touch.moved) return; // a small drag that cleared neither threshold
+
+        // A tap. Check whether it completes a double-tap; either way, a tap
+        // alone never navigates/closes, so this is never double-counted as
+        // two swipes.
+        const now = Date.now();
+        const sinceLast = now - this._lastTapTime;
+        const drift = Math.hypot(touch.startX - this._lastTapX, touch.startY - this._lastTapY);
+        if (sinceLast <= GESTURE_DOUBLE_TAP_MS && drift <= GESTURE_DOUBLE_TAP_PX) {
+            this._lastTapTime = 0; // consumed — a 3rd tap starts a fresh pair
+            this._handleDoubleTap();
+        } else {
+            this._lastTapTime = now;
+            this._lastTapX = touch.startX;
+            this._lastTapY = touch.startY;
+        }
+    }
+
+    // Guest picking, task: mobile gestures — double-tap toggles ♥ only in
+    // pick mode, only for the seat holder, only while canEdit() (picking or
+    // submitted, never retouching). Every other case — viewer, wrong seat,
+    // retouching, or not a pick link at all — changes nothing, exactly like
+    // the pitfall list asks to prove with a negative assertion.
+    _handleDoubleTap() {
+        const pc = window.PickController;
+        if (!pc || !pc.active || !pc.canEdit()) return;
+        if (!this.currentPhoto || !window.app) return;
+        window.app.togglePickHeart(this.currentPhoto); // same code path as the ♥ button
+    }
+
+    // Absolute-zoom counterpart of zoomBy's incremental one: sets the zoom to
+    // an exact value while keeping (mouseX, mouseY) fixed on screen — the
+    // same "zoom about a point" math, just driven by a pinch ratio instead
+    // of a wheel tick.
+    setZoomAbsolute(newZoom, mouseX, mouseY) {
+        const oldZoom = this.zoom;
+        this.zoom = newZoom;
+        if (mouseX != null && mouseY != null && oldZoom !== this.zoom) {
+            const worldX = (mouseX - this.panX) / oldZoom;
+            const worldY = (mouseY - this.panY) / oldZoom;
+            this.panX = mouseX - worldX * this.zoom;
+            this.panY = mouseY - worldY * this.zoom;
+        }
+        this.redraw();
+        this.updateZoomDisplay();
+    }
+
     setTool(tool) {
         this.currentTool = tool;
         this.updateCursor();
@@ -469,22 +628,8 @@ class AnnotationManager {
     }
 
     zoomBy(delta, mouseX = null, mouseY = null) {
-        const oldZoom = this.zoom;
-        this.zoom = Math.max(this.minZoom, Math.min(this.maxZoom, this.zoom + delta));
-
-        // 如果有指定滑鼠位置，執行「對著滑鼠縮放」的數學計算
-        if (mouseX !== null && mouseY !== null && oldZoom !== this.zoom) {
-            // 計算滑鼠位置在圖片世界座標系中的點
-            const worldX = (mouseX - this.panX) / oldZoom;
-            const worldY = (mouseY - this.panY) / oldZoom;
-
-            // 調整平移量，使得該世界座標點在縮放後依然維持在滑鼠位置
-            this.panX = mouseX - worldX * this.zoom;
-            this.panY = mouseY - worldY * this.zoom;
-        }
-
-        this.redraw();
-        this.updateZoomDisplay();
+        const newZoom = Math.max(this.minZoom, Math.min(this.maxZoom, this.zoom + delta));
+        this.setZoomAbsolute(newZoom, mouseX, mouseY);
     }
 
     resetZoom() {

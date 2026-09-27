@@ -16,6 +16,13 @@ class App {
         this.folderTreeRoot = null; // 資料夾樹根節點
         this.treeActivePath = ''; // 目前選中的路徑
 
+        // Mobile task: preview preloading — URLs already asked for (so fast
+        // navigation back and forth doesn't refetch them) and the debounce
+        // timer that lets a burst of quick navigatePhoto() calls settle on
+        // one final index before anything is actually requested.
+        this._preloadedUrls = new Set();
+        this._preloadTimer = null;
+
         this.init();
     }
 
@@ -738,8 +745,6 @@ class App {
     createPhotoCard(photo, index) {
         const card = document.createElement('div');
         const isSelected = this.selectedPhotoIds.has(photo.id);
-        card.className = `photo-card ${isSelected ? 'selected' : ''}`;
-        card.dataset.photoId = photo.id;
 
         // Guest picking (docs/guest-picking.md): a viewer — nobody has claimed
         // the seat yet is never shown a grid at all, but someone else's seat,
@@ -756,6 +761,14 @@ class App {
 
         const imageUrl = driveManager.getImageUrl(photo, 400);
         const isPicked = (photo.rating || 0) > 0;
+        // Mobile task: selected highlight — a thick coloured border + the
+        // solid ♥ badge already drawn below, never a dimming overlay on the
+        // photo itself. Scoped to pick mode: the old multi-select `selected`
+        // class (isSelected, above) is untouched for every other mode.
+        card.className = ['photo-card', isSelected && 'selected', pickMode && isPicked && 'pick-picked']
+            .filter(Boolean).join(' ');
+        card.dataset.photoId = photo.id;
+
         const heartTag = pickMode
             ? (canEdit
                 ? `<button type="button" class="pick-heart-btn${isPicked ? ' on' : ''}" title="選">♥</button>`
@@ -824,6 +837,9 @@ class App {
 
     // Guest picking: the one place a heart toggle actually changes anything.
     // rating 1 = picked, 0 = not — the only two values pick mode ever writes.
+    // Also the double-tap gesture's code path (js/annotation.js
+    // _handleDoubleTap) — one function, so autosave/caps/revert and the
+    // highlight/pulse below apply identically to a click or a double-tap.
     togglePickHeart(photo, btnEl) {
         const next = (photo.rating || 0) > 0 ? 0 : 1;
         photo.rating = next;
@@ -833,9 +849,31 @@ class App {
         // stay in sync without a full repaint
         document.querySelectorAll('.pick-heart-btn').forEach(el => {
             const key = el.closest('[data-photo-id]')?.dataset.photoId ?? el.dataset.photoKey;
-            if (key === photo.id) el.classList.toggle('on', next > 0);
+            if (key !== photo.id) return;
+            el.classList.toggle('on', next > 0);
+            if (next > 0) this.pulseHeart(el);
         });
+        // Mobile task: selected highlight — thick border + solid ♥ badge,
+        // no overlay. The grid card…
+        const card = document.querySelector(`.photo-card[data-photo-id="${CSS.escape(photo.id)}"]`);
+        if (card) card.classList.toggle('pick-picked', next > 0);
+        // …and the preview, when this is the photo currently on screen there.
+        if (window.PickController && PickController.active) {
+            const shown = this.filteredPhotos[this.currentPhotoIndex];
+            if (shown && shown.id === photo.id) {
+                document.querySelector('.canvas-container')?.classList.toggle('pick-picked', next > 0);
+            }
+        }
         driveManager.saveRating(photo.id, next); // pick.js wraps this to autosave
+    }
+
+    // A brief pulse on toggle-on (mobile task: double-tap feedback). Restarts
+    // cleanly even if the previous pulse's animationend hasn't fired yet.
+    pulseHeart(el) {
+        el.classList.remove('pick-heart-pulse');
+        void el.offsetWidth; // force reflow so re-adding the class restarts it
+        el.classList.add('pick-heart-pulse');
+        el.addEventListener('animationend', () => el.classList.remove('pick-heart-pulse'), { once: true });
     }
 
     // A clickable ♥, used anywhere but the grid card itself (which builds its
@@ -867,7 +905,7 @@ class App {
         content.style.display = 'flex';
 
         const img = document.getElementById('previewImg');
-        if (img) img.src = driveManager.getImageUrl(photo, 1600);
+        if (img) img.src = driveManager.getImageUrl(photo, driveManager.previewWidth());
 
         const nameEl = document.getElementById('previewName');
         if (nameEl) nameEl.textContent = photo.name;
@@ -919,13 +957,44 @@ class App {
             mpr.appendChild(ratingManager.createStarRating(photo.rating, photo.id, true));
         }
 
+        // Mobile task: selected highlight, same treatment as the grid card —
+        // thick border, no dimming overlay (see createPhotoCard/togglePickHeart).
+        document.querySelector('.canvas-container')?.classList.toggle(
+            'pick-picked', pickMode && (photo.rating || 0) > 0);
+
         this.updateModalNavigation();
+        this.schedulePreload(index);
 
         // 重置手機端工具抽屜狀態
         const sidebar = document.getElementById('modalSidebar');
         if (sidebar) sidebar.classList.remove('active');
 
         await annotationManager.loadPhoto(photo);
+    }
+
+    // Mobile task: preload the photos next to the one on screen, at the same
+    // responsive width the preview itself uses, so swiping (or the arrow
+    // keys) doesn't wait on a network round trip. Debounced: a burst of
+    // navigatePhoto() calls (fast swiping, or a key held down) only fires the
+    // requests once things settle on a final index — nothing is preloaded for
+    // every index passed through along the way.
+    schedulePreload(index) {
+        clearTimeout(this._preloadTimer);
+        this._preloadTimer = setTimeout(() => this.preloadNeighbors(index), 60);
+    }
+
+    preloadNeighbors(index) {
+        const width = driveManager.previewWidth();
+        [-2, -1, 1, 2].forEach(offset => {
+            const i = index + offset;
+            if (i < 0 || i >= this.filteredPhotos.length) return; // never past either end
+            const photo = this.filteredPhotos[i];
+            const url = driveManager.getImageUrl(photo, width);
+            if (this._preloadedUrls.has(url)) return; // already asked for once
+            this._preloadedUrls.add(url);
+            const img = new Image();
+            img.src = url;
+        });
     }
 
     closeModal() {

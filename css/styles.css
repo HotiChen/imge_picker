@@ -843,6 +843,12 @@ body {
 
 .photo-card.selected { border-color: var(--accent); }
 
+/* Guest picking, mobile task: selected highlight — a clearly coloured THICK
+   border, plus the solid ♥ badge (.pick-heart-btn.on, below) already sitting
+   in the corner. Deliberately not an overlay: nothing here dims or tints
+   .photo-image, which stays exactly as bright picked or not. */
+.photo-card.pick-picked { border: 3px solid var(--danger); }
+
 .photo-image-container {
   position: relative;
   width: 100%;
@@ -1415,13 +1421,24 @@ body {
   justify-content: center;
   position: relative;
   overflow: hidden;
+  border: 3px solid transparent; /* reserve the space so .pick-picked below never shifts layout */
 }
+
+/* Guest picking, mobile task: same treatment as the grid card — see
+   .photo-card.pick-picked. No overlay on the image either. */
+.canvas-container.pick-picked { border-color: var(--danger); }
 
 #photoCanvas {
   max-width: 100%;
   max-height: 100%;
   object-fit: contain;
   cursor: crosshair;
+  /* Mobile task: swipe/pinch/pan gestures are handled ourselves (see
+     js/annotation.js); touch-action: none keeps the browser's own scroll,
+     pinch-zoom and pull-to-refresh from also reacting to the same touches.
+     This cannot reach LINE's in-app browser's own edge-swipe-back gesture,
+     which lives above the page. */
+  touch-action: none;
 }
 
 /* Bottom photo info bar */
@@ -1964,6 +1981,14 @@ span.pick-heart-btn { cursor: default; }
   border-color: var(--danger);
   color: #fff;
 }
+/* Mobile task: a brief pulse when a double-tap (or a click) turns a photo
+   on — js/app.js pulseHeart() adds this and removes it on animationend. */
+.pick-heart-btn.pick-heart-pulse { animation: pickHeartPulse .35s ease-out; }
+@keyframes pickHeartPulse {
+  0%   { transform: scale(1); }
+  40%  { transform: scale(1.45); }
+  100% { transform: scale(1); }
+}
 /* Modal footer and the right-hand preview pane are not the absolutely-
    positioned card overlay the default rule assumes. */
 .pick-heart-btn.pick-heart-static {
@@ -2005,4 +2030,11 @@ span.pick-heart-btn { cursor: default; }
 @media (max-width: 768px) {
   .pick-banner { padding: 8px 12px; font-size: 12px; }
   .pick-counter { align-items: flex-start; }
+
+  /* Mobile task: tap targets >= 44x44 CSS px — the ♥ toggle, the 全部/已選/
+     未選 filter buttons, and 完成挑圖 / 確認送出 (both .btn.btn-success). */
+  .pick-heart-btn { width: 44px; height: 44px; font-size: 18px; }
+  .pick-heart-btn.pick-heart-static { width: 44px; height: 44px; }
+  .pick-filter-btn { min-height: 44px; }
+  #submitJobBtn, #pickSubmitConfirmBtn, #pickSubmitCancelBtn { min-height: 44px; }
 }
