@@ -139,7 +139,8 @@ their own migration files, run by hand in order:
 `worker/migrations/2026-09-28-project-archive.sql` adds
 `projects.archived_at` (run it **before** deploying the Worker that reads it:
 until then the project list fails and pick links are refused; album links are
-unaffected).
+unaffected). `worker/migrations/2026-09-28-dashboard-settings.sql` adds
+`projects.delivered_at` and `studio_settings` (`docs/dashboard-settings.md`).
 
 ```sql
 CREATE TABLE IF NOT EXISTS projects (
@@ -155,7 +156,8 @@ CREATE TABLE IF NOT EXISTS projects (
                   CHECK (phase IN ('picking','submitted','retouching')),
   modified_after_submit INTEGER NOT NULL DEFAULT 0, -- 1 = saved since last submit
   last_notified_at TEXT,                  -- last notification email; NULL = never
-  archived_at     TEXT                    -- NULL = active (2026-09-28 migration)
+  archived_at     TEXT,                   -- NULL = active (2026-09-28 migration)
+  delivered_at    TEXT                    -- NULL = not delivered (dashboard migration)
 );
 CREATE TABLE IF NOT EXISTS pickers (
   id           TEXT PRIMARY KEY,
@@ -205,7 +207,7 @@ ALTER TABLE share_tokens ADD COLUMN project_id TEXT;
 | Route | Auth | Purpose |
 |---|---|---|
 | `POST /api/admin/projects` | admin | create project + mint pick link |
-| `GET /api/admin/projects[?archived=1]` | admin | `{projects: [{id, title, phase, modified_after_submit, owner_name, created_at, archived_at, submission_count, last_submitted_at, unnotified_submissions, token}]}` newest first, this photographer only (`photographer_id = 'default'`), ≤ 200 rows, one SQL query; `owner_name` null when the seat is free; `token` is the newest live pick link (not revoked, not expired, inside the 180-day ceiling) or null. Archived projects are hidden; `?archived=1` returns only archived ones (any other value = default) |
+| `GET /api/admin/projects[?archived=1]` | admin | `{projects: [{id, title, phase, modified_after_submit, owner_name, created_at, archived_at, delivered_at, submission_count, last_submitted_at, unnotified_submissions, token}]}` newest first, this photographer only (`photographer_id = 'default'`), ≤ 200 rows, one SQL query; `owner_name` null when the seat is free; `token` is the newest live pick link (not revoked, not expired, inside the 180-day ceiling) or null. Archived projects are hidden; `?archived=1` returns only archived ones (any other value = default) |
 | `GET /api/admin/projects/:id` | admin | project incl. `phase`, `modified_after_submit`, `last_notified_at`; owner, pickers, selections with `updated_by` and `note`, `tokens` (every pick link, newest first: `{token, created_at, expires_at, revoked_at, last_seen_at, status: 'live'\|'revoked'\|'expired'}`), `submissions` newest first, at most `PICK_MAX_SUBMISSIONS` (50) (`photo_keys` parsed, `notified` 0/1), `unnotified_submissions` |
 | `POST /api/admin/projects/:id/links` | admin | mint a new pick link → 201 `{token, expires_at, created_at, status: 'live'}` |
 | `POST /api/shares/:token/revoke` | admin | revoke any link, pick links included → `{ok: true}`; 404 if unknown or already revoked |
@@ -214,8 +216,9 @@ ALTER TABLE share_tokens ADD COLUMN project_id TEXT;
 | `DELETE /api/admin/projects/:id` | admin | delete a project with no submissions → `{ok: true}`; 409 `{error, code: 'has_submissions'}` (also when a submit races it); 404 |
 | `POST /api/admin/projects/:id/reset-seat` | admin | free the seat (selections, phase, submissions kept) |
 | `POST /api/admin/projects/:id/start-retouch` | admin | `submitted` → `retouching`; 409 `not_submitted` from `picking` |
-| `POST /api/admin/projects/:id/reopen` | admin | `submitted`/`retouching` → `picking`, flag cleared |
-| `GET /api/pick/state` | pick token (+ key) | owner name, am-I-owner, limit/price, selections, `phase`; owner also gets `modified_after_submit`, `submitted_at` (latest submission) and each selection's `note` (viewers get `{photo_key, rating}` only) |
+| `POST /api/admin/projects/:id/reopen` | admin | `submitted`/`retouching` → `picking`, flag and `delivered_at` cleared |
+| `POST /api/admin/projects/:id/deliver` / `undeliver` | admin | stamp / clear `delivered_at` (deliver only from `retouching`, else 409 `not_retouching`) — see `docs/dashboard-settings.md` |
+| `GET /api/pick/state` | pick token (+ key) | owner name, am-I-owner, limit/price, selections, `phase`, `studio: {name, booking_url, has_logo}`; owner also gets `modified_after_submit`, `submitted_at` (latest submission) and each selection's `note` (viewers get `{photo_key, rating}` only) |
 | `POST /api/pick/claim` `{name}` | pick token | atomic claim → `picker_key` |
 | `PUT /api/pick/selections` | token + key, owner only | batch upsert/delete; 400 `invalid_photo_key`; 409 `retouching` / `selection_cap` / `row_cap`; raises the flag when `submitted` |
 | `POST /api/pick/submit` `{relationship, email?}` | token + key, owner only | append `submissions` row (none for a repeat of the latest set: 200 with the latest), phase → `submitted`, email with diff (throttled, see above); 409 `retouching` / `submission_cap` |

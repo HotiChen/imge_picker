@@ -122,7 +122,15 @@ CREATE TABLE IF NOT EXISTS projects (
   -- guest-picking migration only gets it from a hand-run
   --   ALTER TABLE projects ADD COLUMN archived_at TEXT;
   -- (worker/migrations/2026-09-28-project-archive.sql).
-  archived_at     TEXT
+  archived_at     TEXT,
+  -- when the photographer marked the finished photos delivered; NULL = not
+  -- yet. Not a phase value: the CHECK above cannot change without rebuilding
+  -- the table. Only set from phase 'retouching' (POST .../deliver), cleared by
+  -- .../undeliver and by reopen, so delivered always means retouching too and
+  -- the guest's writes stay refused. Appended, from a hand-run
+  --   ALTER TABLE projects ADD COLUMN delivered_at TEXT;
+  -- (worker/migrations/2026-09-28-dashboard-settings.sql).
+  delivered_at    TEXT
 );
 
 -- Everyone who ever held the seat. key_hash is the SHA-256 of the bearer key
@@ -181,4 +189,25 @@ CREATE TABLE IF NOT EXISTS project_members (
   role        TEXT NOT NULL CHECK (role IN ('owner','editor','viewer')),
   approved_at TEXT,
   PRIMARY KEY (project_id, user_id)
+);
+
+-- ─── Studio settings (docs/dashboard-settings.md) ──────────────────────────
+-- A new table, so a deployed database gets it from the same hand-run file as
+-- the projects column above: worker/migrations/2026-09-28-dashboard-settings.sql.
+-- One row per photographer, keyed by the Worker's constant, never by a body.
+-- The logo lives here, not in the `imagepicker` bucket, whose lifecycle rule
+-- deletes everything after 180 days. It is ≤ 200 KB of PNG/JPEG/WebP, decided
+-- by its magic bytes; logo_type is that sniffed type, never the client's.
+-- booking_url is validated (https:// only) on write, because the guest page
+-- puts it in an href.
+CREATE TABLE IF NOT EXISTS studio_settings (
+  photographer_id     TEXT PRIMARY KEY,
+  studio_name         TEXT,
+  booking_url         TEXT,
+  default_pick_limit  INTEGER,
+  default_extra_price INTEGER,
+  logo                BLOB,
+  logo_type           TEXT,
+  logo_updated_at     TEXT,
+  updated_at          TEXT
 );

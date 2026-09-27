@@ -143,17 +143,25 @@ export function fakeDB({ schema } = {}) {
   const normalise = v => {
     if (v === undefined) return null;
     if (typeof v === 'boolean') return v ? 1 : 0;
+    // D1 binds an ArrayBuffer as a BLOB; node:sqlite only takes a view
+    if (v instanceof ArrayBuffer) return new Uint8Array(v);
     return v;
+  };
+  // and D1 hands a BLOB back as a plain array of byte values, not a buffer
+  const blobsOut = row => {
+    if (!row) return row;
+    for (const k of Object.keys(row)) if (row[k] instanceof Uint8Array) row[k] = Array.from(row[k]);
+    return row;
   };
 
   const result = (stmt, sql, params) => ({
     async first() {
       sqlLog.push(sql);
-      return stmt.get(...params) ?? null;
+      return blobsOut(stmt.get(...params)) ?? null;
     },
     async all() {
       sqlLog.push(sql);
-      return { success: true, results: stmt.all(...params) }; // D1 wraps rows in {results}
+      return { success: true, results: stmt.all(...params).map(blobsOut) }; // D1 wraps rows in {results}
     },
     async run() {
       sqlLog.push(sql);

@@ -396,6 +396,116 @@ const DEFAULT_PHOTOGRAPHER_ID = 'default';
 // Characters, not UTF-16 units, so an emoji is one of the fifty.
 const charCount = s => [...s].length;
 
+// ─── Studio settings and dashboard (docs/dashboard-settings.md) ─────────────
+const STUDIO_NAME_MAX = 60;
+const BOOKING_URL_MAX = 500;
+const LOGO_MAX_BYTES = 200 * 1024;
+// Asia/Taipei has no daylight saving, so a fixed offset is its month boundary.
+const TAIPEI_OFFSET_MS = 8 * 60 * 60 * 1000;
+const STATS_MONTHS = 12;
+const STUDIO_INT_FIELDS = ['default_pick_limit', 'default_extra_price'];
+
+// The only image types a logo may be, decided by the bytes themselves. The
+// client's Content-Type is never consulted: an SVG (script) or HTML file
+// labelled image/png is exactly what this is here to refuse.
+const LOGO_SIGNATURES = [
+  ['image/png', 0, [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]],
+  ['image/jpeg', 0, [0xff, 0xd8, 0xff]],
+];
+function sniffImageType(bytes) {
+  const at = (off, sig) => bytes.length >= off + sig.length && sig.every((v, i) => bytes[off + i] === v);
+  for (const [type, off, sig] of LOGO_SIGNATURES) if (at(off, sig)) return type;
+  // RIFF....WEBP: the RIFF container alone is also WAV and AVI
+  if (at(0, [0x52, 0x49, 0x46, 0x46]) && at(8, [0x57, 0x45, 0x42, 0x50])) return 'image/webp';
+  return null;
+}
+
+// The request body, or null once it passes `max` bytes. Read as a stream and
+// cut off there, so neither a lying Content-Length nor a chunked body can make
+// the Worker buffer more than the limit.
+async function readBodyCapped(request, max) {
+  const declared = Number(request.headers.get('Content-Length'));
+  if (Number.isFinite(declared) && declared > max) return null;
+  if (!request.body) return new Uint8Array(0);
+  const reader = request.body.getReader();
+  const chunks = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > max) {
+      await reader.cancel().catch(() => {});
+      return null;
+    }
+    chunks.push(value);
+  }
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const c of chunks) { out.set(c, offset); offset += c.byteLength; }
+  return out;
+}
+
+// A booking link the guest page puts in an href: https only, no whitespace or
+// control characters, no user:pass@ (reads as one host, goes to another).
+// Returns the URL as the parser re-serialised it, or null.
+function cleanBookingUrl(raw) {
+  if (raw.length > BOOKING_URL_MAX) return null;
+  if (!/^https:\/\//i.test(raw)) return null;
+  if (/[\s\u0000-\u001F\u007F-\u009F]/.test(raw)) return null;
+  let u;
+  try { u = new URL(raw); } catch { return null; }
+  if (u.protocol !== 'https:' || !u.hostname || u.username || u.password) return null;
+  if (u.href.length > BOOKING_URL_MAX) return null;
+  return u.href;
+}
+
+// Everything the photographer set, minus the logo bytes. An absent row reads
+// as all-null.
+async function readStudioSettings(env, photographerId) {
+  const row = await env.DB.prepare(
+    'SELECT studio_name, booking_url, default_pick_limit, default_extra_price, logo IS NOT NULL AS has_logo, logo_type, logo_updated_at, updated_at FROM studio_settings WHERE photographer_id = ?'
+  ).bind(photographerId).first();
+  const hasLogo = !!row?.has_logo;
+  return {
+    studio_name: row?.studio_name ?? null,
+    booking_url: row?.booking_url ?? null,
+    default_pick_limit: row?.default_pick_limit ?? null,
+    default_extra_price: row?.default_extra_price ?? null,
+    has_logo: hasLogo,
+    logo_type: hasLogo ? row.logo_type : null,
+    logo_updated_at: hasLogo ? row.logo_updated_at : null,
+    updated_at: row?.updated_at ?? null,
+  };
+}
+
+// The studio brand a guest sees. booking_url was validated on write. A
+// database the settings migration has not reached reads as no brand, so the
+// guest page never breaks over it.
+async function pickStudio(env, photographerId) {
+  try {
+    const s = await readStudioSettings(env, photographerId);
+    return { name: s.studio_name, booking_url: s.booking_url, has_logo: s.has_logo };
+  } catch {
+    return { name: null, booking_url: null, has_logo: false };
+  }
+}
+
+// Month keys ('2026-09') of the last STATS_MONTHS Taipei months, oldest
+// first, and the UTC instant the oldest one starts.
+function statsMonths(now) {
+  const t = new Date(now + TAIPEI_OFFSET_MS);
+  const y = t.getUTCFullYear();
+  const m = t.getUTCMonth();
+  const months = [];
+  for (let i = STATS_MONTHS - 1; i >= 0; i--) {
+    const d = new Date(Date.UTC(y, m - i, 1));
+    months.push(`${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`);
+  }
+  const since = new Date(Date.UTC(y, m - (STATS_MONTHS - 1), 1) - TAIPEI_OFFSET_MS).toISOString();
+  return { months, since };
+}
+
 async function sha256Hex(text) {
   const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
   return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
@@ -985,7 +1095,7 @@ export default {
       const archivedFilter = params.get('archived') === '1' ? 'p.archived_at IS NOT NULL' : 'p.archived_at IS NULL';
       const { results } = await env.DB.prepare(
         `SELECT p.id, p.title, p.phase, p.modified_after_submit,
-                o.name AS owner_name, p.created_at, p.archived_at,
+                o.name AS owner_name, p.created_at, p.archived_at, p.delivered_at,
                 (SELECT COUNT(*) FROM submissions s WHERE s.project_id = p.id) AS submission_count,
                 (SELECT MAX(s.created_at) FROM submissions s WHERE s.project_id = p.id) AS last_submitted_at,
                 ${PICK_UNNOTIFIED_SQL} AS unnotified_submissions,
@@ -1078,7 +1188,7 @@ export default {
           "UPDATE projects SET phase = 'retouching' WHERE id = ? AND photographer_id = ? AND phase IN ('submitted', 'retouching')"
         ).bind(id, DEFAULT_PHOTOGRAPHER_ID).run()
         : await env.DB.prepare(
-          "UPDATE projects SET phase = 'picking', modified_after_submit = 0 WHERE id = ? AND photographer_id = ?"
+          "UPDATE projects SET phase = 'picking', modified_after_submit = 0, delivered_at = NULL WHERE id = ? AND photographer_id = ?"
         ).bind(id, DEFAULT_PHOTOGRAPHER_ID).run();
       if (!moved.meta?.changes) {
         const exists = await env.DB.prepare('SELECT phase FROM projects WHERE id = ? AND photographer_id = ?')
@@ -1183,6 +1293,191 @@ export default {
       return jsonOk({ token, expires_at: expiresAt, created_at: createdAt, status: 'live' }, 201, ADMIN_ONLY_HEADERS);
     }
 
+    // POST /api/admin/projects/:id/deliver — the finished photos went out.
+    // A stamp, not a phase (the phase CHECK cannot change without a table
+    // rebuild): only from 'retouching', so the guest's writes stay refused.
+    // A second press keeps the first stamp.
+    // POST /api/admin/projects/:id/undeliver — clear it (reopen clears it too).
+    if (request.method === 'POST' && pathParts[0] === 'api' && pathParts[1] === 'admin' && pathParts[2] === 'projects' && pathParts[3] && !pathParts[5] &&
+        (pathParts[4] === 'deliver' || pathParts[4] === 'undeliver')) {
+      if (!isAdminToken(request, env)) return jsonErr('Unauthorized', 401);
+      if (!env.DB) return jsonErr('DB not configured', 500);
+      const id = pathParts[3];
+      if (pathParts[4] === 'undeliver') {
+        const result = await env.DB.prepare('UPDATE projects SET delivered_at = NULL WHERE id = ? AND photographer_id = ?')
+          .bind(id, DEFAULT_PHOTOGRAPHER_ID).run();
+        if (!result.meta?.changes) return jsonErr('Not found', 404);
+        return jsonOk({ ok: true, delivered_at: null }, 200, ADMIN_ONLY_HEADERS);
+      }
+      const at = new Date().toISOString();
+      const result = await env.DB.prepare(
+        "UPDATE projects SET delivered_at = COALESCE(delivered_at, ?) WHERE id = ? AND photographer_id = ? AND phase = 'retouching'"
+      ).bind(at, id, DEFAULT_PHOTOGRAPHER_ID).run();
+      const row = await env.DB.prepare('SELECT phase, delivered_at FROM projects WHERE id = ? AND photographer_id = ?')
+        .bind(id, DEFAULT_PHOTOGRAPHER_ID).first();
+      if (!row) return jsonErr('Not found', 404);
+      if (!result.meta?.changes) {
+        return jsonOk({ error: '尚未開始修圖，無法標記為已交付', code: 'not_retouching', phase: row.phase }, 409);
+      }
+      return jsonOk({ ok: true, delivered_at: row.delivered_at }, 200, ADMIN_ONLY_HEADERS);
+    }
+
+    // GET /api/admin/stats — the dashboard's counts, this photographer only.
+    // One pass over projects for the counts, one for the months (Taipei
+    // month boundaries: the stored timestamps are UTC ISO strings).
+    if (url.pathname === '/api/admin/stats') {
+      if (!isAdminToken(request, env)) return jsonErr('Unauthorized', 401);
+      if (request.method !== 'GET') return jsonErr('Method not allowed', 405);
+      if (!env.DB) return jsonErr('DB not configured', 500);
+      const c = await env.DB.prepare(
+        `SELECT
+           COALESCE(SUM(p.archived_at IS NULL AND p.phase = 'picking'), 0) AS picking,
+           COALESCE(SUM(p.archived_at IS NULL AND p.phase = 'submitted'), 0) AS submitted,
+           COALESCE(SUM(p.archived_at IS NULL AND p.phase = 'retouching' AND p.delivered_at IS NULL), 0) AS retouching,
+           COALESCE(SUM(p.delivered_at IS NOT NULL), 0) AS delivered,
+           COALESCE(SUM(p.archived_at IS NOT NULL), 0) AS archived,
+           COALESCE(SUM(p.archived_at IS NULL AND p.modified_after_submit = 1), 0) AS modified,
+           COALESCE(SUM(p.archived_at IS NULL AND ${PICK_UNNOTIFIED_SQL} > 0), 0) AS unnotified
+           FROM projects p WHERE p.photographer_id = ?`
+      ).bind(DEFAULT_PHOTOGRAPHER_ID).first();
+      const { months, since } = statsMonths(Date.now());
+      const { results: monthly } = await env.DB.prepare(
+        `SELECT month, SUM(c) AS created, SUM(d) AS delivered FROM (
+           SELECT strftime('%Y-%m', created_at, '+8 hours') AS month, 1 AS c, 0 AS d
+             FROM projects WHERE photographer_id = ?1 AND created_at >= ?2
+           UNION ALL
+           SELECT strftime('%Y-%m', delivered_at, '+8 hours'), 0, 1
+             FROM projects WHERE photographer_id = ?1 AND delivered_at >= ?2
+         ) GROUP BY month`
+      ).bind(DEFAULT_PHOTOGRAPHER_ID, since).all();
+      const byMonth = new Map(monthly.map(r => [r.month, r]));
+      return jsonOk({
+        by_phase: { picking: c.picking, submitted: c.submitted, retouching: c.retouching },
+        delivered: c.delivered,
+        archived: c.archived,
+        per_month: months.map(month => ({
+          month,
+          created: byMonth.get(month)?.created ?? 0,
+          delivered: byMonth.get(month)?.delivered ?? 0,
+        })),
+        todo: {
+          submitted_not_retouching: c.submitted,
+          unnotified_submissions: c.unnotified,
+          modified_after_submit: c.modified,
+        },
+      }, 200, ADMIN_ONLY_HEADERS);
+    }
+
+    // GET/PUT /api/admin/settings — the studio's name, booking link and
+    // default plan. PUT changes only the fields it names (null clears one);
+    // anything else in the body is ignored, photographer_id above all.
+    if (url.pathname === '/api/admin/settings') {
+      if (!isAdminToken(request, env)) return jsonErr('Unauthorized', 401);
+      if (request.method !== 'GET' && request.method !== 'PUT') return jsonErr('Method not allowed', 405);
+      if (!env.DB) return jsonErr('DB not configured', 500);
+      if (request.method === 'PUT') {
+        let body;
+        try { body = await request.json(); } catch { return jsonErr('Invalid JSON'); }
+        if (!body || typeof body !== 'object' || Array.isArray(body)) return jsonErr('Invalid body');
+        const bad = field => jsonOk({ error: `${field} 格式不正確`, code: `invalid_${field}` }, 400);
+        const has = k => Object.prototype.hasOwnProperty.call(body, k);
+        const set = {};
+        if (has('studio_name')) {
+          const v = body.studio_name;
+          if (v !== null && typeof v !== 'string') return bad('studio_name');
+          const name = v === null ? '' : v.trim();
+          if (charCount(name) > STUDIO_NAME_MAX) return bad('studio_name');
+          set.studio_name = name || null;
+        }
+        if (has('booking_url')) {
+          const v = body.booking_url;
+          if (v !== null && typeof v !== 'string') return bad('booking_url');
+          const raw = v === null ? '' : v.trim();
+          if (raw) {
+            const clean = cleanBookingUrl(raw);
+            if (!clean) return bad('booking_url');
+            set.booking_url = clean;
+          } else {
+            set.booking_url = null;
+          }
+        }
+        for (const field of STUDIO_INT_FIELDS) {
+          if (!has(field)) continue;
+          const v = body[field];
+          if (v !== null && !(Number.isSafeInteger(v) && v >= 0)) return bad(field);
+          set[field] = v;
+        }
+        // column names come from the fixed list above, never from the body
+        const cols = [...Object.keys(set), 'updated_at'];
+        const all = ['photographer_id', ...cols];
+        await env.DB.prepare(
+          `INSERT INTO studio_settings (${all.join(', ')}) VALUES (${all.map(() => '?').join(', ')}) ` +
+          `ON CONFLICT(photographer_id) DO UPDATE SET ${cols.map(k => `${k} = excluded.${k}`).join(', ')}`
+        ).bind(DEFAULT_PHOTOGRAPHER_ID, ...Object.values(set), new Date().toISOString()).run();
+      }
+      return jsonOk(await readStudioSettings(env, DEFAULT_PHOTOGRAPHER_ID), 200, ADMIN_ONLY_HEADERS);
+    }
+
+    // PUT /api/admin/settings/logo — raw bytes, ≤ LOGO_MAX_BYTES, PNG / JPEG
+    // / WebP by magic bytes (415 otherwise). Kept in D1, not R2: the bucket's
+    // lifecycle rule deletes everything after 180 days.
+    // DELETE /api/admin/settings/logo — remove it; the rest stays.
+    if (url.pathname === '/api/admin/settings/logo') {
+      if (!isAdminToken(request, env)) return jsonErr('Unauthorized', 401);
+      if (request.method !== 'PUT' && request.method !== 'DELETE') return jsonErr('Method not allowed', 405);
+      if (!env.DB) return jsonErr('DB not configured', 500);
+      const now = new Date().toISOString();
+      if (request.method === 'DELETE') {
+        await env.DB.prepare(
+          'UPDATE studio_settings SET logo = NULL, logo_type = NULL, logo_updated_at = NULL, updated_at = ? WHERE photographer_id = ?'
+        ).bind(now, DEFAULT_PHOTOGRAPHER_ID).run();
+        return jsonOk({ ok: true, has_logo: false }, 200, ADMIN_ONLY_HEADERS);
+      }
+      const bytes = await readBodyCapped(request, LOGO_MAX_BYTES);
+      if (!bytes) return jsonOk({ error: `Logo 不可超過 ${LOGO_MAX_BYTES / 1024} KB`, code: 'too_large', max: LOGO_MAX_BYTES }, 413);
+      const type = sniffImageType(bytes);
+      if (!type) return jsonOk({ error: 'Logo 只接受 PNG、JPEG 或 WebP', code: 'unsupported_type' }, 415);
+      await env.DB.prepare(
+        'INSERT INTO studio_settings (photographer_id, logo, logo_type, logo_updated_at, updated_at) VALUES (?, ?, ?, ?, ?) ' +
+        'ON CONFLICT(photographer_id) DO UPDATE SET logo = excluded.logo, logo_type = excluded.logo_type, ' +
+        'logo_updated_at = excluded.logo_updated_at, updated_at = excluded.updated_at'
+      ).bind(DEFAULT_PHOTOGRAPHER_ID, bytes.buffer, type, now, now).run();
+      return jsonOk({ ok: true, has_logo: true, logo_type: type, logo_updated_at: now, size: bytes.byteLength }, 200, ADMIN_ONLY_HEADERS);
+    }
+
+    // GET /api/studio/logo — public: the guest page shows it. Served as the
+    // type its bytes are (re-sniffed, so a hand-edited row cannot turn it into
+    // something a browser would run), never sniffed by the browser, and under
+    // a CSP that lets it run nothing even if opened directly.
+    if (url.pathname === '/api/studio/logo') {
+      if (request.method !== 'GET') return jsonErr('Method not allowed', 405);
+      if (!env.DB) return jsonErr('Not found', 404);
+      let row = null;
+      try {
+        row = await env.DB.prepare(
+          'SELECT logo, logo_updated_at FROM studio_settings WHERE photographer_id = ? AND logo IS NOT NULL'
+        ).bind(DEFAULT_PHOTOGRAPHER_ID).first();
+      } catch { row = null; }
+      // D1 hands a BLOB back as an array of byte values
+      const bytes = row ? new Uint8Array(row.logo) : null;
+      const type = bytes && sniffImageType(bytes);
+      if (!type) return jsonErr('Not found', 404);
+      const headers = {
+        ...corsHeaders,
+        'Content-Type': type,
+        'X-Content-Type-Options': 'nosniff',
+        'Content-Security-Policy': "default-src 'none'",
+        'Cache-Control': 'public, max-age=300',
+      };
+      const stamp = String(row.logo_updated_at || '');
+      if (/^[0-9A-Za-z:.+-]+$/.test(stamp)) {
+        headers.ETag = `"${stamp}"`;
+        const inm = (request.headers.get('If-None-Match') || '').split(',').map(s => s.trim().replace(/^W\//, ''));
+        if (inm.includes(headers.ETag)) return new Response(null, { status: 304, headers });
+      }
+      return new Response(bytes, { status: 200, headers });
+    }
+
     // GET /api/shares/minted — the studio and client-session tokens that are
     // live right now. Neither kind carries a book_id, so the per-album list
     // below cannot show them and until this route nothing could: a photographer
@@ -1258,6 +1553,7 @@ export default {
           ...(isOwner ? { modified_after_submit: project.modified_after_submit } : {}),
           submitted_at: last ? last.created_at : null,
           selections,
+          studio: await pickStudio(env, project.photographer_id),
         }, 200, SHARED_LINK_HEADERS);
       }
 

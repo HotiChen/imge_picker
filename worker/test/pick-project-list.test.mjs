@@ -80,6 +80,7 @@ test('each project shows phase, flag, seat holder, submits and its live link', a
     owner_name: '<b>王</b>小明', // raw in JSON; admin.html escapes on render
     created_at: created,
     archived_at: null, // the default list only ever shows active projects
+    delivered_at: null, // not delivered (docs/dashboard-settings.md)
     submission_count: 2,
     last_submitted_at: latest,
     unnotified_submissions: 2, // no mail binding here, so neither was emailed

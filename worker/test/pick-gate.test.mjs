@@ -28,6 +28,13 @@ const OTHER_ROUTES = p => [
   ['POST', `/api/admin/projects/${p.project.id}/archive`],
   ['POST', `/api/admin/projects/${p.project.id}/unarchive`],
   ['DELETE', `/api/admin/projects/${p.project.id}`],
+  ['POST', `/api/admin/projects/${p.project.id}/deliver`],
+  ['POST', `/api/admin/projects/${p.project.id}/undeliver`],
+  ['GET', '/api/admin/stats'],
+  ['GET', '/api/admin/settings'],
+  ['PUT', '/api/admin/settings', { studio_name: 'x' }],
+  ['PUT', '/api/admin/settings/logo', '\x89PNG\r\n\x1a\n'],
+  ['DELETE', '/api/admin/settings/logo'],
   ['GET', '/api/shares/minted'],
   ['POST', '/api/shares/minted/revoke-all'],
   ['POST', `/api/shares/${p.token}/revoke`],
@@ -49,6 +56,7 @@ test('a pick token is refused by every route that is not a pick route or a photo
     rows(env, 'SELECT * FROM share_tokens ORDER BY token'),
     rows(env, 'SELECT * FROM users'),
     rows(env, 'SELECT * FROM projects'),
+    rows(env, 'SELECT * FROM studio_settings'),
   ]);
   const before = snapshot();
   for (const [method, path, body] of OTHER_ROUTES(p)) {
