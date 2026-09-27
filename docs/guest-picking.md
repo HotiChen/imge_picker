@@ -102,6 +102,27 @@ browser. This replaces the fake `submitJob()` in `js/app.js`.
   link (snapshot = `projects.folders`, 90-day expiry like creation); the old
   one is killed with the ordinary `POST /api/shares/:token/revoke`. Old and new
   links reach the same project and seat.
+- **Archive and delete** (admin only, scoped to this photographer):
+  - `POST /api/admin/projects/:id/archive` stamps `projects.archived_at` and
+    revokes every live pick link of the project in the **same batch**
+    (links already revoked keep their own `revoked_at`; the revoke is gated on
+    the project being this photographer's). A second archive keeps the first
+    stamp. Selections, pickers, submissions and the phase stay.
+  - An archived project's links are refused **by project state as well**
+    (`resolveShareToken` reads the project with `archived_at IS NULL`), so a
+    link revived by hand or minted while archived opens no `/api/pick/*` route,
+    no photo and no listing (401). Claim, save and submit also re-check
+    `archived_at IS NULL` inside their writes, so an archive landing mid-write
+    wins (401, nothing written).
+  - `POST /api/admin/projects/:id/unarchive` clears the stamp. The links stay
+    revoked; the photographer mints a new one with `.../links`.
+  - `DELETE /api/admin/projects/:id` only for a project with **zero
+    submissions** (otherwise 409 `has_submissions`; archive it instead).
+    Deletes its selections, pickers, project_members, `kind = 'pick'`
+    share_tokens and the project row in one batch, every statement gated on
+    `NOT EXISTS (SELECT 1 FROM submissions WHERE project_id = ?)` (and on the
+    project being this photographer's), so a submit racing the delete leaves
+    everything in place and the route answers 409. R2 is never touched.
 - Invites (editor / viewer) require the owner to be registered. **Deferred**;
   the schema allows it.
 - Holding the seat ≠ account-level ownership. Long-term storage and
@@ -110,7 +131,15 @@ browser. This replaces the fake `submitJob()` in `js/app.js`.
   `project_members`.** Only an admin route may.
 - The old registered-client + `users.folder_path` flow stays as is.
 
-## Schema (migration not yet run in production; edited in place)
+## Schema
+
+The guest-picking tables are in production
+(`worker/migrations/2026-09-27-guest-picking.sql`). Later columns come in
+their own migration files, run by hand in order:
+`worker/migrations/2026-09-28-project-archive.sql` adds
+`projects.archived_at` (run it **before** deploying the Worker that reads it:
+until then the project list fails and pick links are refused; album links are
+unaffected).
 
 ```sql
 CREATE TABLE IF NOT EXISTS projects (
@@ -125,7 +154,8 @@ CREATE TABLE IF NOT EXISTS projects (
   phase           TEXT NOT NULL DEFAULT 'picking'
                   CHECK (phase IN ('picking','submitted','retouching')),
   modified_after_submit INTEGER NOT NULL DEFAULT 0, -- 1 = saved since last submit
-  last_notified_at TEXT                   -- last notification email; NULL = never
+  last_notified_at TEXT,                  -- last notification email; NULL = never
+  archived_at     TEXT                    -- NULL = active (2026-09-28 migration)
 );
 CREATE TABLE IF NOT EXISTS pickers (
   id           TEXT PRIMARY KEY,
@@ -175,10 +205,13 @@ ALTER TABLE share_tokens ADD COLUMN project_id TEXT;
 | Route | Auth | Purpose |
 |---|---|---|
 | `POST /api/admin/projects` | admin | create project + mint pick link |
-| `GET /api/admin/projects` | admin | `{projects: [{id, title, phase, modified_after_submit, owner_name, created_at, submission_count, last_submitted_at, unnotified_submissions, token}]}` newest first, this photographer only (`photographer_id = 'default'`), ≤ 200 rows, one SQL query; `owner_name` null when the seat is free; `token` is the newest live pick link (not revoked, not expired, inside the 180-day ceiling) or null |
+| `GET /api/admin/projects[?archived=1]` | admin | `{projects: [{id, title, phase, modified_after_submit, owner_name, created_at, archived_at, submission_count, last_submitted_at, unnotified_submissions, token}]}` newest first, this photographer only (`photographer_id = 'default'`), ≤ 200 rows, one SQL query; `owner_name` null when the seat is free; `token` is the newest live pick link (not revoked, not expired, inside the 180-day ceiling) or null. Archived projects are hidden; `?archived=1` returns only archived ones (any other value = default) |
 | `GET /api/admin/projects/:id` | admin | project incl. `phase`, `modified_after_submit`, `last_notified_at`; owner, pickers, selections with `updated_by` and `note`, `tokens` (every pick link, newest first: `{token, created_at, expires_at, revoked_at, last_seen_at, status: 'live'\|'revoked'\|'expired'}`), `submissions` newest first, at most `PICK_MAX_SUBMISSIONS` (50) (`photo_keys` parsed, `notified` 0/1), `unnotified_submissions` |
 | `POST /api/admin/projects/:id/links` | admin | mint a new pick link → 201 `{token, expires_at, created_at, status: 'live'}` |
 | `POST /api/shares/:token/revoke` | admin | revoke any link, pick links included → `{ok: true}`; 404 if unknown or already revoked |
+| `POST /api/admin/projects/:id/archive` | admin | stamp `archived_at` + revoke live pick links (one batch) → `{ok: true, archived_at, revoked}` (`revoked` = links revoked by this call; a repeat keeps the first stamp, `revoked: 0`); 404 unknown / other photographer |
+| `POST /api/admin/projects/:id/unarchive` | admin | clear `archived_at` → `{ok: true, archived_at: null}` (links stay revoked); 404 |
+| `DELETE /api/admin/projects/:id` | admin | delete a project with no submissions → `{ok: true}`; 409 `{error, code: 'has_submissions'}` (also when a submit races it); 404 |
 | `POST /api/admin/projects/:id/reset-seat` | admin | free the seat (selections, phase, submissions kept) |
 | `POST /api/admin/projects/:id/start-retouch` | admin | `submitted` → `retouching`; 409 `not_submitted` from `picking` |
 | `POST /api/admin/projects/:id/reopen` | admin | `submitted`/`retouching` → `picking`, flag cleared |
@@ -216,3 +249,10 @@ DEFAULT_PHOTOGRAPHER_ID`: another photographer's project is 404 and untouched.
     project, atomic, 409 `submission_cap`; admin detail returns ≤ 50.
 12. Notes reach only the seat holder and admin.
 13. Admin project routes are scoped to this photographer's projects.
+15. Archive revokes every live pick link in the same batch as the stamp; an
+    archived project's links (even un-revoked by hand) open no pick route,
+    photo or listing, and an archive racing a claim/save/submit wins. Unarchive
+    leaves the links revoked. The list hides archived projects by default.
+16. Delete only with zero submissions (409 `has_submissions`); every statement
+    of its batch re-checks that, so a racing submit is never lost or orphaned;
+    R2 is never touched.

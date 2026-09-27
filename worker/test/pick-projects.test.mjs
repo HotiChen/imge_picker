@@ -195,7 +195,9 @@ test('the migration file turns a deployed database into exactly what schema.sql 
   const { readFileSync } = await import('node:fs');
   const { fakeDB } = await import('./fakes.mjs');
   const fresh = readFileSync(new URL('../schema.sql', import.meta.url), 'utf8');
-  const migration = readFileSync(new URL('../migrations/2026-09-27-guest-picking.sql', import.meta.url), 'utf8');
+  // the guest-picking paste, then every migration after it, in order
+  const migration = readFileSync(new URL('../migrations/2026-09-27-guest-picking.sql', import.meta.url), 'utf8') +
+    '\n' + readFileSync(new URL('../migrations/2026-09-28-project-archive.sql', import.meta.url), 'utf8');
   // the live database: share_tokens without project_id, none of the new tables
   const deployed = fresh
     .replace(/,\n(?:\s*--[^\n]*\n)*\s*project_id\s+TEXT\n\);/, '\n);')
