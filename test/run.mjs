@@ -58,8 +58,70 @@ const PIXEL = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
   'base64');
 
-async function suite(name, url, run, { initScript, before } = {}) {
-  const context = await browser.newContext({ viewport: { width: 1500, height: 950 } });
+// Mobile task: a phone-shaped context — real Touch/TouchEvent construction
+// needs hasTouch, and DPR3 is what makes the responsive-width formula ask
+// for something other than the desktop bucket.
+const MOBILE = { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, deviceScaleFactor: 3 };
+
+// Dispatches real TouchEvents on `selector` inside the page — Playwright has
+// no built-in swipe/pinch, so gestures are driven with synthetic touches
+// exactly as the task calls for. `sequence` is [{type, points: [{x,y,id}]}].
+async function touchSequence(page, selector, sequence) {
+  await page.evaluate(({ selector, sequence }) => {
+    const el = document.querySelector(selector);
+    if (!el) throw new Error('touch target not found: ' + selector);
+    for (const step of sequence) {
+      const touches = (step.points || []).map(p => new Touch({
+        identifier: p.id ?? 0, target: el, clientX: p.x, clientY: p.y, pageX: p.x, pageY: p.y,
+      }));
+      const ev = new TouchEvent(step.type, {
+        touches: step.type === 'touchend' ? [] : touches,
+        targetTouches: step.type === 'touchend' ? [] : touches,
+        changedTouches: touches,
+        bubbles: true, cancelable: true,
+      });
+      el.dispatchEvent(ev);
+    }
+  }, { selector, sequence });
+}
+
+// One-finger swipe from (x1,y1) to (x2,y2).
+async function swipeTouch(page, selector, x1, y1, x2, y2, steps = 6) {
+  const seq = [{ type: 'touchstart', points: [{ x: x1, y: y1 }] }];
+  for (let i = 1; i <= steps; i++) {
+    seq.push({ type: 'touchmove', points: [{ x: x1 + (x2 - x1) * i / steps, y: y1 + (y2 - y1) * i / steps }] });
+  }
+  seq.push({ type: 'touchend', points: [{ x: x2, y: y2 }] });
+  await touchSequence(page, selector, seq);
+}
+
+async function tapTouch(page, selector, x, y) {
+  await touchSequence(page, selector, [
+    { type: 'touchstart', points: [{ x, y }] },
+    { type: 'touchend', points: [{ x, y }] },
+  ]);
+}
+
+async function doubleTapTouch(page, selector, x, y, gapMs = 100) {
+  await tapTouch(page, selector, x, y);
+  await page.waitForTimeout(gapMs);
+  await tapTouch(page, selector, x, y);
+}
+
+// Two-finger pinch, centred on (cx,cy), from startDist to endDist apart.
+async function pinchTouch(page, selector, cx, cy, startDist, endDist, steps = 6) {
+  const half0 = startDist / 2;
+  const seq = [{ type: 'touchstart', points: [{ x: cx - half0, y: cy, id: 0 }, { x: cx + half0, y: cy, id: 1 }] }];
+  for (let i = 1; i <= steps; i++) {
+    const half = (startDist + (endDist - startDist) * i / steps) / 2;
+    seq.push({ type: 'touchmove', points: [{ x: cx - half, y: cy, id: 0 }, { x: cx + half, y: cy, id: 1 }] });
+  }
+  seq.push({ type: 'touchend', points: [] });
+  await touchSequence(page, selector, seq);
+}
+
+async function suite(name, url, run, { initScript, before, contextOptions } = {}) {
+  const context = await browser.newContext({ viewport: { width: 1500, height: 950 }, ...contextOptions });
   if (initScript) await context.addInitScript(initScript);
   const page = await context.newPage();
   const pageErrors = [];
@@ -3208,7 +3270,7 @@ function pickFakeWorker(opts = {}) {
       const pickerKey = h['x-picker-key'] || '';
       let body = null;
       try { body = JSON.parse(req.postData() || 'null'); } catch (e) { /* not JSON */ }
-      requests.push({ method, path: u.pathname, t: shareTok, key: pickerKey, body });
+      requests.push({ method, path: u.pathname, search: u.search, t: shareTok, key: pickerKey, body });
       const json = (data, status = 200) =>
         route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(data) });
 
@@ -4445,6 +4507,410 @@ await suite('admin — escHtml(0): a project with zero submissions shows 送出 
     },
     { before: m.attach, initScript: ADMIN });
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Mobile picking gestures — the preview modal on a phone (task: mobile
+// gestures). Guests use phones, often LINE's in-app browser or iOS Safari,
+// so the full-size preview needs touch-native swipe/pinch/pan/double-tap on
+// top of the existing mouse+keyboard behaviour, which must keep working too.
+// ═══════════════════════════════════════════════════════════════════════════
+
+{
+  const m = pickFakeWorker({ ownerName: 'Mia', ownerKey: 'MIA-KEY', photos: PHOTOS(5) });
+  await suite('mobile preview — swipe left/right navigates, swipe down closes; short/diagonal moves do neither',
+    `${base}/index.html?t=TOK`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('.photo-card', { timeout: 5000 });
+      await page.locator('.photo-card').first().tap();
+      await page.waitForSelector('#photoModal.active', { timeout: 5000 });
+      const counter = () => page.textContent('#photoCounter');
+      const isActive = () => page.evaluate(() => document.getElementById('photoModal').classList.contains('active'));
+
+      ok('opens on the first photo', (await counter()) === '1 / 5', await counter());
+
+      await swipeTouch(page, '#photoCanvas', 300, 400, 60, 410); // dx=-240 dy=10 — a clean swipe left
+      await page.waitForTimeout(50);
+      ok('swipe left → next photo', (await counter()) === '2 / 5', await counter());
+
+      await swipeTouch(page, '#photoCanvas', 60, 400, 300, 410); // swipe right
+      await page.waitForTimeout(50);
+      ok('swipe right → previous photo', (await counter()) === '1 / 5', await counter());
+
+      await swipeTouch(page, '#photoCanvas', 150, 400, 210, 470); // dx=60 dy=70 — vertical-dominant
+      await page.waitForTimeout(50);
+      ok('a mostly-vertical move past the 50px horizontal threshold does not navigate',
+        (await counter()) === '1 / 5', await counter());
+      ok('and does not close either (below the 80px close threshold)', await isActive());
+
+      await swipeTouch(page, '#photoCanvas', 150, 300, 160, 460); // dx=10 dy=160 — down, well past 80px
+      await page.waitForTimeout(50);
+      ok('swipe down past threshold closes the preview', !(await isActive()));
+      return out;
+    },
+    { before: m.attach, initScript: () => localStorage.setItem('pick_key:TOK', 'MIA-KEY'), contextOptions: MOBILE });
+}
+
+{
+  const m = pickFakeWorker({ ownerName: 'Nia', ownerKey: 'NIA-KEY', photos: PHOTOS(5) });
+  await suite('mobile preview — pinch zooms in; once zoomed, a one-finger drag pans instead of navigating',
+    `${base}/index.html?t=TOK`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('.photo-card', { timeout: 5000 });
+      await page.locator('.photo-card').first().tap();
+      await page.waitForSelector('#photoModal.active', { timeout: 5000 });
+      const zoomPct = () => page.evaluate(() => parseInt(document.getElementById('zoomLevel').textContent, 10));
+
+      ok('starts at 100%', (await zoomPct()) === 100, String(await zoomPct()));
+
+      await pinchTouch(page, '#photoCanvas', 195, 400, 60, 300);
+      await page.waitForTimeout(50);
+      ok('pinching outward zooms in', (await zoomPct()) > 100, String(await zoomPct()));
+
+      const panBefore = await page.evaluate(() => annotationManager.panX);
+      await swipeTouch(page, '#photoCanvas', 300, 400, 100, 410); // would navigate at 100% zoom
+      await page.waitForTimeout(50);
+      ok('stays on the same photo — the one-finger drag panned instead of navigating',
+        (await page.textContent('#photoCounter')) === '1 / 5', await page.textContent('#photoCounter'));
+      const panAfter = await page.evaluate(() => annotationManager.panX);
+      ok('and the pan actually moved the image', panAfter !== panBefore, `${panBefore} -> ${panAfter}`);
+      return out;
+    },
+    { before: m.attach, initScript: () => localStorage.setItem('pick_key:TOK', 'NIA-KEY'), contextOptions: MOBILE });
+}
+
+{
+  const m = pickFakeWorker({ ownerName: 'Owen', ownerKey: 'OWEN-KEY', photos: PHOTOS(3) });
+  await suite('mobile preview — double-tap toggles ♥ for the owner while editable, pulses on, and never navigates',
+    `${base}/index.html?t=TOK`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('.photo-card', { timeout: 5000 });
+      await page.locator('.photo-card').first().tap();
+      await page.waitForSelector('#photoModal.active', { timeout: 5000 });
+
+      const state = () => page.evaluate(() => ({
+        heartOn: document.querySelector('#modalPhotoRating .pick-heart-btn')?.classList.contains('on') ?? null,
+        pulsing: document.querySelector('#modalPhotoRating .pick-heart-btn')?.classList.contains('pick-heart-pulse') ?? false,
+        cardPicked: document.querySelector('.photo-card')?.classList.contains('pick-picked') ?? false,
+        counter: document.getElementById('photoCounter').textContent,
+        rating: app.filteredPhotos[0].rating,
+      }));
+
+      let s = await state();
+      ok('starts unpicked', s.heartOn === false && s.rating === 0, JSON.stringify(s));
+
+      await doubleTapTouch(page, '#photoCanvas', 195, 400);
+      s = await state();
+      ok('double-tap turns it on (same code path as the ♥ button)', s.heartOn === true && s.rating === 1, JSON.stringify(s));
+      ok('a brief pulse plays on toggle-on', s.pulsing === true, JSON.stringify(s));
+      ok('the grid card gets the thick-border highlight too', s.cardPicked === true, JSON.stringify(s));
+      ok('the two taps of a double-tap never navigate', s.counter === '1 / 3', s.counter);
+
+      await doubleTapTouch(page, '#photoCanvas', 195, 400);
+      s = await state();
+      ok('a second double-tap toggles it back off', s.heartOn === false && s.rating === 0, JSON.stringify(s));
+      ok('and the highlight goes with it', s.cardPicked === false, JSON.stringify(s));
+      return out;
+    },
+    { before: m.attach, initScript: () => localStorage.setItem('pick_key:TOK', 'OWEN-KEY'), contextOptions: MOBILE });
+}
+
+{
+  const m = pickFakeWorker({ ownerName: 'Pat', ownerKey: 'PAT-KEY', photos: PHOTOS(3) });
+  await suite('mobile preview — a viewer double-tapping the preview changes nothing',
+    `${base}/index.html?t=TOK`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('.photo-card', { timeout: 5000 }); // seat already taken → straight to the grid
+      await page.locator('.photo-card').first().tap();
+      await page.waitForSelector('#photoModal.active', { timeout: 5000 });
+      ok('a viewer gets no clickable heart in the modal at all',
+        await page.evaluate(() => document.querySelectorAll('#modalPhotoRating .pick-heart-btn').length === 0));
+      await doubleTapTouch(page, '#photoCanvas', 195, 400);
+      const rating = await page.evaluate(() => app.filteredPhotos[0].rating);
+      ok('and double-tapping the image changes the rating not at all', rating === 0, String(rating));
+      return out;
+    },
+    { before: m.attach, contextOptions: MOBILE }); // no picker key stored → a plain viewer
+}
+
+{
+  const m = pickFakeWorker({ ownerName: 'Ray', ownerKey: 'RAY-KEY', photos: PHOTOS(3) });
+  m.state.project.phase = 'retouching';
+  await suite('mobile preview — double-tap does nothing once retouching has started, even for the seat holder',
+    `${base}/index.html?t=TOK`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('.photo-card', { timeout: 5000 });
+      await page.locator('.photo-card').first().tap();
+      await page.waitForSelector('#photoModal.active', { timeout: 5000 });
+      await doubleTapTouch(page, '#photoCanvas', 195, 400);
+      const rating = await page.evaluate(() => app.filteredPhotos[0].rating);
+      ok('the seat holder double-tapping while retouching changes nothing', rating === 0, String(rating));
+      return out;
+    },
+    { before: m.attach, initScript: () => localStorage.setItem('pick_key:TOK', 'RAY-KEY'), contextOptions: MOBILE });
+}
+
+await suite('mobile preview — outside pick mode, double-tap changes nothing (there is no ♥ to toggle)',
+  `${base}/index.html`,
+  async page => {
+    const out = [];
+    const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+    await page.waitForFunction(() => !!window.app, null, { timeout: 5000 });
+    await page.evaluate(() => {
+      app.filteredPhotos = Array.from({ length: 3 }, (_, i) => ({ id: `20260819/p${i}.jpg`, name: `p${i}.jpg`, rating: 0 }));
+      app.openModal(0);
+    });
+    await page.waitForSelector('#photoModal.active', { timeout: 5000 });
+    await doubleTapTouch(page, '#photoCanvas', 195, 400);
+    const r = await page.evaluate(() => ({
+      hearts: document.querySelectorAll('.pick-heart-btn').length,
+      counter: document.getElementById('photoCounter').textContent,
+      rating: app.filteredPhotos[0].rating,
+    }));
+    ok('no heart control exists outside pick mode', r.hearts === 0, String(r.hearts));
+    ok('rating is untouched', r.rating === 0, String(r.rating));
+    ok('and the two taps did not navigate either', r.counter === '1 / 3', r.counter);
+    return out;
+  },
+  { initScript: () => sessionStorage.setItem('studio_token', 'x'), before: mockWorker(3), contextOptions: MOBILE });
+
+{
+  const m = pickFakeWorker({ ownerName: 'Uma', ownerKey: 'UMA-KEY', photos: PHOTOS(5) });
+  await suite('mobile preview — preloads i±1/i±2 at the responsive width, and never past either end of the list',
+    `${base}/index.html?t=TOK`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('.photo-card', { timeout: 5000 });
+
+      const reset = async () => { m.requests.length = 0; await page.evaluate(() => app._preloadedUrls.clear()); };
+      const distinctPaths = () => [...new Set(m.requests
+        .filter(r => r.method === 'GET' && /^\/20260819\/p\d\.jpg$/.test(r.path))
+        .map(r => r.path))].sort();
+      const widthOf = path => {
+        const r = m.requests.find(r => r.path === path);
+        const match = /[?&]w=(\d+)/.exec((r && r.search) || '');
+        return match ? match[1] : null;
+      };
+
+      await reset();
+      await page.evaluate(() => app.openModal(2)); // middle: all four neighbours exist
+      await page.waitForTimeout(150);
+      ok('preloads both photos before and both after the current one',
+        JSON.stringify(distinctPaths()) ===
+          JSON.stringify(['/20260819/p0.jpg', '/20260819/p1.jpg', '/20260819/p2.jpg', '/20260819/p3.jpg', '/20260819/p4.jpg']),
+        distinctPaths().join(','));
+      ok('at the responsive width bucket (1200 on a 390px/DPR3 phone)',
+        widthOf('/20260819/p1.jpg') === '1200', String(widthOf('/20260819/p1.jpg')));
+
+      await reset();
+      await page.evaluate(() => app.openModal(0)); // first photo: no i-1/i-2 to ask for
+      await page.waitForTimeout(150);
+      ok('at the first photo, nothing before it is requested',
+        JSON.stringify(distinctPaths()) === JSON.stringify(['/20260819/p0.jpg', '/20260819/p1.jpg', '/20260819/p2.jpg']),
+        distinctPaths().join(','));
+
+      await reset();
+      await page.evaluate(() => app.openModal(4)); // last photo: no i+1/i+2 to ask for
+      await page.waitForTimeout(150);
+      ok('at the last photo, nothing past it is requested',
+        JSON.stringify(distinctPaths()) === JSON.stringify(['/20260819/p2.jpg', '/20260819/p3.jpg', '/20260819/p4.jpg']),
+        distinctPaths().join(','));
+      return out;
+    },
+    { before: m.attach, initScript: () => localStorage.setItem('pick_key:TOK', 'UMA-KEY'), contextOptions: MOBILE });
+}
+
+{
+  const m = pickFakeWorker({ ownerName: 'Vic', ownerKey: 'VIC-KEY', photos: PHOTOS(10) });
+  await suite('mobile preview — a fast burst of navigation only preloads around where it settles',
+    `${base}/index.html?t=TOK`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('.photo-card', { timeout: 5000 });
+      m.requests.length = 0;
+      // fire three preload requests back-to-back, faster than the debounce
+      // settles — only the last one should ever reach the network
+      await page.evaluate(() => { app.schedulePreload(1); app.schedulePreload(4); app.schedulePreload(8); });
+      await page.waitForTimeout(150);
+      const got = [...new Set(m.requests
+        .filter(r => r.method === 'GET' && /^\/20260819\/p\d\.jpg$/.test(r.path))
+        .map(r => r.path))];
+      ok('only the final index (8)\'s neighbours are fetched',
+        got.length === 3 && ['/20260819/p6.jpg', '/20260819/p7.jpg', '/20260819/p9.jpg'].every(p => got.includes(p)),
+        got.join(','));
+      ok('the superseded, stale indices (1 and 4) preloaded nothing',
+        !got.some(p => ['/20260819/p0.jpg', '/20260819/p2.jpg', '/20260819/p3.jpg', '/20260819/p5.jpg'].includes(p)),
+        got.join(','));
+      return out;
+    },
+    { before: m.attach, initScript: () => localStorage.setItem('pick_key:TOK', 'VIC-KEY'), contextOptions: MOBILE });
+}
+
+{
+  const m = pickFakeWorker({ ownerName: 'Will', ownerKey: 'WILL-KEY', photos: PHOTOS(2) });
+  await suite('responsive preview width — 1200 on a 390px/DPR3 phone; grid thumbnails always stay 400',
+    `${base}/index.html?t=TOK`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('.photo-card', { timeout: 5000 });
+      const width = await page.evaluate(() => driveManager.previewWidth());
+      ok('a 390px/DPR3 phone asks for the 1200 bucket', width === 1200, String(width));
+      const thumb = await page.evaluate(() => document.querySelector('.photo-card img').getAttribute('src'));
+      ok('grid thumbnails still ask for 400 regardless', /[?&]w=400(&|$)/.test(thumb), thumb);
+      return out;
+    },
+    { before: m.attach, initScript: () => localStorage.setItem('pick_key:TOK', 'WILL-KEY'), contextOptions: MOBILE });
+}
+
+await suite('responsive preview width — a desktop viewport keeps the 1600 bucket',
+  `${base}/index.html`,
+  async page => {
+    const out = [];
+    const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+    await page.waitForFunction(() => !!window.driveManager, null, { timeout: 5000 });
+    const width = await page.evaluate(() => driveManager.previewWidth());
+    ok('desktop (1500px, DPR1) keeps the largest bucket', width === 1600, String(width));
+    return out;
+  });
+
+{
+  const m = pickFakeWorker({ ownerName: 'Xin', ownerKey: 'XIN-KEY', photos: PHOTOS(2) });
+  await suite('selected highlight (pick mode) — thick coloured border + solid ♥ badge, never a dimming overlay',
+    `${base}/index.html?t=TOK`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('.photo-card', { timeout: 5000 });
+
+      const cardStyle = () => page.evaluate(() => {
+        const card = document.querySelector('.photo-card');
+        const cs = getComputedStyle(card);
+        return { picked: card.classList.contains('pick-picked'), borderWidth: cs.borderWidth, borderColor: cs.borderColor };
+      });
+      let s = await cardStyle();
+      ok('an unselected card is not marked picked', s.picked === false, JSON.stringify(s));
+
+      await page.locator('.photo-card').first().locator('.pick-heart-btn').click();
+      s = await cardStyle();
+      ok('a selected card gets the pick-picked class', s.picked === true, JSON.stringify(s));
+      ok('with a clearly thick border', parseFloat(s.borderWidth) >= 3, s.borderWidth);
+
+      // A fresh render (e.g. switching the filter and back) rebuilds the card
+      // from scratch via createPhotoCard — the highlight has to come from
+      // the photo's own rating there too, not only from the live toggle's
+      // direct classList write above.
+      await page.evaluate(() => app.renderPhotoGrid());
+      s = await cardStyle();
+      ok('a freshly re-rendered card is picked-highlighted too, from the start',
+        s.picked === true, JSON.stringify(s));
+
+      const overlayCheck = await page.evaluate(() => {
+        const container = document.querySelector('.photo-image-container');
+        const overlay = container.querySelector('.photo-overlay');
+        const img = container.querySelector('.photo-image');
+        return {
+          overlayIsTransparent: !overlay || getComputedStyle(overlay).backgroundColor === 'rgba(0, 0, 0, 0)',
+          imgFilter: getComputedStyle(img).filter,
+          imgOpacity: getComputedStyle(img).opacity,
+        };
+      });
+      ok('no semi-transparent overlay dims the photo', overlayCheck.overlayIsTransparent, JSON.stringify(overlayCheck));
+      ok('the image itself carries no dimming filter', overlayCheck.imgFilter === 'none', overlayCheck.imgFilter);
+      ok('nor any reduced opacity', overlayCheck.imgOpacity === '1', overlayCheck.imgOpacity);
+
+      // same treatment in the preview
+      await page.locator('.photo-card').first().click({ position: { x: 5, y: 5 } }); // avoid the ♥ itself
+      await page.waitForSelector('#photoModal.active', { timeout: 5000 });
+      const modalStyle = await page.evaluate(() => {
+        const c = document.querySelector('.canvas-container');
+        const cs = getComputedStyle(c);
+        return { picked: c.classList.contains('pick-picked'), borderWidth: cs.borderWidth };
+      });
+      ok('the preview frame is highlighted the same way', modalStyle.picked === true, JSON.stringify(modalStyle));
+      ok('with a thick border there too', parseFloat(modalStyle.borderWidth) >= 3, modalStyle.borderWidth);
+      return out;
+    },
+    { before: m.attach, initScript: () => localStorage.setItem('pick_key:TOK', 'XIN-KEY'), contextOptions: MOBILE });
+}
+
+{
+  const m = pickFakeWorker({ ownerName: 'Zoe', ownerKey: 'ZOE-KEY', photos: PHOTOS(2) });
+  await suite('tap targets on a mobile viewport — ♥, the filter buttons, and 完成挑圖/確認送出 are all >= 44x44 CSS px',
+    `${base}/index.html?t=TOK`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('.photo-card', { timeout: 5000 });
+
+      const box = sel => page.evaluate(s => {
+        const el = document.querySelector(s);
+        if (!el) return null;
+        const r = el.getBoundingClientRect();
+        return { w: r.width, h: r.height };
+      }, sel);
+
+      let b = await box('.pick-heart-btn');
+      ok('the ♥ toggle is >= 44x44', !!b && b.w >= 44 && b.h >= 44, JSON.stringify(b));
+
+      b = await box('[data-pick-filter="selected"]');
+      ok('a filter button is >= 44 tall', !!b && b.h >= 44, JSON.stringify(b));
+
+      b = await box('#submitJobBtn');
+      ok('完成挑圖 is >= 44 tall', !!b && b.h >= 44, JSON.stringify(b));
+
+      await page.click('#submitJobBtn');
+      await page.waitForSelector('#pickSubmitModal.active', { timeout: 5000 });
+      b = await box('#pickSubmitConfirmBtn');
+      ok('確認送出 is >= 44 tall', !!b && b.h >= 44, JSON.stringify(b));
+      return out;
+    },
+    { before: m.attach, initScript: () => localStorage.setItem('pick_key:TOK', 'ZOE-KEY'), contextOptions: MOBILE });
+}
+
+await suite('desktop preview — arrow keys and mouse click still navigate/open exactly as before',
+  `${base}/index.html`,
+  async page => {
+    const out = [];
+    const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+    await page.waitForFunction(() => !!window.app, null, { timeout: 5000 });
+    await page.evaluate(() => {
+      app.filteredPhotos = Array.from({ length: 3 }, (_, i) => ({ id: `20260819/p${i}.jpg`, name: `p${i}.jpg`, rating: 0 }));
+      app.renderPhotoGrid();
+    });
+    await page.click('.photo-card:nth-child(2)');
+    await page.waitForSelector('#photoModal.active', { timeout: 5000 });
+    ok('mouse click opens the modal on the clicked photo',
+      (await page.textContent('#photoCounter')) === '2 / 3', await page.textContent('#photoCounter'));
+
+    await page.keyboard.press('ArrowRight');
+    await page.waitForTimeout(50);
+    ok('ArrowRight still navigates to the next photo',
+      (await page.textContent('#photoCounter')) === '3 / 3', await page.textContent('#photoCounter'));
+
+    await page.keyboard.press('ArrowLeft');
+    await page.waitForTimeout(50);
+    ok('ArrowLeft still navigates back',
+      (await page.textContent('#photoCounter')) === '2 / 3', await page.textContent('#photoCounter'));
+
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(50);
+    ok('Escape still closes it', !(await page.evaluate(() =>
+      document.getElementById('photoModal').classList.contains('active'))));
+    return out;
+  },
+  { initScript: () => sessionStorage.setItem('studio_token', 'x'), before: mockWorker(3) });
 
 await browser.close();
 server.close();
