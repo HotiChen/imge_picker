@@ -161,7 +161,7 @@ test('the resubmit email lists what was added and removed since the last submit'
   assert.ok(text.indexOf('20260819/a.jpg') > text.indexOf('移除'));
 });
 
-test('a resubmit with nothing changed is recorded but not mailed', async () => {
+test('a resubmit with nothing changed adds no row and is not mailed', async () => {
   const mailer = fakeMailer();
   const env = mailEnv(mailer);
   const p = await claimed(env);
@@ -169,7 +169,7 @@ test('a resubmit with nothing changed is recorded but not mailed', async () => {
   await submit(env, p);
   rewind(env);
   assert.equal((await submit(env, p)).res.status, 200);
-  assert.equal(submissions(env).length, 2);
+  assert.equal(submissions(env).length, 1);
   assert.equal(mailer.sent.length, 1);
 });
 
@@ -507,6 +507,7 @@ test('submissions newest first holds even when two land in the same millisecond'
   globalThis.Date.now = Date.now;
   try {
     await submit(env, p, { relationship: '本人' });
+    await save(env, p.token, p.key, { upsert: [{ photo_key: A, rating: 1 }] });
     await submit(env, p, { relationship: '朋友' });
   } finally {
     globalThis.Date = RealDate;

@@ -145,6 +145,7 @@ test('email is at most 254 characters and must look like an address', async () =
   }
   assert.equal(rows(env, 'SELECT * FROM submissions').length, 0);
   assert.equal((await submit(env, p, { relationship: '本人', email: at254 })).res.status, 200);
+  await picks(env, p, 1); // a changed set, so the next submit is a new row
   assert.equal((await submit(env, p, { relationship: '本人', email: '' })).res.status, 200);
   assert.equal(one(env, 'SELECT email FROM pickers').email, null, 'blank is no email');
   assert.equal(one(env, 'SELECT email FROM submissions ORDER BY rowid DESC').email, null);
@@ -283,6 +284,8 @@ test('the submit hands the email to waitUntil rather than making the guest wait'
   assert.notEqual(res, 'still waiting on the mailer');
   assert.equal(res.status, 200, 'answered while the mailer is still pending');
   assert.equal(c.pending.length, 1);
+  // the send starts after the slot is claimed, a few awaits later
+  while (!release) await new Promise(r => setTimeout(r, 1));
   release();
   await c.settle();
 });

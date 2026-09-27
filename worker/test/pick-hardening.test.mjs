@@ -291,7 +291,7 @@ test('a second changed submit inside ten minutes is recorded but not mailed', as
   assert.equal(submissionCount(env), 4);
 });
 
-test('a submit with the same photos as the previous one is recorded but never mailed', async () => {
+test('a submit with the same photos as the previous one adds no row and is never mailed', async () => {
   const mailer = fakeMailer();
   const env = mailEnv(mailer);
   const p = await claimed(env);
@@ -301,7 +301,7 @@ test('a submit with the same photos as the previous one is recorded but never ma
   // a rating change and a note do not change the picked set
   await save(env, p.token, p.key, { upsert: [{ photo_key: A, rating: 5, note: 'x' }] });
   assert.equal((await submit(env, p, { relationship: '朋友' })).status, 200);
-  assert.equal(submissionCount(env), 2);
+  assert.equal(submissionCount(env), 1, 'a repeat of the latest submission writes no row');
   assert.equal(mailer.sent.length, 1);
   // and a skipped email does not use up the slot
   await save(env, p.token, p.key, { delete: [B] });
@@ -329,7 +329,7 @@ test('two concurrent changed submits send one email between them', async () => {
   ]);
   await c.settle();
   assert.deepEqual([r1.status, r2.status], [200, 200]);
-  assert.equal(submissionCount(env), 2);
+  assert.equal(submissionCount(env), 1, 'the second is a repeat of the first');
   assert.equal(mailer.sent.length, 1);
 });
 
@@ -457,7 +457,10 @@ test('unnotified_submissions counts the submits newer than the last email, per p
   await save(env, p.token, p.key, { upsert: upsertOf([B]) });
   await submit(env, p); // the burst's last submit lands inside the window
   assert.equal(await unnotified(env, p.project.id), 1);
-  await submit(env, p); // unchanged: not mailed either
+  await submit(env, p); // unchanged: a repeat, no new row
+  assert.equal(await unnotified(env, p.project.id), 1);
+  await save(env, p.token, p.key, { upsert: upsertOf(['20260819/c.jpg']) });
+  await submit(env, p); // changed, still inside the window
   assert.equal(await unnotified(env, p.project.id), 2);
   await submit(env, q); // another project's email does not clear this one's
   assert.equal(await unnotified(env, q.project.id), 0);
@@ -473,6 +476,7 @@ test('with no email ever sent, every submission is unnotified', async () => {
   const env = setup();
   const p = await claimed(env);
   await submit(env, p);
+  await save(env, p.token, p.key, { upsert: upsertOf([A]) });
   await submit(env, p);
   assert.equal(await unnotified(env, p.project.id), 2);
 });

@@ -362,6 +362,12 @@ const PICK_KEY_CONTROL = /[\u0000-\u001F\u007F-\u009F\u2028\u2029]/;
 // Change them here only.
 const PICK_MAX_SELECTIONS = 500;
 const PICK_MAX_ROWS = 1000;
+// The most submissions one project may record. A submit that picked the same
+// photos as the latest one writes no row, so only real changes count; past
+// this a changed submit is refused (409 submission_cap). Enforced inside the
+// submit's own INSERT. The admin detail returns at most this many, newest
+// first. Change it here only.
+const PICK_MAX_SUBMISSIONS = 50;
 // At most one notification email per project in this window.
 const PICK_NOTIFY_INTERVAL_MS = 10 * 60 * 1000;
 const PICK_RELATIONSHIPS = ['本人', '伴侶', '家人', '朋友', '其他'];
@@ -453,17 +459,12 @@ function pickRetouching() {
 // A conditional write that changed nothing: the phase moved to retouching or
 // the seat moved since the checks before it — or, for a save, the seat and
 // phase still hold and it was the selection cap. Re-read to say which.
-// `cap`, for a save: {pickerId, rowsOk()} — rowsOk says whether the row cap
-// (rather than the star cap) would still let this save through.
+// `cap`: {pickerId, refused()} — when the seat and phase still hold, the
+// write's own cap is what refused it, and refused() builds that 409.
 async function pickRefused(env, projectId, notOwner, cap = null) {
   const now = await env.DB.prepare('SELECT phase, owner_picker_id FROM projects WHERE id = ?').bind(projectId).first();
   if (now && !PICK_OPEN_PHASES.includes(now.phase)) return pickRetouching();
-  if (now && cap && now.owner_picker_id === cap.pickerId) {
-    if (!(await cap.rowsOk())) {
-      return jsonOk({ error: `最多只能保留 ${PICK_MAX_ROWS} 筆`, code: 'row_cap', max: PICK_MAX_ROWS }, 409);
-    }
-    return jsonOk({ error: `最多只能選 ${PICK_MAX_SELECTIONS} 張`, code: 'selection_cap', max: PICK_MAX_SELECTIONS }, 409);
-  }
+  if (now && cap && now.owner_picker_id === cap.pickerId) return cap.refused();
   return jsonErr(notOwner, 403);
 }
 
@@ -1002,10 +1003,11 @@ export default {
         'SELECT id, name, relationship, email, user_id, created_at FROM pickers WHERE project_id = ? ORDER BY created_at'
       ).bind(project.id).all();
       // newest first; rowid breaks a tie inside one millisecond, since rows
-      // are only ever appended
+      // are only ever appended. At most PICK_MAX_SUBMISSIONS: a project the
+      // cap never covered (rows from before it) still loads a bounded page
       const { results: submitted } = await env.DB.prepare(
-        'SELECT id, picker_id, relationship, email, photo_keys, count, pick_limit, extra_price, created_at, notified FROM submissions WHERE project_id = ? ORDER BY created_at DESC, rowid DESC'
-      ).bind(project.id).all();
+        'SELECT id, picker_id, relationship, email, photo_keys, count, pick_limit, extra_price, created_at, notified FROM submissions WHERE project_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?'
+      ).bind(project.id, PICK_MAX_SUBMISSIONS).all();
       const { unnotified } = await env.DB.prepare(
         `SELECT ${PICK_UNNOTIFIED_SQL} AS unnotified FROM projects p WHERE p.id = ?`
       ).bind(project.id).first();
@@ -1278,7 +1280,9 @@ export default {
           return pickRefused(env, project.id, '只有挑選人可以修改', {
             pickerId: picker.id,
             // only which message to show; the writes above already decided
-            rowsOk: async () => !!(await env.DB.prepare(`SELECT ${rowsFit} AS ok`).bind(...gateArgs).first())?.ok,
+            refused: async () => (await env.DB.prepare(`SELECT ${rowsFit} AS ok`).bind(...gateArgs).first())?.ok
+              ? jsonOk({ error: `最多只能選 ${PICK_MAX_SELECTIONS} 張`, code: 'selection_cap', max: PICK_MAX_SELECTIONS }, 409)
+              : jsonOk({ error: `最多只能保留 ${PICK_MAX_ROWS} 筆`, code: 'row_cap', max: PICK_MAX_ROWS }, 409),
           });
         }
         return jsonOk({ ok: true });
@@ -1306,57 +1310,93 @@ export default {
         // least one star, the same thing the grid counts — together with the
         // limit and price as they stand now: the record any extra-photo fee is
         // charged from, which a later change to the plan must not rewrite.
+        // A snapshot equal to the latest submission's is a repeat: no row, but
+        // the rest of the submit (contact info, phase, flag) still lands. A
+        // new row needs the project under PICK_MAX_SUBMISSIONS; both checks
+        // are inside the statements, so nothing landing between the route's
+        // reads and its writes can slip past them. The UPDATEs run after the
+        // INSERT, so a row it just added makes them see a repeat.
         const submissionId = crypto.randomUUID();
         const submittedAt = new Date().toISOString();
-        const open = `owner_picker_id = ? AND phase IN ${PICK_OPEN_SQL}`;
         const picked = 'SELECT photo_key FROM selections WHERE project_id = p.id AND rating > 0 ORDER BY photo_key';
-        const [inserted] = await env.DB.batch([
+        const snapshot = `(SELECT json_group_array(photo_key) FROM (${picked}))`;
+        // both sides built by json_group_array over keys in the same order
+        const repeat = `(SELECT photo_keys FROM submissions WHERE project_id = p.id ORDER BY rowid DESC LIMIT 1) IS ${snapshot}`;
+        const room = `(SELECT COUNT(*) FROM submissions WHERE project_id = p.id) < ${PICK_MAX_SUBMISSIONS}`;
+        const open = `p.id = ? AND p.owner_picker_id = ? AND p.phase IN ${PICK_OPEN_SQL}`;
+        const [inserted, , moved] = await env.DB.batch([
           env.DB.prepare(
             'INSERT INTO submissions (id, project_id, picker_id, relationship, email, photo_keys, count, pick_limit, extra_price, created_at) ' +
-            `SELECT ?, p.id, ?, ?, ?, (SELECT json_group_array(photo_key) FROM (${picked})), (SELECT COUNT(*) FROM (${picked})), ` +
-            `p.pick_limit, p.extra_price, ? FROM projects p WHERE p.id = ? AND p.owner_picker_id = ? AND p.phase IN ${PICK_OPEN_SQL}`
+            `SELECT ?, p.id, ?, ?, ?, ${snapshot}, (SELECT COUNT(*) FROM (${picked})), ` +
+            `p.pick_limit, p.extra_price, ? FROM projects p WHERE ${open} AND NOT (${repeat}) AND ${room}`
           ).bind(submissionId, picker.id, relationship, mail, submittedAt, project.id, picker.id),
           // the latest contact info stays on the picker
           env.DB.prepare(
-            `UPDATE pickers SET relationship = ?, email = ? WHERE id = ? AND EXISTS (SELECT 1 FROM projects WHERE id = ? AND ${open})`
+            `UPDATE pickers SET relationship = ?, email = ? WHERE id = ? AND EXISTS (SELECT 1 FROM projects p WHERE ${open} AND (${repeat} OR ${room}))`
           ).bind(relationship, mail, picker.id, project.id, picker.id),
           env.DB.prepare(
-            `UPDATE projects SET phase = 'submitted', modified_after_submit = 0 WHERE id = ? AND ${open}`
+            `UPDATE projects SET phase = 'submitted', modified_after_submit = 0 WHERE id IN (SELECT p.id FROM projects p WHERE ${open} AND (${repeat} OR ${room}))`
           ).bind(project.id, picker.id),
         ]);
-        if (!inserted.meta?.changes) return pickRefused(env, project.id, '只有挑選人可以送出');
+        if (!moved.meta?.changes) {
+          return pickRefused(env, project.id, '只有挑選人可以送出', {
+            pickerId: picker.id,
+            refused: () => jsonOk({
+              error: `送出次數已達上限（${PICK_MAX_SUBMISSIONS} 次），請聯絡攝影師`,
+              code: 'submission_cap', max: PICK_MAX_SUBMISSIONS,
+            }, 409),
+          });
+        }
+        // the row this submit stands for: its own, or for a repeat the latest
+        // one, which it matched
+        const recordId = inserted.meta?.changes ? submissionId
+          : (await env.DB.prepare('SELECT id FROM submissions WHERE project_id = ? ORDER BY rowid DESC LIMIT 1').bind(project.id).first())?.id;
         // this row and the last one before it that the photographer was
         // emailed about: the email tells them everything since then, and a
         // submit that matches what they were told is not worth an email
         const { results: lastTwo } = await env.DB.prepare(
           'SELECT * FROM submissions WHERE project_id = ?1 AND (id = ?2 OR (notified = 1 AND rowid < (SELECT rowid FROM submissions WHERE id = ?2))) ORDER BY rowid DESC LIMIT 2'
-        ).bind(project.id, submissionId).all();
+        ).bind(project.id, recordId).all();
         const [record, previous] = lastTwo.map(r => ({ ...r, photo_keys: parsePhotoKeys(r.photo_keys) }));
         // the guest is not kept waiting on a mail server, and a mail server
         // that fails does not take the submit down with it. The row above is
-        // written either way; only the email is skipped — for a submit that
-        // picked the same photos as the one before it, and for any submit
-        // inside PICK_NOTIFY_INTERVAL_MS of the last email. The slot is taken
-        // with one conditional UPDATE, so of two racing submits one mails.
+        // written either way; only the email is skipped — for a row already
+        // emailed about (a repeat of it), for a submit that picked the same
+        // photos as the last emailed one, and for any submit inside
+        // PICK_NOTIFY_INTERVAL_MS of the last email. The slot is taken with
+        // one conditional UPDATE, so of two racing submits one mails; a send
+        // that fails hands it back, unless someone has taken it since.
         const notify = Promise.resolve()
           .then(async () => {
+            if (record.notified) return false;
             if (previous && samePhotoKeys(record.photo_keys, previous.photo_keys)) return false;
+            const before = (await env.DB.prepare('SELECT last_notified_at FROM projects WHERE id = ?').bind(project.id).first())?.last_notified_at ?? null;
             const sentAt = Date.now();
+            const mine = new Date(sentAt).toISOString();
             const slot = await env.DB.prepare(
-              'UPDATE projects SET last_notified_at = ? WHERE id = ? AND (last_notified_at IS NULL OR last_notified_at <= ?)'
-            ).bind(new Date(sentAt).toISOString(), project.id, new Date(sentAt - PICK_NOTIFY_INTERVAL_MS).toISOString()).run();
+              'UPDATE projects SET last_notified_at = ? WHERE id = ? AND last_notified_at IS ? AND (last_notified_at IS NULL OR last_notified_at <= ?)'
+            ).bind(mine, project.id, before, new Date(sentAt - PICK_NOTIFY_INTERVAL_MS).toISOString()).run();
             if (!slot.meta?.changes) return false;
-            if (!(await sendPickNotification(env, project, picker, record, previous || null))) return false;
+            let sent = false;
+            try {
+              sent = await sendPickNotification(env, project, picker, record, previous || null);
+            } finally {
+              if (!sent) {
+                await env.DB.prepare('UPDATE projects SET last_notified_at = ? WHERE id = ? AND last_notified_at = ?')
+                  .bind(before, project.id, mine).run();
+              }
+            }
+            if (!sent) return false;
             // only a mail actually handed over counts; anything else stays in
             // the admin's unnotified_submissions badge
-            await env.DB.prepare('UPDATE submissions SET notified = 1 WHERE id = ?').bind(submissionId).run();
+            await env.DB.prepare('UPDATE submissions SET notified = 1 WHERE id = ?').bind(record.id).run();
             return true;
           })
           .catch(e => console.error('pick notification failed:', e?.message || e));
         if (ctx?.waitUntil) ctx.waitUntil(notify); else await notify;
         const { count, pick_limit: limit, extra_price: price } = record;
         return jsonOk({
-          ok: true, phase: 'submitted', submission_id: submissionId, submitted_at: submittedAt,
+          ok: true, phase: 'submitted', submission_id: record.id, submitted_at: record.created_at,
           count, limit, price, over: limit == null ? 0 : Math.max(0, count - limit),
         });
       }
