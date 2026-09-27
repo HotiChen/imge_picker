@@ -27,6 +27,10 @@ Decided or discussed, not yet built. Newest decisions at the top of each group.
 6. Landing page (for photographers once multi-photographer is real).
 
 ## Deferred features
+- Logo route per photographer (`/api/studio/:pid/logo`); today it always
+  serves the default studio — fine until a second photographer exists.
+- Strip bidi / zero-width characters from `studio_name` (spoofing only; admin-set).
+- Point imhoti.tw/studio/ at home.html (guest links keep using index.html?t=).
 - Registered-owner invites (editor / viewer) for a project.
 - Link a registered client account to a pick seat (`pickers.user_id`).
 - Long-term storage for registered owners — needs a separate bucket.
