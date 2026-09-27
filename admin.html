@@ -250,7 +250,7 @@
   </main>
 </div>
 
-<script src="js/shoot-types.js?v=20260927b"></script>
+<script src="js/shoot-types.js?v=20260927c"></script>
 <script>
 (function() {
   const WORKER_URL = 'https://imagepicker.hotichen.workers.dev';
@@ -636,6 +636,7 @@
           <span>${escHtml(p.title || '（未命名）')}</span>
           <span class="badge badge-approved">${escHtml(PHASE_LABEL[p.phase] || p.phase || '')}</span>
           ${p.modified_after_submit ? '<span class="badge badge-pending">已修改</span>' : ''}
+          ${p.unnotified_submissions ? `<span class="badge badge-pending">${escHtml(p.unnotified_submissions)} 次送出未寄信</span>` : ''}
           <div class="pd-owner" style="margin:2px 0 0;">
             ${p.owner_name ? escHtml(p.owner_name) : '<span class="folder-none">尚無人認領</span>'}
             · 送出 ${escHtml(p.submission_count)} 次
@@ -752,11 +753,14 @@
 
   const PHASE_LABEL = { picking: '選片中', submitted: '已送出', retouching: '精修中' };
 
+  const TOKEN_STATUS_LABEL = { live: '有效', revoked: '已撤銷', expired: '已過期' };
+
   function renderProjectDetail(data) {
     const body = document.getElementById('project-detail-body');
     const project = data.project || {};
     const pickers = data.pickers || [];
     const submissions = data.submissions || [];
+    const tokens = data.tokens || [];
     const selected = (data.selections || []).filter(s => s.rating > 0);
     const ownerName = data.owner ? data.owner.name : null;
 
@@ -765,6 +769,7 @@
         <h3>${escHtml(project.title || '（未命名）')}</h3>
         <span class="badge badge-approved">${escHtml(PHASE_LABEL[project.phase] || project.phase || '')}</span>
         ${project.modified_after_submit ? '<span class="badge badge-pending">已修改，尚未重新送出</span>' : ''}
+        ${data.unnotified_submissions ? `<span class="badge badge-pending">${escHtml(data.unnotified_submissions)} 次送出未寄信</span>` : ''}
       </div>
       <div class="pd-owner">目前挑選人：${ownerName ? escHtml(ownerName) : '<span class="folder-none">尚無人認領</span>'}</div>
       <div class="pd-actions">
@@ -791,21 +796,80 @@
             : `<div class="pd-diff">${diff.added.length ? `新增 ${diff.added.length} 張：${diff.added.map(escHtml).join('、')}` : ''}${diff.added.length && diff.removed.length ? '<br>' : ''}${diff.removed.length ? `移除 ${diff.removed.length} 張：${diff.removed.map(escHtml).join('、')}` : ''}</div>`);
         return `<div class="pd-submission">
           <div><strong>${escHtml(s.created_at)}</strong> — ${escHtml(pickerNameOf(pickers, s.picker_id))}
-            （${escHtml(s.relationship)}${s.email ? ' · ' + escHtml(s.email) : ''}）— ${escHtml(s.count)} 張${s.pick_limit != null ? ` / 上限 ${escHtml(s.pick_limit)}` : ''}</div>
+            （${escHtml(s.relationship)}${s.email ? ' · ' + escHtml(s.email) : ''}）— ${escHtml(s.count)} 張${s.pick_limit != null ? ` / 上限 ${escHtml(s.pick_limit)}` : ''}
+            ${!s.notified ? '<span class="badge badge-pending">未寄信</span>' : ''}</div>
           ${diffHtml}
         </div>`;
       }).join('') : '<div class="empty">尚無送出紀錄</div>'}</div>
 
       <h4>挑選人</h4>
       <div id="pd-pickers">${pickers.length ? pickers.map(p => `<div>${escHtml(p.name)}${p.relationship ? `（${escHtml(p.relationship)}）` : ''}${p.email ? ' · ' + escHtml(p.email) : ''}${data.owner && data.owner.id === p.id ? ' <span class="badge badge-approved">目前選片中</span>' : ''}</div>`).join('') : '<div class="empty">尚無挑選人</div>'}</div>
+
+      <h4>挑選連結</h4>
+      <div id="pd-tokens">${tokens.length ? tokens.map(t => `
+        <div class="proj-recent-row" data-token-row="${escHtml(t.token)}">
+          <div>
+            <code class="folder-raw">${escHtml(t.token)}</code>
+            <span class="badge ${t.status === 'live' ? 'badge-approved' : 'badge-pending'}">${escHtml(TOKEN_STATUS_LABEL[t.status] || t.status)}</span>
+          </div>
+          <div class="actions">
+            ${t.status === 'live' ? `
+              <button type="button" class="btn btn-outline" data-copy-link="${escHtml(t.token)}">複製連結</button>
+              <button type="button" class="btn btn-danger" data-revoke-token="${escHtml(t.token)}">撤銷</button>` : ''}
+          </div>
+        </div>`).join('') : '<div class="empty">尚無連結</div>'}</div>
+      <button id="pd-new-link-btn" class="btn btn-outline" type="button" style="margin-top:8px;">產生新連結</button>
+      <div id="pd-link-err" class="err"></div>
     `;
 
     document.getElementById('pd-reset-seat-btn').addEventListener('click', async () => {
-      if (!confirm('確定要重設選片人嗎？選取結果與送出紀錄都會保留。')) return;
+      if (!confirm('確定要重設選片人嗎？選取結果與送出紀錄都會保留。\n新的主人會接手目前所有選片，並可修改或刪除')) return;
       await projectAction('reset-seat');
     });
     document.getElementById('pd-start-retouch-btn').addEventListener('click', () => projectAction('start-retouch'));
     document.getElementById('pd-reopen-btn').addEventListener('click', () => projectAction('reopen'));
+    body.querySelectorAll('[data-copy-link]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        try {
+          await navigator.clipboard.writeText(projectLink(btn.dataset.copyLink));
+          flashGreen(btn);
+        } catch (e) { /* clipboard unavailable — nothing else to fall back to here */ }
+      });
+    });
+    body.querySelectorAll('[data-revoke-token]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        if (!confirm('確定要撤銷這個連結嗎？撤銷後這個連結就無法再開啟。')) return;
+        const errEl = document.getElementById('pd-link-err');
+        if (errEl) errEl.textContent = '';
+        try {
+          const r = await fetch(`${WORKER_URL}/api/shares/${encodeURIComponent(btn.dataset.revokeToken)}/revoke`, {
+            method: 'POST', headers: { 'Authorization': `Bearer ${getToken()}` },
+          });
+          if (!r.ok) { const d = await r.json().catch(() => ({})); if (errEl) errEl.textContent = d.error || `失敗（${r.status}）`; return; }
+          await openProjectDetail(currentProjectId);
+        } catch (e) {
+          if (errEl) errEl.textContent = '無法連線到 Worker';
+        }
+      });
+    });
+    document.getElementById('pd-new-link-btn')?.addEventListener('click', async function () {
+      const errEl = document.getElementById('pd-link-err');
+      if (errEl) errEl.textContent = '';
+      this.disabled = true;
+      try {
+        const r = await fetch(`${WORKER_URL}/api/admin/projects/${encodeURIComponent(currentProjectId)}/links`, {
+          method: 'POST', headers: { 'Authorization': `Bearer ${getToken()}` },
+        });
+        const linkData = await r.json().catch(() => ({}));
+        if (!r.ok) { if (errEl) errEl.textContent = linkData.error || `失敗（${r.status}）`; return; }
+        await openProjectDetail(currentProjectId);
+        try { await navigator.clipboard.writeText(projectLink(linkData.token)); } catch (e) { /* best effort */ }
+      } catch (e) {
+        if (errEl) errEl.textContent = '無法連線到 Worker';
+      } finally {
+        this.disabled = false;
+      }
+    });
     document.getElementById('pd-download-btn').addEventListener('click', () => downloadSelectedKeys(project, selected));
   }
 
@@ -990,7 +1054,10 @@
   }
 
   function escHtml(str) {
-    return String(str || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    // str || '' turns 0 (a rating, a count) into '' — blank instead of "0".
+    // null/undefined are the only values meant to render as empty.
+    const s = (str === null || str === undefined) ? '' : str;
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
   }
 
   // Runs last, now that every function and `let` above it is initialised —

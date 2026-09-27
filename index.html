@@ -13,7 +13,7 @@
     <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 
     <!-- Stylesheets -->
-    <link rel="stylesheet" href="css/styles.css?v=20260927b">
+    <link rel="stylesheet" href="css/styles.css?v=20260927c">
 
     <!-- Shows a startup error on screen instead of leaving a blank page.
          Stays inline and first so it is listening before anything else runs. -->
@@ -98,8 +98,7 @@
         <div id="pickBannerLines"></div>
         <div id="pickBannerHint" class="pick-banner-hint" hidden>
             <span id="pickBannerHintText"></span>
-            <button id="pickBannerLoginBtn" class="btn btn-text">登入</button>
-            <span>或請攝影師重設</span>
+            <span>請攝影師重設</span>
         </div>
     </div>
 
@@ -182,6 +181,15 @@
                 <button class="btn btn-outline btn-block" id="filterSelectedBtn" style="margin-top:8px; font-size:10px;">
                     🧺 只看選取 (<span id="selectedCountBadge">0</span>)
                 </button>
+                <!-- Guest picking (docs/guest-picking.md) — filled and shown by
+                     js/pick.js in place of the star filter + 只看選取 above,
+                     which pick.js removes from the DOM for a guest. Other
+                     modes never unhide this. -->
+                <div id="pickFilterBar" class="pick-filter-bar" hidden>
+                    <button type="button" class="pick-filter-btn active" data-pick-filter="all">全部</button>
+                    <button type="button" class="pick-filter-btn" data-pick-filter="selected">♥ 已選 (<span id="pickFilterSelectedCount">0</span>)</button>
+                    <button type="button" class="pick-filter-btn" data-pick-filter="unselected">未選</button>
+                </div>
             </div>
 
             <!-- 03 / FLAGS (placeholder — Phase 2 will wire these) -->
@@ -602,19 +610,19 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 
     <!-- Scripts -->
-    <script src="js/build-version.js?v=20260927b"></script>
-    <script src="js/config.js?v=20260927b"></script>
-    <script src="js/studio-token.js?v=20260927b"></script>
-    <script src="js/session-token.js?v=20260927b"></script>
-    <script src="js/pick.js?v=20260927b"></script>
-    <script src="js/client-auth-check.js?v=20260927b"></script>
-    <script src="js/toast.js?v=20260927b"></script>
-    <script src="js/logger.js?v=20260927b"></script>
-    <script src="js/diagnostics.js?v=20260927b"></script>
-    <script src="js/drive.js?v=20260927b"></script>
-    <script src="js/annotation.js?v=20260927b"></script>
-    <script src="js/rating.js?v=20260927b"></script>
-    <script src="js/app.js?v=20260927b"></script>
+    <script src="js/build-version.js?v=20260927c"></script>
+    <script src="js/config.js?v=20260927c"></script>
+    <script src="js/studio-token.js?v=20260927c"></script>
+    <script src="js/session-token.js?v=20260927c"></script>
+    <script src="js/pick.js?v=20260927c"></script>
+    <script src="js/client-auth-check.js?v=20260927c"></script>
+    <script src="js/toast.js?v=20260927c"></script>
+    <script src="js/logger.js?v=20260927c"></script>
+    <script src="js/diagnostics.js?v=20260927c"></script>
+    <script src="js/drive.js?v=20260927c"></script>
+    <script src="js/annotation.js?v=20260927c"></script>
+    <script src="js/rating.js?v=20260927c"></script>
+    <script src="js/app.js?v=20260927c"></script>
 </body>
 
 </html>

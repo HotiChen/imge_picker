@@ -34,9 +34,17 @@
         submittedAt: null,
         folders: [],
         selections: new Map(),   // photo_key -> {rating, note}
+        // 全部 / 已選 / 未選 — the guest filter bar (docs/guest-picking.md).
+        // 'all' and 'unselected' read the current folder's grid; 'selected'
+        // is built straight from `selections`, across every permitted folder.
+        filterMode: 'all',
         _saveTimer: null,
         _pendingUpsert: new Map(),
         _pendingDelete: new Set(),
+        // The value each key held before this in-flight batch touched it
+        // (or null if the key was new), so a 409 selection_cap/row_cap can put
+        // the optimistic UI back exactly where it was.
+        _pendingPrev: new Map(),
 
         // ── localStorage: the picker key, kept per link so two different
         // pick links opened in the same browser never share one seat's key.
@@ -104,10 +112,18 @@
         // ── autosave: debounced, batched ─────────────────────────────────
         queueUpsert(photoKey, rating, note) {
             if (!this.canEdit()) return;
+            if (!this._pendingPrev.has(photoKey)) {
+                const prev = this.selections.get(photoKey);
+                this._pendingPrev.set(photoKey, prev ? { ...prev } : null);
+            }
             this._pendingDelete.delete(photoKey);
             this._pendingUpsert.set(photoKey, { photo_key: photoKey, rating, note: note || '' });
             this.selections.set(photoKey, { rating, note: note || '' });
             this.renderCounter();
+            // 'all' shows the current folder regardless of what is picked, so
+            // it never needs a repaint here; 已選/未選 depend on the rating
+            // that just changed, both in and out of the current folder.
+            if (this.filterMode !== 'all') this.rerenderGrid();
             clearTimeout(this._saveTimer);
             this._saveTimer = setTimeout(() => this.flush(), 800);
         },
@@ -117,8 +133,10 @@
             if (!this._pendingUpsert.size && !this._pendingDelete.size) return;
             const upsert = Array.from(this._pendingUpsert.values());
             const del = Array.from(this._pendingDelete);
+            const prevSnapshot = this._pendingPrev;
             this._pendingUpsert.clear();
             this._pendingDelete.clear();
+            this._pendingPrev = new Map();
             const { ok, status, data } = await this.saveSelections({ upsert, delete: del });
             if (ok) {
                 // mirrors the gate UPDATE in worker.js: a save while already
@@ -134,11 +152,108 @@
                 this.phase = 'retouching';
                 this.renderBanner();
                 this.rerenderGrid();
-            } else if (typeof toast !== 'undefined') {
+                return;
+            }
+            if (status === 409 && data && (data.code === 'selection_cap' || data.code === 'row_cap')) {
+                // nothing was written server-side — put every key this batch
+                // touched back to what it held before, so the optimistic ♥
+                // toggle does not lie about what is actually saved
+                this._revertBatch(prevSnapshot);
+                if (typeof toast !== 'undefined') {
+                    // selection_cap gets the copy the spec asks for; row_cap
+                    // (a table-size limit a guest never sees coming) shows the
+                    // server's own message rather than a made-up one
+                    toast.error(data.code === 'selection_cap'
+                        ? `最多可選 ${data.max} 張`
+                        : ((data && data.error) || '儲存失敗，請檢查網路連線'));
+                }
+                return;
+            }
+            if (status === 400 && data && data.code === 'invalid_photo_key') {
+                // nothing was written; the batch's optimistic state is wrong
+                // the same way a cap refusal is
+                this._revertBatch(prevSnapshot);
+                if (typeof toast !== 'undefined') toast.error((data && data.error) || '照片名稱不正確');
+                return;
+            }
+            if (typeof toast !== 'undefined') {
                 // a static, server-authored string — never guest-supplied text —
                 // so it is safe in toast's innerHTML-based renderer
                 toast.error((data && data.error) || '儲存失敗，請檢查網路連線');
             }
+        },
+
+        _revertBatch(prevSnapshot) {
+            for (const [key, prev] of prevSnapshot) {
+                if (prev) this.selections.set(key, prev);
+                else this.selections.delete(key);
+            }
+            // togglePickHeart already wrote the optimistic rating straight onto
+            // the photo objects in app.photos (and any synthetic ♥已選 card),
+            // not just into `selections` — resyncing every one of them from
+            // `selections`, the same way a reload does, is what actually
+            // undoes it on screen, not only in this map.
+            this.applyServerSelections();
+        },
+
+        _selectedCount() {
+            let n = 0;
+            for (const s of this.selections.values()) if (s.rating > 0) n++;
+            return n;
+        },
+
+        // ── filter bar: 全部 / ♥ 已選 (N) / 未選 ────────────────────────────
+        // 全部/未選 read the current folder's own photos; 已選 is built from
+        // `selections` directly, so it reaches across every folder the link
+        // permits without a second /list call per folder.
+        buildFilteredPhotos(currentPhotos) {
+            if (this.filterMode === 'selected') {
+                return Array.from(this.selections.entries())
+                    .filter(([, s]) => s.rating > 0)
+                    .map(([photo_key, s]) => this._photoFromKey(photo_key, s))
+                    .sort((a, b) => a.id.localeCompare(b.id));
+            }
+            if (this.filterMode === 'unselected') {
+                return currentPhotos.filter(p => {
+                    const s = this.selections.get(p.id);
+                    return !s || !(s.rating > 0);
+                });
+            }
+            return currentPhotos.slice();
+        },
+
+        // A photo object good enough for createPhotoCard/getImageUrl, built
+        // from nothing but the key and the state already on hand — no
+        // metadata fetch, no listing of the folder it lives in.
+        _photoFromKey(photo_key, s) {
+            return {
+                id: photo_key,
+                name: photo_key.split('/').pop() || photo_key,
+                rating: s.rating,
+                note: s.note || '',
+                uploaded: null,
+                hasAnnotations: false,
+            };
+        },
+
+        _replaceFilterBar() {
+            document.querySelector('.star-filter')?.remove();
+            document.getElementById('filterSelectedBtn')?.remove();
+            const bar = document.getElementById('pickFilterBar');
+            if (!bar) return;
+            bar.hidden = false;
+            bar.querySelectorAll('[data-pick-filter]').forEach(btn => {
+                btn.addEventListener('click', () => this._setFilterMode(btn.dataset.pickFilter));
+            });
+        },
+
+        _setFilterMode(mode) {
+            if (this.filterMode === mode) return;
+            this.filterMode = mode;
+            document.querySelectorAll('#pickFilterBar [data-pick-filter]').forEach(b => {
+                b.classList.toggle('active', b.dataset.pickFilter === mode);
+            });
+            this.rerenderGrid();
         },
 
         // ── lifecycle ─────────────────────────────────────────────────────
@@ -148,9 +263,9 @@
             this._hideStudioOnlyUI();
             this._removeSourceControls();
             this._removeAnnotationToolbox();
+            this._replaceFilterBar();
             this._wireHooks(app);
             this._wireSubmitModal();
-            this._wireBannerHint();
 
             const { ok, status, data } = await this.fetchState();
             if (!ok) {
@@ -360,20 +475,18 @@
             el.hidden = lines.length === 0 && !showHint;
         },
 
-        _wireBannerHint() {
-            const btn = document.getElementById('pickBannerLoginBtn');
-            if (btn) btn.addEventListener('click', () => { window.location.href = 'client-login.html'; });
-        },
-
         // ── counter: "已選 N / limit" + the over-limit warning ──────────────
         renderCounter() {
+            const badgeEl = document.getElementById('pickFilterSelectedCount');
+            if (badgeEl) badgeEl.textContent = String(this._selectedCount());
+
             const el = document.getElementById('pickCounter');
             const mainEl = document.getElementById('pickCounterMain');
             const warnEl = document.getElementById('pickCounterWarn');
             if (!el || !mainEl) return;
             if (!this.isOwner) { el.hidden = true; return; }
 
-            const count = Array.from(this.selections.values()).filter(s => s.rating > 0).length;
+            const count = this._selectedCount();
             const limit = this.pickLimit;
             mainEl.textContent = limit == null ? `已選 ${count} 張` : `已選 ${count} / ${limit}`;
             el.classList.toggle('over', limit != null && count > limit);

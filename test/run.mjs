@@ -3135,6 +3135,28 @@ const lastPut = m => {
 // ═══════════════════════════════════════════════════════════════════════════
 
 const PICK_RELATIONSHIPS = ['本人', '伴侶', '家人', '朋友', '其他'];
+// Mirrors worker.js's own constants exactly (docs/guest-picking.md) — a photo
+// key's shape, and the two caps a save is checked against.
+const PICK_PHOTO_KEY_MAX = 256;
+const PICK_KEY_CONTROL = /[\u0000-\u001F\u007F-\u009F\u2028\u2029]/;
+const PICK_MAX_SELECTIONS = 500;
+const PICK_MAX_ROWS = 1000;
+function pickKeyValidFake(key) {
+  return typeof key === 'string' && [...key].length <= PICK_PHOTO_KEY_MAX &&
+    !PICK_KEY_CONTROL.test(key) && !key.endsWith('/');
+}
+// How many of `subs` (oldest first) are newer than the last one flagged
+// notified:1 — every one of them if none was. Mirrors PICK_UNNOTIFIED_SQL.
+function unnotifiedCountFake(subs) {
+  let lastNotified = -1;
+  subs.forEach((s, i) => { if (s.notified) lastNotified = i; });
+  return subs.length - 1 - lastNotified;
+}
+function pickTokenStatusFake(t, now = Date.now()) {
+  if (t.revoked_at) return 'revoked';
+  if (!Number.isFinite(Date.parse(t.expires_at)) || Date.parse(t.expires_at) <= now) return 'expired';
+  return 'live';
+}
 
 function pickFakeWorker(opts = {}) {
   const state = {
@@ -3151,6 +3173,15 @@ function pickFakeWorker(opts = {}) {
     pickers: new Map(),        // id -> {id, name, key, relationship, email}
     selections: new Map(),     // photo_key -> {rating, note, updated_by, updated_at}
     submissions: [],           // oldest first internally; served newest-first
+    // every pick link the project ever had, oldest first internally, exactly
+    // like worker.js's share_tokens rows (docs/guest-picking.md, "re-minting
+    // a link"). opts.listToken === null means the project starts with none.
+    tokens: opts.listToken === null ? [] : [{
+      token: opts.listToken !== undefined ? opts.listToken : 'PICK-TOKEN',
+      created_at: '2026-01-01T00:00:00.000Z',
+      expires_at: '2027-01-01T00:00:00.000Z',
+      revoked_at: null,
+    }],
   };
   if (opts.ownerName) {
     const id = 'picker-0';
@@ -3162,6 +3193,9 @@ function pickFakeWorker(opts = {}) {
   function findByKey(key) {
     for (const p of state.pickers.values()) if (p.key === key) return p;
     return null;
+  }
+  function liveToken() {
+    return state.tokens.find(t => pickTokenStatusFake(t) === 'live') || null;
   }
 
   const attach = async page => {
@@ -3193,8 +3227,10 @@ function pickFakeWorker(opts = {}) {
           is_owner: isOwner,
           phase: state.project.phase,
           submitted_at: subs.length ? subs[subs.length - 1].created_at : null,
+          // notes are the owner's own words to the photographer — a viewer
+          // gets {photo_key, rating} only (docs/guest-picking.md)
           selections: Array.from(state.selections.entries())
-            .map(([photo_key, s]) => ({ photo_key, rating: s.rating, note: s.note })),
+            .map(([photo_key, s]) => isOwner ? { photo_key, rating: s.rating, note: s.note } : { photo_key, rating: s.rating }),
         };
         if (isOwner) resp.modified_after_submit = state.project.modified_after_submit;
         return json(resp);
@@ -3220,13 +3256,44 @@ function pickFakeWorker(opts = {}) {
         const picker = pickerKey ? findByKey(pickerKey) : null;
         const isOwner = !!picker && state.project.owner_picker_id === picker.id;
         if (!isOwner) return json({ error: '只有挑選人可以修改' }, 403);
+        const upsert = body?.upsert || [];
+        const del = body?.delete || [];
+        // shape first (docs/guest-picking.md rule 7), same as worker.js —
+        // checked before anything about caps, and before any write
+        for (const item of upsert) {
+          if (!pickKeyValidFake(item.photo_key)) return json({ error: '照片名稱不正確', code: 'invalid_photo_key' }, 400);
+        }
+        for (const k of del) {
+          if (!pickKeyValidFake(k)) return json({ error: '照片名稱不正確', code: 'invalid_photo_key' }, 400);
+        }
+        // the caps: what this save would leave, against the current count —
+        // whichever of PICK_MAX_SELECTIONS/current-count is bigger, mirroring
+        // worker.js's MAX(?, current) so a project already over a lowered cap
+        // can still re-rate/un-star/delete
+        const byKey = new Map(upsert.map(it => [it.photo_key, it]));
+        const removed = new Set(del);
+        const resultKeys = new Set([...state.selections.keys(), ...byKey.keys()]);
+        for (const k of removed) resultKeys.delete(k);
+        let starCount = 0;
+        for (const k of resultKeys) {
+          const rating = byKey.has(k) ? byKey.get(k).rating : state.selections.get(k)?.rating;
+          if (rating > 0) starCount++;
+        }
+        const priorStars = Array.from(state.selections.values()).filter(s => s.rating > 0).length;
+        const priorRows = state.selections.size;
+        if (starCount > Math.max(PICK_MAX_SELECTIONS, priorStars)) {
+          return json({ error: `最多只能選 ${PICK_MAX_SELECTIONS} 張`, code: 'selection_cap', max: PICK_MAX_SELECTIONS }, 409);
+        }
+        if (resultKeys.size > Math.max(PICK_MAX_ROWS, priorRows)) {
+          return json({ error: `最多只能保留 ${PICK_MAX_ROWS} 筆`, code: 'row_cap', max: PICK_MAX_ROWS }, 409);
+        }
         const now = new Date().toISOString();
         if (state.project.phase === 'submitted') state.project.modified_after_submit = 1;
-        (body?.upsert || []).forEach(item => {
+        upsert.forEach(item => {
           state.selections.set(item.photo_key,
             { rating: item.rating, note: item.note || '', updated_by: picker.id, updated_at: now });
         });
-        (body?.delete || []).forEach(k => state.selections.delete(k));
+        del.forEach(k => state.selections.delete(k));
         return json({ ok: true });
       }
 
@@ -3249,6 +3316,11 @@ function pickFakeWorker(opts = {}) {
           relationship: body.relationship, email: mail, photo_keys, count: photo_keys.length,
           pick_limit: state.project.pick_limit, extra_price: state.project.extra_price,
           created_at: new Date(Date.now() + state.submissions.length).toISOString(),
+          // the fake never actually mails (the throttle/diff logic is
+          // worker.js's own, pinned by worker/test/pick-hardening.test.mjs) —
+          // every submission starts unnotified, exactly like a project with
+          // no mail configured
+          notified: 0,
         };
         state.submissions.push(submission);
         state.project.phase = 'submitted';
@@ -3266,6 +3338,7 @@ function pickFakeWorker(opts = {}) {
       if (u.pathname === '/api/admin/projects' && method === 'GET') {
         const owner = state.project.owner_picker_id ? state.pickers.get(state.project.owner_picker_id) : null;
         const subs = state.submissions;
+        const live = liveToken();
         return json({
           projects: [{
             id: state.project.id,
@@ -3276,9 +3349,8 @@ function pickFakeWorker(opts = {}) {
             created_at: '2026-01-01T00:00:00.000Z',
             submission_count: subs.length,
             last_submitted_at: subs.length ? subs[subs.length - 1].created_at : null,
-            // 'listToken' lets a test cover the no-live-link case; unset
-            // defaults to a live link, matching the common case.
-            token: opts.listToken !== undefined ? opts.listToken : 'PICK-TOKEN',
+            unnotified_submissions: unnotifiedCountFake(subs),
+            token: live ? live.token : null,
           }],
         });
       }
@@ -3302,11 +3374,27 @@ function pickFakeWorker(opts = {}) {
           .map(([photo_key, s]) => ({ photo_key, rating: s.rating, note: s.note, updated_by: s.updated_by, updated_at: s.updated_at }));
         const submissions = state.submissions.slice().reverse();
         const owner = state.project.owner_picker_id ? state.pickers.get(state.project.owner_picker_id) : null;
+        const tokens = state.tokens.slice().reverse().map(t => ({ ...t, status: pickTokenStatusFake(t) }));
         return json({
           project: { ...state.project },
           owner: owner ? { id: owner.id, name: owner.name } : null,
-          pickers, selections, tokens: [], submissions,
+          pickers, selections, tokens, submissions,
+          unnotified_submissions: unnotifiedCountFake(state.submissions),
         });
+      }
+      if (/\/api\/admin\/projects\/[^/]+\/links$/.test(u.pathname) && method === 'POST') {
+        const token = 'PICK-TOKEN-' + (state.tokens.length + 1);
+        const created_at = new Date().toISOString();
+        const expires_at = new Date(Date.now() + 90 * 86400000).toISOString();
+        state.tokens.push({ token, created_at, expires_at, revoked_at: null });
+        return json({ token, expires_at, created_at, status: 'live' }, 201);
+      }
+      if (/^\/api\/shares\/[^/]+\/revoke$/.test(u.pathname) && method === 'POST') {
+        const tok = decodeURIComponent(u.pathname.split('/')[3]);
+        const row = state.tokens.find(t => t.token === tok);
+        if (!row || row.revoked_at) return json({ error: 'Not found' }, 404);
+        row.revoked_at = new Date().toISOString();
+        return json({ ok: true });
       }
       if (/\/api\/admin\/projects\/[^/]+\/reset-seat$/.test(u.pathname) && method === 'POST') {
         state.project.owner_picker_id = null;
@@ -3371,7 +3459,7 @@ await suite('guest picking — a free seat blocks on a name, then loads an edita
       await page.evaluate(() => getComputedStyle(document.getElementById('pickClaimOverlay')).display === 'none'));
     // and provably not intercepting clicks either, by actually using a
     // control underneath it
-    await page.locator('.photo-card').first().locator('.select-toggle-btn').click({ timeout: 3000 });
+    await page.locator('.photo-card').first().locator('.pick-heart-btn').click({ timeout: 3000 });
 
     const storedKey = await page.evaluate(() => localStorage.getItem('pick_key:TOK'));
     ok('the picker key is stored in localStorage, keyed by the link', storedKey === 'KEY-picker-1', String(storedKey));
@@ -3380,15 +3468,50 @@ await suite('guest picking — a free seat blocks on a name, then loads an edita
       cards: document.querySelectorAll('.photo-card').length,
       stars: document.querySelectorAll('.photo-card .star-rating').length,
       selectBtns: document.querySelectorAll('.photo-card .select-toggle-btn').length,
+      hearts: document.querySelectorAll('.photo-card button.pick-heart-btn').length,
       submitShown: getComputedStyle(document.getElementById('submitJobBtn')).display !== 'none',
     }));
     ok('the grid loaded', r.cards === 3, String(r.cards));
-    ok('the owner gets a rating control on every card', r.stars === 3, String(r.stars));
-    ok('the owner gets a select control on every card', r.selectBtns === 3, String(r.selectBtns));
+    ok('no star rating control exists — the guest heart replaces it', r.stars === 0, String(r.stars));
+    ok('no select checkbox exists either — the guest heart replaces it too', r.selectBtns === 0, String(r.selectBtns));
+    ok('the owner gets one clickable ♥ toggle on every card', r.hearts === 3, String(r.hearts));
     ok('完成挑圖 is shown once this browser owns the seat', r.submitShown === true);
     return out;
   },
   { before: pickFakeWorker().attach });
+
+{
+  const m = pickFakeWorker({ ownerName: 'Rhea', ownerKey: 'RHEA-KEY' });
+  await suite('guest picking — the modal also gets one ♥ toggle instead of the star rating, and stays in sync with the grid',
+    `${base}/index.html?t=TOK`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('.photo-card', { timeout: 5000 });
+
+      await page.click('.photo-card');
+      await page.waitForSelector('#photoModal.active', { timeout: 5000 });
+      const before = await page.evaluate(() => ({
+        stars: document.querySelectorAll('#modalPhotoRating .star-rating').length,
+        hearts: document.querySelectorAll('#modalPhotoRating .pick-heart-btn').length,
+      }));
+      ok('no star rating in the modal', before.stars === 0, String(before.stars));
+      ok('one ♥ toggle in the modal instead', before.hearts === 1, String(before.hearts));
+
+      await page.click('#modalPhotoRating .pick-heart-btn');
+      await page.waitForTimeout(1000);
+      const put = m.requests.filter(r => r.method === 'PUT').pop();
+      ok('picking from the modal autosaves the real key',
+        put && JSON.stringify(put.body) === JSON.stringify({ upsert: [{ photo_key: '20260819/p0.jpg', rating: 1, note: '' }], delete: [] }),
+        JSON.stringify(put));
+
+      await page.click('#closeModal');
+      const gridOn = await page.locator('.photo-card').first().locator('.pick-heart-btn.on').count();
+      ok('closing the modal shows the grid card already carrying the same ♥ state', gridOn === 1, String(gridOn));
+      return out;
+    },
+    { before: m.attach, initScript: () => localStorage.setItem('pick_key:TOK', 'RHEA-KEY') });
+}
 
 {
   const m = pickFakeWorker({ ownerName: 'Bob' });
@@ -3412,14 +3535,21 @@ await suite('guest picking — a free seat blocks on a name, then loads an edita
         cards: document.querySelectorAll('.photo-card').length,
         stars: document.querySelectorAll('.photo-card .star-rating').length,
         selectBtns: document.querySelectorAll('.photo-card .select-toggle-btn').length,
+        clickableHearts: document.querySelectorAll('.photo-card button.pick-heart-btn').length,
+        readonlyHearts: document.querySelectorAll('.photo-card span.pick-heart-btn').length,
         submitShown: getComputedStyle(document.getElementById('submitJobBtn')).display !== 'none',
       }));
       ok('the banner names the current owner', !r.bannerHidden && r.bannerText.includes('此相簿由 Bob 選片中'), r.bannerText);
       ok('and offers the "is this you" hint', !r.hintHidden && r.hintText === '你是 Bob 嗎？', r.hintText);
-      ok('a login button is offered', await page.evaluate(() => !!document.getElementById('pickBannerLoginBtn')));
+      ok('no login option — only 請攝影師重設 is offered',
+        !(await page.evaluate(() => !!document.getElementById('pickBannerLoginBtn'))) &&
+        r.hintText === '你是 Bob 嗎？' &&
+        (await page.evaluate(() => document.getElementById('pickBannerHint').textContent)).includes('請攝影師重設'));
       ok('browsing still works — the grid loads', r.cards === 3, String(r.cards));
-      ok('but no rating control exists in the DOM (removed, not hidden)', r.stars === 0, String(r.stars));
+      ok('but no star rating control exists in the DOM (removed, not hidden)', r.stars === 0, String(r.stars));
       ok('and no select control either', r.selectBtns === 0, String(r.selectBtns));
+      ok('no clickable ♥ toggle — a viewer cannot pick', r.clickableHearts === 0, String(r.clickableHearts));
+      ok('the ♥ state is shown read-only instead', r.readonlyHearts === 3, String(r.readonlyHearts));
       ok('完成挑圖 stays hidden for a viewer', r.submitShown === false);
       return out;
     },
@@ -3436,25 +3566,27 @@ await suite('guest picking — a free seat blocks on a name, then loads an edita
       await page.waitForSelector('.photo-card', { timeout: 5000 });
 
       const card = i => page.locator('.photo-card').nth(i);
-      await card(0).locator('.star[data-value="3"]').click();
+      await card(0).locator('.pick-heart-btn').click();
       // still inside the debounce window — nothing sent yet
       await page.waitForTimeout(200);
-      ok('a rating change is debounced, not sent immediately',
+      ok('a ♥ toggle is debounced, not sent immediately',
         !m.requests.some(r => r.method === 'PUT'), JSON.stringify(m.requests.filter(r => r.method === 'PUT')));
 
       await page.waitForTimeout(900);
       const put1 = m.requests.filter(r => r.method === 'PUT' && r.path === '/api/pick/selections');
-      ok('the batched PUT lands after the debounce window carrying the picker key',
+      ok('the batched PUT lands after the debounce window carrying the picker key, rating 1',
         put1.length === 1 && put1[0].key === 'ALICE-KEY' &&
-        JSON.stringify(put1[0].body) === JSON.stringify({ upsert: [{ photo_key: '20260819/p0.jpg', rating: 3, note: '' }], delete: [] }),
+        JSON.stringify(put1[0].body) === JSON.stringify({ upsert: [{ photo_key: '20260819/p0.jpg', rating: 1, note: '' }], delete: [] }),
         JSON.stringify(put1));
+      ok('the card now shows the heart on',
+        await card(0).locator('.pick-heart-btn.on').count() === 1);
 
       const counter1 = await page.evaluate(() => document.getElementById('pickCounterMain').textContent);
       ok('the counter shows the plan’s limit', counter1 === '已選 1 / 1', counter1);
       ok('no over-limit warning yet',
         await page.evaluate(() => document.getElementById('pickCounterWarn').hidden === true));
 
-      await card(1).locator('.star[data-value="4"]').click();
+      await card(1).locator('.pick-heart-btn').click();
       await page.waitForTimeout(1000);
       const counter2 = await page.evaluate(() => document.getElementById('pickCounterMain').textContent);
       ok('the counter now reads 2', counter2 === '已選 2 / 1', counter2);
@@ -3464,6 +3596,20 @@ await suite('guest picking — a free seat blocks on a name, then loads an edita
       }));
       ok('warns over the limit, with the per-photo fee, and never blocks anything',
         !warn.hidden && warn.text === '方案 1 張精修，您已選 2 張，多 1 張，每張 NT$50 加挑費', warn.text);
+
+      const badge1 = await page.evaluate(() => document.getElementById('pickFilterSelectedCount').textContent);
+      ok('the ♥ 已選 filter badge tracks the same count', badge1 === '2', badge1);
+
+      // clicking an already-on heart turns it back off — rating 0, not 1
+      await card(0).locator('.pick-heart-btn').click();
+      await page.waitForTimeout(1000);
+      const put2 = m.requests.filter(r => r.method === 'PUT' && r.path === '/api/pick/selections');
+      ok('un-picking sends rating 0',
+        JSON.stringify(put2[put2.length - 1].body) === JSON.stringify({ upsert: [{ photo_key: '20260819/p0.jpg', rating: 0, note: '' }], delete: [] }),
+        JSON.stringify(put2[put2.length - 1]));
+      ok('the heart is off again', await card(0).locator('.pick-heart-btn.on').count() === 0);
+      const counter3 = await page.evaluate(() => document.getElementById('pickCounterMain').textContent);
+      ok('the counter drops back to 1', counter3 === '已選 1 / 1', counter3);
       return out;
     },
     {
@@ -3520,7 +3666,7 @@ await suite('guest picking — a free seat blocks on a name, then loads an edita
 
       // saving again while submitted must not block, and must raise the
       // "modified since submit" notice (docs/guest-picking.md)
-      await page.locator('.photo-card').nth(0).locator('.star[data-value="2"]').click();
+      await page.locator('.photo-card').nth(0).locator('.pick-heart-btn').click();
       await page.waitForTimeout(1000);
       const banner2 = await page.evaluate(() => document.getElementById('pickBannerLines').textContent);
       ok('a save after submit shows 已修改，請重新送出', banner2.includes('已修改，請重新送出'), banner2);
@@ -3539,23 +3685,25 @@ await suite('guest picking — a free seat blocks on a name, then loads an edita
       await page.waitForSelector('.photo-card', { timeout: 5000 });
 
       ok('editable at first', await page.evaluate(() =>
-        document.querySelectorAll('.photo-card .star-rating').length === 3));
+        document.querySelectorAll('.photo-card button.pick-heart-btn').length === 3));
 
       // the photographer starts retouching in another tab while this one is
       // mid-session; the next save is refused with 409 retouching
       m.state.project.phase = 'retouching';
-      await page.locator('.photo-card').nth(0).locator('.star[data-value="1"]').click();
+      await page.locator('.photo-card').nth(0).locator('.pick-heart-btn').click();
       await page.waitForTimeout(1000);
 
       const r = await page.evaluate(() => ({
         banner: document.getElementById('pickBannerLines').textContent,
         stars: document.querySelectorAll('.photo-card .star-rating').length,
         selectBtns: document.querySelectorAll('.photo-card .select-toggle-btn').length,
+        clickableHearts: document.querySelectorAll('.photo-card button.pick-heart-btn').length,
         submitShown: getComputedStyle(document.getElementById('submitJobBtn')).display !== 'none',
       }));
       ok('shows the LINE-contact notice', r.banner.includes('攝影師已安排精修，如需修改請透過 LINE 聯絡攝影師'), r.banner);
-      ok('every rating control is gone from the DOM', r.stars === 0, String(r.stars));
-      ok('every select control is gone from the DOM', r.selectBtns === 0, String(r.selectBtns));
+      ok('no star rating control (never existed in pick mode)', r.stars === 0, String(r.stars));
+      ok('no select control either', r.selectBtns === 0, String(r.selectBtns));
+      ok('every clickable ♥ toggle is gone from the DOM', r.clickableHearts === 0, String(r.clickableHearts));
 
       // submitJob() itself must also refuse, not just the autosave path
       await page.evaluate(() => window.app.submitJob());
@@ -3576,6 +3724,10 @@ await suite('guest picking — the studio/client choice overlay and other modes 
       !!window.PickController && window.PickController.active === false));
     ok('the pick counter never appears in a mode that never turns it on',
       await page.evaluate(() => getComputedStyle(document.getElementById('pickCounter')).display === 'none'));
+    ok('the ♥ filter bar stays hidden too — no pick mode to unhide it',
+      await page.evaluate(() => getComputedStyle(document.getElementById('pickFilterBar')).display === 'none'));
+    ok('the star filter and 只看選取 are untouched, still in the DOM',
+      await page.evaluate(() => !!document.querySelector('.star-filter') && !!document.getElementById('filterSelectedBtn')));
     ok('the studio/client choice overlay still appears',
       await page.waitForSelector('#auth-overlay', { timeout: 5000 }).then(() => true, () => false));
     return out;
@@ -3695,6 +3847,187 @@ await suite('guest picking — the studio/client choice overlay and other modes 
     { before: m.attach, initScript: () => localStorage.setItem('pick_key:TOK', 'GARY-KEY') });
 }
 
+{
+  // Distinct photos per folder again, so the cross-folder ♥ 已選 view is
+  // provably pulling from both, not just repainting the current one.
+  const m = pickFakeWorker({
+    ownerName: 'Iris', ownerKey: 'IRIS-KEY',
+    folders: ['20260819/', '20260901/'],
+    photosByFolder: {
+      '20260819/': PHOTOS(3),
+      '20260901/': [{ id: '20260901/q0.jpg', name: 'q0.jpg', size: 9e6, rating: 0 }],
+    },
+  });
+  m.state.selections.set('20260819/p0.jpg', { rating: 1, note: '', updated_by: 'picker-0', updated_at: 't' });
+  m.state.selections.set('20260901/q0.jpg', { rating: 1, note: '', updated_by: 'picker-0', updated_at: 't' });
+  await suite('guest picking — the 全部/♥已選/未選 filter bar replaces the star filter; 已選 reaches across every folder',
+    `${base}/index.html?t=TOK`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('.photo-card', { timeout: 5000 });
+
+      ok('the star filter is gone from the DOM entirely',
+        await page.evaluate(() => document.querySelector('.star-filter') === null));
+      ok('so is 只看選取',
+        await page.evaluate(() => document.getElementById('filterSelectedBtn') === null));
+      const barShown = await page.evaluate(() =>
+        getComputedStyle(document.getElementById('pickFilterBar')).display !== 'none');
+      ok('the ♥ filter bar is shown instead', barShown);
+
+      const all1 = await page.evaluate(() => [...document.querySelectorAll('.photo-card .photo-name')].map(e => e.textContent));
+      ok('全部 (default) shows the current folder’s own 3 photos',
+        JSON.stringify(all1) === JSON.stringify(['p0.jpg', 'p1.jpg', 'p2.jpg']), JSON.stringify(all1));
+      ok('the picked one already shows its heart on',
+        await page.locator('.photo-card').first().locator('.pick-heart-btn.on').count() === 1);
+
+      await page.click('#pickFilterBar [data-pick-filter="unselected"]');
+      const unsel = await page.evaluate(() => [...document.querySelectorAll('.photo-card .photo-name')].map(e => e.textContent));
+      ok('未選 drops the already-picked one, current folder only',
+        JSON.stringify(unsel) === JSON.stringify(['p1.jpg', 'p2.jpg']), JSON.stringify(unsel));
+
+      await page.click('#pickFilterBar [data-pick-filter="selected"]');
+      await page.waitForFunction(() => document.querySelectorAll('.photo-card').length === 2, null, { timeout: 5000 });
+      const sel = await page.evaluate(() => ({
+        names: [...document.querySelectorAll('.photo-card .photo-name')].map(e => e.textContent),
+        // the thumbnail for the OTHER folder's photo, loaded the same way the
+        // grid loads any thumbnail — with the pick token on the URL
+        otherSrc: document.querySelector('.photo-card[data-photo-id="20260901/q0.jpg"] img')?.getAttribute('src'),
+      }));
+      ok('♥ 已選 lists the pick from both folders, one page, sorted by key',
+        JSON.stringify(sel.names) === JSON.stringify(['p0.jpg', 'q0.jpg']), JSON.stringify(sel.names));
+      ok('the other folder’s thumbnail is fetched straight from its key + the pick token',
+        !!sel.otherSrc && sel.otherSrc.includes('20260901/q0.jpg') && sel.otherSrc.includes('t=TOK'), sel.otherSrc);
+
+      // un-picking from inside the cross-folder view removes it from the list
+      // right there, and still autosaves the real key
+      await page.locator('.photo-card[data-photo-id="20260901/q0.jpg"] .pick-heart-btn').click();
+      await page.waitForFunction(() => document.querySelectorAll('.photo-card').length === 1, null, { timeout: 5000 });
+      await page.waitForTimeout(1000);
+      const lastPut = m.requests.filter(r => r.method === 'PUT').pop();
+      ok('the real full-path key was sent, rating 0',
+        lastPut && JSON.stringify(lastPut.body) === JSON.stringify({ upsert: [{ photo_key: '20260901/q0.jpg', rating: 0, note: '' }], delete: [] }),
+        JSON.stringify(lastPut));
+
+      await page.click('#pickFilterBar [data-pick-filter="all"]');
+      const backToAll = await page.evaluate(() => [...document.querySelectorAll('.photo-card .photo-name')].map(e => e.textContent));
+      ok('全部 goes back to the current folder', JSON.stringify(backToAll) === JSON.stringify(['p0.jpg', 'p1.jpg', 'p2.jpg']), JSON.stringify(backToAll));
+      return out;
+    },
+    { before: m.attach, initScript: () => localStorage.setItem('pick_key:TOK', 'IRIS-KEY') });
+}
+
+{
+  const m = pickFakeWorker({ ownerName: 'Kelly', ownerKey: 'KELLY-KEY' });
+  for (let i = 0; i < 500; i++) m.state.selections.set(`20260819/extra${i}.jpg`, { rating: 1, note: '', updated_by: 'picker-0', updated_at: 't' });
+  await suite('guest picking — 409 selection_cap reverts the ♥ toggle and warns with the plan’s wording',
+    `${base}/index.html?t=TOK`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('.photo-card', { timeout: 5000 });
+
+      await page.locator('.photo-card').first().locator('.pick-heart-btn').click();
+      await page.waitForFunction(() => {
+        const t = document.querySelector('.toast.error .toast-message');
+        return t && t.textContent.length > 0;
+      }, null, { timeout: 5000 });
+      const msg = await page.evaluate(() => document.querySelector('.toast.error .toast-message').textContent);
+      ok('shows 最多可選 500 張', msg === '最多可選 500 張', msg);
+      const revertedOk = await page.waitForFunction(() =>
+        document.querySelectorAll('.photo-card').length &&
+        !document.querySelector('.photo-card').querySelector('.pick-heart-btn.on'), null, { timeout: 5000 })
+        .then(() => true, () => false);
+      ok('the heart reverts to off — nothing was actually saved', revertedOk);
+      const put = m.requests.filter(r => r.method === 'PUT').pop();
+      ok('the refused save did carry the attempted upsert',
+        put && put.body.upsert[0].rating === 1, JSON.stringify(put));
+      return out;
+    },
+    { before: m.attach, initScript: () => localStorage.setItem('pick_key:TOK', 'KELLY-KEY') });
+}
+
+{
+  const m = pickFakeWorker({ ownerName: 'Quinn', ownerKey: 'QUINN-KEY' });
+  // exactly PICK_MAX_ROWS existing rows, rating 0 (un-starred, so they cost
+  // nothing against the star cap) and none of them the folder’s own 3 photos
+  // — so the very first ♥ click adds a brand-new row and tips the row cap.
+  for (let i = 0; i < 1000; i++) m.state.selections.set(`20260819/row${i}.jpg`, { rating: 0, note: '', updated_by: 'picker-0', updated_at: 't' });
+  await suite('guest picking — 409 row_cap reverts the ♥ toggle too, with the server’s own wording',
+    `${base}/index.html?t=TOK`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('.photo-card', { timeout: 5000 });
+
+      await page.locator('.photo-card').first().locator('.pick-heart-btn').click();
+      await page.waitForFunction(() => {
+        const t = document.querySelector('.toast.error .toast-message');
+        return t && t.textContent.length > 0;
+      }, null, { timeout: 5000 });
+      const msg = await page.evaluate(() => document.querySelector('.toast.error .toast-message').textContent);
+      ok('shows the server’s row-cap wording, not a made-up one',
+        msg === '最多只能保留 1000 筆', msg);
+      const revertedOk = await page.waitForFunction(() =>
+        document.querySelectorAll('.photo-card').length &&
+        !document.querySelector('.photo-card').querySelector('.pick-heart-btn.on'), null, { timeout: 5000 })
+        .then(() => true, () => false);
+      ok('the heart reverts to off here too', revertedOk);
+      return out;
+    },
+    { before: m.attach, initScript: () => localStorage.setItem('pick_key:TOK', 'QUINN-KEY') });
+}
+
+{
+  // A key this odd never comes from a real folder listing, but the client
+  // has to survive the server refusing it anyway rather than crash or lie
+  // about what got saved (docs/guest-picking.md rule 7).
+  const BAD_PHOTO = { id: '20260819/bad\u0000name.jpg', name: 'bad\u0000name.jpg', size: 1, rating: 0 };
+  const m = pickFakeWorker({ ownerName: 'Leo', ownerKey: 'LEO-KEY', photos: [BAD_PHOTO] });
+  await suite('guest picking — 400 invalid_photo_key reverts the ♥ toggle too, without crashing',
+    `${base}/index.html?t=TOK`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('.photo-card', { timeout: 5000 });
+
+      await page.locator('.pick-heart-btn').click();
+      await page.waitForFunction(() => {
+        const t = document.querySelector('.toast.error .toast-message');
+        return t && t.textContent.length > 0;
+      }, null, { timeout: 5000 });
+      const msg = await page.evaluate(() => document.querySelector('.toast.error .toast-message').textContent);
+      ok('shows the server’s own message, not "undefined"',
+        msg === '照片名稱不正確', msg);
+      const revertedOk = await page.waitForFunction(() =>
+        document.querySelectorAll('.pick-heart-btn.on').length === 0, null, { timeout: 5000 })
+        .then(() => true, () => false);
+      ok('the heart reverts to off', revertedOk);
+      return out;
+    },
+    { before: m.attach, initScript: () => localStorage.setItem('pick_key:TOK', 'LEO-KEY') });
+}
+
+{
+  // A viewer's own /api/pick/state response carries no `note` field at all
+  // (docs/guest-picking.md) — the client must not crash or print "undefined".
+  const m = pickFakeWorker({ ownerName: 'Mona' });
+  m.state.selections.set('20260819/p0.jpg', { rating: 4, note: '放大這張', updated_by: 'picker-0', updated_at: 't' });
+  await suite('guest picking — a viewer’s state has no note field; nothing crashes or shows "undefined"',
+    `${base}/index.html?t=TOK`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('.photo-card', { timeout: 5000 });
+      const text = await page.evaluate(() => document.body.textContent);
+      ok('no stray "undefined" anywhere on the page', !/undefined/.test(text), text.slice(0, 200));
+      ok('the viewer still sees the ♥ state (read-only)',
+        await page.locator('.photo-card').first().locator('span.pick-heart-btn.on').count() === 1);
+      return out;
+    },
+    { before: m.attach });
+}
+
 // A studio session (photographer, via studio_token) must be completely
 // unaffected: the same path box + LOAD that guests and clients lose here is
 // still how a photographer opens an arbitrary folder in the bucket.
@@ -3724,6 +4057,15 @@ await suite('photographer mode — the path box, LOAD button and folder tree are
     const cards = await page.evaluate(() => document.querySelectorAll('.photo-card').length);
     ok('typing a path and clicking LOAD still loads photos, exactly as before',
       cards === 3, String(cards));
+
+    const controls = await page.evaluate(() => ({
+      stars: document.querySelectorAll('.photo-card .star-rating').length,
+      selectBtns: document.querySelectorAll('.photo-card .select-toggle-btn').length,
+      hearts: document.querySelectorAll('.photo-card .pick-heart-btn').length,
+    }));
+    ok('the star rating and select checkbox are exactly what a photographer still gets',
+      controls.stars === 3 && controls.selectBtns === 3, JSON.stringify(controls));
+    ok('the guest-only ♥ toggle never appears here', controls.hearts === 0, String(controls.hearts));
     return out;
   },
   {
@@ -3894,6 +4236,125 @@ await suite('photographer mode — the path box, LOAD button and folder tree are
       ok('current selections only lists rating > 0 (one row, not the zero-rated one)',
         r.selectionRows === 1, String(r.selectionRows));
 
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN });
+}
+
+await suite('admin — escHtml(0): a project with zero submissions shows 送出 0 次, not blank',
+  `${base}/admin.html`,
+  async page => {
+    const out = [];
+    const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+    await page.waitForSelector('[data-project-row]', { timeout: 5000 });
+    const text = await page.evaluate(() => document.querySelector('[data-project-row]').textContent);
+    ok('shows 送出 0 次, the digit is there', /送出\s*0\s*次/.test(text), text);
+    return out;
+  },
+  { before: pickFakeWorker().attach, initScript: ADMIN });
+
+{
+  const m = pickFakeWorker({ ownerName: 'Nora', ownerKey: 'NORA-KEY' });
+  await suite('admin — 重設主人 warns that the new owner inherits and can change or delete every pick',
+    `${base}/admin.html`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('[data-open-project]', { timeout: 5000 });
+      await page.click('[data-open-project]');
+      await page.waitForSelector('#pd-reset-seat-btn', { timeout: 5000 });
+
+      let dialogMsg = '';
+      page.once('dialog', d => { dialogMsg = d.message(); d.dismiss(); });
+      await page.click('#pd-reset-seat-btn');
+      await page.waitForTimeout(200);
+      ok('warns that the new owner takes over every current pick and can change or delete it',
+        dialogMsg.includes('新的主人會接手目前所有選片，並可修改或刪除'), dialogMsg);
+      ok('dismissing it does not reset the seat',
+        !m.requests.some(r => r.method === 'POST' && r.path.endsWith('/reset-seat')));
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN });
+}
+
+{
+  const m = pickFakeWorker({ ownerName: 'Oscar', ownerKey: 'OSCAR-KEY' });
+  await suite('admin — project detail: pick links with status, 撤銷, and 產生新連結 with copy',
+    `${base}/admin.html`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+      await page.waitForSelector('[data-open-project]', { timeout: 5000 });
+      await page.click('[data-open-project]');
+      await page.waitForSelector('[data-token-row]', { timeout: 5000 });
+
+      const before = await page.evaluate(() => ({
+        rows: document.querySelectorAll('[data-token-row]').length,
+        status: document.querySelector('[data-token-row] .badge')?.textContent,
+        revokeBtn: !!document.querySelector('[data-revoke-token]'),
+      }));
+      ok('the live link is listed with its status', before.rows === 1 && before.status === '有效', JSON.stringify(before));
+      ok('a live link offers 撤銷', before.revokeBtn);
+
+      page.once('dialog', d => d.accept());
+      await page.click('[data-revoke-token]');
+      await page.waitForFunction(() =>
+        document.querySelector('[data-token-row] .badge')?.textContent === '已撤銷', null, { timeout: 5000 });
+      const afterRevoke = await page.evaluate(() => ({
+        rows: document.querySelectorAll('[data-token-row]').length,
+        revokeBtn: !!document.querySelector('[data-revoke-token]'),
+      }));
+      ok('撤銷 flips it to 已撤銷 and drops its own 撤銷/複製連結 buttons',
+        afterRevoke.rows === 1 && afterRevoke.revokeBtn === false, JSON.stringify(afterRevoke));
+      ok('the real revoke endpoint was called',
+        m.requests.some(r => r.method === 'POST' && /\/api\/shares\/.+\/revoke$/.test(r.path)));
+
+      await page.click('#pd-new-link-btn');
+      await page.waitForFunction(() => document.querySelectorAll('[data-token-row]').length === 2, null, { timeout: 5000 });
+      const afterMint = await page.evaluate(() => ({
+        rows: document.querySelectorAll('[data-token-row]').length,
+        liveCount: [...document.querySelectorAll('[data-token-row] .badge')].filter(b => b.textContent === '有效').length,
+      }));
+      ok('產生新連結 adds a fresh live one, the old one stays revoked',
+        afterMint.rows === 2 && afterMint.liveCount === 1, JSON.stringify(afterMint));
+      ok('the mint endpoint was posted to',
+        m.requests.some(r => r.method === 'POST' && r.path.endsWith('/links')));
+      const clip = await page.evaluate(() => navigator.clipboard.readText());
+      ok('the new link is copied to the clipboard', /index\.html\?t=PICK-TOKEN-2/.test(clip), clip);
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN });
+}
+
+{
+  const m = pickFakeWorker({ ownerName: 'Paula' });
+  m.state.submissions.push(
+    { id: 's1', picker_id: 'picker-0', relationship: '本人', email: null,
+      photo_keys: ['20260819/p0.jpg'], count: 1, pick_limit: null, extra_price: null,
+      created_at: '2026-01-01T00:00:00Z', notified: 1 },
+    { id: 's2', picker_id: 'picker-0', relationship: '本人', email: null,
+      photo_keys: ['20260819/p0.jpg', '20260819/p1.jpg'], count: 2, pick_limit: null, extra_price: null,
+      created_at: '2026-01-02T00:00:00Z', notified: 0 },
+  );
+  await suite('admin — badge "N 次送出未寄信" in the list and detail, and a per-submission 未寄信 marker',
+    `${base}/admin.html`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('[data-project-row]', { timeout: 5000 });
+      const listText = await page.evaluate(() => document.querySelector('[data-project-row]').textContent);
+      ok('the list shows 1 次送出未寄信', listText.includes('1 次送出未寄信'), listText);
+
+      await page.click('[data-open-project]');
+      await page.waitForSelector('#pd-submissions .pd-submission', { timeout: 5000 });
+      const r = await page.evaluate(() => ({
+        headText: document.querySelector('.pd-head').textContent,
+        blocks: [...document.querySelectorAll('.pd-submission')].map(b => b.textContent),
+      }));
+      ok('the detail head shows the same badge', r.headText.includes('1 次送出未寄信'), r.headText);
+      ok('the newest (unmailed) submission carries its own 未寄信 marker', r.blocks[0].includes('未寄信'), r.blocks[0]);
+      ok('the older, already-mailed one does not', !r.blocks[1].includes('未寄信'), r.blocks[1]);
       return out;
     },
     { before: m.attach, initScript: ADMIN });

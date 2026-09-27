@@ -694,13 +694,21 @@ class App {
     }
 
     applyFilters() {
-        this.filteredPhotos = this.photos.filter(p => {
-            if (this.filters.stars !== 'all' && p.rating !== parseInt(this.filters.stars)) return false;
-            if (this.filters.annotated === 'yes' && !p.hasAnnotations) return false;
-            if (this.filters.annotated === 'no' && p.hasAnnotations) return false;
-            if (this.filters.selectedOnly && !this.selectedPhotoIds.has(p.id)) return false;
-            return true;
-        });
+        // Guest picking (docs/guest-picking.md): the star filter and 只看選取
+        // are gone from a guest's DOM (js/pick.js _replaceFilterBar), and the
+        // heart-only 全部/已選/未選 bar has its own rules — including 已選,
+        // which reaches across every folder the link permits, not just this
+        // one. Every other mode keeps exactly the filtering below.
+        const pickMode = !!(window.PickController && PickController.active);
+        this.filteredPhotos = pickMode
+            ? PickController.buildFilteredPhotos(this.photos)
+            : this.photos.filter(p => {
+                if (this.filters.stars !== 'all' && p.rating !== parseInt(this.filters.stars)) return false;
+                if (this.filters.annotated === 'yes' && !p.hasAnnotations) return false;
+                if (this.filters.annotated === 'no' && p.hasAnnotations) return false;
+                if (this.filters.selectedOnly && !this.selectedPhotoIds.has(p.id)) return false;
+                return true;
+            });
 
         this.filteredPhotos.sort((a, b) => {
             if (this.filters.sortBy === 'rating') return b.rating - a.rating;
@@ -741,15 +749,25 @@ class App {
         // }, the same reason client-auth-check.js removes rather than hides
         // its own buttons for a client.
         const canEdit = !window.PickController || !PickController.active || PickController.canEdit();
+        // Guest (pick) mode only: one ♥ toggle replaces the star rating and
+        // the select checkbox entirely — photographer/studio/client modes are
+        // untouched below (task: guest heart-only picking).
+        const pickMode = !!(window.PickController && PickController.active);
 
         const imageUrl = driveManager.getImageUrl(photo, 400);
+        const isPicked = (photo.rating || 0) > 0;
+        const heartTag = pickMode
+            ? (canEdit
+                ? `<button type="button" class="pick-heart-btn${isPicked ? ' on' : ''}" title="選">♥</button>`
+                : `<span class="pick-heart-btn${isPicked ? ' on' : ''}" title="選">♥</span>`)
+            : '';
         card.innerHTML = `
             <div class="photo-image-container">
                 <img src="${escapeHtml(imageUrl)}" class="photo-image" loading="lazy" decoding="async">
                 <div class="photo-overlay">
                     ${photo.hasAnnotations ? '<span class="photo-badge">✎</span>' : ''}
                 </div>
-                ${canEdit ? '<div class="select-toggle-btn" title="選取此照片"></div>' : ''}
+                ${heartTag || (canEdit ? '<div class="select-toggle-btn" title="選取此照片"></div>' : '')}
             </div>
             <div class="photo-info-section">
                 <div class="photo-name">${escapeHtml(photo.name)}</div>
@@ -757,12 +775,19 @@ class App {
             </div>
         `;
 
-        if (canEdit) {
+        if (!pickMode && canEdit) {
             const rc = card.querySelector('.rating-container');
             rc.appendChild(ratingManager.createStarRating(photo.rating, photo.id, true));
         }
 
-        // 專門處理右上角勾勾的點擊
+        if (pickMode && canEdit) {
+            card.querySelector('.pick-heart-btn')?.addEventListener('click', (e) => {
+                e.stopPropagation(); // 阻止觸發開 Modal
+                this.togglePickHeart(photo, e.currentTarget);
+            });
+        }
+
+        // 專門處理右上角勾勾的點擊 (studio/client/photographer only)
         const selectBtn = card.querySelector('.select-toggle-btn');
         if (selectBtn) {
             selectBtn.addEventListener('click', (e) => {
@@ -783,8 +808,10 @@ class App {
 
             // 判斷是否為批量選取操作 (Ctrl, Cmd, 或 Shift) — a viewer has no
             // selection to batch, so the modifier falls through to a plain
-            // open instead of silently doing nothing
-            if (canEdit && (e.ctrlKey || e.metaKey || e.shiftKey)) {
+            // open instead of silently doing nothing. Guest pick mode has no
+            // batch-select at all: the heart toggle already stopped its own
+            // click from reaching here.
+            if (!pickMode && canEdit && (e.ctrlKey || e.metaKey || e.shiftKey)) {
                 e.preventDefault();
                 this.toggleSelection(photo.id, index, e.shiftKey, (e.ctrlKey || e.metaKey));
             } else {
@@ -793,6 +820,36 @@ class App {
             }
         });
         return card;
+    }
+
+    // Guest picking: the one place a heart toggle actually changes anything.
+    // rating 1 = picked, 0 = not — the only two values pick mode ever writes.
+    togglePickHeart(photo, btnEl) {
+        const next = (photo.rating || 0) > 0 ? 0 : 1;
+        photo.rating = next;
+        // grid card, modal footer and hover preview pane can all show the
+        // same photo at once — every one of them carries data-photo-key (the
+        // grid card on its own container, see createPhotoCard) so all three
+        // stay in sync without a full repaint
+        document.querySelectorAll('.pick-heart-btn').forEach(el => {
+            const key = el.closest('[data-photo-id]')?.dataset.photoId ?? el.dataset.photoKey;
+            if (key === photo.id) el.classList.toggle('on', next > 0);
+        });
+        driveManager.saveRating(photo.id, next); // pick.js wraps this to autosave
+    }
+
+    // A clickable ♥, used anywhere but the grid card itself (which builds its
+    // markup as a string for render-cost reasons) — the modal footer and the
+    // hover preview pane.
+    createPickHeartControl(photo) {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'pick-heart-btn pick-heart-static' + ((photo.rating || 0) > 0 ? ' on' : '');
+        btn.title = '選';
+        btn.dataset.photoKey = photo.id;
+        btn.textContent = '♥';
+        btn.addEventListener('click', () => this.togglePickHeart(photo, btn));
+        return btn;
     }
 
     updatePreviewPane(photo) {
@@ -821,7 +878,12 @@ class App {
         const starsEl = document.getElementById('previewStars');
         if (starsEl) {
             starsEl.innerHTML = '';
-            starsEl.appendChild(ratingManager.createStarRating(photo.rating, photo.id, true));
+            const pickMode = !!(window.PickController && PickController.active);
+            if (pickMode) {
+                if (PickController.canEdit()) starsEl.appendChild(this.createPickHeartControl(photo));
+            } else {
+                starsEl.appendChild(ratingManager.createStarRating(photo.rating, photo.id, true));
+            }
         }
 
         const detailBtn = document.getElementById('previewDetailBtn');
@@ -845,12 +907,17 @@ class App {
         const noteEl = document.getElementById('photoNote');
         noteEl.value = photo.note || '';
 
-        const canEdit = !window.PickController || !PickController.active || PickController.canEdit();
+        const pickMode = !!(window.PickController && PickController.active);
+        const canEdit = !pickMode || PickController.canEdit();
         noteEl.readOnly = !canEdit;
 
         const mpr = document.getElementById('modalPhotoRating');
         mpr.innerHTML = '';
-        if (canEdit) mpr.appendChild(ratingManager.createStarRating(photo.rating, photo.id, true));
+        if (pickMode) {
+            if (canEdit) mpr.appendChild(this.createPickHeartControl(photo));
+        } else if (canEdit) {
+            mpr.appendChild(ratingManager.createStarRating(photo.rating, photo.id, true));
+        }
 
         this.updateModalNavigation();
 
