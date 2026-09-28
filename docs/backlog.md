@@ -22,6 +22,48 @@ Decided or discussed, not yet built. Newest decisions at the top of each group.
       stored relative to the photo (fractions of width/height) so phone and
       desktop agree, and the admin/project view showing them. High tier.
 
+## Handoff (2026-09-28 session end) — start here
+Two finished pieces of work, not yet on main:
+1. **Guest bottom bar + submit overage + booking link** — merged into
+   `claude/vigilant-edison-ewegwm` (merge 7b01260, from `claude/guest-bottom-bar`).
+   Verified: its new suites fail on the old code, pass on the new. TODO before PR:
+   bump `?v=` (20260928j → next), run the full browser + worker suites, open PR.
+   - Phone bottom bar shows 已選 N / L (red when over), 完成提交 beside it; viewer sees none;
+     header counter/完成挑圖 hidden on mobile pick mode; desktop unchanged.
+   - Over the limit: no warning while picking; the submit modal shows the overage
+     and fee (N × price, or 加挑費用請與攝影師確認) before sending.
+   - 📅 預約拍攝 left the header; shown in the banner once submitted (https only).
+2. **Edit a project after creation** (title / 張數 / 單價 / folders) — branch
+   `claude/edit-project` (5bb3917), pushed, NOT merged. Security review done:
+   no Critical/High. Fix before merging (TDD):
+   - M1 (Medium, verified): hidden picks (in a removed folder) still count toward the
+     500-star / 1000-row caps in the save route (worker.js ~1747-1757), and the guest
+     can't delete them (403). Count only covered rows (`pickCoveredSql`) in the star cap;
+     decide the row cap.
+   - L1: resubmit email lists hidden picks under 移除 (pickDiff) — mark as 資料夾已移除 instead.
+   - L2: pick.js flush() should undo + re-fetch state on 403, not only 409/400.
+   - L4: cap pick_limit / extra_price (e.g. ≤ 1,000,000) in pickProjectFields.
+   - Decide: photographer `?project=` view still shows hidden picks unmarked
+     (js/project-view.js) — mark or exclude?
+   - Prod checks: D1 with json_each/json_valid/substr(x,-1); no cache rule overriding
+     `private` on photo responses.
+   Then merge into the working branch, bump `?v=`, full suites, PR.
+3. The commit-review hook fix (`.claude/settings.json`) is on main; it only takes
+   effect in a new session.
+
+## Ideas to design next (Tim, 2026-09-28)
+- **Add a folder to a project after its link was sent** (e.g. a 精修 subfolder with
+  the retouched photos): covered by the edit-project work above (adding a folder
+  widens every live link at once); a subfolder of an existing project folder is
+  already visible without any edit.
+- **Retouch versions**: a guest picks photo A; the photographer uploads 精修 v1,
+  the guest comments, v2, v3 … up to a maximum the photographer sets per project
+  (e.g. 最多 4 版), shown to the guest ("第 2 / 4 版"). Needs design: how versions
+  are stored (naming like `A_v2.jpg` or a `versions` table), the guest view
+  (side-by-side / history), comments per version, the round counter and what
+  happens at the limit (extra fee?). Probably pairs with "guests circle what to
+  retouch" (Next up).
+
 ## Product roadmap (agreed order)
 1. Back-office shell: side menu, dashboard (projects by phase, per month,
    to-do), add a 已交付 phase so "completed" can be counted.
