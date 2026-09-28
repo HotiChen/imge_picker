@@ -888,6 +888,20 @@ class App {
         driveManager.saveRating(photo.id, next); // pick.js wraps this to autosave
     }
 
+    // Double-tap feedback over the preview: a big ♥ (on) or hollow ♡ (off)
+    // that pops and fades. Removed on a timer, not animationend, so it never
+    // lingers where animations are suppressed.
+    burstHeart(on) {
+        const host = document.querySelector('.canvas-container');
+        if (!host) return;
+        host.querySelectorAll('.pick-heart-burst').forEach(el => el.remove());
+        const el = document.createElement('span');
+        el.className = 'pick-heart-burst' + (on ? '' : ' off');
+        el.textContent = on ? '♥' : '♡';
+        host.appendChild(el);
+        setTimeout(() => el.remove(), 800);
+    }
+
     // A brief pulse on toggle-on (mobile task: double-tap feedback). Restarts
     // cleanly even if the previous pulse's animationend hasn't fired yet.
     pulseHeart(el) {

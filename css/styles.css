@@ -1974,7 +1974,7 @@ body {
    pointer semantics) for a read-only viewer — see js/app.js createPhotoCard. */
 .pick-heart-btn {
   position: absolute;
-  top: 6px;
+  bottom: 6px; /* bottom-right: the ✎ badge owns the top-right corner */
   right: 6px;
   width: 26px;
   height: 26px;
@@ -2005,6 +2005,28 @@ span.pick-heart-btn { cursor: default; }
   0%   { transform: scale(1); }
   40%  { transform: scale(1.45); }
   100% { transform: scale(1); }
+}
+/* Double-tap feedback over the preview photo — a big ♥ on toggle-on, a hollow
+   ♡ on toggle-off (js/app.js burstHeart). Never catches a tap itself. */
+.pick-heart-burst {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  font-size: 96px;
+  line-height: 1;
+  color: var(--danger);
+  text-shadow: 0 2px 12px rgba(0,0,0,.45);
+  pointer-events: none;
+  z-index: 6;
+  transform: translate(-50%, -50%) scale(0);
+  animation: pickHeartBurst .7s ease-out forwards;
+}
+.pick-heart-burst.off { color: #fff; }
+@keyframes pickHeartBurst {
+  0%   { transform: translate(-50%, -50%) scale(0);   opacity: 0; }
+  25%  { transform: translate(-50%, -50%) scale(1.2); opacity: 1; }
+  45%  { transform: translate(-50%, -50%) scale(1);   opacity: 1; }
+  100% { transform: translate(-50%, -50%) scale(1);   opacity: 0; }
 }
 /* Modal footer and the right-hand preview pane are not the absolutely-
    positioned card overlay the default rule assumes. */
