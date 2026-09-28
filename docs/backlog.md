@@ -49,6 +49,12 @@ Decided or discussed, not yet built. Newest decisions at the top of each group.
 - Edit a project's 張數 / 加挑單價 after creation (today only set at create;
   no update route). Submissions snapshot both at submit, so an edit only
   affects later submits.
+- Edit a project's folders after creation — same edit screen as 張數 / 單價.
+  Folders are snapshotted on the project and on every pick share token
+  (worker.js:1074, reissue copies the project at :1290), so an edit must
+  update the live pick tokens too, or existing links keep the old scope.
+  Decide what happens to picks in a removed folder (keep, but hide?).
+  Security review: this widens what a live link can read.
 - Make "no extra picks" explicit: today a blank 加挑單價 only hides the price —
   guests can still pick past the limit, nothing blocks. Add a choice
   (可加選 NT$__ / 不可加選) and cap picks at the limit for 不可加選.
