@@ -12,6 +12,15 @@ Decided or discussed, not yet built. Newest decisions at the top of each group.
       3. `wrangler secret put PHOTOGRAPHER_EMAIL` (or Worker → Settings → Secret).
       4. Merge, submit a test pick, check inbox + spam; admin 未寄信 should clear.
       Sender is `notify@imhoti.tw` (`NOTIFY_FROM` var). Until then admin shows 未寄信.
+- [ ] Guests circle what to retouch (after the bottom-bar and edit-project work
+      ships — all three touch the preview / pick.js). Today pick.js removes the
+      drawing tools for guests (pick.js ~404-409) because annotations only live
+      in that browser's localStorage (`r2_photo_picker_annotations`); the
+      photographer never sees them. Needs: a D1 column/table for annotations
+      (migration, hand-run first), guest save/load through `/api/pick/*` with
+      the same gates as selections, the touch-drawing save bug fixed, coordinates
+      stored relative to the photo (fractions of width/height) so phone and
+      desktop agree, and the admin/project view showing them. High tier.
 
 ## Product roadmap (agreed order)
 1. Back-office shell: side menu, dashboard (projects by phase, per month,
