@@ -149,6 +149,8 @@
   .pd-submission { padding: 10px 0; border-top: 1px solid var(--rule); font-size: 12px; }
   .pd-submission:first-child { border-top: none; }
   .pd-diff { color: var(--ink-55); margin-top: 4px; word-break: break-word; }
+  .pd-settings { color: var(--ink-55); font-size: 12px; margin-bottom: 12px; word-break: break-word; }
+  #pd-edit-form { border: 1px solid var(--rule); border-radius: 6px; padding: 12px 14px; margin: 10px 0; }
   #project-detail-panel h4 { font-size: 13px; margin: 18px 0 8px; color: var(--ink-90); }
   #project-detail-panel h4 a.pd-link,
   #project-detail-panel summary a.pd-link,
@@ -562,8 +564,9 @@
   // about which one is theirs. Held for as long as the picker is open.
   let pickerDate = '';
   let pickerMatch = null;
-  // 'client' (the row's folder_path) or 'project' (a new pick project's
-  // folders, guest-picking.md) — same overlay, different confirm target.
+  // 'client' (the row's folder_path), 'project' (a new pick project's
+  // folders, guest-picking.md) or 'edit' (an existing project's, in its
+  // 編輯設定 form) — same overlay, different confirm target.
   let pickerMode = 'client';
 
   let pickerWired = false;
@@ -578,11 +581,11 @@
     await browseFolders('');
   }
 
-  async function openProjectFolderPicker() {
+  async function openProjectFolderPicker(mode = 'project') {
     if (!pickerWired) { wireFolderPicker(); pickerWired = true; }
-    pickerMode = 'project';
+    pickerMode = mode;
     pickerFor = null;
-    pickerChosen = projectFolders.slice();
+    pickerChosen = (mode === 'edit' ? editFolders : projectFolders).slice();
     pickerDate = '';
     pickerMatch = null;
     document.getElementById('folder-picker').style.display = 'flex';
@@ -611,6 +614,12 @@
       projectFolders = pickerChosen.slice();
       close();
       renderProjectFolders();
+      return;
+    }
+    if (pickerMode === 'edit') {
+      editFolders = pickerChosen.slice();
+      close();
+      renderEditFolders();
       return;
     }
     const row = document.querySelector(`tr[data-id="${pickerFor}"]`);
@@ -660,19 +669,153 @@
   let projectFolders = [];
   let currentProjectId = null;
 
+  // A project's folders as removable chips plus the 選擇資料夾 button — the
+  // create form and the 編輯設定 form draw the same cell.
+  function renderFolderChips(cell, folders, btnId, onPick, onRemove) {
+    const chips = folders.map(f => `
+      <span class="folder-chip" data-folder-chip="${escHtml(f)}">${escHtml(f)}<button type="button" data-remove-proj-folder="${escHtml(f)}" title="移除">×</button></span>`).join('');
+    cell.innerHTML = (chips || '<span class="folder-none">尚未選擇</span>') +
+      `<button id="${btnId}" class="btn btn-outline" type="button">選擇資料夾</button>`;
+    cell.querySelector('#' + btnId).addEventListener('click', onPick);
+    cell.querySelectorAll('[data-remove-proj-folder]').forEach(btn => {
+      btn.addEventListener('click', () => onRemove(btn.dataset.removeProjFolder));
+    });
+  }
+
   function renderProjectFolders() {
     const cell = document.getElementById('proj-folders-cell');
     if (!cell) return;
-    const chips = projectFolders.map(f => `
-      <span class="folder-chip" data-folder-chip="${escHtml(f)}">${escHtml(f)}<button type="button" data-remove-proj-folder="${escHtml(f)}" title="移除">×</button></span>`).join('');
-    cell.innerHTML = (chips || '<span class="folder-none">尚未選擇</span>') +
-      '<button id="proj-pick-folders-btn" class="btn btn-outline" type="button">選擇資料夾</button>';
-    cell.querySelector('#proj-pick-folders-btn').addEventListener('click', openProjectFolderPicker);
-    cell.querySelectorAll('[data-remove-proj-folder]').forEach(btn => {
-      btn.addEventListener('click', () => {
-        projectFolders = projectFolders.filter(f => f !== btn.dataset.removeProjFolder);
-        renderProjectFolders();
-      });
+    renderFolderChips(cell, projectFolders, 'proj-pick-folders-btn', () => openProjectFolderPicker('project'), f => {
+      projectFolders = projectFolders.filter(x => x !== f);
+      renderProjectFolders();
+    });
+  }
+
+  // ── 編輯設定: an existing project's title, plan and folders ───────────────
+  // PATCH /api/admin/projects/:id with only the fields that changed. A
+  // folders change reaches the guest's live link at once; picks in a folder
+  // taken away are hidden from the guest, not deleted.
+  let editFolders = [];
+
+  function renderEditFolders() {
+    const cell = document.getElementById('pd-edit-folders-cell');
+    if (!cell) return;
+    renderFolderChips(cell, editFolders, 'pd-edit-pick-folders-btn', () => openProjectFolderPicker('edit'), f => {
+      editFolders = editFolders.filter(x => x !== f);
+      renderEditFolders();
+    });
+  }
+
+  // The two plan inputs as the Worker wants them: blank = null, otherwise a
+  // whole number from 0. {error} in the words the create form has always used.
+  function planInputs(limitRaw, priceRaw) {
+    const pick_limit = limitRaw === '' ? null : parseInt(limitRaw, 10);
+    const extra_price = priceRaw === '' ? null : parseInt(priceRaw, 10);
+    if (pick_limit !== null && (!Number.isInteger(pick_limit) || pick_limit < 0)) return { error: '精修張數上限需為 0 以上整數' };
+    if (extra_price !== null && (!Number.isInteger(extra_price) || extra_price < 0)) return { error: '加選單價需為 0 以上整數' };
+    return { pick_limit, extra_price };
+  }
+
+  // A folder as the Worker stores it (trailing /), so `2026` and `2026/` are
+  // the one folder when working out what an edit takes away.
+  const slashed = f => (f.endsWith('/') ? f : f + '/');
+  const coveredBy = (folders, key) => folders.some(f => key.startsWith(slashed(f)));
+
+  // The Worker's own error, or its status, as a sentence for the photographer.
+  function editErrorText(status, data) {
+    if (status === 409 && data.code === 'archived') return '專案已封存，請先取消封存再修改';
+    if (status === 404) return '找不到這個專案，可能已被刪除';
+    if (status === 401) return '登入已失效，請重新登入';
+    if (status === 400) {
+      const e = String(data.error || '');
+      if (e.startsWith('folders')) return '資料夾不正確，請至少選擇一個相片資料夾';
+      if (e.startsWith('pick_limit')) return '精修張數上限需為 0 以上整數';
+      if (e.startsWith('extra_price')) return '加選單價需為 0 以上整數';
+      if (e.startsWith('title')) return '標題格式不正確';
+      return '資料格式不正確';
+    }
+    return `儲存失敗（${status}）`;
+  }
+
+  function openEditForm(project, selections) {
+    const form = document.getElementById('pd-edit-form');
+    if (!form) return;
+    const original = Array.isArray(project.folders) ? project.folders : [];
+    editFolders = original.slice();
+    form.innerHTML = `
+      <div class="pick-admin-field">
+        <label for="pd-edit-title">標題</label>
+        <input id="pd-edit-title" class="field" type="text">
+      </div>
+      <div class="pick-admin-field">
+        <label>資料夾</label>
+        <div id="pd-edit-folders-cell" class="folder-cell"></div>
+      </div>
+      <div class="pick-admin-row">
+        <div class="pick-admin-field">
+          <label for="pd-edit-limit">精修張數上限（留空 = 不限）</label>
+          <input id="pd-edit-limit" class="field" type="number" min="0" step="1">
+        </div>
+        <div class="pick-admin-field">
+          <label for="pd-edit-price">加選單價 NT$（留空 = 不顯示）</label>
+          <input id="pd-edit-price" class="field" type="number" min="0" step="1">
+        </div>
+      </div>
+      <button id="pd-edit-save" class="btn btn-accent" type="button">儲存</button>
+      <button id="pd-edit-cancel" class="btn btn-ghost" type="button">取消</button>
+      <div id="pd-edit-err" class="err"></div>`;
+    // set as properties, not interpolated: a title is the photographer's own
+    // text but still goes through the DOM, never through innerHTML
+    document.getElementById('pd-edit-title').value = project.title || '';
+    document.getElementById('pd-edit-limit').value = project.pick_limit == null ? '' : String(project.pick_limit);
+    document.getElementById('pd-edit-price').value = project.extra_price == null ? '' : String(project.extra_price);
+    renderEditFolders();
+    form.style.display = 'block';
+
+    document.getElementById('pd-edit-cancel').addEventListener('click', () => {
+      form.style.display = 'none';
+      form.innerHTML = '';
+    });
+    document.getElementById('pd-edit-save').addEventListener('click', async function () {
+      const errEl = document.getElementById('pd-edit-err');
+      errEl.textContent = '';
+      if (!editFolders.length) { errEl.textContent = '請至少選擇一個資料夾'; return; }
+      const plan = planInputs(document.getElementById('pd-edit-limit').value.trim(),
+        document.getElementById('pd-edit-price').value.trim());
+      if (plan.error) { errEl.textContent = plan.error; return; }
+      const title = document.getElementById('pd-edit-title').value.trim();
+      const body = {};
+      if (title !== (project.title || '')) body.title = title;
+      if (plan.pick_limit !== (project.pick_limit ?? null)) body.pick_limit = plan.pick_limit;
+      if (plan.extra_price !== (project.extra_price ?? null)) body.extra_price = plan.extra_price;
+      const sameFolders = editFolders.length === original.length && editFolders.every((f, i) => f === original[i]);
+      if (!sameFolders) body.folders = editFolders.slice();
+      if (!Object.keys(body).length) { form.style.display = 'none'; form.innerHTML = ''; return; }
+      if (body.folders) {
+        const removed = original.filter(f => !editFolders.some(g => slashed(g) === slashed(f)));
+        const hidden = (selections || []).filter(s => s.rating > 0 && coveredBy(original, s.photo_key) && !coveredBy(editFolders, s.photo_key));
+        if (removed.length || hidden.length) {
+          const msg = `將移除資料夾：${removed.join('、') || '（無）'}\n` +
+            (hidden.length ? `客人已選的 ${hidden.length} 張照片在這些資料夾裡，儲存後客人將看不到、也不會計入送出。\n` : '') +
+            '選片紀錄會保留、不會刪除；之後把資料夾加回來就會恢復。\n\n確定要儲存嗎？';
+          if (!confirm(msg)) return;
+        }
+      }
+      this.disabled = true;
+      try {
+        const r = await fetch(`${WORKER_URL}/api/admin/projects/${encodeURIComponent(project.id)}`, {
+          method: 'PATCH',
+          headers: { 'Authorization': `Bearer ${getToken()}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok) { errEl.textContent = editErrorText(r.status, data); return; }
+        await Promise.all([openProjectDetail(project.id), loadProjectList()]);
+      } catch (e) {
+        errEl.textContent = '無法連線到 Worker';
+      } finally {
+        this.disabled = false;
+      }
     });
   }
 
@@ -751,14 +894,9 @@
     const title = document.getElementById('proj-title').value.trim();
     const limitRaw = document.getElementById('proj-pick-limit').value.trim();
     const priceRaw = document.getElementById('proj-extra-price').value.trim();
-    const pick_limit = limitRaw === '' ? null : parseInt(limitRaw, 10);
-    const extra_price = priceRaw === '' ? null : parseInt(priceRaw, 10);
-    if (pick_limit !== null && (!Number.isInteger(pick_limit) || pick_limit < 0)) {
-      errEl.textContent = '精修張數上限需為 0 以上整數'; return;
-    }
-    if (extra_price !== null && (!Number.isInteger(extra_price) || extra_price < 0)) {
-      errEl.textContent = '加選單價需為 0 以上整數'; return;
-    }
+    const plan = planInputs(limitRaw, priceRaw);
+    if (plan.error) { errEl.textContent = plan.error; return; }
+    const { pick_limit, extra_price } = plan;
     this.disabled = true;
     try {
       const r = await fetch(`${WORKER_URL}/api/admin/projects`, {
@@ -845,8 +983,14 @@
     const pickers = data.pickers || [];
     const submissions = data.submissions || [];
     const tokens = data.tokens || [];
-    const selected = (data.selections || []).filter(s => s.rating > 0);
+    const picked = (data.selections || []).filter(s => s.rating > 0);
+    // a pick in a folder since taken off the project: kept, listed and marked
+    // here, but the guest no longer sees or submits it, so it is not counted
+    // or downloaded (in_folders from GET /api/admin/projects/:id)
+    const selected = picked.filter(s => s.in_folders !== false);
+    const hiddenCount = picked.length - selected.length;
     const ownerName = data.owner ? data.owner.name : null;
+    const folderList = Array.isArray(project.folders) ? project.folders : [];
 
     body.innerHTML = `
       <div class="pd-head">
@@ -858,7 +1002,11 @@
         ${data.unnotified_submissions ? `<span class="badge badge-pending">${escHtml(data.unnotified_submissions)} 次送出未寄信</span>` : ''}
       </div>
       <div class="pd-owner">目前挑選人：${ownerName ? escHtml(ownerName) : '<span class="folder-none">尚無人認領</span>'}</div>
+      <div class="pd-settings" id="pd-settings">資料夾：${folderList.length ? folderList.map(escHtml).join('、') : '（無）'}
+        · 精修張數：${project.pick_limit == null ? '不限' : escHtml(project.pick_limit) + ' 張'}
+        · 加選單價：${project.extra_price == null ? '不顯示' : 'NT$' + escHtml(project.extra_price)}</div>
       <div class="pd-actions">
+        ${project.archived_at ? '' : '<button id="pd-edit-btn" class="btn btn-outline" type="button">編輯設定</button>'}
         <button id="pd-reset-seat-btn" class="btn btn-ghost" type="button">重設主人</button>
         <button id="pd-start-retouch-btn" class="btn btn-accent" type="button">開始精修</button>
         <button id="pd-reopen-btn" class="btn btn-ghost" type="button">開放修改</button>
@@ -873,12 +1021,13 @@
         ${!submissions.length ? '<button id="pd-delete-btn" class="btn btn-danger" type="button">刪除</button>' : ''}
       </div>
       <div id="pd-action-err" class="err"></div>
+      <div id="pd-edit-form" style="display:none;"></div>
 
       <details id="pd-selections-details">
-        <summary>目前選取（${selected.length} 張） <a class="pd-link" href="index.html?project=${encodeURIComponent(project.id)}">看照片 →</a></summary>
+        <summary>目前選取（${selected.length} 張）${hiddenCount ? `<span class="badge badge-pending" data-hidden-count>另有 ${hiddenCount} 張在已移除的資料夾</span>` : ''} <a class="pd-link" href="index.html?project=${encodeURIComponent(project.id)}">看照片 →</a></summary>
         <div class="table-wrap"><table><thead><tr><th>照片</th><th>♥</th><th>備註</th><th>選片人</th><th>更新時間</th></tr></thead>
-          <tbody>${selected.length ? selected.map(s => `<tr>
-            <td class="folder-raw"><a class="pd-link" href="index.html?project=${encodeURIComponent(project.id)}&amp;photo=${encodeURIComponent(s.photo_key)}">${escHtml(s.photo_key)}</a></td><td>♥</td><td>${escHtml(s.note || '')}</td>
+          <tbody>${picked.length ? picked.map(s => `<tr${s.in_folders === false ? ' data-folder-removed' : ''}>
+            <td class="folder-raw"><a class="pd-link" href="index.html?project=${encodeURIComponent(project.id)}&amp;photo=${encodeURIComponent(s.photo_key)}">${escHtml(s.photo_key)}</a>${s.in_folders === false ? ' <span class="badge badge-pending">資料夾已移除</span>' : ''}</td><td>♥</td><td>${escHtml(s.note || '')}</td>
             <td>${escHtml(pickerNameOf(pickers, s.updated_by))}</td><td>${escHtml(fmtTime(s.updated_at))}</td>
           </tr>`).join('') : '<tr><td colspan="5" class="empty">尚無選取</td></tr>'}</tbody></table></div>
       </details>
@@ -918,6 +1067,7 @@
       <div id="pd-link-err" class="err"></div>
     `;
 
+    document.getElementById('pd-edit-btn')?.addEventListener('click', () => openEditForm(project, data.selections || []));
     document.getElementById('pd-reset-seat-btn').addEventListener('click', async () => {
       if (!confirm('確定要重設選片人嗎？選取結果與送出紀錄都會保留。\n新的主人會接手目前所有選片，並可修改或刪除')) return;
       await projectAction('reset-seat');

@@ -555,6 +555,46 @@ function pickFolders(value) {
   return out;
 }
 
+// The fields a project is created with and may later be edited, checked the
+// same way by both routes. `fields` holds only the ones this request sets.
+// {error} for the first one that is wrong (or not a field at all — an edit
+// never reaches the seat, the phase or photographer_id), else {values}, each
+// cleaned: the title trimmed and cut to 200, the folders canonical.
+const PICK_PROJECT_FIELDS = ['title', 'folders', 'pick_limit', 'extra_price'];
+function pickProjectFields(fields) {
+  const values = {};
+  for (const [name, v] of Object.entries(fields)) {
+    if (name === 'title') {
+      if (typeof v !== 'string') return { error: 'title must be a string' };
+      values.title = v.trim().slice(0, 200);
+    } else if (name === 'folders') {
+      const snapshot = pickFolders(v);
+      if (!snapshot) return { error: 'folders must be a non-empty array of photo folders' };
+      values.folders = snapshot;
+    } else if (name === 'pick_limit' || name === 'extra_price') {
+      if (v !== null && !(Number.isInteger(v) && v >= 0)) return { error: `${name} must be a whole number from 0` };
+      values[name] = v;
+    } else {
+      return { error: `unknown field: ${name}` };
+    }
+  }
+  return { values };
+}
+
+// SQL: the photo key `key` sits inside one of the folders in the JSON array
+// `folders` — folderCovers, in SQL. substr rather than LIKE, whose `_` and
+// `%` are ordinary characters in a folder name. A folder written without its
+// trailing `/` gets one, so `20260819` does not reach `20260819-other/`; a
+// bare `/` and a column that is not JSON cover nothing. This is what decides
+// which picks still count for the guest once a folder has been taken off the
+// project: the state route, the submit snapshot and the admin detail all use
+// it, so the ♥ count the guest sees is the count the submission records.
+function pickCoveredSql(key, folders) {
+  const prefix = "(CASE WHEN substr(f.value, -1) = '/' THEN f.value ELSE f.value || '/' END)";
+  return `EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(${folders}) THEN ${folders} ELSE '[]' END) f ` +
+    `WHERE f.type = 'text' AND ${prefix} <> '/' AND substr(${key}, 1, length(${prefix})) = ${prefix})`;
+}
+
 // The project behind a pick token and, when the request carries a picker key,
 // the picker it belongs to. The key is looked up by its hash and only within
 // the token's own project, so a key from another project finds nobody. null
@@ -1052,19 +1092,15 @@ export default {
       let body;
       try { body = await request.json(); } catch { return jsonErr('Invalid JSON'); }
       const { title = '', folders, pick_limit = null, extra_price = null } = body || {};
-      if (typeof title !== 'string') return jsonErr('title must be a string');
-      const snapshot = pickFolders(folders);
-      if (!snapshot) return jsonErr('folders must be a non-empty array of photo folders');
-      for (const [name, v] of [['pick_limit', pick_limit], ['extra_price', extra_price]]) {
-        if (v !== null && !(Number.isInteger(v) && v >= 0)) return jsonErr(`${name} must be a whole number from 0`);
-      }
+      const checked = pickProjectFields({ title, folders, pick_limit, extra_price });
+      if (checked.error) return jsonErr(checked.error);
+      const { folders: snapshot, title: cleanTitle } = checked.values;
       const id = crypto.randomUUID();
       const token = newShareToken();
       const now = Date.now();
       const createdAt = new Date(now).toISOString();
       const expiresAt = new Date(now + SHARE_TTL_MS).toISOString();
       const foldersJson = JSON.stringify(snapshot);
-      const cleanTitle = title.trim().slice(0, 200);
       await env.DB.prepare(
         'INSERT INTO projects (id, title, folders, pick_limit, extra_price, created_at, photographer_id) VALUES (?, ?, ?, ?, ?, ?, ?)'
       ).bind(id, cleanTitle, foldersJson, pick_limit, extra_price, createdAt, DEFAULT_PHOTOGRAPHER_ID).run();
@@ -1140,9 +1176,13 @@ export default {
         `SELECT ${PICK_UNNOTIFIED_SQL} AS unnotified FROM projects p WHERE p.id = ?`
       ).bind(project.id).first();
       const submissions = submitted.map(r => ({ ...r, photo_keys: parsePhotoKeys(r.photo_keys) }));
-      const { results: selections } = await env.DB.prepare(
-        'SELECT photo_key, rating, note, updated_by, updated_at FROM selections WHERE project_id = ? ORDER BY photo_key'
+      // every pick, including those in a folder since taken off the project:
+      // the guest no longer sees those (in_folders false), the photographer does
+      const { results: selectionRows } = await env.DB.prepare(
+        `SELECT s.photo_key, s.rating, s.note, s.updated_by, s.updated_at, ${pickCoveredSql('s.photo_key', 'p.folders')} AS in_folders ` +
+        'FROM selections s JOIN projects p ON p.id = s.project_id WHERE s.project_id = ? ORDER BY s.photo_key'
       ).bind(project.id).all();
+      const selections = selectionRows.map(r => ({ ...r, in_folders: !!r.in_folders }));
       // every pick link the project ever had, live or not, so the page can
       // offer revoke on the live ones
       const { results: tokenRows } = await env.DB.prepare(
@@ -1157,6 +1197,66 @@ export default {
         owner: pickers.find(p => p.id === project.owner_picker_id) || null,
         pickers, selections, tokens, submissions, unnotified_submissions: unnotified,
       }, 200, ADMIN_ONLY_HEADERS);
+    }
+
+    // PATCH /api/admin/projects/:id {title?, pick_limit?, extra_price?, folders?}
+    // — any of the four, checked as create checks them; anything else in the
+    // body is a 400, so a typo is not a silent no-op. Limit and price reach
+    // only later submits: each submission copied both when it was made.
+    // Folders reach every live pick link at once: the project row and every
+    // unrevoked pick token of it are rewritten in one batch, and the object,
+    // list and save routes read the token's own snapshot, so a link already
+    // in LINE opens the new set on its next request — wider or narrower.
+    // Revoked links keep theirs (they open nothing). Picks in a folder that
+    // was taken away are not deleted; they stop counting for the guest
+    // (pickCoveredSql) and come back with the folder. An archived project is
+    // refused like POST .../links refuses it: its links are all revoked, so
+    // the edit could reach nobody, and unarchive + a new link copies the
+    // project's folders anyway. Both writes re-check "this photographer's,
+    // not archived" themselves, so an archive landing after the read wins.
+    if (request.method === 'PATCH' && pathParts[0] === 'api' && pathParts[1] === 'admin' && pathParts[2] === 'projects' && pathParts[3] && !pathParts[4]) {
+      if (!isAdminToken(request, env)) return jsonErr('Unauthorized', 401);
+      if (!env.DB) return jsonErr('DB not configured', 500);
+      const id = pathParts[3];
+      let body;
+      try { body = await request.json(); } catch { return jsonErr('Invalid JSON'); }
+      if (!body || typeof body !== 'object' || Array.isArray(body)) return jsonErr('Invalid body');
+      if (!Object.keys(body).length) return jsonErr(`nothing to change: send any of ${PICK_PROJECT_FIELDS.join(', ')}`);
+      const checked = pickProjectFields(body);
+      if (checked.error) return jsonErr(checked.error);
+      const edits = { ...checked.values };
+      if (edits.folders) edits.folders = JSON.stringify(edits.folders);
+      const found = await env.DB.prepare('SELECT archived_at FROM projects WHERE id = ? AND photographer_id = ?')
+        .bind(id, DEFAULT_PHOTOGRAPHER_ID).first();
+      if (!found) return jsonErr('Not found', 404);
+      const archivedErr = () => jsonOk({ error: '專案已封存，請先取消封存再修改', code: 'archived' }, 409, ADMIN_ONLY_HEADERS);
+      if (found.archived_at) return archivedErr();
+      // column names come from PICK_PROJECT_FIELDS, never from the body's keys
+      const names = PICK_PROJECT_FIELDS.filter(n => n in edits);
+      const open = 'id = ? AND photographer_id = ? AND archived_at IS NULL';
+      const writes = [
+        env.DB.prepare(`UPDATE projects SET ${names.map(n => `${n} = ?`).join(', ')} WHERE ${open}`)
+          .bind(...names.map(n => edits[n]), id, DEFAULT_PHOTOGRAPHER_ID),
+      ];
+      if (edits.folders) {
+        // pick links only: album, studio and session links never carry a
+        // project's scope, whatever their project_id column says
+        writes.push(env.DB.prepare(
+          "UPDATE share_tokens SET folders = ? WHERE kind = 'pick' AND project_id = ? AND revoked_at IS NULL " +
+          `AND EXISTS (SELECT 1 FROM projects WHERE ${open})`
+        ).bind(edits.folders, id, id, DEFAULT_PHOTOGRAPHER_ID));
+      }
+      const [updated] = await env.DB.batch(writes);
+      if (!updated.meta?.changes) {
+        const still = await env.DB.prepare('SELECT id FROM projects WHERE id = ? AND photographer_id = ?')
+          .bind(id, DEFAULT_PHOTOGRAPHER_ID).first();
+        return still ? archivedErr() : jsonErr('Not found', 404);
+      }
+      const project = await env.DB.prepare('SELECT * FROM projects WHERE id = ? AND photographer_id = ?')
+        .bind(id, DEFAULT_PHOTOGRAPHER_ID).first();
+      let folders = null;
+      try { folders = JSON.parse(project.folders); } catch {}
+      return jsonOk({ project: { ...project, folders } }, 200, ADMIN_ONLY_HEADERS);
     }
 
     // POST /api/admin/projects/:id/reset-seat — the guest lost their browser.
@@ -1285,10 +1385,13 @@ export default {
       const createdAt = new Date(now).toISOString();
       const expiresAt = new Date(now + SHARE_TTL_MS).toISOString();
       // Gated on the project still being open, so an archive landing between
-      // the read above and this write leaves no live link behind it.
+      // the read above and this write leaves no live link behind it. The
+      // folders are copied from the row inside the INSERT, not from the read
+      // above: a folders edit rewrites the links that exist when it runs, so
+      // one landing in between would otherwise leave this link on the old set.
       const minted = await env.DB.prepare(
-        "INSERT INTO share_tokens (token, book_id, label, kind, project_id, folders, created_at, expires_at) SELECT ?, '', ?, 'pick', ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM projects WHERE id = ? AND archived_at IS NULL)"
-      ).bind(token, project.title, project.id, project.folders, createdAt, expiresAt, project.id).run();
+        "INSERT INTO share_tokens (token, book_id, label, kind, project_id, folders, created_at, expires_at) SELECT ?, '', ?, 'pick', id, folders, ?, ? FROM projects WHERE id = ? AND archived_at IS NULL"
+      ).bind(token, project.title, createdAt, expiresAt, project.id).run();
       if (!minted.meta || !minted.meta.changes) return archivedErr();
       return jsonOk({ token, expires_at: expiresAt, created_at: createdAt, status: 'live' }, 201, ADMIN_ONLY_HEADERS);
     }
@@ -1538,8 +1641,12 @@ export default {
         await touchShareToken(s, request, env);
         // notes are the owner's own words to the photographer: a viewer sees
         // what was picked and how it was rated, never the note
+        // only picks inside the project's folders as they stand now: one in a
+        // folder the photographer took away stays in D1 but is not the
+        // guest's to see, count or submit (pickCoveredSql)
         const { results: selections } = await env.DB.prepare(
-          `SELECT photo_key, rating${isOwner ? ', note' : ''} FROM selections WHERE project_id = ? ORDER BY photo_key`
+          `SELECT s.photo_key, s.rating${isOwner ? ', s.note' : ''} FROM selections s JOIN projects p ON p.id = s.project_id ` +
+          `WHERE s.project_id = ? AND ${pickCoveredSql('s.photo_key', 'p.folders')} ORDER BY s.photo_key`
         ).bind(project.id).all();
         // the owner learns when the project was last submitted and whether they
         // changed anything since; a viewer only which phase it is in
@@ -1711,7 +1818,10 @@ export default {
         // INSERT, so a row it just added makes them see a repeat.
         const submissionId = crypto.randomUUID();
         const submittedAt = new Date().toISOString();
-        const picked = 'SELECT photo_key FROM selections WHERE project_id = p.id AND rating > 0 ORDER BY photo_key';
+        // and only picks inside the project's folders as they stand in this
+        // same transaction — the rule the state route shows the guest by
+        const picked = 'SELECT photo_key FROM selections WHERE project_id = p.id AND rating > 0 AND ' +
+          `${pickCoveredSql('selections.photo_key', 'p.folders')} ORDER BY photo_key`;
         const snapshot = `(SELECT json_group_array(photo_key) FROM (${picked}))`;
         // both sides built by json_group_array over keys in the same order
         const repeat = `(SELECT photo_keys FROM submissions WHERE project_id = p.id ORDER BY rowid DESC LIMIT 1) IS ${snapshot}`;

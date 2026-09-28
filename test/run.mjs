@@ -3393,6 +3393,29 @@ function delimitedListFake(files, prefix) {
   return { data, folders: Array.from(prefixSet).sort() };
 }
 
+// Mirrors worker.js's pickFolders: canonical (trailing /), deduped, and null
+// for anything that could not name a photo folder.
+function pickFoldersFake(value) {
+  if (!Array.isArray(value) || !value.length) return null;
+  const out = [];
+  for (const f of value) {
+    if (typeof f !== 'string' || !f.trim()) return null;
+    const t = f.trim();
+    const sl = t.endsWith('/') ? t : t + '/';
+    if (sl.startsWith('/') || sl.startsWith('_')) return null;
+    const seg = sl.split('/');
+    if (seg.includes('..') || seg.includes('.')) return null;
+    if (!out.includes(sl)) out.push(sl);
+  }
+  return out;
+}
+// Mirrors worker.js's pickCoveredSql: the key sits inside one of the
+// project's current folders, on a / boundary.
+function pickCoveredFake(folders, key) {
+  return (folders || []).some(f => typeof f === 'string' && f !== '/' &&
+    key.startsWith(f.endsWith('/') ? f : f + '/'));
+}
+
 function pickFakeWorker(opts = {}) {
   const state = {
     project: {
@@ -3471,7 +3494,11 @@ function pickFakeWorker(opts = {}) {
           submitted_at: subs.length ? subs[subs.length - 1].created_at : null,
           // notes are the owner's own words to the photographer — a viewer
           // gets {photo_key, rating} only (docs/guest-picking.md)
+          // only picks inside the project's current folders (worker.js's
+          // pickCoveredSql) — one in a folder since removed stays in the
+          // store but is not the guest's to see
           selections: Array.from(state.selections.entries())
+            .filter(([photo_key]) => pickCoveredFake(state.project.folders, photo_key))
             .map(([photo_key, s]) => isOwner ? { photo_key, rating: s.rating, note: s.note } : { photo_key, rating: s.rating }),
         };
         if (isOwner) resp.modified_after_submit = state.project.modified_after_submit;
@@ -3553,7 +3580,7 @@ function pickFakeWorker(opts = {}) {
           mail = body.email;
         }
         const photo_keys = Array.from(state.selections.entries())
-          .filter(([, s]) => s.rating > 0).map(([k]) => k).sort();
+          .filter(([k, s]) => s.rating > 0 && pickCoveredFake(state.project.folders, k)).map(([k]) => k).sort();
         const submission = {
           id: 'sub-' + (state.submissions.length + 1), picker_id: picker.id,
           relationship: body.relationship, email: mail, photo_keys, count: photo_keys.length,
@@ -3617,7 +3644,10 @@ function pickFakeWorker(opts = {}) {
           email: p.email || null, user_id: null, created_at: '2026-01-01T00:00:00.000Z',
         }));
         const selections = Array.from(state.selections.entries())
-          .map(([photo_key, s]) => ({ photo_key, rating: s.rating, note: s.note, updated_by: s.updated_by, updated_at: s.updated_at }));
+          .map(([photo_key, s]) => ({
+            photo_key, rating: s.rating, note: s.note, updated_by: s.updated_by, updated_at: s.updated_at,
+            in_folders: pickCoveredFake(state.project.folders, photo_key),
+          }));
         const submissions = state.submissions.slice().reverse();
         const owner = state.project.owner_picker_id ? state.pickers.get(state.project.owner_picker_id) : null;
         const tokens = state.tokens.slice().reverse().map(t => ({ ...t, status: pickTokenStatusFake(t) }));
@@ -3627,6 +3657,34 @@ function pickFakeWorker(opts = {}) {
           pickers, selections, tokens, submissions,
           unnotified_submissions: unnotifiedCountFake(state.submissions),
         });
+      }
+      // PATCH /api/admin/projects/:id — worker.js's rules: any of the four
+      // fields, each checked as create checks it, anything else a 400; an
+      // archived project a 409 archived. state.failPatch forces a response.
+      if (/^\/api\/admin\/projects\/[^/]+$/.test(u.pathname) && method === 'PATCH') {
+        if (state.failPatch) return json(state.failPatch.body, state.failPatch.status);
+        if (!body || typeof body !== 'object' || Array.isArray(body)) return json({ error: 'Invalid body' }, 400);
+        if (!Object.keys(body).length) return json({ error: 'nothing to change: send any of title, folders, pick_limit, extra_price' }, 400);
+        const next = {};
+        for (const [k, v] of Object.entries(body)) {
+          if (k === 'title') {
+            if (typeof v !== 'string') return json({ error: 'title must be a string' }, 400);
+            next.title = v.trim().slice(0, 200);
+          } else if (k === 'folders') {
+            const f = pickFoldersFake(v);
+            if (!f) return json({ error: 'folders must be a non-empty array of photo folders' }, 400);
+            next.folders = f;
+          } else if (k === 'pick_limit' || k === 'extra_price') {
+            if (v !== null && !(Number.isInteger(v) && v >= 0)) return json({ error: `${k} must be a whole number from 0` }, 400);
+            next[k] = v;
+          } else {
+            return json({ error: `unknown field: ${k}` }, 400);
+          }
+        }
+        if (state.deleted) return json({ error: 'Not found' }, 404);
+        if (state.project.archived_at) return json({ error: '專案已封存，請先取消封存再修改', code: 'archived' }, 409);
+        Object.assign(state.project, next);
+        return json({ project: { ...state.project } });
       }
       if (/^\/api\/admin\/projects\/[^/]+$/.test(u.pathname) && method === 'DELETE') {
         if (state.submissions.length)
@@ -4750,6 +4808,242 @@ await suite('photographer mode — the path box, LOAD button and folder tree are
       return out;
     },
     { before: m.attach, initScript: ADMIN });
+}
+
+// ─── 編輯設定: editing a project after it was created ──────────────────────
+// PATCH /api/admin/projects/:id (worker/test/pick-edit.test.mjs pins the
+// route). The form is the create form's fields, prefilled; only what changed
+// is sent; narrowing the folders warns first that picks in a removed folder
+// are hidden from the guest, not deleted.
+async function openEdit(page) {
+  await page.waitForSelector('[data-open-project]', { timeout: 5000 });
+  await page.click('[data-open-project]');
+  await page.waitForSelector('#pd-edit-btn', { timeout: 5000 });
+  await page.click('#pd-edit-btn');
+  await page.waitForSelector('#pd-edit-form #pd-edit-title', { timeout: 5000 });
+}
+const editChips = page => page.evaluate(() =>
+  [...document.querySelectorAll('#pd-edit-folders-cell [data-folder-chip]')].map(el => el.dataset.folderChip));
+const patches = m => m.requests.filter(r => r.method === 'PATCH');
+
+{
+  const m = pickFakeWorker({ title: '舊標題', pickLimit: 40, extraPrice: 200, bucketFolders: ['20260819/', '20260901/'] });
+  await suite('admin — 編輯設定: the form is prefilled from the project, 儲存 PATCHes only what changed, then the detail and list refresh',
+    `${base}/admin.html`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      const dialogs = [];
+      page.on('dialog', d => { dialogs.push(d.message()); d.accept(); });
+      await openEdit(page);
+
+      const pre = await page.evaluate(() => ({
+        title: document.getElementById('pd-edit-title').value,
+        limit: document.getElementById('pd-edit-limit').value,
+        price: document.getElementById('pd-edit-price').value,
+        createChips: document.querySelectorAll('#proj-folders-cell [data-folder-chip]').length,
+        inDetail: !!document.querySelector('#project-detail-body #pd-edit-form'),
+      }));
+      ok('the title is prefilled', pre.title === '舊標題', pre.title);
+      ok('張數 is prefilled', pre.limit === '40', pre.limit);
+      ok('加挑單價 is prefilled', pre.price === '200', pre.price);
+      ok('the folders are prefilled as chips in the edit form', JSON.stringify(await editChips(page)) === '["20260819/"]',
+        JSON.stringify(await editChips(page)));
+      ok('the form sits inside the project detail', pre.inDetail);
+      ok('the create form’s own folder cell is untouched', pre.createChips === 0, String(pre.createChips));
+
+      await page.fill('#pd-edit-title', '新標題');
+      await page.fill('#pd-edit-price', '');
+      await page.click('#pd-edit-pick-folders-btn');
+      await page.waitForSelector('#folder-picker', { state: 'visible' });
+      await page.waitForSelector('[data-pick-folder="20260901/"]');
+      ok('the picker opens with the project’s folders already ticked',
+        await page.isChecked('[data-pick-folder="20260819/"]') && !(await page.isChecked('[data-pick-folder="20260901/"]')));
+      await page.check('[data-pick-folder="20260901/"]');
+      await page.click('[data-confirm-folders]');
+      await page.waitForSelector('#folder-picker', { state: 'hidden' });
+      ok('the picked folder is added to the edit form’s chips',
+        JSON.stringify(await editChips(page)) === '["20260819/","20260901/"]', JSON.stringify(await editChips(page)));
+      ok('and not to the create form',
+        await page.evaluate(() => document.querySelectorAll('#proj-folders-cell [data-folder-chip]').length) === 0);
+
+      await page.click('#pd-edit-save');
+      await page.waitForFunction(() => !document.getElementById('pd-edit-form') ||
+        document.getElementById('pd-edit-form').style.display === 'none', null, { timeout: 5000 });
+      const sent = patches(m);
+      ok('one PATCH was sent to the project', sent.length === 1 && sent[0].path === '/api/admin/projects/proj-1',
+        JSON.stringify(sent));
+      ok('carrying only what changed (blank price = null, no pick_limit)',
+        sent[0] && JSON.stringify(sent[0].body) === JSON.stringify({ title: '新標題', extra_price: null, folders: ['20260819/', '20260901/'] }),
+        JSON.stringify(sent[0] && sent[0].body));
+      ok('widening the folders asks nothing', dialogs.length === 0, JSON.stringify(dialogs));
+
+      await page.waitForFunction(() => (document.getElementById('pd-settings') || {}).textContent?.includes('20260901/'), null, { timeout: 5000 });
+      const after = await page.evaluate(() => ({
+        head: document.querySelector('.pd-head h3').textContent,
+        settings: document.getElementById('pd-settings').textContent,
+        list: document.getElementById('proj-recent-list').textContent,
+      }));
+      ok('the detail is re-read: new title', after.head === '新標題', after.head);
+      ok('the detail is re-read: folders and plan', after.settings.includes('20260901/') && after.settings.includes('40 張') &&
+        after.settings.includes('不顯示'), after.settings);
+      ok('the project list is re-read too', after.list.includes('新標題'), after.list);
+
+      // nothing changed: no request at all
+      await page.click('#pd-edit-btn');
+      await page.waitForSelector('#pd-edit-form #pd-edit-save');
+      ok('re-opened, the form holds the saved values',
+        await page.inputValue('#pd-edit-title') === '新標題' && await page.inputValue('#pd-edit-price') === '');
+      await page.click('#pd-edit-save');
+      await page.waitForTimeout(200);
+      ok('saving an unchanged form sends nothing', patches(m).length === 1, String(patches(m).length));
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN });
+}
+
+{
+  const m = pickFakeWorker({ ownerName: 'Grace', folders: ['20260819/', '20260901/'], bucketFolders: ['20260819/', '20260901/'] });
+  const at = '2026-01-01T00:00:00Z';
+  m.state.selections.set('20260819/p0.jpg', { rating: 1, note: '', updated_by: 'picker-0', updated_at: at });
+  m.state.selections.set('20260901/x.jpg', { rating: 1, note: '留這張', updated_by: 'picker-0', updated_at: at });
+  await suite('admin — 編輯設定: narrowing the folders warns first that the picks in them are hidden, not deleted; the admin view marks them',
+    `${base}/admin.html`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      const dialogs = [];
+      let answer = false;
+      page.on('dialog', d => { dialogs.push(d.message()); answer ? d.accept() : d.dismiss(); });
+      await openEdit(page);
+      await page.click('#pd-edit-folders-cell [data-remove-proj-folder="20260901/"]');
+      ok('the chip is gone from the edit form', JSON.stringify(await editChips(page)) === '["20260819/"]');
+
+      await page.click('#pd-edit-save');
+      await page.waitForTimeout(200);
+      ok('a warning is shown before saving', dialogs.length === 1, JSON.stringify(dialogs));
+      const msg = dialogs[0] || '';
+      ok('it names the folder being removed', msg.includes('20260901/'), msg);
+      ok('it says how many picks are affected', msg.includes('1 張'), msg);
+      ok('it says they are hidden from the guest, kept and not deleted', msg.includes('看不到') && msg.includes('保留') && msg.includes('不會刪除'), msg);
+      ok('declining sends nothing', patches(m).length === 0, String(patches(m).length));
+
+      answer = true;
+      await page.click('#pd-edit-save');
+      await page.waitForFunction(() => document.querySelector('[data-folder-removed]'), null, { timeout: 5000 });
+      const sent = patches(m);
+      ok('accepting sends the narrowed folders',
+        sent.length === 1 && JSON.stringify(sent[0].body) === JSON.stringify({ folders: ['20260819/'] }), JSON.stringify(sent));
+
+      const r = await page.evaluate(() => ({
+        summary: document.querySelector('#pd-selections-details summary').textContent,
+        removedRows: [...document.querySelectorAll('[data-folder-removed]')].map(tr => tr.textContent),
+        rows: document.querySelectorAll('#pd-selections-details tbody tr').length,
+      }));
+      ok('the hidden pick is still listed, marked 資料夾已移除',
+        r.removedRows.length === 1 && r.removedRows[0].includes('20260901/x.jpg') && r.removedRows[0].includes('資料夾已移除') &&
+        r.removedRows[0].includes('留這張'), JSON.stringify(r.removedRows));
+      ok('the visible pick is listed unmarked', r.rows === 2, String(r.rows));
+      ok('the count is the guest’s, with the hidden ones called out',
+        r.summary.includes('目前選取（1 張）') && r.summary.includes('另有 1 張在已移除的資料夾'), r.summary);
+      ok('the store still holds the pick (hidden, not deleted)', m.state.selections.has('20260901/x.jpg'));
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN });
+}
+
+{
+  const m = pickFakeWorker({ pickLimit: 40 });
+  await suite('admin — 編輯設定: bad input is refused on the page, and a server refusal is shown in Chinese',
+    `${base}/admin.html`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      page.on('dialog', d => d.accept());
+      await openEdit(page);
+      const err = () => page.textContent('#pd-edit-err');
+
+      await page.fill('#pd-edit-price', '-1');
+      await page.click('#pd-edit-save');
+      ok('a negative price is refused on the page', (await err()) === '加選單價需為 0 以上整數', await err());
+      await page.fill('#pd-edit-price', '');
+      await page.fill('#pd-edit-limit', '-3');
+      await page.click('#pd-edit-save');
+      ok('a negative limit is refused on the page', (await err()) === '精修張數上限需為 0 以上整數', await err());
+      await page.fill('#pd-edit-limit', '40');
+      await page.click('#pd-edit-folders-cell [data-remove-proj-folder]');
+      await page.click('#pd-edit-save');
+      ok('no folders is refused on the page', (await err()) === '請至少選擇一個資料夾', await err());
+      ok('none of those reached the Worker', patches(m).length === 0, String(patches(m).length));
+
+      // archived from another tab after the form was opened
+      await page.click('#pd-edit-cancel');
+      await page.click('#pd-edit-btn');
+      await page.waitForSelector('#pd-edit-form #pd-edit-save');
+      m.state.project.archived_at = '2026-02-01T00:00:00Z';
+      await page.fill('#pd-edit-title', '改名');
+      await page.click('#pd-edit-save');
+      await page.waitForFunction(() => document.getElementById('pd-edit-err').textContent, null, { timeout: 5000 });
+      ok('409 archived is explained', (await err()) === '專案已封存，請先取消封存再修改', await err());
+      ok('and the form stays open with what was typed', await page.inputValue('#pd-edit-title') === '改名');
+
+      m.state.project.archived_at = null;
+      m.state.failPatch = { status: 400, body: { error: 'pick_limit must be a whole number from 0' } };
+      await page.click('#pd-edit-save');
+      await page.waitForFunction(() => document.getElementById('pd-edit-err').textContent === '精修張數上限需為 0 以上整數', null, { timeout: 5000 })
+        .then(() => ok('a 400 from the Worker is shown in Chinese', true))
+        .catch(async () => ok('a 400 from the Worker is shown in Chinese', false, await err()));
+      m.state.failPatch = { status: 500, body: {} };
+      await page.click('#pd-edit-save');
+      await page.waitForFunction(() => document.getElementById('pd-edit-err').textContent.includes('500'), null, { timeout: 5000 })
+        .then(() => ok('anything else says it failed, with the status', true))
+        .catch(async () => ok('anything else says it failed, with the status', false, await err()));
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN });
+}
+
+{
+  const m = pickFakeWorker({ archivedAt: '2026-02-01T00:00:00Z' });
+  await suite('admin — 編輯設定 is not offered on an archived project',
+    `${base}/admin.html`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('#admin-view', { state: 'visible', timeout: 5000 });
+      await page.check('#proj-show-archived-toggle');
+      await page.waitForSelector('[data-open-project]', { timeout: 5000 });
+      await page.click('[data-open-project]');
+      await page.waitForSelector('#pd-unarchive-btn', { timeout: 5000 });
+      ok('the detail is the archived one', await page.isVisible('#pd-unarchive-btn'));
+      ok('no 編輯設定 button in the DOM', await page.evaluate(() => !document.getElementById('pd-edit-btn')));
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN });
+}
+
+{
+  // the guest page reads the fake's filtered state: a pick in a removed
+  // folder is not counted in ♥ 已選
+  const m = pickFakeWorker({ ownerName: 'Grace', ownerKey: 'OWNER-KEY', folders: ['20260819/'] });
+  m.state.selections.set('20260819/p0.jpg', { rating: 1, note: '', updated_by: 'picker-0', updated_at: '2026-01-01T00:00:00Z' });
+  m.state.selections.set('20260901/gone.jpg', { rating: 1, note: '', updated_by: 'picker-0', updated_at: '2026-01-01T00:00:00Z' });
+  await suite('guest picking — a pick in a folder the photographer removed is not counted or shown',
+    `${base}/index.html?t=TOK`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('.photo-card', { timeout: 5000 });
+      await page.waitForFunction(() => (document.getElementById('pickFilterSelectedCount') || {}).textContent !== '', null, { timeout: 5000 });
+      const badge = await page.textContent('#pickFilterSelectedCount');
+      ok('the ♥ 已選 count is 1, not 2', badge === '1', badge);
+      await page.click('#pickFilterBar [data-pick-filter="selected"]');
+      await page.waitForTimeout(300);
+      const ids = await page.evaluate(() => [...document.querySelectorAll('.photo-card')].map(el => el.dataset.photoId));
+      ok('已選 lists only the pick inside the project\u2019s folders', JSON.stringify(ids) === '["20260819/p0.jpg"]', JSON.stringify(ids));
+      return out;
+    },
+    { before: m.attach, initScript: () => localStorage.setItem('pick_key:TOK', 'OWNER-KEY') });
 }
 
 await suite('admin — escHtml(0): a project with zero submissions shows 送出 0 次, not blank',
@@ -6105,7 +6399,9 @@ await suite('desktop preview — arrow keys and mouse click still navigate/open 
 // ═══════════════════════════════════════════════════════════════════════════
 
 {
-  const m = pickFakeWorker({ ownerName: 'Grace' });
+  // both folders on the project: a pick outside its folders is one the
+  // photographer removed, and is counted apart (編輯設定 suites)
+  const m = pickFakeWorker({ ownerName: 'Grace', folders: ['20260819/', '20260901/'] });
   m.state.selections.set('20260819/a.jpg', { rating: 5, note: '', updated_by: 'picker-0', updated_at: '2026-01-01T00:00:00Z' });
   m.state.selections.set('20260901/b.jpg', { rating: 3, note: '', updated_by: 'picker-0', updated_at: '2026-01-01T00:00:00Z' });
   m.state.selections.set('20260819/zero.jpg', { rating: 0, note: '', updated_by: 'picker-0', updated_at: '2026-01-01T00:00:00Z' });
