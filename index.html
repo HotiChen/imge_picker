@@ -81,13 +81,8 @@
         <div class="header-right">
             <span id="pickCounter" class="pick-counter" hidden>
                 <span id="pickCounterMain"></span>
-                <span id="pickCounterWarn" class="pick-counter-warn" hidden></span>
             </span>
             <button id="submitJobBtn" class="btn btn-success" style="display: none;">✅ 完成挑圖</button>
-            <!-- Guest pick page only (js/pick.js, docs/dashboard-settings.md):
-                 href is set from the server's studio.booking_url and only
-                 when it starts with https://, never left as a bare '#'. -->
-            <a id="studioBookingLink" class="btn btn-outline" href="#" target="_blank" rel="noopener noreferrer" hidden>📅 預約拍攝</a>
             <a href="upload.html" class="btn btn-outline" id="uploadPageBtn">⬆ 上傳</a>
             <button id="openBookEditorBtn" class="btn btn-outline">📖 相本書</button>
             <div class="user-avatar-circle" id="userAvatarStudio">HC</div>
@@ -103,6 +98,15 @@
         <div id="pickBannerHint" class="pick-banner-hint" hidden>
             <span id="pickBannerHintText"></span>
             <span>請攝影師重設</span>
+        </div>
+        <!-- 預約拍攝 — moved out of the header (docs/dashboard-settings.md):
+             only shown once the seat holder has actually submitted, and only
+             when studio.booking_url is a real https:// url (js/pick.js,
+             renderBanner). href is set by property, never string-built, and
+             only when it starts with https:// — same safety rules as before. -->
+        <div id="pickBannerBooking" class="pick-banner-booking" hidden>
+            <span>想預約下次拍攝？</span>
+            <a id="studioBookingLink" class="btn btn-outline" href="#" target="_blank" rel="noopener noreferrer">📅 預約拍攝</a>
         </div>
     </div>
 
@@ -373,13 +377,18 @@
 
         <!-- 手機版專用底部操作列 (P0) -->
         <div id="mobileActionBar" class="mobile-action-bar" style="display: none;">
-            <div class="mobile-action-status">
+            <div id="mobileActionStatus" class="mobile-action-status">
                 <span style="font-size: 0.8rem; color: var(--text-secondary);">已選取</span>
                 <span id="mobileSelectedCount"
                     style="font-weight: bold; font-size: 1.1rem; color: var(--primary);">0</span>
                 <span style="font-size: 0.8rem; color: var(--text-secondary);">張</span>
             </div>
-            <button class="btn btn-success" style="font-weight: bold; flex: 1; margin-left: 15px;"
+            <!-- Guest picking, mobile only (js/pick.js): replaces the
+                 bulk-select status above with the ♥ pick count (only for the
+                 seat holder — js/pick.js hides the whole bar for a viewer).
+                 Hidden outside pick mode; nothing else ever unhides it. -->
+            <span id="pickMobileCounter" class="pick-mobile-counter" hidden></span>
+            <button id="mobileActionSubmitBtn" class="btn btn-success" style="font-weight: bold; flex: 1; margin-left: 15px;"
                 onclick="app.submitJob()">
                 ✅ 完成提交
             </button>
@@ -598,6 +607,12 @@
                 <label for="pickSubmitEmail">Email（選填）</label>
                 <input id="pickSubmitEmail" type="email" class="input" maxlength="254">
             </div>
+            <!-- Guest picking — shown only when the current ♥ count is over
+                 the plan's pick_limit (js/pick.js, openSubmitModal), so the
+                 guest sees the overage and the extra fee before they confirm
+                 and send. Text is entirely computed from server-given
+                 numbers, never guest input. -->
+            <div id="pickSubmitOverInfo" class="pick-submit-over" hidden></div>
             <div id="pickSubmitErr" class="pick-claim-err"></div>
             <div class="pick-submit-actions">
                 <button id="pickSubmitCancelBtn" class="btn btn-outline">取消</button>

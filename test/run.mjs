@@ -3852,7 +3852,7 @@ await suite('guest picking — a free seat blocks on a name, then loads an edita
 
 {
   const m = pickFakeWorker({ ownerName: 'Alice', ownerKey: 'ALICE-KEY', pickLimit: 1, extraPrice: 50 });
-  await suite('guest picking — ratings autosave debounced and batched, and the counter warns over the limit',
+  await suite('guest picking — ratings autosave debounced and batched, and the counter turns red over the limit (no warning sentence)',
     `${base}/index.html?t=TOK`,
     async page => {
       const out = [];
@@ -3877,19 +3877,23 @@ await suite('guest picking — a free seat blocks on a name, then loads an edita
 
       const counter1 = await page.evaluate(() => document.getElementById('pickCounterMain').textContent);
       ok('the counter shows the plan’s limit', counter1 === '已選 1 / 1', counter1);
-      ok('no over-limit warning yet',
-        await page.evaluate(() => document.getElementById('pickCounterWarn').hidden === true));
+      ok('not over yet — no red, no pickCounterWarn element left in the DOM at all',
+        await page.evaluate(() =>
+          !document.getElementById('pickCounter').classList.contains('over') &&
+          document.getElementById('pickCounterWarn') === null));
 
       await card(1).locator('.pick-heart-btn').click();
       await page.waitForTimeout(1000);
       const counter2 = await page.evaluate(() => document.getElementById('pickCounterMain').textContent);
-      ok('the counter now reads 2', counter2 === '已選 2 / 1', counter2);
-      const warn = await page.evaluate(() => ({
-        hidden: document.getElementById('pickCounterWarn').hidden,
-        text: document.getElementById('pickCounterWarn').textContent,
-      }));
-      ok('warns over the limit, with the per-photo fee, and never blocks anything',
-        !warn.hidden && warn.text === '方案 1 張精修，您已選 2 張，多 1 張，每張 NT$50 加挑費', warn.text);
+      ok('the counter now reads 2 — numbers only, no warning sentence anywhere',
+        counter2 === '已選 2 / 1', counter2);
+      const overStyle = await page.evaluate(() => {
+        const el = document.getElementById('pickCounter');
+        const main = document.getElementById('pickCounterMain');
+        return { over: el.classList.contains('over'), color: getComputedStyle(main).color };
+      });
+      ok('over the limit turns the counter red (via .over), and it never blocks the ♥ toggle',
+        overStyle.over === true, JSON.stringify(overStyle));
 
       const badge1 = await page.evaluate(() => document.getElementById('pickFilterSelectedCount').textContent);
       ok('the ♥ 已選 filter badge tracks the same count', badge1 === '2', badge1);
@@ -5851,7 +5855,7 @@ await suite('responsive preview width — a desktop viewport keeps the 1600 buck
 
 {
   const m = pickFakeWorker({ ownerName: 'Zoe', ownerKey: 'ZOE-KEY', photos: PHOTOS(2) });
-  await suite('tap targets on a mobile viewport — ♥, the filter buttons, and 完成挑圖/確認送出 are all >= 44x44 CSS px',
+  await suite('tap targets on a mobile viewport — ♥, the filter buttons, and 完成提交/確認送出 are all >= 44x44 CSS px',
     `${base}/index.html?t=TOK`,
     async page => {
       const out = [];
@@ -5871,16 +5875,355 @@ await suite('responsive preview width — a desktop viewport keeps the 1600 buck
       b = await box('[data-pick-filter="selected"]');
       ok('a filter button is >= 44 tall', !!b && b.h >= 44, JSON.stringify(b));
 
-      b = await box('#submitJobBtn');
-      ok('完成挑圖 is >= 44 tall', !!b && b.h >= 44, JSON.stringify(b));
+      // 完成挑圖 (header) is hidden on mobile in pick mode now — the bottom
+      // bar's 完成提交 is the one the guest can actually reach.
+      b = await box('#mobileActionSubmitBtn');
+      ok('完成提交 (bottom bar) is >= 44 tall', !!b && b.h >= 44, JSON.stringify(b));
 
-      await page.click('#submitJobBtn');
+      await page.click('#mobileActionSubmitBtn');
       await page.waitForSelector('#pickSubmitModal.active', { timeout: 5000 });
       b = await box('#pickSubmitConfirmBtn');
       ok('確認送出 is >= 44 tall', !!b && b.h >= 44, JSON.stringify(b));
       return out;
     },
     { before: m.attach, initScript: () => localStorage.setItem('pick_key:TOK', 'ZOE-KEY'), contextOptions: MOBILE });
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Mobile bottom bar (docs/guest-picking.md) — #mobileActionBar repurposed for
+// pick mode on the mobile layout: the ♥ count + the real submit flow for the
+// seat holder, nothing at all for a viewer, and the header's own #pickCounter
+// / #submitJobBtn hidden so nothing is shown twice.
+// ═══════════════════════════════════════════════════════════════════════════
+
+{
+  const m = pickFakeWorker({ ownerName: 'Gina', ownerKey: 'GINA-KEY', pickLimit: 1, photos: PHOTOS(3) });
+  await suite('mobile bottom bar — owner sees the ♥ count (not the old 0), it follows every ♥ change, and turns red over the limit with no warning sentence',
+    `${base}/index.html?t=TOK`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('.photo-card', { timeout: 5000 });
+
+      const barState = () => page.evaluate(() => {
+        const bar = document.getElementById('mobileActionBar');
+        const counter = document.getElementById('pickMobileCounter');
+        const status = document.getElementById('mobileActionStatus');
+        const r = bar.getBoundingClientRect();
+        return {
+          display: getComputedStyle(bar).display,
+          onScreen: r.height > 0 && r.bottom <= window.innerHeight + 1 && r.top >= 0,
+          counterText: counter.hidden ? null : counter.textContent,
+          counterHidden: counter.hidden,
+          statusHidden: status.hidden,
+          over: counter.classList.contains('over'),
+        };
+      });
+
+      let s = await barState();
+      ok('the bar is visible on screen for the seat holder', s.display !== 'none' && s.onScreen, JSON.stringify(s));
+      ok('the old bulk-select "已選取" status is hidden, replaced by the ♥ count', s.statusHidden === true, JSON.stringify(s));
+      ok('starts at 0 — the real ♥ count, not app.selectedPhotoIds', s.counterText === '已選 0 / 1', s.counterText);
+      ok('not over yet, so not red', s.over === false, JSON.stringify(s));
+
+      // the ♥ button
+      await page.locator('.photo-card').nth(0).locator('.pick-heart-btn').tap();
+      await page.waitForFunction(() => document.getElementById('pickMobileCounter').textContent === '已選 1 / 1');
+      s = await barState();
+      ok('a ♥ button tap updates the bar live', s.counterText === '已選 1 / 1', s.counterText);
+
+      // double-tap in the full-size preview
+      await page.locator('.photo-card').nth(1).tap();
+      await page.waitForSelector('#photoModal.active', { timeout: 5000 });
+      await doubleTapTouch(page, '#photoCanvas', 195, 400);
+      await page.waitForFunction(() => document.getElementById('pickMobileCounter').textContent === '已選 2 / 1');
+      s = await barState();
+      ok('a preview double-tap updates the bar live too, and now it is over the limit', s.counterText === '已選 2 / 1', s.counterText);
+      ok('over the limit turns the bar count red (no warning sentence, still one line)', s.over === true, JSON.stringify(s));
+      ok('no warning sentence exists anywhere in the DOM any more', await page.evaluate(() =>
+        document.getElementById('pickCounterWarn') === null && document.getElementById('pickSubmitOverInfo').hidden === true));
+      return out;
+    },
+    { before: m.attach, initScript: () => localStorage.setItem('pick_key:TOK', 'GINA-KEY'), contextOptions: MOBILE });
+}
+
+{
+  const m = pickFakeWorker({ ownerName: 'Hana', ownerKey: 'HANA-KEY', folders: ['20260819/', '20260820/'], photos: PHOTOS(2) });
+  await suite('mobile bottom bar — stays correct across a filter switch and a folder change, and a fresh viewer never sees it',
+    `${base}/index.html?t=TOK`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('.photo-card', { timeout: 5000 });
+
+      await page.locator('.photo-card').nth(0).locator('.pick-heart-btn').tap();
+      await page.waitForFunction(() => document.getElementById('pickMobileCounter').textContent === '已選 1 張');
+
+      // the sidebar (filter bar + folder tree) is off-screen on mobile until
+      // the hamburger toggle opens it
+      await page.click('#sidebarToggle');
+      await page.click('[data-pick-filter="selected"]');
+      await page.waitForTimeout(100);
+      let text = await page.evaluate(() => document.getElementById('pickMobileCounter').textContent);
+      ok('switching the 全部/已選/未選 filter leaves the count correct', text === '已選 1 張', text);
+
+      await page.locator('.tree-row[data-folder="20260820/"]').click();
+      await page.waitForSelector('.photo-card', { timeout: 5000 });
+      text = await page.evaluate(() => document.getElementById('pickMobileCounter').textContent);
+      ok('changing folder leaves the count correct (♥ 已選 reaches across folders)', text === '已選 1 張', text);
+      return out;
+    },
+    { before: m.attach, initScript: () => localStorage.setItem('pick_key:TOK', 'HANA-KEY'), contextOptions: MOBILE });
+}
+
+{
+  const m = pickFakeWorker({ ownerName: 'Ivy', ownerKey: 'IVY-KEY', photos: PHOTOS(2) });
+  await suite('mobile bottom bar — reload with server selections already picked shows the right count immediately',
+    `${base}/index.html?t=TOK`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('.photo-card', { timeout: 5000 });
+      await page.locator('.photo-card').nth(0).locator('.pick-heart-btn').tap();
+      await page.waitForTimeout(1000); // let the autosave actually land server-side
+
+      await page.reload({ waitUntil: 'load' });
+      await page.waitForSelector('.photo-card', { timeout: 5000 });
+      const text = await page.evaluate(() => document.getElementById('pickMobileCounter').textContent);
+      ok('the bar reflects the server-known selection right after reload, no extra tap needed', text === '已選 1 張', text);
+      return out;
+    },
+    { before: m.attach, initScript: () => localStorage.setItem('pick_key:TOK', 'IVY-KEY'), contextOptions: MOBILE });
+}
+
+{
+  // no picker key stored → a plain viewer, same fixture shape as the other
+  // "someone else's seat" suites
+  const m = pickFakeWorker({ ownerName: 'Jon', ownerKey: 'JON-KEY', photos: PHOTOS(2) });
+  await suite('mobile bottom bar — a viewer sees no bar at all, removed rather than just visually empty',
+    `${base}/index.html?t=TOK`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('.photo-card', { timeout: 5000 });
+      const s = await page.evaluate(() => {
+        const bar = document.getElementById('mobileActionBar');
+        return { display: getComputedStyle(bar).display, hasPickHidden: bar.classList.contains('pick-mobile-hidden') };
+      });
+      ok('the !important flex rule for the media query is actually beaten — computed display is none', s.display === 'none', JSON.stringify(s));
+      ok('via the pick-mobile-hidden class js/pick.js adds for a non-owner', s.hasPickHidden === true, JSON.stringify(s));
+      return out;
+    },
+    { before: m.attach, contextOptions: MOBILE }); // no picker key → a viewer
+}
+
+{
+  const m = pickFakeWorker({ ownerName: 'Kim', ownerKey: 'KIM-KEY', photos: PHOTOS(2) });
+  await suite('mobile bottom bar — the header 完成挑圖/counter are hidden on mobile in pick mode (not duplicated), but stay untouched on desktop with no bottom bar',
+    `${base}/index.html?t=TOK`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('.photo-card', { timeout: 5000 });
+      const s = await page.evaluate(() => ({
+        counter: getComputedStyle(document.getElementById('pickCounter')).display,
+        submit: getComputedStyle(document.getElementById('submitJobBtn')).display,
+      }));
+      ok('#pickCounter is hidden on mobile', s.counter === 'none', JSON.stringify(s));
+      ok('#submitJobBtn is hidden on mobile', s.submit === 'none', JSON.stringify(s));
+      return out;
+    },
+    { before: m.attach, initScript: () => localStorage.setItem('pick_key:TOK', 'KIM-KEY'), contextOptions: MOBILE });
+}
+
+{
+  const m = pickFakeWorker({ ownerName: 'Lily', ownerKey: 'LILY-KEY', photos: PHOTOS(2) });
+  await suite('desktop pick mode — header counter/完成挑圖 unchanged, and there is still no bottom bar (today’s desktop behaviour kept)',
+    `${base}/index.html?t=TOK`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('.photo-card', { timeout: 5000 });
+      const s = await page.evaluate(() => ({
+        counter: getComputedStyle(document.getElementById('pickCounter')).display,
+        submit: getComputedStyle(document.getElementById('submitJobBtn')).display,
+        bar: getComputedStyle(document.getElementById('mobileActionBar')).display,
+      }));
+      ok('#pickCounter still shows on desktop', s.counter !== 'none', JSON.stringify(s));
+      ok('#submitJobBtn still shows on desktop', s.submit !== 'none', JSON.stringify(s));
+      ok('the bottom bar stays gone on desktop', s.bar === 'none', JSON.stringify(s));
+      return out;
+    },
+    { before: m.attach, initScript: () => localStorage.setItem('pick_key:TOK', 'LILY-KEY') }); // desktop viewport (default)
+}
+
+{
+  const m = pickFakeWorker({ ownerName: 'Mona', ownerKey: 'MONA-KEY', photos: PHOTOS(2) });
+  await suite('mobile bottom bar — its own 完成提交 button runs the real submit flow (same modal, same POST) as the header button',
+    `${base}/index.html?t=TOK`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('.photo-card', { timeout: 5000 });
+      await page.tap('#mobileActionSubmitBtn');
+      await page.waitForSelector('#pickSubmitModal.active', { timeout: 5000 });
+      ok('tapping the bottom bar opens the same submit modal as the header button', true);
+      await page.selectOption('#pickSubmitRelationship', '本人');
+      await page.tap('#pickSubmitConfirmBtn');
+      await page.waitForTimeout(300);
+      const submitReqs = m.requests.filter(r => r.method === 'POST' && r.path === '/api/pick/submit');
+      ok('and it actually posts the real submit', submitReqs.length === 1, JSON.stringify(submitReqs));
+      return out;
+    },
+    { before: m.attach, initScript: () => localStorage.setItem('pick_key:TOK', 'MONA-KEY'), contextOptions: MOBILE });
+}
+
+{
+  const m = pickFakeWorker({ ownerName: 'Nora', ownerKey: 'NORA-KEY', photos: PHOTOS(2) });
+  await suite('mobile bottom bar — once retouching starts mid-session, it stays visible for the owner but tapping submit only warns (mirrors the header exactly)',
+    `${base}/index.html?t=TOK`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('.photo-card', { timeout: 5000 });
+      m.state.project.phase = 'retouching';
+      await page.locator('.photo-card').nth(0).locator('.pick-heart-btn.on, .pick-heart-btn').first().tap().catch(() => {});
+      // past the debounce window, so the 409 retouching from the autosave
+      // has actually landed and PickController.phase has caught up
+      await page.waitForTimeout(1000);
+      const barDisplay = await page.evaluate(() => getComputedStyle(document.getElementById('mobileActionBar')).display);
+      ok('the bar itself is still there for the seat holder', barDisplay !== 'none', barDisplay);
+      await page.tap('#mobileActionSubmitBtn');
+      await page.waitForTimeout(300);
+      const modalOpen = await page.evaluate(() => document.getElementById('pickSubmitModal').classList.contains('active'));
+      ok('but it refuses to open the submit modal, same as the header button would', modalOpen === false);
+      return out;
+    },
+    { before: m.attach, initScript: () => localStorage.setItem('pick_key:TOK', 'NORA-KEY'), contextOptions: MOBILE });
+}
+
+{
+  // Studio mode (photographer, own token) on the same mobile layout — the
+  // old bulk-select bar must behave exactly as it did before this task.
+  await suite('mobile bottom bar — untouched outside pick mode (studio session): still the old bulk-select bar, no pick-mode classes',
+    `${base}/index.html`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      // No pick token here, so pick.js's `active` flag stays false and never
+      // touches the page — no folder is loaded either way, so there is no
+      // grid to wait for.
+      await page.waitForFunction(() => !!window.app, null, { timeout: 5000 });
+      const s = await page.evaluate(() => {
+        const bar = document.getElementById('mobileActionBar');
+        const status = document.getElementById('mobileActionStatus');
+        const counter = document.getElementById('pickMobileCounter');
+        return {
+          bodyPickActive: document.body.classList.contains('pick-active'),
+          barPickHidden: bar.classList.contains('pick-mobile-hidden'),
+          statusHidden: status.hidden,
+          counterHidden: counter.hidden,
+          submitDisplay: getComputedStyle(document.getElementById('submitJobBtn')).display,
+        };
+      });
+      ok('no pick-active class on <body> outside pick mode', s.bodyPickActive === false, JSON.stringify(s));
+      ok('no pick-mobile-hidden class added to the bar', s.barPickHidden === false, JSON.stringify(s));
+      ok('the old 已選取 status stays untouched (not hidden)', s.statusHidden === false, JSON.stringify(s));
+      ok('the pick counter span stays hidden (never used outside pick mode)', s.counterHidden === true, JSON.stringify(s));
+      return out;
+    },
+    { initScript: () => sessionStorage.setItem('studio_token', 'x'), before: mockWorker(3), contextOptions: MOBILE });
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Submit-time overage (docs/guest-picking.md) — the warning moved from the
+// header counter to the submit modal: the guest sees the overage and the
+// extra fee right before they confirm and send.
+// ═══════════════════════════════════════════════════════════════════════════
+
+{
+  const m = pickFakeWorker({ ownerName: 'Omar', ownerKey: 'OMAR-KEY', pickLimit: 2, extraPrice: 150, photos: PHOTOS(4) });
+  await suite('submit modal — over the limit shows the overage and the computed extra fee before sending, and cancel sends nothing',
+    `${base}/index.html?t=TOK`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('.photo-card', { timeout: 5000 });
+      for (const i of [0, 1, 2, 3]) {
+        await page.locator('.photo-card').nth(i).locator('.pick-heart-btn').click();
+      }
+      await page.waitForTimeout(1000);
+
+      await page.click('#submitJobBtn');
+      await page.waitForSelector('#pickSubmitModal.active', { timeout: 5000 });
+      const info = await page.evaluate(() => ({
+        hidden: document.getElementById('pickSubmitOverInfo').hidden,
+        text: document.getElementById('pickSubmitOverInfo').textContent,
+      }));
+      ok('shows the overage + the computed fee, with the exact numbers, before anything is sent',
+        !info.hidden && info.text === '方案 2 張，您選了 4 張，多 2 張，加挑費用 2 × NT$150 = NT$300', info.text);
+
+      await page.click('#pickSubmitCancelBtn');
+      await page.waitForTimeout(200);
+      ok('cancel closes the modal and sends nothing',
+        !m.requests.some(r => r.method === 'POST' && r.path === '/api/pick/submit'));
+
+      await page.click('#submitJobBtn');
+      await page.waitForSelector('#pickSubmitModal.active', { timeout: 5000 });
+      await page.selectOption('#pickSubmitRelationship', '本人');
+      await page.click('#pickSubmitConfirmBtn');
+      await page.waitForTimeout(300);
+      const submitReqs = m.requests.filter(r => r.method === 'POST' && r.path === '/api/pick/submit');
+      ok('confirm actually sends, after seeing the overage', submitReqs.length === 1, JSON.stringify(submitReqs));
+      return out;
+    },
+    { before: m.attach, initScript: () => localStorage.setItem('pick_key:TOK', 'OMAR-KEY') });
+}
+
+{
+  const m = pickFakeWorker({ ownerName: 'Petra', ownerKey: 'PETRA-KEY', pickLimit: 1, extraPrice: null, photos: PHOTOS(2) });
+  await suite('submit modal — over the limit with no extra_price set asks the guest to confirm with the photographer instead of a made-up fee',
+    `${base}/index.html?t=TOK`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('.photo-card', { timeout: 5000 });
+      await page.locator('.photo-card').nth(0).locator('.pick-heart-btn').click();
+      await page.locator('.photo-card').nth(1).locator('.pick-heart-btn').click();
+      await page.waitForTimeout(1000);
+
+      await page.click('#submitJobBtn');
+      await page.waitForSelector('#pickSubmitModal.active', { timeout: 5000 });
+      const text = await page.evaluate(() => document.getElementById('pickSubmitOverInfo').textContent);
+      ok('the no-price wording is used instead of a fee', text === '方案 1 張，您選了 2 張，多 1 張，加挑費用請與攝影師確認', text);
+      return out;
+    },
+    { before: m.attach, initScript: () => localStorage.setItem('pick_key:TOK', 'PETRA-KEY') });
+}
+
+{
+  const m = pickFakeWorker({ ownerName: 'Quinn', ownerKey: 'QUINN-KEY', pickLimit: 5, extraPrice: 100, photos: PHOTOS(2) });
+  await suite('submit modal — within the limit, no overage notice and submit works exactly as before',
+    `${base}/index.html?t=TOK`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('.photo-card', { timeout: 5000 });
+      await page.locator('.photo-card').nth(0).locator('.pick-heart-btn').click();
+      await page.waitForTimeout(1000);
+
+      await page.click('#submitJobBtn');
+      await page.waitForSelector('#pickSubmitModal.active', { timeout: 5000 });
+      const hidden = await page.evaluate(() => document.getElementById('pickSubmitOverInfo').hidden);
+      ok('no overage notice when within the limit', hidden === true);
+      await page.selectOption('#pickSubmitRelationship', '朋友');
+      await page.click('#pickSubmitConfirmBtn');
+      await page.waitForTimeout(300);
+      const submitReqs = m.requests.filter(r => r.method === 'POST' && r.path === '/api/pick/submit');
+      ok('and it submits normally', submitReqs.length === 1, JSON.stringify(submitReqs));
+      return out;
+    },
+    { before: m.attach, initScript: () => localStorage.setItem('pick_key:TOK', 'QUINN-KEY') });
 }
 
 await suite('desktop preview — arrow keys and mouse click still navigate/open exactly as before',
@@ -7170,7 +7513,7 @@ await suite('設定 — 沒有 studio_token 時跳轉回 home.html',
     ownerName: 'Ann', ownerKey: 'ANN-KEY',
     studio: { name: '海邊影像工作室', booking_url: 'https://booking.example.com/x', has_logo: true },
   });
-  await suite('選片頁 — 顯示工作室名稱與 Logo，並提供 https 預約連結',
+  await suite('選片頁 — 顯示工作室名稱與 Logo；📅 預約拍攝連結不在 header，只在已送出後的提示卡片出現（https）',
     `${base}/index.html?t=PICK-TOKEN`,
     async page => {
       const out = [];
@@ -7181,9 +7524,29 @@ await suite('設定 — 沒有 studio_token 時跳轉回 home.html',
       ok('logo-name replaced with the studio name', true);
       const img = await page.$eval('.logo-mark-img', el => ({ src: el.src, alt: el.alt })).catch(() => null);
       ok('the text mark is replaced by an <img> for the logo', !!img && img.src.includes('/api/studio/logo'), JSON.stringify(img));
-      const link = await page.$eval('#studioBookingLink', el => ({ hidden: el.hidden, href: el.href, rel: el.rel, target: el.target }));
-      ok('預約拍攝 link is shown with the https url, opened safely in a new tab',
-        link.hidden === false && link.href === 'https://booking.example.com/x' &&
+
+      const beforeSubmit = await page.evaluate(() => ({
+        inHeader: !!document.querySelector('.header-right #studioBookingLink'),
+        cardDisplay: getComputedStyle(document.getElementById('pickBannerBooking')).display,
+      }));
+      ok('預約拍攝 is never in the header, and the submitted-only card stays hidden while still picking',
+        beforeSubmit.inHeader === false && beforeSubmit.cardDisplay === 'none', JSON.stringify(beforeSubmit));
+
+      m.state.project.phase = 'submitted';
+      await page.reload({ waitUntil: 'load' });
+      await page.waitForFunction(() => (document.getElementById('pickBannerLines')?.textContent || '').includes('已送出'),
+        null, { timeout: 5000 });
+      const link = await page.evaluate(() => {
+        const a = document.getElementById('studioBookingLink');
+        return {
+          inHeader: !!document.querySelector('.header-right #studioBookingLink'),
+          cardDisplay: getComputedStyle(document.getElementById('pickBannerBooking')).display,
+          href: a.href, rel: a.rel, target: a.target,
+        };
+      });
+      ok('once submitted, the https 預約拍攝 link shows in the banner card, opened safely in a new tab, still never in the header',
+        link.inHeader === false && link.cardDisplay !== 'none' &&
+        link.href === 'https://booking.example.com/x' &&
         link.rel.includes('noopener') && link.rel.includes('noreferrer') && link.target === '_blank', JSON.stringify(link));
       return out;
     },
@@ -7193,21 +7556,27 @@ await suite('設定 — 沒有 studio_token 時跳轉回 home.html',
 {
   // The https guard is the one line worth mutation-testing here: anything
   // else (http://, //evil, javascript:, empty) must leave the link hidden
-  // with its href untouched, never fall through to "set it anyway".
+  // with its href untouched, never fall through to "set it anyway" — even
+  // once the guest has submitted.
   const m = pickFakeWorker({
     ownerName: 'Ben', ownerKey: 'BEN-KEY',
     studio: { name: 'S', booking_url: 'http://not-secure.example.com', has_logo: false },
   });
-  await suite('選片頁 — 非 https 的 booking_url 不會被拿來當連結，預約按鈕保持隱藏',
+  await suite('選片頁 — 非 https 的 booking_url 不會被拿來當連結，即使已送出也不顯示',
     `${base}/index.html?t=PICK-TOKEN`,
     async page => {
       const out = [];
       const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
       await page.evaluate(() => localStorage.setItem('pick_key:PICK-TOKEN', 'BEN-KEY'));
+      m.state.project.phase = 'submitted';
       await page.reload({ waitUntil: 'load' });
       await page.waitForFunction(() => document.querySelector('.logo-name')?.textContent === 'S', null, { timeout: 5000 });
-      const link = await page.$eval('#studioBookingLink', el => ({ hidden: el.hidden, href: el.getAttribute('href') }));
-      ok('link stays hidden for an http:// url', link.hidden === true, JSON.stringify(link));
+      const link = await page.evaluate(() => {
+        const a = document.getElementById('studioBookingLink');
+        return { cardDisplay: getComputedStyle(document.getElementById('pickBannerBooking')).display, href: a.getAttribute('href') };
+      });
+      ok('the card stays hidden for an http:// url even though the project is submitted',
+        link.cardDisplay === 'none', JSON.stringify(link));
       ok('and its href was never touched (still the placeholder "#")', link.href === '#', JSON.stringify(link));
       ok('no logo <img> is added when has_logo is false', (await page.$('.logo-mark-img')) === null);
       return out;
