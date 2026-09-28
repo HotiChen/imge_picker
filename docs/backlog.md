@@ -5,9 +5,13 @@ Decided or discussed, not yet built. Newest decisions at the top of each group.
 ## Next up
 - [ ] Phone test of guest picking + gestures (and the new bright entrance) on real LINE / iOS Safari (Tim).
       Watch: LINE's edge swipe-back vs swipe-right, zoom feel.
-- [ ] Email notifications: Cloudflare Email Routing + `send_email` binding
-      `NOTIFY_EMAIL`, vars `PHOTOGRAPHER_EMAIL`, `NOTIFY_FROM` (must be an
-      address on imhoti.tw). Until then admin shows 未寄信.
+- [ ] Email notifications — code and `wrangler.toml` binding ready (branch
+      `claude/vigilant-edison-ewegwm`). Tim, before merging:
+      1. Cloudflare → imhoti.tw → Email → Email Routing: enable (check MX first).
+      2. Destination addresses: add and verify the photographer's inbox.
+      3. `wrangler secret put PHOTOGRAPHER_EMAIL` (or Worker → Settings → Secret).
+      4. Merge, submit a test pick, check inbox + spam; admin 未寄信 should clear.
+      Sender is `notify@imhoti.tw` (`NOTIFY_FROM` var). Until then admin shows 未寄信.
 
 ## Product roadmap (agreed order)
 1. Back-office shell: side menu, dashboard (projects by phase, per month,
