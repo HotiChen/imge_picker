@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Studio Settings — 設定</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #15120d;
+    --surface: #1d1a14;
+    --card: #221f18;
+    --accent: #e5a448;
+    --accent-dim: rgba(229,164,72,.16);
+    --ink-90: #e8e3da;
+    --ink-70: rgba(232,227,218,.72);
+    --ink-55: #8c8375;
+    --rule: #2e2a22;
+    --border: #3a3528;
+    --danger: #e05c5c;
+    --success: #4caf7d;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--ink-90); font-family: 'IBM Plex Sans', sans-serif; font-size: 14px; min-height: 100vh; }
+
+  header { background: var(--surface); border-bottom: 1px solid var(--rule); padding: 0 24px; display: flex; align-items: center; gap: 16px; height: 52px; }
+  header .brand { color: var(--accent); font-family: 'IBM Plex Mono', monospace; font-size: 13px; letter-spacing: 0.15em; }
+  header .subtitle { color: var(--ink-55); font-size: 12px; }
+  header .spacer { flex: 1; }
+  .btn-logout { background: transparent; border: 1px solid var(--border); color: var(--ink-55); padding: 5px 12px; border-radius: 4px; cursor: pointer; font-size: 12px; font-family: inherit; }
+  .btn-logout:hover { border-color: var(--danger); color: var(--danger); }
+
+  .app-shell { display: flex; align-items: stretch; min-height: calc(100vh - 52px); }
+  .side-nav { width: 190px; flex-shrink: 0; background: var(--surface); border-right: 1px solid var(--rule); padding: 20px 14px; }
+  .side-nav-brand { color: var(--ink-55); font-size: 10px; letter-spacing: 0.2em; padding: 0 10px 12px; border-bottom: 1px solid var(--rule); margin-bottom: 10px; }
+  .side-nav-list { display: flex; flex-direction: column; gap: 2px; }
+  .side-nav-item { display: block; text-align: left; background: none; border: none; color: var(--ink-70); text-decoration: none; padding: 9px 10px; border-radius: 5px; font-size: 13px; font-family: inherit; cursor: pointer; }
+  .side-nav-item:hover { background: var(--card); color: var(--ink-90); }
+  .side-nav-item.active { background: var(--accent-dim); color: var(--accent); font-weight: 600; }
+  .side-nav-logout { margin-top: 14px; border-top: 1px solid var(--rule); padding-top: 14px; color: var(--ink-55); }
+  .side-nav-logout:hover { color: var(--danger); background: none; }
+
+  main { flex: 1; min-width: 0; padding: 24px; max-width: 640px; }
+  h2 { font-size: 16px; font-weight: 600; margin-bottom: 14px; }
+  .panel { border: 1px solid var(--border); border-radius: 6px; background: var(--surface); margin-bottom: 24px; }
+  .panel-body { padding: 18px 20px; }
+
+  .field-group { margin-bottom: 16px; }
+  .field-group label { display: block; font-size: 12px; color: var(--ink-55); margin-bottom: 6px; }
+  .field { background: var(--card); border: 1px solid var(--border); color: var(--ink-90); padding: 9px 12px; border-radius: 4px; font-size: 14px; font-family: inherit; outline: none; width: 100%; }
+  .field:focus { border-color: var(--accent); }
+  .field-row { display: flex; gap: 14px; flex-wrap: wrap; }
+  .field-row .field-group { flex: 1; min-width: 180px; }
+  .hint { font-size: 11px; color: var(--ink-55); margin-top: 5px; }
+  .err { color: var(--danger); font-size: 12px; min-height: 16px; margin-top: 8px; }
+  .ok-msg { color: var(--success); font-size: 12px; min-height: 16px; margin-top: 8px; }
+
+  .btn { padding: 8px 16px; border-radius: 4px; border: none; cursor: pointer; font-size: 13px; font-weight: 500; font-family: inherit; }
+  .btn-accent { background: var(--accent); color: var(--bg); }
+  .btn-accent:disabled { opacity: .5; cursor: not-allowed; }
+  .btn-danger { background: rgba(224,92,92,0.15); color: var(--danger); border: 1px solid rgba(224,92,92,0.3); }
+  .btn-outline { background: transparent; color: var(--ink-70); border: 1px solid var(--border); }
+  .btn-outline:hover { border-color: var(--accent); color: var(--accent); }
+
+  .logo-row { display: flex; align-items: center; gap: 16px; }
+  .logo-preview-box { width: 84px; height: 84px; border: 1px dashed var(--border); border-radius: 6px; display: flex; align-items: center; justify-content: center; overflow: hidden; background: var(--card); flex-shrink: 0; }
+  .logo-preview-box img { max-width: 100%; max-height: 100%; }
+  .logo-preview-box .none { font-size: 11px; color: var(--ink-55); text-align: center; padding: 4px; }
+  .logo-actions { display: flex; flex-direction: column; gap: 8px; }
+  .logo-actions input[type="file"] { font-size: 12px; color: var(--ink-70); }
+</style>
+</head>
+<body>
+
+<header>
+  <span class="brand">STUDIO</span>
+  <span class="subtitle">設定</span>
+  <span id="buildVersion"></span>
+  <span class="spacer"></span>
+  <button class="btn-logout" id="logout-btn">登出</button>
+</header>
+
+<div class="app-shell">
+  <aside id="sideNav" class="side-nav"></aside>
+  <main>
+    <h2>工作室資訊</h2>
+    <div class="panel">
+      <div class="panel-body">
+        <div class="field-group">
+          <label for="set-studio-name">工作室名稱</label>
+          <input id="set-studio-name" class="field" type="text" placeholder="例如：某某影像工作室" maxlength="60">
+        </div>
+        <div class="field-group">
+          <label for="set-booking-url">預約網址（僅限 https://）</label>
+          <input id="set-booking-url" class="field" type="text" placeholder="https://...">
+          <div class="hint">留空表示不顯示預約連結。客人在選片頁會看到「預約拍攝」連結。</div>
+        </div>
+        <div class="field-row">
+          <div class="field-group">
+            <label for="set-default-pick-limit">預設精修張數上限（留空 = 不限）</label>
+            <input id="set-default-pick-limit" class="field" type="number" min="0" step="1">
+          </div>
+          <div class="field-group">
+            <label for="set-default-extra-price">預設加選單價 NT$（留空 = 不顯示）</label>
+            <input id="set-default-extra-price" class="field" type="number" min="0" step="1">
+          </div>
+        </div>
+        <div class="hint" style="margin-bottom:12px;">建立新選片專案時會預先帶入這兩個值，仍可依專案調整。</div>
+        <button id="set-save-btn" class="btn btn-accent" type="button">儲存設定</button>
+        <div id="set-err" class="err"></div>
+        <div id="set-ok" class="ok-msg"></div>
+      </div>
+    </div>
+
+    <h2>工作室 Logo</h2>
+    <div class="panel">
+      <div class="panel-body">
+        <div class="logo-row">
+          <div class="logo-preview-box" id="logo-preview-box"><span class="none">尚未上傳</span></div>
+          <div class="logo-actions">
+            <input id="logo-file-input" type="file" accept="image/png,image/jpeg,image/webp">
+            <div class="hint">限 PNG / JPEG / WebP，200 KB 以內。客人選片頁會顯示這個 Logo。</div>
+            <button id="logo-remove-btn" class="btn btn-danger" type="button" style="display:none;width:fit-content;">移除 Logo</button>
+          </div>
+        </div>
+        <div id="logo-err" class="err"></div>
+        <div id="logo-ok" class="ok-msg"></div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<script src="js/build-version.js?v=20260928e"></script>
+<script src="js/side-nav.js?v=20260928e"></script>
+<script>
+(function () {
+  const WORKER_URL = 'https://imagepicker.hotichen.workers.dev';
+  const LOGO_MAX_BYTES = 204800; // 200 KB — mirrors the server limit (docs/dashboard-settings.md)
+
+  const token = SideNav.requireToken();
+  if (token) {
+    SideNav.render(document.getElementById('sideNav'), 'settings', SideNav.logoutToHome);
+    document.getElementById('logout-btn').addEventListener('click', SideNav.logoutToHome);
+
+    const nameInput = document.getElementById('set-studio-name');
+    const urlInput = document.getElementById('set-booking-url');
+    const limitInput = document.getElementById('set-default-pick-limit');
+    const priceInput = document.getElementById('set-default-extra-price');
+    const saveBtn = document.getElementById('set-save-btn');
+    const errEl = document.getElementById('set-err');
+    const okEl = document.getElementById('set-ok');
+
+    const previewBox = document.getElementById('logo-preview-box');
+    const fileInput = document.getElementById('logo-file-input');
+    const removeBtn = document.getElementById('logo-remove-btn');
+    const logoErr = document.getElementById('logo-err');
+    const logoOk = document.getElementById('logo-ok');
+
+    function authedFetch(path, opts) {
+      opts = opts || {};
+      opts.headers = Object.assign({ 'Authorization': `Bearer ${token}` }, opts.headers || {});
+      return fetch(`${WORKER_URL}${path}`, opts).then(r => {
+        if (r.status === 401) { SideNav.logoutToHome(); throw new Error('401'); }
+        return r;
+      });
+    }
+
+    function renderLogo(has_logo) {
+      if (has_logo) {
+        previewBox.innerHTML = `<img src="${WORKER_URL}/api/studio/logo?ts=${Date.now()}" alt="Logo">`;
+        removeBtn.style.display = '';
+      } else {
+        previewBox.innerHTML = '<span class="none">尚未上傳</span>';
+        removeBtn.style.display = 'none';
+      }
+    }
+
+    async function loadSettings() {
+      try {
+        const r = await authedFetch('/api/admin/settings');
+        if (!r.ok) { errEl.textContent = `讀取失敗（${r.status}）`; return; }
+        const s = await r.json();
+        nameInput.value = s.studio_name || '';
+        urlInput.value = s.booking_url || '';
+        limitInput.value = s.default_pick_limit != null ? s.default_pick_limit : '';
+        priceInput.value = s.default_extra_price != null ? s.default_extra_price : '';
+        renderLogo(!!s.has_logo);
+      } catch (e) {
+        if (e.message !== '401') errEl.textContent = '無法連線到 Worker';
+      }
+    }
+    loadSettings();
+
+    const ERROR_LABEL = {
+      invalid_studio_name: '工作室名稱格式錯誤（需為文字，60 字以內）',
+      invalid_booking_url: '預約網址需為 https:// 開頭的合法網址',
+      invalid_default_pick_limit: '預設精修張數上限需為 0 以上整數',
+      invalid_default_extra_price: '預設加選單價需為 0 以上整數',
+    };
+
+    saveBtn.addEventListener('click', async function () {
+      errEl.textContent = '';
+      okEl.textContent = '';
+      const bookingUrl = urlInput.value.trim();
+      // Client-side https guard — the server is the source of truth (and
+      // catches whitespace/control-char/user:pass@ cases this cannot), but
+      // failing fast here means an http:// typo never leaves the browser.
+      if (bookingUrl && !/^https:\/\//i.test(bookingUrl)) {
+        errEl.textContent = ERROR_LABEL.invalid_booking_url;
+        return;
+      }
+      const limitRaw = limitInput.value.trim();
+      const priceRaw = priceInput.value.trim();
+      const pick_limit = limitRaw === '' ? null : parseInt(limitRaw, 10);
+      const extra_price = priceRaw === '' ? null : parseInt(priceRaw, 10);
+      if (pick_limit !== null && (!Number.isInteger(pick_limit) || pick_limit < 0)) {
+        errEl.textContent = ERROR_LABEL.invalid_default_pick_limit; return;
+      }
+      if (extra_price !== null && (!Number.isInteger(extra_price) || extra_price < 0)) {
+        errEl.textContent = ERROR_LABEL.invalid_default_extra_price; return;
+      }
+      saveBtn.disabled = true;
+      try {
+        const r = await authedFetch('/api/admin/settings', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            studio_name: nameInput.value.trim() === '' ? '' : nameInput.value.trim(),
+            booking_url: bookingUrl,
+            default_pick_limit: pick_limit,
+            default_extra_price: extra_price,
+          }),
+        });
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok) {
+          errEl.textContent = ERROR_LABEL[data.code] || data.error || `儲存失敗（${r.status}）`;
+          return;
+        }
+        okEl.textContent = '已儲存';
+        setTimeout(() => { okEl.textContent = ''; }, 2500);
+      } catch (e) {
+        if (e.message !== '401') errEl.textContent = '無法連線到 Worker';
+      } finally {
+        saveBtn.disabled = false;
+      }
+    });
+
+    fileInput.addEventListener('change', async function () {
+      logoErr.textContent = '';
+      logoOk.textContent = '';
+      const file = fileInput.files && fileInput.files[0];
+      if (!file) return;
+      if (file.size > LOGO_MAX_BYTES) {
+        logoErr.textContent = '檔案超過 200 KB，請壓縮後再試';
+        fileInput.value = '';
+        return;
+      }
+      if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type)) {
+        logoErr.textContent = '不支援的檔案格式，僅限 PNG / JPEG / WebP';
+        fileInput.value = '';
+        return;
+      }
+      try {
+        const r = await authedFetch('/api/admin/settings/logo', {
+          method: 'PUT',
+          headers: { 'Content-Type': file.type },
+          body: file,
+        });
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok) {
+          if (r.status === 413) logoErr.textContent = '檔案超過 200 KB，請壓縮後再試';
+          else if (r.status === 415) logoErr.textContent = '不支援的檔案格式，僅限 PNG / JPEG / WebP';
+          else logoErr.textContent = data.error || `上傳失敗（${r.status}）`;
+          return;
+        }
+        renderLogo(!!data.has_logo);
+        logoOk.textContent = '已更新 Logo';
+        setTimeout(() => { logoOk.textContent = ''; }, 2500);
+      } catch (e) {
+        if (e.message !== '401') logoErr.textContent = '無法連線到 Worker';
+      } finally {
+        fileInput.value = '';
+      }
+    });
+
+    removeBtn.addEventListener('click', async function () {
+      logoErr.textContent = '';
+      logoOk.textContent = '';
+      removeBtn.disabled = true;
+      try {
+        const r = await authedFetch('/api/admin/settings/logo', { method: 'DELETE' });
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok) { logoErr.textContent = data.error || `失敗（${r.status}）`; return; }
+        renderLogo(false);
+      } catch (e) {
+        if (e.message !== '401') logoErr.textContent = '無法連線到 Worker';
+      } finally {
+        removeBtn.disabled = false;
+      }
+    });
+  }
+})();
+</script>
+</body>
+</html>

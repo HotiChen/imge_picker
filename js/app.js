@@ -592,6 +592,10 @@ class App {
     }
 
     async setBulkRating(rating) {
+        // Photographer project view (js/project-view.js, task: 專案選片) is
+        // read-only — no control here, including this keyboard/bulk-bar
+        // shortcut, may write a rating.
+        if (window.ProjectViewController && ProjectViewController.active) return;
         if (this.selectedPhotoIds.size === 0) return;
 
         const count = this.selectedPhotoIds.size;
@@ -761,11 +765,17 @@ class App {
         // display:inline-flex, which beats the UA's [hidden] { display: none
         // }, the same reason client-auth-check.js removes rather than hides
         // its own buttons for a client.
-        const canEdit = !window.PickController || !PickController.active || PickController.canEdit();
+        let canEdit = !window.PickController || !PickController.active || PickController.canEdit();
         // Guest (pick) mode only: one ♥ toggle replaces the star rating and
         // the select checkbox entirely — photographer/studio/client modes are
         // untouched below (task: guest heart-only picking).
         const pickMode = !!(window.PickController && PickController.active);
+        // Photographer project view (js/project-view.js, task: 專案選片):
+        // every card here is already a pick and no control may write a
+        // rating or a selection — same read-only ♥ replacement as pick mode,
+        // plus a 💬 marker when the photo has a note.
+        const projectMode = !!(window.ProjectViewController && ProjectViewController.active);
+        if (projectMode) canEdit = false;
 
         const imageUrl = driveManager.getImageUrl(photo, 400);
         const isPicked = (photo.rating || 0) > 0;
@@ -781,14 +791,17 @@ class App {
             ? (canEdit
                 ? `<button type="button" class="pick-heart-btn${isPicked ? ' on' : ''}" title="選">♥</button>`
                 : `<span class="pick-heart-btn${isPicked ? ' on' : ''}" title="選">♥</span>`)
-            : '';
+            : (projectMode ? `<span class="pick-heart-btn on" title="已選">♥</span>` : '');
+        const noteMarker = projectMode && photo.note
+            ? '<span class="pv-note-badge" title="有備註">💬</span>' : '';
         card.innerHTML = `
             <div class="photo-image-container">
                 <img src="${escapeHtml(imageUrl)}" class="photo-image" loading="lazy" decoding="async">
                 <div class="photo-overlay">
                     ${photo.hasAnnotations ? '<span class="photo-badge">✎</span>' : ''}
                 </div>
-                ${heartTag || (canEdit ? '<div class="select-toggle-btn" title="選取此照片"></div>' : '')}
+                ${heartTag}${noteMarker}
+                ${(!heartTag && canEdit) ? '<div class="select-toggle-btn" title="選取此照片"></div>' : ''}
             </div>
             <div class="photo-info-section">
                 <div class="photo-name">${escapeHtml(photo.name)}</div>
@@ -898,6 +911,17 @@ class App {
         return btn;
     }
 
+    // Photographer project view (js/project-view.js, task: 專案選片): a
+    // static, non-interactive ♥ — every photo shown in that view is already
+    // a pick, and nothing here may write a rating.
+    _createReadOnlyHeart() {
+        const span = document.createElement('span');
+        span.className = 'pick-heart-btn pick-heart-static on';
+        span.title = '已選';
+        span.textContent = '♥';
+        return span;
+    }
+
     updatePreviewPane(photo) {
         const empty   = document.getElementById('previewEmpty');
         const content = document.getElementById('previewContent');
@@ -921,16 +945,30 @@ class App {
         const metaEl = document.getElementById('previewMeta');
         if (metaEl) metaEl.textContent = photo.date || '';
 
+        const pickMode = !!(window.PickController && PickController.active);
+        // Photographer project view (js/project-view.js, task: 專案選片):
+        // read-only ♥ in place of the star rating, plus the guest's note
+        // text below it — textContent only, never innerHTML.
+        const projectMode = !!(window.ProjectViewController && ProjectViewController.active);
+
         const starsEl = document.getElementById('previewStars');
         if (starsEl) {
             starsEl.innerHTML = '';
-            const pickMode = !!(window.PickController && PickController.active);
-            if (pickMode) {
+            if (projectMode) {
+                starsEl.appendChild(this._createReadOnlyHeart());
+            } else if (pickMode) {
                 if (PickController.canEdit()) starsEl.appendChild(this.createPickHeartControl(photo));
             } else {
                 starsEl.appendChild(ratingManager.createStarRating(photo.rating, photo.id, true));
             }
         }
+        const hintEl = document.getElementById('previewStarsHint');
+        if (hintEl) hintEl.hidden = projectMode;
+
+        const noteSection = document.getElementById('pvPreviewNoteSection');
+        if (noteSection) noteSection.hidden = !projectMode;
+        const noteEl = document.getElementById('pvPreviewNote');
+        if (noteEl) noteEl.textContent = projectMode ? (photo.note || '（無備註）') : '';
 
         const detailBtn = document.getElementById('previewDetailBtn');
         if (detailBtn) {
@@ -954,12 +992,15 @@ class App {
         noteEl.value = photo.note || '';
 
         const pickMode = !!(window.PickController && PickController.active);
-        const canEdit = !pickMode || PickController.canEdit();
+        const projectMode = !!(window.ProjectViewController && ProjectViewController.active);
+        const canEdit = !projectMode && (!pickMode || PickController.canEdit());
         noteEl.readOnly = !canEdit;
 
         const mpr = document.getElementById('modalPhotoRating');
         mpr.innerHTML = '';
-        if (pickMode) {
+        if (projectMode) {
+            mpr.appendChild(this._createReadOnlyHeart());
+        } else if (pickMode) {
             if (canEdit) mpr.appendChild(this.createPickHeartControl(photo));
         } else if (canEdit) {
             mpr.appendChild(ratingManager.createStarRating(photo.rating, photo.id, true));
@@ -968,7 +1009,7 @@ class App {
         // Mobile task: selected highlight, same treatment as the grid card —
         // thick border, no dimming overlay (see createPhotoCard/togglePickHeart).
         document.querySelector('.canvas-container')?.classList.toggle(
-            'pick-picked', pickMode && (photo.rating || 0) > 0);
+            'pick-picked', (pickMode || projectMode) && (photo.rating || 0) > 0);
 
         this.updateModalNavigation();
         this.schedulePreload(index);

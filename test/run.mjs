@@ -2403,6 +2403,7 @@ const revokeCalls = m => m.seen.filter(r =>
 {
   console.log('\n# asset versions — every local asset on a page moves together');
   const PAGES = ['index.html', 'upload.html', 'tutorial.html', 'admin.html', 'client-login.html',
+                 'home.html', 'dashboard.html', 'settings.html',
                  'book_editor/index.html', 'book_editor/view.html', 'r2_designer/index.html'];
   const lines = [];
   const seenVersions = new Set();
@@ -3239,7 +3240,12 @@ function pickFakeWorker(opts = {}) {
       phase: 'picking',
       modified_after_submit: 0,
       archived_at: opts.archivedAt || null,
+      delivered_at: opts.deliveredAt || null,
     },
+    // GET /api/pick/state's studio.{name, booking_url, has_logo}
+    // (docs/dashboard-settings.md) — omitted from the response unless a test
+    // opts in, so every pre-existing suite's fixture is unaffected.
+    studio: opts.studio || null,
     deleted: false,
     pickers: new Map(),        // id -> {id, name, key, relationship, email}
     selections: new Map(),     // photo_key -> {rating, note, updated_by, updated_at}
@@ -3304,6 +3310,7 @@ function pickFakeWorker(opts = {}) {
             .map(([photo_key, s]) => isOwner ? { photo_key, rating: s.rating, note: s.note } : { photo_key, rating: s.rating }),
         };
         if (isOwner) resp.modified_after_submit = state.project.modified_after_submit;
+        if (state.studio) resp.studio = state.studio;
         return json(resp);
       }
 
@@ -3420,6 +3427,7 @@ function pickFakeWorker(opts = {}) {
           owner_name: owner ? owner.name : null,
           created_at: '2026-01-01T00:00:00.000Z',
           archived_at: state.project.archived_at,
+          delivered_at: state.project.delivered_at,
           submission_count: subs.length,
           last_submitted_at: subs.length ? subs[subs.length - 1].created_at : null,
           unnotified_submissions: unnotifiedCountFake(subs),
@@ -3505,7 +3513,21 @@ function pickFakeWorker(opts = {}) {
       if (/\/api\/admin\/projects\/[^/]+\/reopen$/.test(u.pathname) && method === 'POST') {
         state.project.phase = 'picking';
         state.project.modified_after_submit = 0;
+        state.project.delivered_at = null; // reopen always implies retouching's stamp is gone too
         return json({ ok: true, phase: 'picking' });
+      }
+      // Delivered projects (docs/dashboard-settings.md) — a stamp, not a
+      // phase: delivering never changes `phase`, only sets `delivered_at`,
+      // and only from retouching.
+      if (/\/api\/admin\/projects\/[^/]+\/deliver$/.test(u.pathname) && method === 'POST') {
+        if (state.project.phase !== 'retouching')
+          return json({ error: '尚未開始精修', code: 'not_retouching', phase: state.project.phase }, 409);
+        if (!state.project.delivered_at) state.project.delivered_at = new Date().toISOString();
+        return json({ ok: true, delivered_at: state.project.delivered_at });
+      }
+      if (/\/api\/admin\/projects\/[^/]+\/undeliver$/.test(u.pathname) && method === 'POST') {
+        state.project.delivered_at = null;
+        return json({ ok: true, delivered_at: null });
       }
 
       if (u.searchParams.has('list')) {
@@ -4522,7 +4544,9 @@ await suite('admin — escHtml(0): a project with zero submissions shows 送出 
       await page.waitForSelector('#admin-view', { state: 'visible', timeout: 5000 });
       await page.waitForSelector('[data-open-project]', { timeout: 5000 });
       await page.click('[data-open-project]');
-      await page.waitForSelector('#project-detail-body table');
+      // The table lives inside a collapsed <details> by default (task: 專案選片
+      // — admin collapse), so it's attached but not visible until expanded.
+      await page.waitForSelector('#project-detail-body table', { state: 'attached' });
       await new Promise(r => setTimeout(r, 300));
 
       const r = await page.evaluate(payload => ({
@@ -5148,27 +5172,70 @@ await suite('desktop preview — arrow keys and mouse click still navigate/open 
       const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
       await page.waitForSelector('[data-open-project]', { timeout: 5000 });
       await page.click('[data-open-project]');
-      await page.waitForSelector('#project-detail-body table tbody tr');
+      // The table lives inside a collapsed <details> (task: 專案選片 — admin
+      // collapse), so its rows are attached but not visible until expanded.
+      await page.waitForSelector('#project-detail-body table tbody tr', { state: 'attached' });
 
       const r = await page.evaluate(() => {
-        const headingLink = document.querySelector('#project-detail-body h4 a');
+        const summary = document.querySelector('#project-detail-body summary');
+        const seeLink = summary && summary.querySelector('a.pd-link');
         const rowLinks = [...document.querySelectorAll('#project-detail-body table tbody tr a')];
         return {
-          headingHref: headingLink && headingLink.getAttribute('href'),
-          headingTarget: headingLink && headingLink.getAttribute('target'),
-          headingText: headingLink && headingLink.textContent,
+          summaryText: summary && summary.textContent,
+          seeHref: seeLink && seeLink.getAttribute('href'),
+          seeTarget: seeLink && seeLink.getAttribute('target'),
           rowHrefs: rowLinks.map(a => a.getAttribute('href')),
           rowCount: rowLinks.length,
         };
       });
-      ok('the heading links to index.html?project=<id>', r.headingHref === 'index.html?project=proj-1', r.headingHref);
-      ok('the heading still shows the count', /目前選取（2 張）/.test(r.headingText || ''), r.headingText);
-      ok('it is a plain same-tab link (no target=_blank)', !r.headingTarget, String(r.headingTarget));
+      ok('the summary shows the count', /目前選取（2 張）/.test(r.summaryText || ''), r.summaryText);
+      ok('看照片 → links to index.html?project=<id>', r.seeHref === 'index.html?project=proj-1', r.seeHref);
+      ok('it is a plain same-tab link (no target=_blank)', !r.seeTarget, String(r.seeTarget));
       ok('exactly the 2 rating>0 rows are links (not the zero-rated one)', r.rowCount === 2, String(r.rowCount));
       ok('one row links to its own photo key, encoded',
         r.rowHrefs.includes('index.html?project=proj-1&photo=20260819%2Fa.jpg'), JSON.stringify(r.rowHrefs));
       ok('the other, in a different folder, does too',
         r.rowHrefs.includes('index.html?project=proj-1&photo=20260901%2Fb.jpg'), JSON.stringify(r.rowHrefs));
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN });
+}
+
+{
+  const m = pickFakeWorker({ ownerName: 'Norah', projectId: 'proj-collapse' });
+  m.state.selections.set('20260819/a.jpg', { rating: 5, note: '', updated_by: 'picker-0', updated_at: '2026-01-01T00:00:00Z' });
+  await suite('admin — 專案選片：目前選取表格預設收合，展開後仍看得到表格',
+    `${base}/admin.html`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('[data-open-project]', { timeout: 5000 });
+      await page.click('[data-open-project]');
+      await page.waitForSelector('#pd-selections-details', { timeout: 5000 });
+
+      const openBefore = await page.evaluate(() => document.getElementById('pd-selections-details').open);
+      ok('collapsed by default', openBefore === false, String(openBefore));
+      // <details> hides its non-summary content without necessarily
+      // clearing getBoundingClientRect on it (Chrome's internal
+      // content-visibility mechanism keeps reporting a non-zero rect even
+      // though nothing paints) — Playwright's own actionability-grade
+      // isVisible() is the reliable "actually invisible" signal here, the
+      // same kind of trap this repo's [hidden]-vs-display:inline-flex bug
+      // note calls for.
+      ok('and the table is not actually visible either',
+        (await page.locator('#pd-selections-details table').isVisible()) === false);
+
+      // click near the left edge of the summary text, away from the 看照片
+      // link appended after it, so this exercises the disclosure toggle
+      // itself rather than navigating.
+      await page.click('#pd-selections-details summary', { position: { x: 5, y: 8 } });
+      const after = await page.evaluate(() => ({
+        open: document.getElementById('pd-selections-details').open,
+        rowCount: document.querySelectorAll('#pd-selections-details table tbody tr').length,
+      }));
+      ok('expanding opens it', after.open === true);
+      const rowVisible = await page.locator('#pd-selections-details table tbody tr').first().isVisible();
+      ok('the table is still there, with its row', after.rowCount === 1 && rowVisible === true, String(after.rowCount));
       return out;
     },
     { before: m.attach, initScript: ADMIN });
@@ -5264,6 +5331,16 @@ await suite('index.html — 專案選片：沒有 ?project= 時，攝影師模�
     const bannerHidden = await page.evaluate(() => document.getElementById('projectViewBanner').hidden);
     ok('its banner stays hidden', bannerHidden === true);
 
+    // task: 專案選片 sidebar trim only ever runs for ProjectViewController —
+    // the plain studio sidebar keeps LOAD + RATING untouched.
+    const sidebar = await page.evaluate(() => ({
+      driveUrl: !!document.getElementById('driveUrl'),
+      loadBtn: !!document.getElementById('loadPhotosBtn'),
+      starFilter: !!document.querySelector('.star-filter'),
+    }));
+    ok('the studio sidebar still has LOAD', sidebar.driveUrl && sidebar.loadBtn, JSON.stringify(sidebar));
+    ok('and RATING', sidebar.starFilter === true);
+
     await page.fill('#driveUrl', '20260819/');
     await page.click('#loadPhotosBtn');
     await page.waitForSelector('.photo-card', { timeout: 5000 });
@@ -5356,13 +5433,886 @@ await suite('index.html — 專案選片：沒有 ?project= 時，攝影師模�
       const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
       await page.waitForSelector('[data-open-project]', { timeout: 5000 });
       await page.click('[data-open-project]');
-      await page.waitForSelector('#project-detail-body table tbody tr');
+      // collapsed by default (task: 專案選片 — admin collapse); attached
+      // is enough here, the assertions below don't need it visible.
+      await page.waitForSelector('#project-detail-body table tbody tr', { state: 'attached' });
       const r = await page.evaluate(() => ({
         headers: [...document.querySelectorAll('#project-detail-body table thead th')].map(th => th.textContent),
         cell: document.querySelectorAll('#project-detail-body table tbody tr td')[1]?.textContent,
       }));
       ok('the header is ♥, not 星等', r.headers.includes('♥') && !r.headers.includes('星等'), JSON.stringify(r.headers));
       ok('the cell shows ♥', r.cell === '♥', r.cell);
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN });
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// index.html?project= — sidebar trim, read-only cards, downloads and the
+// grid/list toggle (task: 專案選片, second pass).
+// ═══════════════════════════════════════════════════════════════════════════
+
+{
+  const m = pickFakeWorker({ ownerName: 'Oscar', projectId: 'proj-trim' });
+  m.state.selections.set('20260819/a.jpg', { rating: 5, note: '', updated_by: 'picker-0', updated_at: '2026-01-01T00:00:00Z' });
+  await suite('index.html — 專案選片：側邊欄移除來源/星級/FLAGS/標註過濾，保留排序與備份（不含重設此資料夾）',
+    `${base}/index.html?project=proj-trim`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('.photo-card', { timeout: 5000 });
+      const r = await page.evaluate(() => ({
+        driveUrl: !!document.getElementById('driveUrl'),
+        loadBtn: !!document.getElementById('loadPhotosBtn'),
+        starFilter: !!document.querySelector('.star-filter'),
+        filterSelectedBtn: !!document.getElementById('filterSelectedBtn'),
+        flagsGrid: !!document.querySelector('.flags-grid'),
+        toggleGroup: !!document.querySelector('.toggle-group'),
+        sortSelect: !!document.getElementById('sortBy'),
+        backupBtn: !!document.getElementById('backupDataBtn'),
+        resetCurrentBtn: !!document.getElementById('resetCurrentDataBtn'),
+        resetAllBtn: !!document.getElementById('resetAllDataBtn'),
+        bulkStars: !!document.getElementById('bulkStars'),
+        clearRatingBtn: !!document.querySelector('#bulkActionBar button[onclick="app.setBulkRating(0)"]'),
+      }));
+      ok('SOURCE input removed', r.driveUrl === false);
+      ok('LOAD button removed', r.loadBtn === false);
+      ok('RATING star filter removed', r.starFilter === false);
+      ok('只看選取 removed', r.filterSelectedBtn === false);
+      ok('FLAGS section removed', r.flagsGrid === false);
+      ok('ANNOTATION filter removed', r.toggleGroup === false);
+      ok('sort is kept', r.sortSelect === true);
+      ok('匯出備份 JSON is kept', r.backupBtn === true);
+      ok('重設此資料夾 removed (dangerous here)', r.resetCurrentBtn === false);
+      ok('清除所有快取 is kept', r.resetAllBtn === true);
+      ok('bulk-star buttons removed (would write ratings)', r.bulkStars === false);
+      ok('清空評分 removed too', r.clearRatingBtn === false);
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN });
+}
+
+{
+  const m = pickFakeWorker({ ownerName: 'Petra', projectId: 'proj-ro' });
+  m.state.selections.set('20260819/noted.jpg', { rating: 5, note: '請保留這張', updated_by: 'picker-0', updated_at: '2026-09-27T14:52:00.000Z' });
+  m.state.selections.set('20260819/plain.jpg', { rating: 4, note: '', updated_by: 'picker-0', updated_at: '2026-01-01T00:00:00Z' });
+  await suite('index.html — 專案選片：卡片只有唯讀 ♥ 與 💬，沒有星級/勾選框，沒有控制項能寫入評分',
+    `${base}/index.html?project=proj-ro`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('.photo-card', { timeout: 5000 });
+      const r = await page.evaluate(() => ({
+        stars: document.querySelectorAll('.photo-card .star-rating').length,
+        selectBtns: document.querySelectorAll('.photo-card .select-toggle-btn').length,
+        clickableHearts: document.querySelectorAll('.photo-card button.pick-heart-btn').length,
+        readonlyHearts: document.querySelectorAll('.photo-card span.pick-heart-btn.on').length,
+        noteBadges: document.querySelectorAll('.photo-card .pv-note-badge').length,
+      }));
+      ok('no star rating control on any card', r.stars === 0, String(r.stars));
+      ok('no select checkbox either', r.selectBtns === 0, String(r.selectBtns));
+      ok('no clickable heart — every ♥ is read-only', r.clickableHearts === 0, String(r.clickableHearts));
+      ok('every card shows the read-only ♥', r.readonlyHearts === 2, String(r.readonlyHearts));
+      ok('exactly the noted photo gets the 💬 marker', r.noteBadges === 1, String(r.noteBadges));
+
+      // No control may write a rating — try the one shortcut that still
+      // reaches setBulkRating() even with the bulk-star buttons gone.
+      await page.click('#selectAllBtn');
+      await page.keyboard.press('5');
+      await page.waitForTimeout(200);
+      const ratingsAfter = await page.evaluate(() => {
+        const byId = {};
+        app.photos.forEach(p => { byId[p.id] = p.rating; });
+        return byId;
+      });
+      ok('ratings are unchanged after the bulk-rating keyboard shortcut',
+        ratingsAfter['20260819/noted.jpg'] === 5 && ratingsAfter['20260819/plain.jpg'] === 4,
+        JSON.stringify(ratingsAfter));
+      const stored = await page.evaluate(() => {
+        try { return JSON.parse(localStorage.getItem(CONFIG.STORAGE_KEYS.RATINGS) || '{}'); }
+        catch (e) { return {}; }
+      });
+      ok('nothing was persisted to localStorage either', !stored['20260819/plain.jpg'], JSON.stringify(stored));
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN });
+}
+
+{
+  const XSS_NOTE = '<img src=x onerror="window.__xssNote=1">';
+  const m = pickFakeWorker({ ownerName: 'Quincy', projectId: 'proj-note' });
+  m.state.selections.set('20260819/n.jpg', { rating: 5, note: XSS_NOTE, updated_by: 'picker-0', updated_at: '2026-09-27T14:52:00.000Z' });
+  await suite('index.html — 專案選片：preview 與 modal 顯示備註文字（escaped），沒有星星可點',
+    `${base}/index.html?project=proj-note`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('.photo-card', { timeout: 5000 });
+      await page.hover('.photo-card');
+      await page.waitForTimeout(250); // updatePreviewPane's own hover debounce
+      const r = await page.evaluate(() => ({
+        noteHidden: document.getElementById('pvPreviewNoteSection').hidden,
+        noteText: document.getElementById('pvPreviewNote').textContent,
+        injected: document.querySelectorAll('#pvPreviewNote img').length,
+        fired: !!window.__xssNote,
+        heartReadOnly: document.querySelectorAll('#previewStars span.pick-heart-btn.on').length,
+        heartClickable: document.querySelectorAll('#previewStars button.pick-heart-btn').length,
+        hintHidden: document.getElementById('previewStarsHint').hidden,
+      }));
+      ok('the note section is shown', r.noteHidden === false);
+      ok('the note text is there as text, not injected as an element',
+        r.noteText.includes(XSS_NOTE) && r.injected === 0, r.noteText);
+      ok('onerror never fired', r.fired === false);
+      ok('the preview heart is read-only (a span), not a button',
+        r.heartReadOnly === 1 && r.heartClickable === 0, JSON.stringify(r));
+      ok('the "按 1–5" hint is hidden — nothing here is keyed by number', r.hintHidden === true);
+
+      await page.click('.photo-card');
+      await page.waitForFunction(
+        () => document.getElementById('photoModal').classList.contains('active'), null, { timeout: 5000 });
+      const modal = await page.evaluate(() => ({
+        noteValue: document.getElementById('photoNote').value,
+        readOnly: document.getElementById('photoNote').readOnly,
+        mprHeart: document.querySelectorAll('#modalPhotoRating span.pick-heart-btn.on').length,
+      }));
+      ok('the modal note textarea shows the same text (via .value, never innerHTML)',
+        modal.noteValue === XSS_NOTE, modal.noteValue);
+      ok('and is read-only', modal.readOnly === true);
+      ok('the modal footer shows the read-only heart too', modal.mprHeart === 1, String(modal.mprHeart));
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN });
+}
+
+{
+  const m = pickFakeWorker({ ownerName: 'Rex', projectId: 'proj-dl' });
+  m.state.selections.set('20260819/a.jpg', { rating: 5, note: '', updated_by: 'picker-0', updated_at: '2026-01-01T00:00:00Z' });
+  m.state.selections.set('20260901/b.jpg', { rating: 3, note: '', updated_by: 'picker-0', updated_at: '2026-01-01T00:00:00Z' });
+  await suite('index.html — 專案選片：打包全部下載／下載選取 只打包這個專案跨資料夾的選片',
+    `${base}/index.html?project=proj-dl`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('.photo-card', { timeout: 5000 });
+      await page.evaluate(() => {
+        window.__zipFiles = [];
+        window.JSZip = function () {
+          this.file = (name) => window.__zipFiles.push(name);
+          this.generateAsync = async () => new Blob(['z']);
+        };
+      });
+
+      await page.click('#downloadAllBtn');
+      await page.waitForTimeout(400);
+      const filesAll = await page.evaluate(() => window.__zipFiles.slice());
+      ok('打包全部下載 packages exactly the project’s 2 picks, from both folders',
+        filesAll.length === 2 && filesAll.includes('a.jpg') && filesAll.includes('b.jpg'), JSON.stringify(filesAll));
+
+      await page.evaluate(() => { window.__zipFiles.length = 0; });
+      await page.click('#downloadSelectedHeaderBtn'); // no checkbox to pick a subset with — see js/project-view.js _wireDownloads
+      await page.waitForTimeout(400);
+      const filesSel = await page.evaluate(() => window.__zipFiles.slice());
+      ok('下載選取 downloads the same set (documented behaviour: 下載選取 = 全部選片)',
+        filesSel.length === 2 && filesSel.includes('a.jpg') && filesSel.includes('b.jpg'), JSON.stringify(filesSel));
+
+      const fetched = m.requests.filter(r => r.method === 'GET').map(r => r.path);
+      ok('both photos were actually fetched from their own folder, proving this is not driveManager.photos (which stays empty here)',
+        fetched.includes('/20260819/a.jpg') && fetched.includes('/20260901/b.jpg'), JSON.stringify(fetched));
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN });
+}
+
+{
+  const m = pickFakeWorker({ ownerName: 'Sara', projectId: 'proj-list' });
+  m.state.selections.set('20260819/a.jpg', { rating: 5, note: '備註A', updated_by: 'picker-0', updated_at: '2026-09-27T14:52:00.000Z' });
+  await suite('index.html — 專案選片：格狀/列表切換，列表顯示縮圖/檔名/備註/更新時間，並記住選擇',
+    `${base}/index.html?project=proj-list`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('.photo-card', { timeout: 5000 });
+      const before = await page.evaluate(() => document.getElementById('headerViewBtn').textContent.trim());
+      ok('starts in grid mode (網格)', before === '網格', before);
+
+      await page.click('#headerViewBtn');
+      await page.waitForSelector('.pv-list-row', { timeout: 5000 });
+      const r = await page.evaluate(() => {
+        const row = document.querySelector('.pv-list-row');
+        return {
+          btnText: document.getElementById('headerViewBtn').textContent.trim(),
+          gridHasListClass: document.getElementById('photoGrid').classList.contains('pv-list'),
+          cardCount: document.querySelectorAll('.photo-card').length,
+          rowCount: document.querySelectorAll('.pv-list-row').length,
+          thumb: !!row.querySelector('.pv-list-thumb'),
+          name: row.querySelector('.pv-list-name')?.textContent,
+          note: row.querySelector('.pv-list-note')?.textContent,
+          time: row.querySelector('.pv-list-time')?.textContent,
+        };
+      });
+      ok('the header button now reads 列表', r.btnText === '列表', r.btnText);
+      ok('the grid container gets the list layout class', r.gridHasListClass === true);
+      ok('grid cards are gone', r.cardCount === 0, String(r.cardCount));
+      ok('exactly one row', r.rowCount === 1, String(r.rowCount));
+      ok('the row has a thumbnail', r.thumb === true);
+      ok('and the filename', r.name === 'a.jpg', r.name);
+      ok('and the note', r.note === '備註A', r.note);
+      ok('and the updated time, in Taipei format, like admin.html', r.time === '9/27 22:52', r.time);
+
+      await page.click('.pv-list-row');
+      await page.waitForFunction(
+        () => document.getElementById('photoModal').classList.contains('active'), null, { timeout: 5000 });
+      ok('clicking a row opens the preview', true);
+      await page.click('#closeModal');
+
+      await page.reload();
+      await page.waitForSelector('.pv-list-row', { timeout: 5000 });
+      const afterReload = await page.evaluate(() => document.getElementById('headerViewBtn').textContent.trim());
+      ok('the choice is remembered across reload (localStorage)', afterReload === '列表', afterReload);
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN });
+}
+
+{
+  const m = pickFakeWorker({ ownerName: 'Tina', projectId: 'proj-btn' });
+  await suite('index.html — 專案選片：「← 回專案」是明顯的按鈕（仍是可 middle-click 的 <a>）',
+    `${base}/index.html?project=proj-btn`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('#projectViewBanner:not([hidden])', { timeout: 5000 });
+      const r = await page.evaluate(() => {
+        const el = document.getElementById('pvBackLink');
+        return { tag: el.tagName, cls: el.className, href: el.getAttribute('href') };
+      });
+      ok('it is a real <a>', r.tag === 'A', r.tag);
+      ok('styled with the existing .btn look, left of the banner text', r.cls.includes('btn') && r.cls.includes('btn-outline'), r.cls);
+      ok('href still resolves — middle-click / back-nav semantics stay intact',
+        r.href === 'admin.html#project=proj-btn', r.href);
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN });
+
+  await suite('index.html — 專案選片：手機版「← 回專案」至少 44px 高',
+    `${base}/index.html?project=proj-btn`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('#projectViewBanner:not([hidden])', { timeout: 5000 });
+      const box = await page.locator('#pvBackLink').boundingBox();
+      ok('at least 44px tall on a phone-width viewport', !!box && box.height >= 44, JSON.stringify(box));
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN, contextOptions: MOBILE });
+}
+
+{
+  const m = pickFakeWorker({ ownerName: 'Uma', projectId: 'proj-copylink', listToken: 'PICK-LIVE-1' });
+  await suite('index.html — 專案選片：複製選片連結 複製最新的有效挑選連結（不是資料夾）',
+    `${base}/index.html?project=proj-copylink`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+      await page.waitForSelector('#projectViewBanner:not([hidden])', { timeout: 5000 });
+      await page.click('#pvCopyLinkBtn');
+      await page.waitForTimeout(200);
+      const clip = await page.evaluate(() => navigator.clipboard.readText());
+      ok('copies index.html?t=<newest live token>', /index\.html\?t=PICK-LIVE-1$/.test(clip), clip);
+      const toastShown = await page.evaluate(() => document.querySelector('.toast-message')?.textContent);
+      ok('confirms with a success toast', toastShown === '已複製選片連結', toastShown);
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN });
+}
+
+{
+  // A revoked-only link is not "有效" either — this must actually check
+  // status, not just whether any token row exists at all.
+  const m = pickFakeWorker({ ownerName: 'Wade', projectId: 'proj-revoked' });
+  m.state.tokens[0].revoked_at = '2026-01-01T00:00:00.000Z';
+  await suite('index.html — 專案選片：只剩已撤銷的連結時，也算沒有有效連結',
+    `${base}/index.html?project=proj-revoked`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+      await page.waitForSelector('#projectViewBanner:not([hidden])', { timeout: 5000 });
+      await page.evaluate(() => navigator.clipboard.writeText('sentinel'));
+      await page.click('#pvCopyLinkBtn');
+      await page.waitForTimeout(200);
+      const toastShown = await page.evaluate(() => document.querySelector('.toast-message')?.textContent);
+      ok('shows 沒有有效連結，請到專案頁產生', toastShown === '沒有有效連結，請到專案頁產生', toastShown);
+      const clip = await page.evaluate(() => navigator.clipboard.readText());
+      ok('the revoked token was not copied', clip === 'sentinel', clip);
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN });
+}
+
+{
+  const m = pickFakeWorker({ ownerName: 'Vic', projectId: 'proj-nolink', listToken: null });
+  await suite('index.html — 專案選片：沒有有效連結時提示「沒有有效連結，請到專案頁產生」，不複製任何東西',
+    `${base}/index.html?project=proj-nolink`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+      await page.waitForSelector('#projectViewBanner:not([hidden])', { timeout: 5000 });
+      await page.evaluate(() => navigator.clipboard.writeText('sentinel'));
+      await page.click('#pvCopyLinkBtn');
+      await page.waitForTimeout(200);
+      const toastShown = await page.evaluate(() => document.querySelector('.toast-message')?.textContent);
+      ok('shows 沒有有效連結，請到專案頁產生', toastShown === '沒有有效連結，請到專案頁產生', toastShown);
+      const clip = await page.evaluate(() => navigator.clipboard.readText());
+      ok('nothing was copied — clipboard stays untouched', clip === 'sentinel', clip);
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN });
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Studio entrance — home.html, dashboard.html, settings.html
+// (docs/dashboard-settings.md backs dashboard.html/settings.html;
+// home.html's login reuses admin.html's own token check, now against
+// GET /api/admin/settings instead of /api/admin/clients).
+// ═══════════════════════════════════════════════════════════════════════════
+
+function dashSettingsMock(opts = {}) {
+  const token = opts.token ?? 'adm';
+  const state = {
+    settings: Object.assign({
+      studio_name: null, booking_url: null, default_pick_limit: null, default_extra_price: null,
+      has_logo: false, logo_type: null, logo_updated_at: null, updated_at: null,
+    }, opts.settings || {}),
+    stats: opts.stats || {
+      by_phase: { picking: 0, submitted: 0, retouching: 0 }, delivered: 0, archived: 0,
+      per_month: [], todo: { submitted_not_retouching: 0, unnotified_submissions: 0, modified_after_submit: 0 },
+    },
+    projects: opts.projects || [],
+    settingsPutStatus: opts.settingsPutStatus || 200,
+    settingsPutBody: opts.settingsPutBody || null,
+    logoPutStatus: opts.logoPutStatus || 200,
+    logoPutBody: opts.logoPutBody || null,
+    deliverStatus: opts.deliverStatus || 200,
+    deliverBody: opts.deliverBody || null,
+  };
+  const seen = [];
+  const attach = async page => {
+    await page.route('**/imagepicker.hotichen.workers.dev/**', async route => {
+      const req = route.request();
+      const u = new URL(req.url());
+      const method = req.method();
+      const h = await req.allHeaders();
+      const auth = h['authorization'] ?? null;
+      let body = null;
+      try { body = JSON.parse(req.postData() || 'null'); } catch (e) { /* not JSON, e.g. a logo PUT */ }
+      seen.push({ method, path: u.pathname, auth, body });
+      const json = (data, status = 200) =>
+        route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(data) });
+
+      if (u.pathname === '/api/studio/logo') // public — no auth required
+        return route.fulfill({ status: 200, contentType: 'image/png', body: PIXEL });
+      if (auth !== `Bearer ${token}`) return json({ error: 'Unauthorized' }, 401);
+
+      if (u.pathname === '/api/admin/settings' && method === 'GET') return json(state.settings);
+      if (u.pathname === '/api/admin/settings' && method === 'PUT') {
+        if (state.settingsPutStatus !== 200) return json(state.settingsPutBody || { error: 'bad' }, state.settingsPutStatus);
+        Object.assign(state.settings, body);
+        return json(state.settings);
+      }
+      if (u.pathname === '/api/admin/settings/logo' && method === 'PUT') {
+        if (state.logoPutStatus !== 200) return json(state.logoPutBody || { error: 'bad' }, state.logoPutStatus);
+        state.settings.has_logo = true;
+        return json({ ok: true, has_logo: true, logo_type: 'image/png', logo_updated_at: '2026-09-27T00:00:00.000Z', size: 1 });
+      }
+      if (u.pathname === '/api/admin/settings/logo' && method === 'DELETE') {
+        state.settings.has_logo = false;
+        return json({ ok: true, has_logo: false });
+      }
+      if (u.pathname === '/api/admin/stats' && method === 'GET') return json(state.stats);
+      if (u.pathname === '/api/admin/projects' && method === 'GET') return json({ projects: state.projects });
+      if (/^\/api\/admin\/projects\/[^/]+\/deliver$/.test(u.pathname) && method === 'POST')
+        return json(state.deliverBody || { ok: true, delivered_at: '2026-09-27T00:00:00.000Z' }, state.deliverStatus);
+      if (/^\/api\/admin\/projects\/[^/]+\/undeliver$/.test(u.pathname) && method === 'POST')
+        return json({ ok: true, delivered_at: null });
+      return json({});
+    });
+  };
+  return { state, seen, attach };
+}
+
+// addInitScript re-seeds on every navigation within the context (a known
+// false-pass shape, see CLAUDE.md) — fine for a suite that stays on one
+// authenticated page, but wrong for the logout suite, which navigates away
+// to home.html and needs the token to actually stay gone there. So this one
+// skips home.html; the "already logged in" home.html suite below seeds
+// unconditionally instead.
+const SEED_TOKEN = () => {
+  if (!location.pathname.endsWith('/home.html')) sessionStorage.setItem('studio_token', 'adm');
+};
+const SEED_TOKEN_ALWAYS = () => sessionStorage.setItem('studio_token', 'adm');
+
+await suite('入口 — 未登入時看到品牌、三張特色卡與手機示意圖，並提供攝影師登入',
+  `${base}/home.html`,
+  async page => {
+    const out = [];
+    const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+
+    ok('the pitch line is on the page', (await page.textContent('body')).includes('讓客人在手機上輕鬆選片，你專心修圖'));
+    const cardTitles = await page.$$eval('.feature-card h3', els => els.map(e => e.textContent));
+    ok('three feature cards, in order', JSON.stringify(cardTitles) ===
+      JSON.stringify(['傳連結，手機就能選', '送出即通知，加選自動算', '開始精修，選片就鎖定']), JSON.stringify(cardTitles));
+    const pitch = await page.textContent('.pitch');
+    ok('the sub-line adds to the headline instead of repeating it', !pitch.includes('讓客人在手機上輕鬆選片'), pitch);
+    ok('the secondary button is not underlined',
+      (await page.$eval('.btn-ghost', e => getComputedStyle(e).textDecorationLine)) === 'none');
+    ok('the mock tiles are not all the same colour',
+      new Set(await page.$$eval('.phone-tile', els => els.map(e => getComputedStyle(e).backgroundColor))).size >= 4);
+    ok('a phone mock is built from CSS/markup, not an <img>',
+      (await page.$('.phone-mock')) !== null && (await page.$('.phone-mock img')) === null);
+    ok('no external script tags', (await page.$$eval('script[src]', els =>
+      els.every(e => !/^https?:|^\/\//.test(e.getAttribute('src'))))));
+
+    await page.click('#heroLoginBtn');
+    await page.waitForSelector('#loginOverlay.open', { timeout: 3000 });
+    ok('login overlay opens', true);
+    return out;
+  });
+
+{
+  const m = dashSettingsMock({ token: 'right-pw' });
+  await suite('入口 — 攝影師登入：密碼錯誤顯示提示，正確密碼存 studio_token 並跳轉到 dashboard.html',
+    `${base}/home.html`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+
+      await page.click('#photographerLoginBtn');
+      await page.fill('#loginTokenInput', 'wrong-pw');
+      await page.click('#loginSubmitBtn');
+      await page.waitForTimeout(300);
+      const err1 = await page.textContent('#loginErr');
+      ok('wrong password shows 密碼錯誤', err1.trim() === '密碼錯誤', err1);
+      ok('nothing was stored on the wrong attempt',
+        await page.evaluate(() => sessionStorage.getItem('studio_token')) === null);
+
+      await page.fill('#loginTokenInput', 'right-pw');
+      await page.click('#loginSubmitBtn');
+      await page.waitForURL('**/dashboard.html', { timeout: 3000 });
+      const stored = await page.evaluate(() => sessionStorage.getItem('studio_token'));
+      ok('the real token landed in sessionStorage.studio_token, nowhere else', stored === 'right-pw', stored);
+      return out;
+    },
+    { before: m.attach });
+}
+
+await suite('入口 — 已經登入過（sessionStorage 已有 studio_token）直接跳轉到 dashboard.html',
+  `${base}/home.html`,
+  async page => {
+    const out = [];
+    const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+    await page.waitForURL('**/dashboard.html', { timeout: 3000 }).catch(() => {});
+    ok('redirected to dashboard.html', /dashboard\.html/.test(page.url()), page.url());
+    return out;
+  },
+  { initScript: SEED_TOKEN_ALWAYS });
+
+await suite('儀表板 — 沒有 studio_token 時，還沒發出任何請求就先跳轉回 home.html',
+  `${base}/dashboard.html`,
+  async page => {
+    const out = [];
+    const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+    await page.waitForURL('**/home.html', { timeout: 3000 }).catch(() => {});
+    ok('redirected to home.html', /home\.html/.test(page.url()), page.url());
+    return out;
+  });
+
+{
+  const m = dashSettingsMock({
+    stats: {
+      by_phase: { picking: 3, submitted: 2, retouching: 1 }, delivered: 5, archived: 1,
+      per_month: [
+        { month: '2026-08', created: 4, delivered: 2 },
+        { month: '2026-09', created: 8, delivered: 4 },
+      ],
+      todo: { submitted_not_retouching: 2, unnotified_submissions: 1, modified_after_submit: 0 },
+    },
+    projects: [
+      { id: 'p1', title: '海邊系列', phase: 'retouching', delivered_at: null },
+      { id: 'p2', title: '婚紗', phase: 'retouching', delivered_at: '2026-09-20T00:00:00.000Z' },
+    ],
+  });
+  await suite('儀表板 — 卡片、長條圖與待處理清單都照 /api/admin/stats 的資料畫',
+    `${base}/dashboard.html`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+
+      await page.waitForFunction(() => document.getElementById('stat-picking').textContent !== '–', null, { timeout: 5000 });
+      const nums = await page.evaluate(() => ['stat-picking', 'stat-submitted', 'stat-retouching', 'stat-delivered']
+        .map(id => document.getElementById(id).textContent));
+      ok('選片中/已送出/精修中/已交付 counts', JSON.stringify(nums) === JSON.stringify(['3', '2', '1', '5']), JSON.stringify(nums));
+
+      // per_month's max value (8, September's created) must be the tallest
+      // bar (100%); everything else scales relative to it — a stats-mapping
+      // mutant (e.g. always 100%, or delivered/created swapped) breaks this.
+      const heights = await page.$$eval('#stat-chart .chart-col', cols => cols.map(c => ({
+        created: c.querySelector('.chart-bar.created').style.height,
+        delivered: c.querySelector('.chart-bar.delivered').style.height,
+      })));
+      ok('two months rendered', heights.length === 2, JSON.stringify(heights));
+      ok('September (the max) created bar is 100%', heights[1]?.created === '100%', JSON.stringify(heights));
+      ok('August created (4/8) is 50%', heights[0]?.created === '50%', JSON.stringify(heights));
+      ok('August delivered (2/8) is 25%, not swapped with created', heights[0]?.delivered === '25%', JSON.stringify(heights));
+
+      const todoText = await page.textContent('#todo-list');
+      ok('待處理 shows all three non-zero counts',
+        todoText.includes('2') && todoText.includes('已送出但尚未開始精修') &&
+        todoText.includes('1') && todoText.includes('尚未寄信通知') &&
+        !todoText.includes('個專案送出後又被修改'), todoText);
+      const todoLinks = await page.$$eval('#todo-list a', els => els.map(e => e.getAttribute('href')));
+      ok('待處理 items link into admin.html#projects', todoLinks.every(h => h === 'admin.html#projects'), JSON.stringify(todoLinks));
+
+      const recentLinks = await page.$$eval('#recent-projects a', els => els.map(e => e.getAttribute('href')));
+      ok('recent projects link to admin.html#project=<id>',
+        JSON.stringify(recentLinks) === JSON.stringify(['admin.html#project=p1', 'admin.html#project=p2']), JSON.stringify(recentLinks));
+      const deliveredBadges = await page.$$eval('.recent-row', rows => rows.map(r => r.textContent.includes('已交付')));
+      ok('only the delivered project shows 已交付', JSON.stringify(deliveredBadges) === JSON.stringify([false, true]), JSON.stringify(deliveredBadges));
+      return out;
+    },
+    { before: m.attach, initScript: SEED_TOKEN });
+}
+
+{
+  const m = dashSettingsMock();
+  await suite('儀表板 — 全部待處理歸零時顯示「目前沒有待處理事項」，側邊選單標出目前頁面並可登出',
+    `${base}/dashboard.html`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('#todo-list .todo-empty', { timeout: 5000 });
+      ok('says nothing pending', (await page.textContent('#todo-list')).includes('目前沒有待處理事項'));
+
+      const navHrefs = await page.$$eval('.side-nav-item[href]', els => els.map(e => e.getAttribute('href')));
+      ok('side menu has all six destinations',
+        JSON.stringify(navHrefs) === JSON.stringify(['dashboard.html', 'admin.html#projects', 'admin.html', 'index.html', 'upload.html', 'book_editor/', 'settings.html']),
+        JSON.stringify(navHrefs));
+      const active = await page.$eval('.side-nav-item.active', e => e.textContent);
+      ok('儀表板 is marked active on this page', active === '儀表板', active);
+
+      await page.click('.side-nav-logout');
+      await page.waitForURL('**/home.html', { timeout: 3000 });
+      ok('logout clears the token and leaves for home.html, which stays put (no token to bounce it back)',
+        /home\.html$/.test(page.url()) &&
+        (await page.evaluate(() => sessionStorage.getItem('studio_token'))) === null,
+        page.url());
+      return out;
+    },
+    { before: m.attach, initScript: SEED_TOKEN });
+}
+
+await suite('設定 — 沒有 studio_token 時跳轉回 home.html',
+  `${base}/settings.html`,
+  async page => {
+    const out = [];
+    const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+    await page.waitForURL('**/home.html', { timeout: 3000 }).catch(() => {});
+    ok('redirected to home.html', /home\.html/.test(page.url()), page.url());
+    return out;
+  });
+
+{
+  const m = dashSettingsMock({ settings: { studio_name: '某某影像', booking_url: 'https://example.com/book', default_pick_limit: 30, default_extra_price: 100 } });
+  await suite('設定 — 讀出既有設定並帶入表單，儲存後顯示已儲存',
+    `${base}/settings.html`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForFunction(() => document.getElementById('set-studio-name').value !== '', null, { timeout: 5000 });
+      const vals = await page.evaluate(() => ({
+        name: document.getElementById('set-studio-name').value,
+        url: document.getElementById('set-booking-url').value,
+        limit: document.getElementById('set-default-pick-limit').value,
+        price: document.getElementById('set-default-extra-price').value,
+      }));
+      ok('fields are prefilled from GET /api/admin/settings',
+        vals.name === '某某影像' && vals.url === 'https://example.com/book' && vals.limit === '30' && vals.price === '100',
+        JSON.stringify(vals));
+
+      await page.fill('#set-studio-name', '新名字');
+      await page.click('#set-save-btn');
+      await page.waitForFunction(() => document.getElementById('set-ok').textContent === '已儲存', null, { timeout: 3000 });
+      const put = m.seen.find(r => r.method === 'PUT' && r.path === '/api/admin/settings');
+      ok('PUT carried the edited name', put?.body?.studio_name === '新名字', JSON.stringify(put));
+      return out;
+    },
+    { before: m.attach, initScript: SEED_TOKEN });
+}
+
+{
+  const m = dashSettingsMock();
+  await suite('設定 — 預約網址不是 https:// 時擋在前端，不會打到 Worker',
+    `${base}/settings.html`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('#set-save-btn', { timeout: 5000 });
+      await page.fill('#set-booking-url', 'http://not-secure.example.com');
+      await page.click('#set-save-btn');
+      await page.waitForTimeout(300);
+      const err = await page.textContent('#set-err');
+      ok('client shows the https-only message', err.includes('https://'), err);
+      const put = m.seen.find(r => r.method === 'PUT' && r.path === '/api/admin/settings');
+      ok('no PUT was sent for an http:// url', put === undefined, JSON.stringify(put));
+      return out;
+    },
+    { before: m.attach, initScript: SEED_TOKEN });
+}
+
+{
+  // A url that passes the client's startsWith check but the server still
+  // rejects (whitespace, control chars, user:pass@, docs/dashboard-settings.md)
+  // — the server's invalid_booking_url has to reach the screen, not just the
+  // client-side guard's own wording.
+  const m = dashSettingsMock({ settingsPutStatus: 400, settingsPutBody: { error: 'bad url', code: 'invalid_booking_url' } });
+  await suite('設定 — 伺服器回報 invalid_booking_url 時顯示對應錯誤訊息',
+    `${base}/settings.html`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('#set-save-btn', { timeout: 5000 });
+      await page.fill('#set-booking-url', 'https://ok-looking.example.com');
+      await page.click('#set-save-btn');
+      await page.waitForTimeout(300);
+      const err = await page.textContent('#set-err');
+      ok('shows the server-side https validation message', err.includes('https://'), err);
+      return out;
+    },
+    { before: m.attach, initScript: SEED_TOKEN });
+}
+
+{
+  const m = dashSettingsMock();
+  await suite('設定 — Logo 上傳：超過 200KB 或非允許格式在前端就擋下，成功後顯示預覽與移除鍵',
+    `${base}/settings.html`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('#logo-file-input', { timeout: 5000 });
+
+      // 200 KB + 1 byte — client-side rejected, no request to the Worker
+      await page.setInputFiles('#logo-file-input', {
+        name: 'big.png', mimeType: 'image/png', buffer: Buffer.alloc(204801, 1),
+      });
+      await page.waitForTimeout(200);
+      let err = await page.textContent('#logo-err');
+      ok('oversized file rejected client-side', err.includes('200 KB'), err);
+      ok('no logo PUT was sent for it', m.seen.find(r => r.path === '/api/admin/settings/logo') === undefined);
+
+      await page.setInputFiles('#logo-file-input', {
+        name: 'x.svg', mimeType: 'image/svg+xml', buffer: Buffer.from('<svg/>'),
+      });
+      await page.waitForTimeout(200);
+      err = await page.textContent('#logo-err');
+      ok('unsupported type rejected client-side', err.includes('PNG'), err);
+
+      ok('no remove button before any logo exists', await page.isHidden('#logo-remove-btn'));
+
+      await page.setInputFiles('#logo-file-input', {
+        name: 'ok.png', mimeType: 'image/png', buffer: Buffer.from([1, 2, 3]),
+      });
+      await page.waitForFunction(() => !document.getElementById('logo-remove-btn').style.display ||
+        document.getElementById('logo-remove-btn').style.display !== 'none', null, { timeout: 3000 });
+      const put = m.seen.find(r => r.method === 'PUT' && r.path === '/api/admin/settings/logo');
+      ok('the good file reached the Worker', !!put, JSON.stringify(m.seen));
+      ok('and a preview <img> is shown', await page.$('#logo-preview-box img') !== null);
+
+      await page.click('#logo-remove-btn');
+      await page.waitForFunction(() => document.getElementById('logo-remove-btn').style.display === 'none', null, { timeout: 3000 });
+      const del = m.seen.find(r => r.method === 'DELETE' && r.path === '/api/admin/settings/logo');
+      ok('remove sent a DELETE', !!del, JSON.stringify(m.seen));
+      ok('preview reverts to the empty state', (await page.textContent('#logo-preview-box')).includes('尚未上傳'));
+      return out;
+    },
+    { before: m.attach, initScript: SEED_TOKEN });
+}
+
+{
+  const m = dashSettingsMock({ logoPutStatus: 413, logoPutBody: { error: 'too large', code: 'too_large' } });
+  await suite('設定 — 伺服器回 413 時顯示檔案過大訊息（用來覆蓋前端漏放過去的情況）',
+    `${base}/settings.html`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('#logo-file-input', { timeout: 5000 });
+      await page.setInputFiles('#logo-file-input', { name: 'ok.png', mimeType: 'image/png', buffer: Buffer.from([1, 2, 3]) });
+      await page.waitForTimeout(300);
+      const err = await page.textContent('#logo-err');
+      ok('shows the 200 KB message from a server 413', err.includes('200 KB'), err);
+      return out;
+    },
+    { before: m.attach, initScript: SEED_TOKEN });
+}
+
+{
+  const m = dashSettingsMock({ logoPutStatus: 415, logoPutBody: { error: 'bad type', code: 'unsupported_type' } });
+  await suite('設定 — 伺服器回 415 時顯示不支援格式訊息',
+    `${base}/settings.html`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('#logo-file-input', { timeout: 5000 });
+      await page.setInputFiles('#logo-file-input', { name: 'ok.png', mimeType: 'image/png', buffer: Buffer.from([1, 2, 3]) });
+      await page.waitForTimeout(300);
+      const err = await page.textContent('#logo-err');
+      ok('shows the unsupported-format message from a server 415', err.includes('PNG'), err);
+      return out;
+    },
+    { before: m.attach, initScript: SEED_TOKEN });
+}
+
+{
+  // admin.html's project-create form prefills from the studio's saved
+  // defaults, but only into a field the photographer has not already typed
+  // into — the mutant this guards is "always overwrite".
+  const m = adminMock({ clients: [] });
+  m.attach = (orig => async page => {
+    await orig(page);
+    await page.route('**/imagepicker.hotichen.workers.dev/api/admin/settings', route =>
+      route.fulfill({ status: 200, contentType: 'application/json',
+        body: JSON.stringify({ studio_name: 'S', booking_url: null, default_pick_limit: 25, default_extra_price: 150, has_logo: false }) }));
+  })(m.attach);
+  await suite('設定 — 預設方案（張數/單價）帶入 admin.html 的新專案表單，且不覆蓋已輸入的值',
+    `${base}/admin.html`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForFunction(() => document.getElementById('proj-pick-limit').value !== '', null, { timeout: 5000 });
+      const vals = await page.evaluate(() => ({
+        limit: document.getElementById('proj-pick-limit').value,
+        price: document.getElementById('proj-extra-price').value,
+      }));
+      ok('prefilled from the studio defaults', vals.limit === '25' && vals.price === '150', JSON.stringify(vals));
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN });
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Guest pick page — studio branding (docs/dashboard-settings.md)
+// ═══════════════════════════════════════════════════════════════════════════
+
+{
+  const m = pickFakeWorker({
+    ownerName: 'Ann', ownerKey: 'ANN-KEY',
+    studio: { name: '海邊影像工作室', booking_url: 'https://booking.example.com/x', has_logo: true },
+  });
+  await suite('選片頁 — 顯示工作室名稱與 Logo，並提供 https 預約連結',
+    `${base}/index.html?t=PICK-TOKEN`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.evaluate(() => localStorage.setItem('pick_key:PICK-TOKEN', 'ANN-KEY'));
+      await page.reload({ waitUntil: 'load' });
+      await page.waitForFunction(() => document.querySelector('.logo-name')?.textContent === '海邊影像工作室', null, { timeout: 5000 });
+      ok('logo-name replaced with the studio name', true);
+      const img = await page.$eval('.logo-mark-img', el => ({ src: el.src, alt: el.alt })).catch(() => null);
+      ok('the text mark is replaced by an <img> for the logo', !!img && img.src.includes('/api/studio/logo'), JSON.stringify(img));
+      const link = await page.$eval('#studioBookingLink', el => ({ hidden: el.hidden, href: el.href, rel: el.rel, target: el.target }));
+      ok('預約拍攝 link is shown with the https url, opened safely in a new tab',
+        link.hidden === false && link.href === 'https://booking.example.com/x' &&
+        link.rel.includes('noopener') && link.rel.includes('noreferrer') && link.target === '_blank', JSON.stringify(link));
+      return out;
+    },
+    { before: m.attach });
+}
+
+{
+  // The https guard is the one line worth mutation-testing here: anything
+  // else (http://, //evil, javascript:, empty) must leave the link hidden
+  // with its href untouched, never fall through to "set it anyway".
+  const m = pickFakeWorker({
+    ownerName: 'Ben', ownerKey: 'BEN-KEY',
+    studio: { name: 'S', booking_url: 'http://not-secure.example.com', has_logo: false },
+  });
+  await suite('選片頁 — 非 https 的 booking_url 不會被拿來當連結，預約按鈕保持隱藏',
+    `${base}/index.html?t=PICK-TOKEN`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.evaluate(() => localStorage.setItem('pick_key:PICK-TOKEN', 'BEN-KEY'));
+      await page.reload({ waitUntil: 'load' });
+      await page.waitForFunction(() => document.querySelector('.logo-name')?.textContent === 'S', null, { timeout: 5000 });
+      const link = await page.$eval('#studioBookingLink', el => ({ hidden: el.hidden, href: el.getAttribute('href') }));
+      ok('link stays hidden for an http:// url', link.hidden === true, JSON.stringify(link));
+      ok('and its href was never touched (still the placeholder "#")', link.href === '#', JSON.stringify(link));
+      ok('no logo <img> is added when has_logo is false', (await page.$('.logo-mark-img')) === null);
+      return out;
+    },
+    { before: m.attach });
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Delivered projects (docs/dashboard-settings.md) — admin.html project detail
+// ═══════════════════════════════════════════════════════════════════════════
+
+{
+  const m = pickFakeWorker({ projectId: 'proj-deliver', title: '待交付專案' });
+  m.state.project.phase = 'retouching';
+  await suite('admin — 精修中專案顯示「標記已交付」，點下去之後變成「取消交付」＋已交付徽章，清單也跟著顯示',
+    `${base}/admin.html#project=proj-deliver`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('#pd-deliver-btn', { timeout: 5000 });
+      // "標記已交付" (the deliver button's own label) contains the substring
+      // "已交付" too, so the badge is checked by its own [data-delivered-badge]
+      // marker rather than a plain text search.
+      ok('no 取消交付 yet, no 已交付 badge yet',
+        (await page.$('#pd-undeliver-btn')) === null && (await page.$('[data-delivered-badge]')) === null);
+
+      await page.click('#pd-deliver-btn');
+      await page.waitForSelector('#pd-undeliver-btn', { timeout: 3000 });
+      ok('標記已交付 is gone, replaced by 取消交付', (await page.$('#pd-deliver-btn')) === null);
+      ok('已交付 badge shows in the detail panel',
+        (await page.$('#project-detail-body [data-delivered-badge]')) !== null);
+      ok('the deliver call actually reached the Worker',
+        m.requests.some(r => r.method === 'POST' && r.path.endsWith('/deliver')));
+      ok('and the projects list picked up the badge too', await page.waitForSelector(
+        '#proj-recent-list [data-delivered-badge]', { timeout: 3000 }).then(() => true, () => false));
+
+      await page.click('#pd-undeliver-btn');
+      await page.waitForSelector('#pd-deliver-btn', { timeout: 3000 });
+      ok('取消交付 reverts to 標記已交付, no more 已交付 badge',
+        (await page.$('#pd-undeliver-btn')) === null &&
+        (await page.$('#project-detail-body [data-delivered-badge]')) === null);
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN });
+}
+
+{
+  const m = pickFakeWorker({ projectId: 'proj-not-ready', title: '選片中專案' });
+  await suite('admin — 選片中／已送出的專案不顯示交付按鈕；直接呼叫 API 會拿到 409 not_retouching 並顯示友善訊息',
+    `${base}/admin.html#project=proj-not-ready`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('#pd-reset-seat-btn', { timeout: 5000 });
+      ok('no 標記已交付 button while still picking',
+        (await page.$('#pd-deliver-btn')) === null && (await page.$('#pd-undeliver-btn')) === null);
+
+      // The friendly 409 message is exercised directly against the endpoint —
+      // the button itself is gated off in this phase, by design.
+      const res = await page.evaluate(async id => {
+        const r = await fetch(`https://imagepicker.hotichen.workers.dev/api/admin/projects/${id}/deliver`,
+          { method: 'POST', headers: { 'Authorization': 'Bearer adm' } });
+        return { status: r.status, body: await r.json() };
+      }, m.state.project.id);
+      ok('409 not_retouching from the fake, mirroring the real Worker',
+        res.status === 409 && res.body.code === 'not_retouching', JSON.stringify(res));
       return out;
     },
     { before: m.attach, initScript: ADMIN });

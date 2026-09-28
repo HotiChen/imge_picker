@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>選圖工作室 — Studio</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@600;900&family=Noto+Sans+TC:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #15120d;
+    --bg-soft: #1c1a14;
+    --surface: #1d1a14;
+    --card: #221f18;
+    --card-hi: #2b271e;
+    --accent: #e5a448;
+    --accent-dim: rgba(229,164,72,.16);
+    --ink-90: #e8e3da;
+    --ink-70: rgba(232,227,218,.72);
+    --ink-55: #8c8375;
+    --rule: #2e2a22;
+    --border: #3a3528;
+    --danger: #e05c5c;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { background: var(--bg); }
+  body {
+    color: var(--ink-90); font-family: 'Noto Sans TC', sans-serif; font-size: 15px;
+    line-height: 1.6; min-height: 100vh;
+  }
+  .mono { font-family: 'IBM Plex Mono', monospace; }
+  .serif { font-family: 'Noto Serif TC', serif; }
+  a { text-decoration: none; }
+
+  /* ── Top bar ─────────────────────────────────────────── */
+  .topbar {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 20px 28px; max-width: 1200px; margin: 0 auto;
+  }
+  .brand { display: flex; align-items: center; gap: 10px; }
+  .brand .mark {
+    width: 28px; height: 28px; background: var(--accent); color: var(--bg);
+    display: flex; align-items: center; justify-content: center; font-weight: 700;
+    font-size: 15px; border-radius: 6px; flex-shrink: 0;
+  }
+  .brand .name { font-family: 'Noto Serif TC', serif; font-weight: 600; font-size: 18px; letter-spacing: .04em; }
+  .brand .label {
+    font-family: 'IBM Plex Mono', monospace; font-size: 10px; letter-spacing: 0.2em;
+    color: var(--ink-55); border: 1px solid var(--border); border-radius: 3px; padding: 2px 6px;
+  }
+  #buildVersion { margin-left: 10px; }
+  #photographerLoginBtn {
+    background: transparent; border: 1px solid var(--border); color: var(--ink-70);
+    padding: 8px 16px; border-radius: 5px; font-family: inherit; font-size: 13px;
+    cursor: pointer; transition: border-color .15s, color .15s;
+  }
+  #photographerLoginBtn:hover { border-color: var(--accent); color: var(--accent); }
+
+  /* ── Hero ────────────────────────────────────────────── */
+  .hero {
+    max-width: 1200px; margin: 0 auto; padding: 72px 28px 64px;
+    display: grid; grid-template-columns: 1fr 1fr; gap: 64px; align-items: center;
+  }
+  .eyebrow { font-family: 'IBM Plex Mono', monospace; font-size: 12px; letter-spacing: .22em; color: var(--accent); margin-bottom: 22px; }
+  .hero h1 { font-family: 'Noto Serif TC', serif; font-size: 56px; font-weight: 900; line-height: 1.25; letter-spacing: .02em; margin-bottom: 24px; }
+  .hero h1 span { color: var(--accent); }
+  .pitch { font-size: 18px; line-height: 1.8; color: var(--ink-70); margin-bottom: 32px; max-width: 480px; }
+  .hero-ctas { display: flex; gap: 12px; flex-wrap: wrap; }
+  .btn {
+    display: inline-flex; align-items: center; gap: 8px; border: none; border-radius: 6px;
+    padding: 15px 28px; font-size: 16px; font-weight: 700; min-height: 48px; text-decoration: none; cursor: pointer; font-family: inherit;
+  }
+  .btn-accent { background: var(--accent); color: var(--bg); }
+  .btn-accent:hover { opacity: .9; }
+  .btn-ghost { background: transparent; border: 1px solid var(--border); color: var(--ink-90); }
+  .btn-ghost:hover { border-color: var(--accent); color: var(--accent); }
+
+  /* ── Phone mock (pure CSS/SVG, no external images) ──── */
+  .phone-mock {
+    justify-self: center; width: 280px; background: #0e0c09;
+    border: 1px solid var(--border); border-radius: 40px; padding: 18px 12px 14px;
+    box-shadow: 0 30px 80px rgba(0,0,0,.5);
+  }
+  .phone-notch { width: 60px; height: 6px; background: var(--bg); border-radius: 4px; margin: 0 auto 10px; }
+  .phone-header {
+    display: flex; align-items: center; justify-content: space-between; padding: 0 4px 8px;
+    border-bottom: 1px solid var(--rule); margin-bottom: 8px;
+  }
+  .phone-header .t { font-size: 11px; color: var(--ink-55); font-family: 'IBM Plex Mono', monospace; }
+  .phone-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; }
+  .phone-tile {
+    aspect-ratio: 1; border-radius: 7px; position: relative; border: 3px solid transparent;
+    background: #6b7f86;
+  }
+  .phone-tile:nth-child(2) { background: #c9b79c; }
+  .phone-tile:nth-child(3) { background: #8c6f55; }
+  .phone-tile:nth-child(4) { background: #a8b3a1; }
+  .phone-tile:nth-child(5) { background: #d8c8b0; }
+  .phone-tile:nth-child(6) { background: #4f5b63; }
+  .phone-tile.picked { border-color: var(--accent); }
+  .phone-wrap { position: relative; justify-self: center; }
+  .notice {
+    position: absolute; left: -64px; bottom: 72px; background: #221d17; border: 1px solid var(--border);
+    border-radius: 12px; padding: 12px 16px; box-shadow: 0 16px 40px rgba(0,0,0,.4);
+  }
+  .notice .when { font-family: 'IBM Plex Mono', monospace; font-size: 10px; letter-spacing: .16em; color: var(--ink-55); }
+  .notice .what { font-size: 14px; font-weight: 700; }
+  .notice .fee { font-size: 12px; color: var(--accent); }
+  .phone-tile .heart {
+    position: absolute; top: 4px; right: 4px; width: 20px; height: 20px; border-radius: 50%;
+    background: var(--accent); color: var(--bg); font-size: 11px; display: flex;
+    align-items: center; justify-content: center;
+  }
+  .phone-cta {
+    margin-top: 10px; background: var(--accent); color: var(--bg); text-align: center;
+    font-size: 13px; font-weight: 700; padding: 11px; border-radius: 9px;
+  }
+
+  /* ── Feature cards ───────────────────────────────────── */
+  .features {
+    max-width: 1200px; margin: 0 auto 80px; padding: 0 28px;
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 28px;
+  }
+  .feature-card { border-top: 1px solid var(--border); padding-top: 22px; }
+  .feature-card .step { font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: var(--accent); margin-bottom: 10px; }
+  .feature-card h3 { font-family: 'Noto Serif TC', serif; font-size: 21px; font-weight: 600; margin-bottom: 10px; }
+  .feature-card p { font-size: 15px; color: var(--ink-70); line-height: 1.8; }
+
+  footer {
+    max-width: 1200px; margin: 0 auto; padding: 20px 28px 40px; border-top: 1px solid var(--rule); color: var(--ink-55);
+    font-size: 12px; text-align: center;
+  }
+
+  /* ── Login overlay ───────────────────────────────────── */
+  .login-overlay {
+    display: none; position: fixed; inset: 0; background: rgba(10,8,5,.7);
+    align-items: center; justify-content: center; z-index: 1000; padding: 16px;
+  }
+  .login-overlay.open { display: flex; }
+  .login-card {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+    padding: 36px 30px; width: 320px; max-width: 100%; text-align: center; position: relative;
+  }
+  .login-card .close-btn {
+    position: absolute; top: 10px; right: 12px; background: none; border: none;
+    color: var(--ink-55); font-size: 18px; cursor: pointer; line-height: 1;
+  }
+  .login-card .close-btn:hover { color: var(--ink-90); }
+  .login-card .brand-mono {
+    color: var(--accent); font-family: 'IBM Plex Mono', monospace; font-size: 12px;
+    letter-spacing: 0.15em; margin-bottom: 4px;
+  }
+  .login-card .subtitle { color: var(--ink-55); font-size: 12px; margin-bottom: 24px; }
+  .field {
+    background: var(--card); border: 1px solid var(--border); color: var(--ink-90);
+    padding: 10px 12px; border-radius: 4px; font-size: 14px; font-family: inherit;
+    outline: none; width: 100%; margin-bottom: 10px;
+  }
+  .field:focus { border-color: var(--accent); }
+  .err { color: var(--danger); font-size: 12px; margin-top: 8px; min-height: 16px; }
+
+  @media (max-width: 780px) {
+    .hero { grid-template-columns: 1fr; padding: 40px 16px 32px; gap: 40px; }
+    .hero h1 { font-size: 38px; }
+    .hero-ctas { flex-direction: column; }
+    .hero-ctas .btn { justify-content: center; }
+    .phone-mock { width: 250px; }
+    .notice { left: auto; right: -12px; bottom: 150px; }
+    .features { grid-template-columns: 1fr; padding: 0 16px; }
+  }
+  @media (max-width: 420px) {
+    .topbar { padding: 16px; }
+    #buildVersion { display: none; }
+    .hero h1 { font-size: 34px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="brand">
+    <span class="mark">選</span>
+    <span class="name">選圖工作室</span>
+    <span class="label mono">STUDIO</span>
+    <span id="buildVersion"></span>
+  </div>
+  <button id="photographerLoginBtn" type="button">攝影師登入</button>
+</div>
+
+<section class="hero">
+  <div>
+    <div class="eyebrow">PHOTO PICKING · FOR PHOTOGRAPHERS</div>
+    <h1>讓客人在手機上<br>輕鬆<span>選片</span>，<br>你專心修圖。</h1>
+    <p class="pitch">用 LINE 傳一條連結，客人不用註冊就能挑照片。選完送出的那一刻你就收到通知，加選幾張、要補多少，系統都幫你算好。</p>
+    <div class="hero-ctas">
+      <button id="heroLoginBtn" class="btn btn-accent" type="button">攝影師登入</button>
+      <a class="btn btn-ghost" href="#features">看看怎麼運作 →</a>
+    </div>
+  </div>
+  <div class="phone-wrap" aria-hidden="true">
+  <div class="phone-mock">
+    <div class="phone-notch"></div>
+    <div class="phone-header">
+      <span class="t">海邊婚紗 · 選片</span>
+      <span class="t" style="color:var(--accent)">12 / 40</span>
+    </div>
+    <div class="phone-grid">
+      <div class="phone-tile picked"><span class="heart">♥</span></div>
+      <div class="phone-tile"></div>
+      <div class="phone-tile"></div>
+      <div class="phone-tile picked"><span class="heart">♥</span></div>
+      <div class="phone-tile"></div>
+      <div class="phone-tile picked"><span class="heart">♥</span></div>
+    </div>
+    <div class="phone-cta">送出選片</div>
+  </div>
+  <div class="notice">
+    <div class="when">NEW · 剛剛</div>
+    <div class="what">Amy 送出了 42 張</div>
+    <div class="fee">方案 40 張，加選 2 張</div>
+  </div>
+  </div>
+</section>
+
+<section class="features" id="features">
+  <div class="feature-card">
+    <div class="step">01</div>
+    <h3>傳連結，手機就能選</h3>
+    <p>客人在 LINE 打開連結、輸入名字就開始。左右滑看照片，雙擊按愛心，不用裝 App。</p>
+  </div>
+  <div class="feature-card">
+    <div class="step">02</div>
+    <h3>送出即通知，加選自動算</h3>
+    <p>超過方案張數時，客人當下就看到加選費用。每次送出都留下紀錄，改了哪幾張一目了然。</p>
+  </div>
+  <div class="feature-card">
+    <div class="step">03</div>
+    <h3>開始精修，選片就鎖定</h3>
+    <p>你按下開始精修，客人就不能再改。每個案子在哪個階段，儀表板上一眼看完。</p>
+  </div>
+</section>
+
+<footer>選圖工作室 · imhoti</footer>
+
+<!-- Login overlay — reuses the admin-token login already used on admin.html:
+     verified against GET /api/admin/settings, token kept in
+     sessionStorage.studio_token, never anywhere new. -->
+<div class="login-overlay" id="loginOverlay">
+  <div class="login-card">
+    <button class="close-btn" id="loginCloseBtn" type="button" aria-label="關閉">×</button>
+    <div class="brand-mono">STUDIO</div>
+    <div class="subtitle">輸入攝影師密碼以繼續</div>
+    <input id="loginTokenInput" type="password" placeholder="攝影師密碼" class="field">
+    <button id="loginSubmitBtn" class="btn btn-accent" style="width:100%;justify-content:center;" type="button">進入管理後台</button>
+    <div id="loginErr" class="err"></div>
+  </div>
+</div>
+
+<script src="js/build-version.js?v=20260928e"></script>
+<script>
+(function () {
+  const WORKER_URL = 'https://imagepicker.hotichen.workers.dev';
+  const TOKEN_KEY = 'studio_token';
+
+  // Already signed in from an earlier visit — go straight to the dashboard.
+  if (sessionStorage.getItem(TOKEN_KEY)) {
+    window.location.href = 'dashboard.html';
+    return;
+  }
+
+  const overlay = document.getElementById('loginOverlay');
+  const input = document.getElementById('loginTokenInput');
+  const errEl = document.getElementById('loginErr');
+  const submitBtn = document.getElementById('loginSubmitBtn');
+
+  function openOverlay() {
+    errEl.textContent = '';
+    input.value = '';
+    overlay.classList.add('open');
+    input.focus();
+  }
+  function closeOverlay() { overlay.classList.remove('open'); }
+
+  document.getElementById('photographerLoginBtn').addEventListener('click', openOverlay);
+  document.getElementById('heroLoginBtn').addEventListener('click', openOverlay);
+  document.getElementById('loginCloseBtn').addEventListener('click', closeOverlay);
+  overlay.addEventListener('click', e => { if (e.target === overlay) closeOverlay(); });
+
+  async function tryLogin() {
+    const token = input.value.trim();
+    if (!token) { errEl.textContent = '請輸入密碼'; return; }
+    errEl.textContent = '';
+    submitBtn.disabled = true;
+    try {
+      const r = await fetch(`${WORKER_URL}/api/admin/settings`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (r.status === 401) { errEl.textContent = '密碼錯誤'; return; }
+      if (!r.ok) { errEl.textContent = `錯誤 ${r.status}`; return; }
+      sessionStorage.setItem(TOKEN_KEY, token);
+      window.location.href = 'dashboard.html';
+    } catch (e) {
+      errEl.textContent = '無法連線到 Worker';
+    } finally {
+      submitBtn.disabled = false;
+    }
+  }
+
+  submitBtn.addEventListener('click', tryLogin);
+  input.addEventListener('keydown', e => { if (e.key === 'Enter') tryLogin(); });
+})();
+</script>
+</body>
+</html>

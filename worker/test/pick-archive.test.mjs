@@ -489,11 +489,14 @@ test('the archive migration is one ALTER, and fresh == old migration + it', () =
   const migration = readFileSync(new URL('../migrations/2026-09-28-project-archive.sql', import.meta.url), 'utf8');
   const statements = migration.replace(/--[^\n]*/g, '').split(';').map(s => s.trim()).filter(Boolean);
   assert.deepEqual(statements.map(s => s.replace(/\s+/g, ' ')), ['ALTER TABLE projects ADD COLUMN archived_at TEXT']);
-  // the database as the guest-picking migration left it: no archived_at
-  const deployed = fresh.replace(/,\n(?:\s*--[^\n]*\n)*\s*archived_at\s+TEXT\n\);/, '\n);');
-  assert.doesNotMatch(deployed, /archived_at/, 'fixture still has the column');
+  // the database as the guest-picking migration left it: no archived_at, and
+  // none of the columns appended after it (delivered_at, which the next
+  // migration adds, is appended on top so the column order is pinned too)
+  const deployed = fresh.replace(/,\n(?:\s*--[^\n]*\n)*\s*archived_at\s+TEXT,\n(?:\s*--[^\n]*\n)*\s*delivered_at\s+TEXT\n\);/, '\n);');
+  assert.doesNotMatch(deployed, /archived_at|delivered_at/, 'fixture still has the column');
+  const later = 'ALTER TABLE projects ADD COLUMN delivered_at TEXT;';
   const shape = db => db._db.prepare('PRAGMA table_info(projects)').all();
-  assert.deepEqual(shape(fakeDB({ schema: deployed + '\n' + migration })), shape(fakeDB({ schema: fresh })));
+  assert.deepEqual(shape(fakeDB({ schema: deployed + '\n' + migration + '\n' + later })), shape(fakeDB({ schema: fresh })));
   assert.match(fresh, /ALTER TABLE projects ADD COLUMN archived_at TEXT;/, 'schema.sql names the hand-run ALTER');
 });
 

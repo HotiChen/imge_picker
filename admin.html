@@ -36,8 +36,19 @@
   header .subtitle { color: var(--ink-55); font-size: 12px; }
   header .spacer { flex: 1; }
   header .refresh-info { color: var(--ink-55); font-size: 11px; font-family: 'IBM Plex Mono', monospace; }
-  
-  main { padding: 24px; max-width: 1100px; }
+
+  /* Shared side menu (js/side-nav.js) — also in dashboard.html / settings.html */
+  .app-shell { display: flex; align-items: stretch; min-height: calc(100vh - 52px); }
+  .side-nav { width: 190px; flex-shrink: 0; background: var(--surface); border-right: 1px solid var(--rule); padding: 20px 14px; }
+  .side-nav-brand { color: var(--ink-55); font-size: 10px; letter-spacing: 0.2em; padding: 0 10px 12px; border-bottom: 1px solid var(--rule); margin-bottom: 10px; }
+  .side-nav-list { display: flex; flex-direction: column; gap: 2px; }
+  .side-nav-item { display: block; text-align: left; background: none; border: none; color: var(--ink-70, var(--ink-55)); text-decoration: none; padding: 9px 10px; border-radius: 5px; font-size: 13px; font-family: inherit; cursor: pointer; }
+  .side-nav-item:hover { background: var(--card); color: var(--ink-90); }
+  .side-nav-item.active { background: rgba(229,164,72,.16); color: var(--accent); font-weight: 600; }
+  .side-nav-logout { margin-top: 14px; border-top: 1px solid var(--rule); padding-top: 14px; color: var(--ink-55); }
+  .side-nav-logout:hover { color: var(--danger); background: none; }
+
+  main { flex: 1; min-width: 0; padding: 24px; max-width: 1100px; }
   
   h2 { font-size: 16px; font-weight: 600; margin-bottom: 16px; }
   
@@ -140,9 +151,22 @@
   .pd-diff { color: var(--ink-55); margin-top: 4px; word-break: break-word; }
   #project-detail-panel h4 { font-size: 13px; margin: 18px 0 8px; color: var(--ink-90); }
   #project-detail-panel h4 a.pd-link,
+  #project-detail-panel summary a.pd-link,
   #project-detail-panel td a.pd-link { color: var(--accent); text-decoration: none; }
   #project-detail-panel h4 a.pd-link:hover,
+  #project-detail-panel summary a.pd-link:hover,
   #project-detail-panel td a.pd-link:hover { text-decoration: underline; }
+  /* 目前選取 collapses by default (task: 專案選片) — the table underneath
+     can be long, and the photographer usually only wants the count + a
+     link into index.html?project=, not the whole list, every time. */
+  #project-detail-panel summary {
+    font-size: 13px; margin: 18px 0 8px; color: var(--ink-90);
+    cursor: pointer; list-style: none;
+  }
+  #project-detail-panel summary::-webkit-details-marker { display: none; }
+  #project-detail-panel summary::before { content: '▸ '; }
+  #project-detail-panel details[open] summary::before { content: '▾ '; }
+  #project-detail-panel summary a.pd-link { margin-left: 8px; }
 </style>
 </head>
 <body>
@@ -168,6 +192,8 @@
     <span class="refresh-info" id="refresh-info"></span>
     <button class="btn-logout" id="logout-btn">登出</button>
   </header>
+  <div class="app-shell">
+  <aside id="sideNav" class="side-nav"></aside>
   <main>
     <h2>登入中的裝置</h2>
     <div id="minted-panel" class="panel">
@@ -191,7 +217,7 @@
       </div>
     </div>
 
-    <h2>選片專案（Guest Picking）</h2>
+    <h2 id="projects">選片專案（Guest Picking）</h2>
     <div id="project-create-panel" class="panel">
       <div class="panel-body">
         <div class="pick-admin-field">
@@ -256,10 +282,12 @@
       </table>
     </div>
   </main>
+  </div>
 </div>
 
-<script src="js/shoot-types.js?v=20260928c"></script>
-<script src="js/build-version.js?v=20260928c"></script>
+<script src="js/shoot-types.js?v=20260928e"></script>
+<script src="js/build-version.js?v=20260928e"></script>
+<script src="js/side-nav.js?v=20260928e"></script>
 <script>
 (function() {
   const WORKER_URL = 'https://imagepicker.hotichen.workers.dev';
@@ -295,12 +323,33 @@
   function showAdmin() {
     loginView.style.display = 'none';
     adminView.style.display = 'block';
+    if (typeof SideNav !== 'undefined') SideNav.render(document.getElementById('sideNav'), 'clients', doLogout);
     loadClients();
     loadMinted();
+    loadProjectDefaults();
     startAutoRefresh();
     renderProjectFolders();
     loadProjectList();
     restoreProjectFromHash();
+  }
+
+  // Prefills 精修張數上限 / 加選單價 in the project-create form from the
+  // studio's saved defaults (settings.html) — a convenience only, so any
+  // failure here is silent and the fields just stay blank ("留空 = 不限").
+  // Only fills a field that is still empty, so it never clobbers something
+  // the photographer already typed before this resolved.
+  async function loadProjectDefaults() {
+    try {
+      const r = await fetch(`${WORKER_URL}/api/admin/settings`, {
+        headers: { 'Authorization': `Bearer ${getToken()}` },
+      });
+      if (!r.ok) return;
+      const s = await r.json();
+      const limitEl = document.getElementById('proj-pick-limit');
+      const priceEl = document.getElementById('proj-extra-price');
+      if (limitEl && !limitEl.value && s.default_pick_limit != null) limitEl.value = s.default_pick_limit;
+      if (priceEl && !priceEl.value && s.default_extra_price != null) priceEl.value = s.default_extra_price;
+    } catch (e) { /* best effort */ }
   }
 
   // index.html?project=<id> links back to `#project=<id>` (openProjectDetail
@@ -362,12 +411,13 @@
 
   document.getElementById('admin-login-btn').addEventListener('click', tryAdminLogin);
   document.getElementById('admin-token-input').addEventListener('keydown', e => { if (e.key === 'Enter') tryAdminLogin(); });
-  document.getElementById('logout-btn').addEventListener('click', () => {
+  function doLogout() {
     sessionStorage.removeItem(TOKEN_KEY);
     clearInterval(autoRefreshTimer);
     adminView.style.display = 'none';
     loginView.style.display = 'flex';
-  });
+  }
+  document.getElementById('logout-btn').addEventListener('click', doLogout);
 
   // ── Auto-refresh ──────────────────────────────────────────────────────────
   function startAutoRefresh() {
@@ -661,6 +711,7 @@
         <div>
           <span>${escHtml(p.title || '（未命名）')}</span>
           <span class="badge badge-approved">${escHtml(PHASE_LABEL[p.phase] || p.phase || '')}</span>
+          ${p.delivered_at ? '<span class="badge badge-approved" data-delivered-badge>已交付</span>' : ''}
           ${p.archived_at ? '<span class="badge badge-pending">已封存</span>' : ''}
           ${p.modified_after_submit ? '<span class="badge badge-pending">已修改</span>' : ''}
           ${p.unnotified_submissions ? `<span class="badge badge-pending">${escHtml(p.unnotified_submissions)} 次送出未寄信</span>` : ''}
@@ -801,6 +852,7 @@
       <div class="pd-head">
         <h3>${escHtml(project.title || '（未命名）')}</h3>
         <span class="badge badge-approved">${escHtml(PHASE_LABEL[project.phase] || project.phase || '')}</span>
+        ${project.delivered_at ? '<span class="badge badge-approved" data-delivered-badge>已交付</span>' : ''}
         ${project.archived_at ? '<span class="badge badge-pending">已封存</span>' : ''}
         ${project.modified_after_submit ? '<span class="badge badge-pending">已修改，尚未重新送出</span>' : ''}
         ${data.unnotified_submissions ? `<span class="badge badge-pending">${escHtml(data.unnotified_submissions)} 次送出未寄信</span>` : ''}
@@ -810,6 +862,10 @@
         <button id="pd-reset-seat-btn" class="btn btn-ghost" type="button">重設主人</button>
         <button id="pd-start-retouch-btn" class="btn btn-accent" type="button">開始精修</button>
         <button id="pd-reopen-btn" class="btn btn-ghost" type="button">開放修改</button>
+        ${project.phase === 'retouching' && !project.delivered_at
+          ? '<button id="pd-deliver-btn" class="btn btn-accent" type="button">標記已交付</button>' : ''}
+        ${project.delivered_at
+          ? '<button id="pd-undeliver-btn" class="btn btn-ghost" type="button">取消交付</button>' : ''}
         <button id="pd-download-btn" class="btn btn-outline" type="button">下載選片</button>
         ${project.archived_at
           ? '<button id="pd-unarchive-btn" class="btn btn-ghost" type="button">取消封存</button>'
@@ -818,12 +874,14 @@
       </div>
       <div id="pd-action-err" class="err"></div>
 
-      <h4><a class="pd-link" href="index.html?project=${encodeURIComponent(project.id)}">目前選取（${selected.length} 張）</a></h4>
-      <div class="table-wrap"><table><thead><tr><th>照片</th><th>♥</th><th>備註</th><th>選片人</th><th>更新時間</th></tr></thead>
-        <tbody>${selected.length ? selected.map(s => `<tr>
-          <td class="folder-raw"><a class="pd-link" href="index.html?project=${encodeURIComponent(project.id)}&amp;photo=${encodeURIComponent(s.photo_key)}">${escHtml(s.photo_key)}</a></td><td>♥</td><td>${escHtml(s.note || '')}</td>
-          <td>${escHtml(pickerNameOf(pickers, s.updated_by))}</td><td>${escHtml(fmtTime(s.updated_at))}</td>
-        </tr>`).join('') : '<tr><td colspan="5" class="empty">尚無選取</td></tr>'}</tbody></table></div>
+      <details id="pd-selections-details">
+        <summary>目前選取（${selected.length} 張） <a class="pd-link" href="index.html?project=${encodeURIComponent(project.id)}">看照片 →</a></summary>
+        <div class="table-wrap"><table><thead><tr><th>照片</th><th>♥</th><th>備註</th><th>選片人</th><th>更新時間</th></tr></thead>
+          <tbody>${selected.length ? selected.map(s => `<tr>
+            <td class="folder-raw"><a class="pd-link" href="index.html?project=${encodeURIComponent(project.id)}&amp;photo=${encodeURIComponent(s.photo_key)}">${escHtml(s.photo_key)}</a></td><td>♥</td><td>${escHtml(s.note || '')}</td>
+            <td>${escHtml(pickerNameOf(pickers, s.updated_by))}</td><td>${escHtml(fmtTime(s.updated_at))}</td>
+          </tr>`).join('') : '<tr><td colspan="5" class="empty">尚無選取</td></tr>'}</tbody></table></div>
+      </details>
 
       <h4>送出紀錄（新到舊）</h4>
       <div id="pd-submissions">${submissions.length ? submissions.map((s, i) => {
@@ -866,6 +924,31 @@
     });
     document.getElementById('pd-start-retouch-btn').addEventListener('click', () => projectAction('start-retouch'));
     document.getElementById('pd-reopen-btn').addEventListener('click', () => projectAction('reopen'));
+    // Deliver gets its own handler rather than the generic projectAction:
+    // a 409 here means "not retouching yet" and deserves a sentence that says
+    // what to do (docs/dashboard-settings.md), not just the raw server error.
+    document.getElementById('pd-deliver-btn')?.addEventListener('click', async function () {
+      const errEl = document.getElementById('pd-action-err');
+      if (errEl) errEl.textContent = '';
+      this.disabled = true;
+      try {
+        const r = await fetch(`${WORKER_URL}/api/admin/projects/${encodeURIComponent(currentProjectId)}/deliver`, {
+          method: 'POST', headers: { 'Authorization': `Bearer ${getToken()}` },
+        });
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok) {
+          if (errEl) errEl.textContent = data.code === 'not_retouching'
+            ? '尚未開始精修，無法標記為已交付，請先按「開始精修」' : (data.error || `失敗（${r.status}）`);
+          return;
+        }
+        await Promise.all([openProjectDetail(currentProjectId), loadProjectList()]);
+      } catch (e) {
+        if (errEl) errEl.textContent = '無法連線到 Worker';
+      } finally {
+        this.disabled = false;
+      }
+    });
+    document.getElementById('pd-undeliver-btn')?.addEventListener('click', () => projectAction('undeliver'));
     document.getElementById('pd-archive-btn')?.addEventListener('click', async () => {
       if (!confirm('封存後連結會立即失效，資料會保留')) return;
       await projectAction('archive'); // refreshes the list too, see projectAction

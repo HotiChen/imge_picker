@@ -197,7 +197,8 @@ test('the migration file turns a deployed database into exactly what schema.sql 
   const fresh = readFileSync(new URL('../schema.sql', import.meta.url), 'utf8');
   // the guest-picking paste, then every migration after it, in order
   const migration = readFileSync(new URL('../migrations/2026-09-27-guest-picking.sql', import.meta.url), 'utf8') +
-    '\n' + readFileSync(new URL('../migrations/2026-09-28-project-archive.sql', import.meta.url), 'utf8');
+    '\n' + readFileSync(new URL('../migrations/2026-09-28-project-archive.sql', import.meta.url), 'utf8') +
+    '\n' + readFileSync(new URL('../migrations/2026-09-28-dashboard-settings.sql', import.meta.url), 'utf8');
   // the live database: share_tokens without project_id, none of the new tables
   const deployed = fresh
     .replace(/,\n(?:\s*--[^\n]*\n)*\s*project_id\s+TEXT\n\);/, '\n);')
@@ -205,7 +206,7 @@ test('the migration file turns a deployed database into exactly what schema.sql 
   assert.doesNotMatch(deployed, /project_id|CREATE TABLE IF NOT EXISTS projects/, 'fixture still has the new schema');
   const migrated = fakeDB({ schema: deployed + '\n' + migration });
   const created = fakeDB({ schema: fresh });
-  const shape = db => ['share_tokens', 'projects', 'pickers', 'selections', 'project_members', 'submissions']
+  const shape = db => ['share_tokens', 'projects', 'pickers', 'selections', 'project_members', 'submissions', 'studio_settings']
     .map(t => [t, db._db.prepare(`PRAGMA table_info(${t})`).all()]);
   assert.deepEqual(shape(migrated), shape(created));
   // table_info cannot see a CHECK, so the role constraint is tried directly
