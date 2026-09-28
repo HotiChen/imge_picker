@@ -12,6 +12,7 @@ import { readFile } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import { extname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import zlib from 'node:zlib';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const TYPES = {
@@ -121,6 +122,91 @@ async function pinchTouch(page, selector, cx, cy, startDist, endDist, steps = 6)
   seq.push({ type: 'touchend', points: [] });
   await touchSequence(page, selector, seq);
 }
+
+// Real touch input through CDP (Input.dispatchTouchEvent): the browser hit-
+// tests every point, so a finger lands on whatever is really there — unlike
+// touchSequence above, which dispatches straight to one element.
+async function realTouch(page) {
+  const cdp = await page.context().newCDPSession(page);
+  const send = (type, pts) => cdp.send('Input.dispatchTouchEvent', {
+    type, touchPoints: pts.map((p, i) => ({ x: p.x, y: p.y, id: p.id ?? i })) });
+  const t = {
+    async tap(x, y) { await send('touchStart', [{ x, y }]); await send('touchEnd', []); },
+    async doubleTap(x, y, gapMs = 120) {
+      await t.tap(x, y); await page.waitForTimeout(gapMs); await t.tap(x + 2, y + 1);
+    },
+    async drag(x1, y1, x2, y2, steps = 8) {
+      await send('touchStart', [{ x: x1, y: y1 }]);
+      for (let i = 1; i <= steps; i++) {
+        await send('touchMove', [{ x: x1 + (x2 - x1) * i / steps, y: y1 + (y2 - y1) * i / steps }]);
+      }
+      await send('touchEnd', []);
+    },
+    async pinch(cx, cy, d0, d1, steps = 8) {
+      const pts = d => [{ x: cx - d / 2, y: cy, id: 0 }, { x: cx + d / 2, y: cy, id: 1 }];
+      await send('touchStart', pts(d0));
+      for (let i = 1; i <= steps; i++) await send('touchMove', pts(d0 + (d1 - d0) * i / steps));
+      await send('touchEnd', []);
+    },
+  };
+  return t;
+}
+
+// A realistically sized landscape photo (1600x1067, like a real preview) —
+// the 1x1 PIXEL hides every layout bug. A colour gradient, so a canvas pixel
+// says which point of the photo is drawn there: R grows left→right, G grows
+// top→bottom, B is a constant 60. Pure blue (annotation colour below) never
+// occurs in it. Minimal dependency-free PNG encoder (RGB, filter 0).
+const BIG_W = 1600, BIG_H = 1067;
+const BIG_PHOTO = (() => {
+  const { deflateSync, crc32 } = zlib;
+  const raw = Buffer.alloc((BIG_W * 3 + 1) * BIG_H);
+  for (let y = 0; y < BIG_H; y++) {
+    const row = y * (BIG_W * 3 + 1);
+    const g = Math.round(y * 255 / (BIG_H - 1));
+    for (let x = 0; x < BIG_W; x++) {
+      const o = row + 1 + x * 3;
+      raw[o] = Math.round(x * 255 / (BIG_W - 1)); raw[o + 1] = g; raw[o + 2] = 60;
+    }
+  }
+  const chunk = (type, data) => {
+    const len = Buffer.alloc(4); len.writeUInt32BE(data.length);
+    const td = Buffer.concat([Buffer.from(type, 'ascii'), data]);
+    const crc = Buffer.alloc(4); crc.writeUInt32BE(crc32(td) >>> 0);
+    return Buffer.concat([len, td, crc]);
+  };
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(BIG_W, 0); ihdr.writeUInt32BE(BIG_H, 4);
+  ihdr[8] = 8; ihdr[9] = 2; // 8-bit RGB
+  return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
+    chunk('IHDR', ihdr), chunk('IDAT', deflateSync(raw)), chunk('IEND', Buffer.alloc(0))]);
+})();
+
+// In-page: the preview canvas's pixel at screen point (x, y), or null when
+// the point isn't on the canvas at all.
+const CANVAS_PX = ([x, y]) => {
+  const c = document.getElementById('photoCanvas');
+  const r = c.getBoundingClientRect();
+  if (x < r.left || x >= r.right || y < r.top || y >= r.bottom) return null;
+  const d = c.getContext('2d').getImageData(Math.floor((x - r.left) * c.width / r.width),
+    Math.floor((y - r.top) * c.height / r.height), 1, 1).data;
+  return [d[0], d[1], d[2], d[3]];
+};
+
+// In-page: where the photo sat on screen before the canvas filled its
+// container — the old fitted rect, computed from first principles: scaled by
+// min(container/photo, 1), the canvas bitmap truncated to whole pixels, and
+// flex-centred inside .canvas-container's content box.
+const OLD_FIT_RECT = ([iw, ih]) => {
+  const box = document.querySelector('.canvas-container');
+  const cr = box.getBoundingClientRect();
+  const cs = getComputedStyle(box);
+  const left = cr.left + parseFloat(cs.borderLeftWidth), top = cr.top + parseFloat(cs.borderTopWidth);
+  const cw = box.clientWidth, ch = box.clientHeight;
+  const s = Math.min(cw / iw, ch / ih, 1);
+  const w = Math.floor(iw * s), h = Math.floor(ih * s);
+  return { left: left + (cw - w) / 2, top: top + (ch - h) / 2, w, h, s };
+};
 
 // ONLY=<text> runs just the suites whose name contains that text, for quick
 // iterations while developing; run everything before a commit or merge.
@@ -313,7 +399,9 @@ const GRID_CHECK = sel => {
 const PHOTOS = n => Array.from({ length: n }, (_, i) =>
   ({ id: `20260819/p${i}.jpg`, name: `p${i}.jpg`, size: 9e6, rating: 0 }));
 
-function mockWorker(count, extraSettings = {}) {
+// `image`: serve this instead of the 1x1 PIXEL (with CORS, so the preview
+// canvas stays readable) — see BIG_PHOTO.
+function mockWorker(count, extraSettings = {}, image = null) {
   return async page => {
     await page.route('**/imagepicker.hotichen.workers.dev/**', route => {
       const u = new URL(route.request().url());
@@ -330,6 +418,8 @@ function mockWorker(count, extraSettings = {}) {
       if (u.searchParams.has('list'))
         return route.fulfill({ status: 200, contentType: 'application/json',
           body: JSON.stringify({ status: 'success', folders: [], data: PHOTOS(count) }) });
+      if (image) return route.fulfill({ status: 200, contentType: 'image/png', body: image,
+        headers: { 'Access-Control-Allow-Origin': '*' } });
       route.fulfill({ status: 200, contentType: 'image/png', body: PIXEL });
     });
   };
@@ -3549,6 +3639,8 @@ function pickFakeWorker(opts = {}) {
         }
         return json({ status: 'success', folders: [], data: opts.photos || PHOTOS(3) });
       }
+      if (opts.image) return route.fulfill({ status: 200, contentType: 'image/png', body: opts.image,
+        headers: { 'Access-Control-Allow-Origin': '*' } });
       route.fulfill({ status: 200, contentType: 'image/png', body: PIXEL });
     });
   };
@@ -4815,7 +4907,8 @@ await suite('admin — escHtml(0): a project with zero submissions shows 送出 
 }
 
 // A landscape photo on a portrait phone leaves black bars above and below
-// it, and those bars belong to .canvas-container, not #photoCanvas. The
+// it. The canvas now fills the whole frame (bars included — see "preview
+// zoom" below), so a finger on a bar lands on the canvas, off the photo. The
 // helpers above dispatch straight to the canvas; this one uses real touch
 // input, so the finger lands on whatever is really at that point. The 1x1
 // fixture photo makes nearly the whole frame letterbox.
@@ -4836,7 +4929,9 @@ await suite('admin — escHtml(0): a project with zero submissions shows 送出 
         const el = document.elementFromPoint(x, y);
         return el ? (el.id || el.className) : null;
       }, [x, y]);
-      ok('the tap point is the bar, not the canvas', hit === 'canvas-container', String(hit));
+      const px = await page.evaluate(CANVAS_PX, [x, y]);
+      ok('the tap point is the bar (on the frame-sized canvas, nothing drawn there), not the photo',
+        hit === 'photoCanvas' && !!px && px[3] === 0, JSON.stringify({ hit, px }));
       await page.touchscreen.tap(x, y);
       await page.waitForTimeout(150);
       await page.touchscreen.tap(x + 3, y + 2);
@@ -4922,6 +5017,477 @@ await suite('mobile preview — outside pick mode, double-tap changes nothing (t
     return out;
   },
   { initScript: () => sessionStorage.setItem('studio_token', 'x'), before: mockWorker(3), contextOptions: MOBILE });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Preview zoom on a phone (docs/backlog.md, "Preview zoom on a phone"): a
+// double-tap while zoomed goes back to fit (like iPhone Photos), the ⟲ is a
+// real tap target, and a zoomed photo spreads over the whole frame instead of
+// staying clipped to its fitted box. Real touch input (realTouch) and the
+// 1600x1067 gradient BIG_PHOTO throughout — the 1x1 PIXEL hides layout bugs.
+// ═══════════════════════════════════════════════════════════════════════════
+
+// In-page helpers shared by these suites.
+const ZOOM_STATE = () => ({
+  zoom: parseInt(document.getElementById('zoomLevel').textContent, 10),
+  panX: annotationManager.panX, panY: annotationManager.panY,
+  rating: app.filteredPhotos[0].rating,
+  burst: document.querySelectorAll('.pick-heart-burst').length,
+  counter: document.getElementById('photoCounter').textContent,
+});
+const isPhotoPx = px => !!px && px[3] === 255 && Math.abs(px[2] - 60) <= 8;
+const sameColour = (a, b, tol = 3) => !!a && !!b && [0, 1, 2].every(i => Math.abs(a[i] - b[i]) <= tol);
+
+// In-page: the big photo is loaded and the modal's slideUp entrance has
+// finished — until then every rect is still moving.
+const PREVIEW_SETTLED = () => annotationManager.imageElement?.naturalWidth === 1600
+  && document.querySelector('#photoModal .modal-content').getAnimations().length === 0;
+
+async function openBigGuestPreview(page) {
+  await page.waitForSelector('.photo-card', { timeout: 5000 });
+  await page.locator('.photo-card').first().tap();
+  await page.waitForSelector('#photoModal.active', { timeout: 5000 });
+  await page.waitForFunction(PREVIEW_SETTLED, null, { timeout: 5000 });
+  await page.waitForTimeout(100);
+  const box = await page.locator('.canvas-container').boundingBox();
+  return { cx: Math.round(box.x + box.width / 2), cy: Math.round(box.y + box.height / 2) };
+}
+
+{
+  const m = pickFakeWorker({ ownerName: 'Zed', ownerKey: 'ZED-KEY', photos: PHOTOS(3), image: BIG_PHOTO });
+  await suite('preview zoom — a double-tap while zoomed goes back to fit and leaves the ♥ alone; at fit it still toggles ♥',
+    `${base}/index.html?t=TOK`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      const { cx, cy } = await openBigGuestPreview(page);
+      const t = await realTouch(page);
+      const st = () => page.evaluate(ZOOM_STATE);
+
+      await t.pinch(cx, cy, 60, 260);
+      await page.waitForTimeout(50);
+      let s = await st();
+      ok('a real pinch zooms in first', s.zoom > 150, JSON.stringify(s));
+
+      await t.tap(cx, cy);
+      await page.waitForTimeout(500); // past the double-tap window
+      s = await st();
+      ok('a single tap while zoomed changes nothing', s.zoom > 150 && s.rating === 0, JSON.stringify(s));
+
+      await t.doubleTap(cx, cy);
+      await page.waitForTimeout(50);
+      s = await st();
+      ok('a double-tap while zoomed goes back to 100%', s.zoom === 100 && s.panX === 0 && s.panY === 0, JSON.stringify(s));
+      ok('and does not touch the ♥ (no rating, no burst)', s.rating === 0 && s.burst === 0, JSON.stringify(s));
+      const resetToasts = () => page.evaluate(() => [...document.querySelectorAll('#toastContainer .toast-message')]
+        .filter(el => el.textContent.includes('已重置縮放')).length);
+      ok('quietly — the gesture is its own feedback, no 已重置縮放 toast', (await resetToasts()) === 0, String(await resetToasts()));
+      ok('and never navigates', s.counter === '1 / 3', s.counter);
+
+      await page.waitForTimeout(500);
+      await t.doubleTap(cx, cy);
+      await page.waitForTimeout(50);
+      s = await st();
+      ok('a double-tap at fit still toggles ♥ on, as before', s.rating === 1 && s.burst === 1, JSON.stringify(s));
+      ok('and stays at 100%', s.zoom === 100, JSON.stringify(s));
+      return out;
+    },
+    { before: m.attach, initScript: () => localStorage.setItem('pick_key:TOK', 'ZED-KEY'), contextOptions: MOBILE });
+}
+
+{
+  const m = pickFakeWorker({ ownerName: 'Pam', ownerKey: 'PAM-KEY', photos: PHOTOS(3), image: BIG_PHOTO });
+  await suite('preview zoom — a pan drag while zoomed moves the photo and is never counted as a tap',
+    `${base}/index.html?t=TOK`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      const { cx, cy } = await openBigGuestPreview(page);
+      const t = await realTouch(page);
+      const st = () => page.evaluate(ZOOM_STATE);
+      const px = (x, y) => page.evaluate(CANVAS_PX, [x, y]);
+
+      await t.pinch(cx, cy, 60, 260);
+      await page.waitForTimeout(50);
+      const s0 = await st();
+      ok('zoomed in first', s0.zoom > 150, JSON.stringify(s0));
+
+      const target = await px(cx + 120, cy - 40);
+      await t.drag(cx, cy, cx - 120, cy + 40);
+      await page.waitForTimeout(50);
+      let s = await st();
+      ok('the drag pans by the finger’s travel',
+        Math.abs(s.panX - s0.panX + 120) <= 2 && Math.abs(s.panY - s0.panY - 40) <= 2, JSON.stringify({ s0, s }));
+      const now = await px(cx, cy);
+      ok('the photo really moved under the finger', isPhotoPx(target) && sameColour(now, target),
+        JSON.stringify({ target, now }));
+      ok('still zoomed, same photo, no ♥', s.zoom === s0.zoom && s.counter === '1 / 3' && s.rating === 0,
+        JSON.stringify(s));
+
+      await t.drag(cx, cy, cx - 40, cy);
+      await t.drag(cx, cy, cx - 40, cy);
+      await page.waitForTimeout(50);
+      s = await st();
+      ok('two quick drags are not a double-tap', s.zoom === s0.zoom && s.rating === 0, JSON.stringify(s));
+
+      await page.waitForTimeout(500);
+      await t.tap(cx, cy);
+      await t.drag(cx + 1, cy, cx + 41, cy);
+      await page.waitForTimeout(50);
+      s = await st();
+      ok('a tap then a drag is not a double-tap', s.zoom === s0.zoom && s.rating === 0, JSON.stringify(s));
+
+      await page.waitForTimeout(500);
+      await t.drag(cx, cy, cx - 40, cy);
+      await t.tap(cx - 40, cy);
+      await page.waitForTimeout(50);
+      s = await st();
+      ok('a drag then a tap is not a double-tap', s.zoom === s0.zoom && s.rating === 0, JSON.stringify(s));
+      return out;
+    },
+    { before: m.attach, initScript: () => localStorage.setItem('pick_key:TOK', 'PAM-KEY'), contextOptions: MOBILE });
+}
+
+{
+  const m = pickFakeWorker({ ownerName: 'Vic', ownerKey: 'VIC-KEY', photos: PHOTOS(3), image: BIG_PHOTO });
+  await suite('preview zoom — a viewer’s double-tap while zoomed goes back to fit too (and still no ♥)',
+    `${base}/index.html?t=TOK`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      const { cx, cy } = await openBigGuestPreview(page);
+      const t = await realTouch(page);
+      await t.pinch(cx, cy, 60, 260);
+      await page.waitForTimeout(50);
+      let s = await page.evaluate(ZOOM_STATE);
+      ok('zoomed in first', s.zoom > 150, JSON.stringify(s));
+      await t.doubleTap(cx, cy);
+      await page.waitForTimeout(50);
+      s = await page.evaluate(ZOOM_STATE);
+      ok('back to 100%', s.zoom === 100, JSON.stringify(s));
+      ok('rating untouched, no ♥ popped', s.rating === 0 && s.burst === 0, JSON.stringify(s));
+      return out;
+    },
+    { before: m.attach, contextOptions: MOBILE }); // no picker key → a viewer
+}
+
+await suite('preview zoom — the photographer’s double-tap while zoomed goes back to fit too',
+  `${base}/index.html`,
+  async page => {
+    const out = [];
+    const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+    await page.waitForFunction(() => !!window.app, null, { timeout: 5000 });
+    await page.evaluate(() => {
+      app.filteredPhotos = Array.from({ length: 3 }, (_, i) => ({ id: `20260819/p${i}.jpg`, name: `p${i}.jpg`, rating: 0 }));
+      app.openModal(0);
+    });
+    await page.waitForSelector('#photoModal.active', { timeout: 5000 });
+    await page.waitForFunction(PREVIEW_SETTLED, null, { timeout: 5000 });
+    const box = await page.locator('.canvas-container').boundingBox();
+    const cx = Math.round(box.x + box.width / 2), cy = Math.round(box.y + box.height / 2);
+    const t = await realTouch(page);
+    await t.pinch(cx, cy, 60, 260);
+    await page.waitForTimeout(50);
+    let s = await page.evaluate(ZOOM_STATE);
+    ok('zoomed in first', s.zoom > 150, JSON.stringify(s));
+    await t.doubleTap(cx, cy);
+    await page.waitForTimeout(50);
+    s = await page.evaluate(ZOOM_STATE);
+    ok('back to 100%', s.zoom === 100, JSON.stringify(s));
+    ok('rating untouched', s.rating === 0, JSON.stringify(s));
+    return out;
+  },
+  { initScript: () => sessionStorage.setItem('studio_token', 'x'), before: mockWorker(3, {}, BIG_PHOTO), contextOptions: MOBILE });
+
+{
+  const m = pickFakeWorker({ ownerName: 'Fay', ownerKey: 'FAY-KEY', photos: PHOTOS(3), image: BIG_PHOTO });
+  await suite('preview zoom — the canvas fills the frame; at 100% the photo sits exactly where it did; zoomed, it covers the black bars',
+    `${base}/index.html?t=TOK`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      const { cx, cy } = await openBigGuestPreview(page);
+      const px = (x, y) => page.evaluate(CANVAS_PX, [x, y]);
+      const old = await page.evaluate(OLD_FIT_RECT, [BIG_W, BIG_H]);
+
+      const geo = await page.evaluate(() => {
+        const c = document.getElementById('photoCanvas'), box = c.parentElement;
+        const r = c.getBoundingClientRect(), b = box.getBoundingClientRect(), cs = getComputedStyle(box);
+        return { cw: r.width, ch: r.height, bw: box.clientWidth, bh: box.clientHeight,
+                 dx: r.left - b.left - parseFloat(cs.borderLeftWidth), dy: r.top - b.top - parseFloat(cs.borderTopWidth) };
+      });
+      ok('the canvas covers the whole frame', Math.abs(geo.cw - geo.bw) <= 1 && Math.abs(geo.ch - geo.bh) <= 1
+        && Math.abs(geo.dx) <= 1 && Math.abs(geo.dy) <= 1, JSON.stringify(geo));
+      const contTop = (await page.locator('.canvas-container').boundingBox()).y;
+      ok('a landscape photo on a portrait phone leaves bars (the case under test)', old.top - contTop > 40,
+        JSON.stringify({ old, contTop }));
+
+      // At 100%: the photo's four corners are where the old fitted canvas put them.
+      const tl = await px(old.left + 2, old.top + 2), br = await px(old.left + old.w - 3, old.top + old.h - 3);
+      ok('at 100% the photo’s top-left corner is where it was', isPhotoPx(tl) && tl[0] <= 4 && tl[1] <= 4, JSON.stringify(tl));
+      ok('and its bottom-right corner too', isPhotoPx(br) && br[0] >= 251 && br[1] >= 251, JSON.stringify(br));
+      const above = await px(cx, old.top - 3), below = await px(cx, old.top + old.h + 3);
+      ok('the bar just above it is still empty', !isPhotoPx(above), JSON.stringify(above));
+      ok('the bar just below it is still empty', !isPhotoPx(below), JSON.stringify(below));
+
+      // Zoom in about the centre with a real pinch.
+      const t = await realTouch(page);
+      const mid0 = await px(cx, cy);
+      await t.pinch(cx, cy, 60, 300);
+      await page.waitForTimeout(50);
+      const z = await page.evaluate(() => annotationManager.zoom);
+      ok('pinched to well over 2x', z > 2, String(z));
+      const mid1 = await px(cx, cy);
+      ok('the pinch zoomed about its midpoint (same photo point under it)', sameColour(mid1, mid0),
+        JSON.stringify({ mid0, mid1 }));
+      const barPt = await px(cx, old.top - 20), barPt2 = await px(cx, old.top + old.h + 20);
+      ok('zoomed, the old bar above shows the photo', isPhotoPx(barPt), JSON.stringify(barPt));
+      ok('and so does the old bar below', isPhotoPx(barPt2), JSON.stringify(barPt2));
+      return out;
+    },
+    { before: m.attach, initScript: () => localStorage.setItem('pick_key:TOK', 'FAY-KEY'), contextOptions: MOBILE });
+}
+
+{
+  const m = pickFakeWorker({ ownerName: 'Rio', ownerKey: 'RIO-KEY', photos: PHOTOS(3), image: BIG_PHOTO });
+  await suite('preview zoom — rotating the phone re-fits the canvas and the photo to the new frame',
+    `${base}/index.html?t=TOK`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await openBigGuestPreview(page);
+      await page.setViewportSize({ width: 844, height: 390 });
+      await page.waitForTimeout(300);
+      const geo = await page.evaluate(() => {
+        const c = document.getElementById('photoCanvas'), box = c.parentElement;
+        const r = c.getBoundingClientRect();
+        return { cw: r.width, ch: r.height, bw: box.clientWidth, bh: box.clientHeight };
+      });
+      ok('after rotating, the canvas still covers the whole frame',
+        Math.abs(geo.cw - geo.bw) <= 1 && Math.abs(geo.ch - geo.bh) <= 1, JSON.stringify(geo));
+      const old = await page.evaluate(OLD_FIT_RECT, [BIG_W, BIG_H]);
+      const tl = await page.evaluate(CANVAS_PX, [old.left + 2, old.top + 2]);
+      const br = await page.evaluate(CANVAS_PX, [old.left + old.w - 3, old.top + old.h - 3]);
+      ok('and the photo is re-fitted, corners where a fresh open would put them',
+        isPhotoPx(tl) && tl[0] <= 4 && tl[1] <= 4 && isPhotoPx(br) && br[0] >= 251 && br[1] >= 251,
+        JSON.stringify({ old, tl, br }));
+
+      // Landscape phone: the bars are now left and right of the photo, so
+      // this is where the horizontal centring offset really matters.
+      const cont = (await page.locator('.canvas-container').boundingBox());
+      ok('the rotated frame has side bars (the case under test)', old.left - cont.x > 40, JSON.stringify({ old, cont }));
+      const midY = Math.round(old.top + old.h / 2);
+      const left = await page.evaluate(CANVAS_PX, [old.left - 3, midY]);
+      ok('the side bar is still empty at 100%', !!left && !isPhotoPx(left), JSON.stringify(left));
+      const P = { x: Math.round(old.left + old.w * 0.25), y: midY };
+      const p0 = await page.evaluate(CANVAS_PX, [P.x, P.y]);
+      const t = await realTouch(page);
+      await t.pinch(P.x, P.y, 60, 200);
+      await page.waitForTimeout(50);
+      const z = await page.evaluate(() => annotationManager.zoom);
+      const p1 = await page.evaluate(CANVAS_PX, [P.x, P.y]);
+      ok('an off-centre pinch zooms about its midpoint', z > 2 && sameColour(p0, p1), JSON.stringify({ z, p0, p1 }));
+      const side = await page.evaluate(CANVAS_PX, [old.left - 20, midY]);
+      ok('zoomed, the old side bar shows the photo', isPhotoPx(side), JSON.stringify(side));
+      return out;
+    },
+    { before: m.attach, initScript: () => localStorage.setItem('pick_key:TOK', 'RIO-KEY'), contextOptions: MOBILE });
+}
+
+// Annotations are the photographer's saved data (localStorage, via
+// driveManager.saveAnnotations). They're stored in "fitted canvas pixels":
+// (0,0) is the photo's top-left, one unit is one screen px at 100% zoom of
+// the fitted photo. That space must not change: old circles keep rendering
+// on the same spot, new ones are stored the same way.
+const OLD_CIRCLE = { type: 'circle', startX: 300, startY: 200, endX: 400, endY: 300,
+  color: '#0000ff', size: 3, number: 1, timestamp: 1 };
+const BLUE_NEAR = ([x, y, r]) => {
+  const c = document.getElementById('photoCanvas');
+  const cr = c.getBoundingClientRect();
+  const d = c.getContext('2d').getImageData(Math.round(x - cr.left) - r, Math.round(y - cr.top) - r, 2 * r + 1, 2 * r + 1).data;
+  for (let i = 0; i < d.length; i += 4) if (d[i + 2] > 180 && d[i] < 80 && d[i + 1] < 80) return true;
+  return false;
+};
+
+await suite('preview annotations — an old saved circle renders on the same spot; new ones are stored in the same space; wheel zoom stays about the cursor',
+  `${base}/index.html`,
+  async page => {
+    const out = [];
+    const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+    await page.waitForFunction(() => !!window.app, null, { timeout: 5000 });
+    await page.evaluate(circle => {
+      app.filteredPhotos = Array.from({ length: 3 }, (_, i) => ({ id: `20260819/p${i}.jpg`, name: `p${i}.jpg`, rating: 0,
+        annotations: i === 0 ? [circle] : [] }));
+      driveManager.photos = app.filteredPhotos;
+      app.openModal(0);
+    }, OLD_CIRCLE);
+    await page.waitForSelector('#photoModal.active', { timeout: 5000 });
+    await page.waitForFunction(PREVIEW_SETTLED, null, { timeout: 5000 });
+    await page.waitForTimeout(100);
+    const px = (x, y) => page.evaluate(CANVAS_PX, [x, y]);
+    const blueNear = (x, y, r = 2) => page.evaluate(BLUE_NEAR, [x, y, r]);
+    const old = await page.evaluate(OLD_FIT_RECT, [BIG_W, BIG_H]);
+    const stored = () => page.evaluate(() =>
+      JSON.parse(localStorage.getItem('r2_photo_picker_annotations') || '{}')['20260819/p0.jpg'] || []);
+
+    // 1. The old circle (centre 350,250, r 50) lands where the old canvas drew it.
+    ok('the old circle’s right edge is drawn where it always was', await blueNear(old.left + 400, old.top + 250),
+      JSON.stringify(old));
+    ok('and its bottom edge', await blueNear(old.left + 350, old.top + 300));
+    ok('its middle is photo, not ink', isPhotoPx(await px(old.left + 350, old.top + 250)));
+    ok('and nothing is drawn 10px outside the ring', !(await blueNear(old.left + 410, old.top + 250, 1)));
+
+    // 2. A new circle, drawn with the mouse at 100%, is stored in the same space.
+    await page.click('#drawCircleBtn');
+    await page.mouse.move(old.left + 100, old.top + 80);
+    await page.mouse.down();
+    await page.mouse.move(old.left + 150, old.top + 140, { steps: 4 });
+    await page.mouse.move(old.left + 200, old.top + 190, { steps: 4 });
+    await page.mouse.up();
+    await page.waitForTimeout(50);
+    let a = await stored();
+    const c2 = a[1];
+    ok('the new circle is saved', a.length === 2, JSON.stringify(a));
+    ok('in the old coordinate space (fitted-photo pixels from its top-left)',
+      !!c2 && Math.abs(c2.startX - 100) <= 1 && Math.abs(c2.startY - 80) <= 1
+        && Math.abs(c2.endX - 200) <= 1 && Math.abs(c2.endY - 190) <= 1, JSON.stringify(c2));
+    ok('and the old circle is saved back unchanged', JSON.stringify(a[0]) === JSON.stringify(OLD_CIRCLE), JSON.stringify(a[0]));
+
+    // 2b. A drag that runs off the photo ends at its edge (the old photo-
+    //     sized canvas ended it there on mouseleave): nothing stored outside.
+    //     (Ends halfway into the bar below, still inside the frame — past
+    //     the frame, the canvas's own mouseleave ends it, as before.)
+    const into = await page.evaluate(t => (t - document.querySelector('.canvas-container').getBoundingClientRect().top) / 2, old.top);
+    ok('(the frame has a bar below the photo to drag into)', into >= 10, String(into));
+    await page.mouse.move(old.left + 200, old.top + old.h - 100);
+    await page.mouse.down();
+    await page.mouse.move(old.left + 320, old.top + old.h + into, { steps: 6 });
+    await page.mouse.up();
+    await page.waitForTimeout(50);
+    a = await stored();
+    const cEdge = a[2];
+    ok('a drag that runs off the photo is stored ending on its edge',
+      !!cEdge && Math.abs(cEdge.endY - old.h) <= 1 && Math.abs(cEdge.endX - 320) <= 1
+        && Math.abs(cEdge.startY - (old.h - 100)) <= 1, JSON.stringify({ cEdge, h: old.h }));
+    await page.evaluate(() => { annotationManager.undo(); }); // back to the two circles
+    await page.waitForTimeout(50);
+    a = await stored();
+    ok('(undo leaves the two circles)', a.length === 2, JSON.stringify(a));
+
+    // 3. Pressing on the black bar (off the photo) draws nothing, as before.
+    const cont = await page.evaluate(() => {
+      const b = document.querySelector('.canvas-container').getBoundingClientRect();
+      return { left: b.left, top: b.top, right: b.right, bottom: b.bottom };
+    });
+    const sideBar = old.left - cont.left, topBar = old.top - cont.top;
+    ok('this desktop frame has a bar beside or above the photo', Math.max(sideBar, topBar) >= 20, JSON.stringify({ sideBar, topBar }));
+    const bx = sideBar >= topBar ? cont.left + sideBar / 2 : old.left + 50;
+    const by = sideBar >= topBar ? old.top + 50 : cont.top + topBar / 2;
+    await page.mouse.move(bx, by);
+    await page.mouse.down();
+    await page.mouse.move(bx + 60, by + 60, { steps: 4 });
+    await page.mouse.up();
+    await page.waitForTimeout(50);
+    a = await stored();
+    ok('a drag starting on the bar adds no circle', a.length === 2, JSON.stringify(a));
+    const by2 = sideBar >= topBar ? old.top + 50 : old.top + old.h + topBar / 2;
+    const bx2 = sideBar >= topBar ? old.left + old.w + sideBar / 2 : old.left + 50;
+    await page.mouse.move(bx2, by2);
+    await page.mouse.down();
+    await page.mouse.move(bx2 - 60, by2 - 60, { steps: 4 });
+    await page.mouse.up();
+    await page.waitForTimeout(50);
+    a = await stored();
+    ok('nor does one starting on the bar on the far side', a.length === 2, JSON.stringify(a));
+
+    // 4. Wheel zoom about the cursor: the photo point under it stays put.
+    await page.click('#panBtn');
+    const P = { x: Math.round(old.left + old.w * 0.3), y: Math.round(old.top + old.h * 0.6) };
+    const c0 = await px(P.x, P.y), q0 = await px(P.x + 80, P.y);
+    await page.mouse.move(P.x, P.y);
+    for (let i = 0; i < 5; i++) { await page.mouse.wheel(0, -100); await page.waitForTimeout(30); }
+    const z = await page.evaluate(() => annotationManager.zoom);
+    ok('the wheel zoomed in', z > 1.4, String(z));
+    const c1 = await px(P.x, P.y), q1 = await px(P.x + 80, P.y);
+    ok('the photo point under the cursor stayed under it', sameColour(c0, c1), JSON.stringify({ c0, c1 }));
+    ok('while the photo around it grew', !!q0 && !!q1 && Math.abs(q1[0] - q0[0]) >= 3, JSON.stringify({ q0, q1 }));
+    ok('the old circle grew about the cursor too',
+      await blueNear(P.x + (old.left + 400 - P.x) * z, P.y + (old.top + 250 - P.y) * z, 3));
+
+    // 5. Zoomed, draw from a point that was bar at 100% but now shows the
+    //    photo: stored in the same space, computed from the gradient colour
+    //    (which photo pixel is under the mouse) — independent of the code.
+    await page.click('#drawCircleBtn');
+    const S = sideBar >= topBar ? { x: Math.round(old.left - 6), y: P.y } : { x: P.x, y: Math.round(old.top - 6) };
+    const E = { x: S.x + 120, y: S.y + 90 };
+    const sPx = await px(S.x, S.y), ePx = await px(E.x, E.y);
+    ok('zoomed, the old bar now shows the photo', isPhotoPx(sPx), JSON.stringify(sPx));
+    const worldOf = p => ({ x: p[0] / 255 * (BIG_W - 1) * old.s, y: p[1] / 255 * (BIG_H - 1) * old.s });
+    await page.mouse.move(S.x, S.y);
+    await page.mouse.down();
+    await page.mouse.move(E.x, E.y, { steps: 6 });
+    await page.mouse.up();
+    await page.waitForTimeout(50);
+    a = await stored();
+    const c3 = a[2], ws = sPx && worldOf(sPx), we = ePx && worldOf(ePx);
+    ok('a circle drawn while zoomed is stored at the photo point under the mouse',
+      !!c3 && !!ws && !!we && Math.abs(c3.startX - ws.x) <= 5 && Math.abs(c3.startY - ws.y) <= 5
+        && Math.abs(c3.endX - we.x) <= 5 && Math.abs(c3.endY - we.y) <= 5, JSON.stringify({ c3, ws, we }));
+
+    // 6. Back to fit: the old circle is exactly where it started.
+    await page.click('#zoomResetBtn');
+    await page.waitForTimeout(50);
+    ok('after ⟲ the old circle is back on its original spot', await blueNear(old.left + 400, old.top + 250));
+    ok('and the ⟲ button still says 已重置縮放', await page.evaluate(() => [...document.querySelectorAll('#toastContainer .toast-message')]
+      .some(el => el.textContent.includes('已重置縮放'))));
+    return out;
+  },
+  { initScript: () => sessionStorage.setItem('studio_token', 'x'), before: mockWorker(3, {}, BIG_PHOTO) });
+
+{
+  const m = pickFakeWorker({ ownerName: 'Kai', ownerKey: 'KAI-KEY', photos: [
+    // a real camera-length filename, so the bar's name has to give way
+    { id: '20260819/DSC_20260819_143015_wedding_ceremony.jpg', name: 'DSC_20260819_143015_wedding_ceremony.jpg', size: 9e6, rating: 0 },
+    ...PHOTOS(1)] });
+  await suite('tap targets on a mobile viewport — the preview’s ⟲ and − / + zoom buttons are >= 44x44 CSS px, on screen and apart',
+    `${base}/index.html?t=TOK`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('.photo-card', { timeout: 5000 });
+      await page.locator('.photo-card').first().tap();
+      await page.waitForSelector('#photoModal.active', { timeout: 5000 });
+      // measure after the modal's slideUp entrance, not mid-slide
+      await page.waitForFunction(() => document.querySelector('#photoModal .modal-content').getAnimations().length === 0,
+        null, { timeout: 5000 });
+      const boxes = await page.evaluate(() => ['zoomOutBtn', 'zoomInBtn', 'zoomResetBtn'].map(id => {
+        const el = document.getElementById(id);
+        if (!el) return null;
+        const r = el.getBoundingClientRect();
+        return { id, w: r.width, h: r.height, left: r.left, right: r.right, top: r.top, bottom: r.bottom,
+                 display: getComputedStyle(el).display };
+      }));
+      for (const b of boxes) {
+        ok(`${b?.id} is >= 44x44`, !!b && b.display !== 'none' && b.w >= 44 && b.h >= 44, JSON.stringify(b));
+        ok(`${b?.id} is fully on screen`, !!b && b.left >= 0 && b.right <= 390 && b.top >= 0 && b.bottom <= 844, JSON.stringify(b));
+      }
+      const overlap = (a, b) => a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
+      ok('none of them overlap', boxes.every(Boolean) && !overlap(boxes[0], boxes[1]) && !overlap(boxes[1], boxes[2])
+        && !overlap(boxes[0], boxes[2]), JSON.stringify(boxes));
+      const hit = await page.evaluate(b => document.elementFromPoint((b.left + b.right) / 2, (b.top + b.bottom) / 2)?.closest('button')?.id, boxes[2]);
+      ok('a tap on the ⟲ reaches it', hit === 'zoomResetBtn', String(hit));
+      const heart = await page.evaluate(() => {
+        const r = document.querySelector('#modalPhotoRating .pick-heart-btn')?.getBoundingClientRect();
+        return r ? { left: r.left, right: r.right, top: r.top, bottom: r.bottom } : null;
+      });
+      const nameW = await page.evaluate(() => document.getElementById('modalPhotoName').getBoundingClientRect().width);
+      ok('the file name keeps a readable width (>= 80px, ellipsised)', nameW >= 80, String(nameW));
+      ok('the bigger buttons don’t push the bar’s ♥ off screen or onto them',
+        !!heart && heart.left >= 0 && heart.right <= 390 && heart.bottom <= 844
+          && boxes.every(b => b && !overlap(b, heart)), JSON.stringify({ heart, boxes }));
+      return out;
+    },
+    { before: m.attach, initScript: () => localStorage.setItem('pick_key:TOK', 'KAI-KEY'), contextOptions: MOBILE });
+}
 
 {
   const m = pickFakeWorker({ ownerName: 'Uma', ownerKey: 'UMA-KEY', photos: PHOTOS(5) });
