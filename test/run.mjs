@@ -20,7 +20,9 @@ const TYPES = {
 };
 
 const server = createServer(async (req, res) => {
-  const rel = normalize(decodeURIComponent(req.url.split('?')[0])).replace(/^(\.\.[/\\])+/, '');
+  let rel = normalize(decodeURIComponent(req.url.split('?')[0])).replace(/^(\.\.[/\\])+/, '');
+  // a directory URL serves its index.html, like the real host (imhoti.tw/studio/)
+  if (rel.endsWith('/')) rel += 'index.html';
   try {
     const body = await readFile(join(ROOT, rel));
     res.writeHead(200, { 'Content-Type': TYPES[extname(rel)] || 'application/octet-stream' });
@@ -3905,6 +3907,42 @@ await suite('入口 — sessionStorage 已有 studio_token 的 index.html 不會
   },
   { before: mockWorker(1), initScript: ADMIN });
 
+// imhoti.tw/studio/ itself (the directory URL, what Tim types) with a
+// photographer signed in goes to the dashboard. index.html by name — the side
+// menu's 選圖 and upload's 回選圖 — still opens the workspace (suite above).
+await suite('入口 — 已登入攝影師開 /studio/ 導向 dashboard.html',
+  `${base}/`,
+  async page => {
+    const out = [];
+    const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+    await page.waitForURL('**/dashboard.html', { timeout: 3000 }).catch(() => {});
+    ok('redirected to dashboard.html', /\/dashboard\.html$/.test(page.url()), page.url());
+    return out;
+  },
+  { before: mockWorker(1), initScript: ADMIN });
+
+await suite('入口 — 已登入攝影師開 /studio/?project=<id> 留在原頁',
+  `${base}/?project=P1`,
+  async page => {
+    const out = [];
+    const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+    await page.waitForTimeout(500);
+    ok('a mode param keeps the page', /\/\?project=P1$/.test(page.url()), page.url());
+    return out;
+  },
+  { before: mockWorker(1), initScript: ADMIN });
+
+await suite('入口 — 沒登入開 /studio/ 仍導向 home.html',
+  `${base}/`,
+  async page => {
+    const out = [];
+    const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+    await page.waitForURL('**/home.html', { timeout: 3000 }).catch(() => {});
+    ok('redirected to home.html', /\/home\.html$/.test(page.url()), page.url());
+    return out;
+  },
+  { before: mockWorker(1) });
+
 {
   const m = clientMock();
   await suite('入口 — 已登入的客戶（client_session）的 index.html 不會被導向 home.html',
@@ -4774,6 +4812,50 @@ await suite('admin — escHtml(0): a project with zero submissions shows 送出 
       return out;
     },
     { before: m.attach, initScript: () => localStorage.setItem('pick_key:TOK', 'OWEN-KEY'), contextOptions: MOBILE });
+}
+
+// A landscape photo on a portrait phone leaves black bars above and below
+// it, and those bars belong to .canvas-container, not #photoCanvas. The
+// helpers above dispatch straight to the canvas; this one uses real touch
+// input, so the finger lands on whatever is really at that point. The 1x1
+// fixture photo makes nearly the whole frame letterbox.
+{
+  const m = pickFakeWorker({ ownerName: 'Lea', ownerKey: 'LEA-KEY', photos: PHOTOS(3) });
+  await suite('mobile preview — double-tap on the black bars around the photo still likes it; the ‹ › buttons still work',
+    `${base}/index.html?t=TOK`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('.photo-card', { timeout: 5000 });
+      await page.locator('.photo-card').first().tap();
+      await page.waitForSelector('#photoModal.active', { timeout: 5000 });
+      await page.waitForTimeout(200);
+      const box = await page.locator('.canvas-container').boundingBox();
+      const x = Math.round(box.x + box.width / 2), y = Math.round(box.y + 20);
+      const hit = await page.evaluate(([x, y]) => {
+        const el = document.elementFromPoint(x, y);
+        return el ? (el.id || el.className) : null;
+      }, [x, y]);
+      ok('the tap point is the bar, not the canvas', hit === 'canvas-container', String(hit));
+      await page.touchscreen.tap(x, y);
+      await page.waitForTimeout(150);
+      await page.touchscreen.tap(x + 3, y + 2);
+      await page.waitForTimeout(50);
+      const r = await page.evaluate(() => ({ rating: app.filteredPhotos[0].rating,
+        burst: !!document.querySelector('.canvas-container .pick-heart-burst'),
+        counter: document.getElementById('photoCounter').textContent }));
+      ok('double-tapping the bar likes the photo', r.rating === 1, JSON.stringify(r));
+      ok('and pops the big ♥', r.burst, JSON.stringify(r));
+      ok('and stays on the same photo', r.counter === '1 / 3', r.counter);
+
+      await page.waitForTimeout(500);
+      await page.locator('#nextPhotoBtn').tap();
+      await page.waitForTimeout(100);
+      ok('tapping › still goes to the next photo', (await page.textContent('#photoCounter')) === '2 / 3',
+        await page.textContent('#photoCounter'));
+      return out;
+    },
+    { before: m.attach, initScript: () => localStorage.setItem('pick_key:TOK', 'LEA-KEY'), contextOptions: MOBILE });
 }
 
 {

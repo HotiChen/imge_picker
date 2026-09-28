@@ -1432,6 +1432,7 @@ body {
 
 .canvas-container {
   flex: 1;
+  touch-action: none; /* the bars around the photo take gestures too (js/annotation.js) */
   background: #000;
   display: flex;
   align-items: center;

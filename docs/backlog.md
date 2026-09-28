@@ -30,7 +30,34 @@ Decided or discussed, not yet built. Newest decisions at the top of each group.
    Needs payments through the platform first; check tax/legal before launch.
 6. Landing page (for photographers once multi-photographer is real).
 
+## Bugs
+- Guest page hides subfolders. Project folder `A/` with `A/a/`, `A/b/`, `A/c/`:
+  the guest sees none of a/b/c and cannot open them. The Worker allows them
+  (prefix match); the page loses them. `js/pick.js` redraws after every load:
+  `applyServerSelections` calls `renderPhotoGrid()` (pick.js:372), replacing
+  the folder cards app.js drew for a photo-less folder, and
+  `renderFolderPanel` (pick.js:415) lists only the project's own folders,
+  replacing app.js's subfolder tree. Also: when `A/` has photos of its own,
+  folder cards never show (app.js:136). Probably the same in the
+  photographer project view (`project-view.js:287` clears currentFolders) —
+  unverified. Workaround: list `A/a/`, `A/b/`, `A/c/` as the project folders.
+  Planned fix: the 資料夾 panel shows subfolders nested under each project
+  folder, all clickable; a photo-less folder opens its first subfolder.
+  Check the ♥ 已選 filter still spans every folder. Test with real hit-testing.
+
 ## Deferred features
+- Edit a project's 張數 / 加挑單價 after creation (today only set at create;
+  no update route). Submissions snapshot both at submit, so an edit only
+  affects later submits.
+- Edit a project's folders after creation — same edit screen as 張數 / 單價.
+  Folders are snapshotted on the project and on every pick share token
+  (worker.js:1074, reissue copies the project at :1290), so an edit must
+  update the live pick tokens too, or existing links keep the old scope.
+  Decide what happens to picks in a removed folder (keep, but hide?).
+  Security review: this widens what a live link can read.
+- Make "no extra picks" explicit: today a blank 加挑單價 only hides the price —
+  guests can still pick past the limit, nothing blocks. Add a choice
+  (可加選 NT$__ / 不可加選) and cap picks at the limit for 不可加選.
 - Logo route per photographer (`/api/studio/:pid/logo`); today it always
   serves the default studio — fine until a second photographer exists.
 - Strip bidi / zero-width characters from `studio_name` (spoofing only; admin-set).
