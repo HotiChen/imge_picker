@@ -63,6 +63,10 @@ Two finished pieces of work, not yet on main:
   (side-by-side / history), comments per version, the round counter and what
   happens at the limit (extra fee?). Probably pairs with "guests circle what to
   retouch" (Next up).
+  Also: the guest can look back at earlier versions — "第 3 / 4 版" with ‹ ›
+  between v1…vN, ideally a before/after compare (side by side or a drag
+  divider). Comments must be tied to the version they were made on. Mind the
+  180-day R2 lifecycle: old versions of a long project will be deleted.
 
 ## Product roadmap (agreed order)
 1. Back-office shell: side menu, dashboard (projects by phase, per month,
