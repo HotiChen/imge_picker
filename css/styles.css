@@ -1446,6 +1446,8 @@ body {
    .photo-card.pick-picked. No overlay on the image either. */
 .canvas-container.pick-picked { border-color: var(--danger); }
 
+/* Fills .canvas-container: js/annotation.js resizeCanvas sizes the bitmap to
+   it and draws the photo fitted and centred inside. */
 #photoCanvas {
   max-width: 100%;
   max-height: 100%;
@@ -2164,4 +2166,13 @@ span.pick-heart-btn { cursor: default; }
   .pick-filter-btn { min-height: 44px; }
   #submitJobBtn, #pickSubmitConfirmBtn, #pickSubmitCancelBtn { min-height: 44px; }
   .pv-banner-btn { min-height: 44px; padding: 10px 16px; }
+  /* The preview's − / + / ⟲ (reset to fit) in the bottom bar. The bar gives
+     up its dividers and side padding, and the file name shrinks (ellipsis),
+     so the bigger buttons and the ♥ still fit a 390px phone. */
+  .modal-photo-info { gap: 8px; padding: 6px 8px; }
+  .modal-photo-info .bar-divider { display: none; }
+  .modal-photo-info .info-group, #modalPhotoName { min-width: 0; }
+  .zoom-tools-compact { gap: 0; flex-shrink: 0; }
+  .zoom-tools-compact button { min-width: 44px; min-height: 44px; justify-content: center; }
+  #modalPhotoRating { flex-shrink: 0; }
 }

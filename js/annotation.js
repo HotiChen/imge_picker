@@ -37,6 +37,14 @@ class AnnotationManager {
         this.maxZoom = 5;
         this.panX = 0;
         this.panY = 0;
+        // The canvas fills .canvas-container; the photo is drawn fitted and
+        // centred inside it at (offsetX, offsetY), fitW x fitH. Annotation
+        // coordinates ("world") stay what they always were: fitted-photo
+        // pixels from the photo's top-left — see _toWorld().
+        this.offsetX = 0;
+        this.offsetY = 0;
+        this.fitW = 0;
+        this.fitH = 0;
         this.lastPanX = 0;
         this.lastPanY = 0;
 
@@ -72,9 +80,8 @@ class AnnotationManager {
         // 觸控支援 — { passive: false } so preventDefault() on a pan-tool
         // swipe/pinch actually stops the page (and iOS Safari's own
         // pinch-zoom / pull-to-refresh) from also reacting to it.
-        // Bound on the container, not the canvas: the canvas is only as big
-        // as the fitted photo, so a landscape photo on a portrait phone
-        // leaves black bars that must still take a swipe or a double-tap.
+        // Bound on the container, not the canvas: the canvas now fills it,
+        // but the ‹ › overlay and the ♥ burst sit on top of it in there too.
         const touchHost = this.canvas.parentElement || this.canvas;
         touchHost.addEventListener('touchstart', this.handleTouchStart.bind(this), { passive: false });
         touchHost.addEventListener('touchmove', this.handleTouchMove.bind(this), { passive: false });
@@ -197,26 +204,61 @@ class AnnotationManager {
         toast.info('已重做');
     }
 
-    // 調整畫布大小以符合圖片
+    // 畫布填滿容器；照片 fit 後置中畫在裡面 (the "fitted rect")
+    // The fitted rect is exactly the old canvas: same scale, same whole-pixel
+    // truncation the old `canvas.width = width` did, and centred the way the
+    // old flex container centred that canvas. So at 100% the photo — and
+    // every saved annotation, which lives in that rect's pixels — lands on
+    // the same screen spot as before; zoom/pan now just have the whole
+    // container to spread into instead of being clipped to the rect.
     resizeCanvas(img) {
         const container = this.canvas.parentElement;
         const maxWidth = container.clientWidth - 0; // 電影模式拿掉 padding
         const maxHeight = container.clientHeight - 0;
 
-        let width = img.width;
-        let height = img.height;
-
         // 計算縮放比例
-        const scale = Math.min(maxWidth / width, maxHeight / height, 1);
+        const scale = Math.min(maxWidth / img.width, maxHeight / img.height, 1);
 
-        width *= scale;
-        height *= scale;
+        this.fitW = Math.floor(img.width * scale);
+        this.fitH = Math.floor(img.height * scale);
+        this.offsetX = (maxWidth - this.fitW) / 2;
+        this.offsetY = (maxHeight - this.fitH) / 2;
 
-        this.canvas.width = width;
-        this.canvas.height = height;
+        this.canvas.width = maxWidth;
+        this.canvas.height = maxHeight;
 
         // 儲存原始縮放比例
         this.scale = scale;
+    }
+
+    // Screen point → the fitted rect's own pixels at the current view
+    // (before undoing zoom/pan) — what the zoom-about-a-point math uses.
+    _toLocal(clientX, clientY) {
+        const rect = this.canvas.getBoundingClientRect();
+        return { x: clientX - rect.left - this.offsetX, y: clientY - rect.top - this.offsetY };
+    }
+
+    // Screen point → annotation ("world") coordinates: fitted-photo pixels at
+    // 100%, the space every saved annotation has always been stored in.
+    _toWorld(clientX, clientY) {
+        const p = this._toLocal(clientX, clientY);
+        return { x: (p.x - this.panX) / this.zoom, y: (p.y - this.panY) / this.zoom };
+    }
+
+    _onPhoto(p) {
+        return p.x >= 0 && p.y >= 0 && p.x <= this.fitW && p.y <= this.fitH;
+    }
+
+    // A drawing drag that ends off the photo ends at its edge — what the old
+    // photo-sized canvas's mouseleave did — so no stored shape leaves it.
+    _clampToPhoto(p) {
+        return { x: Math.min(Math.max(p.x, 0), this.fitW), y: Math.min(Math.max(p.y, 0), this.fitH) };
+    }
+
+    // World → canvas transform: the fitted rect's origin, then pan, then zoom.
+    _applyView() {
+        this.ctx.translate(this.offsetX + this.panX, this.offsetY + this.panY);
+        this.ctx.scale(this.zoom, this.zoom);
     }
 
     // 重新繪製畫布
@@ -230,11 +272,10 @@ class AnnotationManager {
         this.ctx.save();
 
         // 應用縮放和平移
-        this.ctx.translate(this.panX, this.panY);
-        this.ctx.scale(this.zoom, this.zoom);
+        this._applyView();
 
         // 繪製圖片
-        this.ctx.drawImage(this.imageElement, 0, 0, this.canvas.width, this.canvas.height);
+        this.ctx.drawImage(this.imageElement, 0, 0, this.fitW, this.fitH);
 
         // 繪製所有標注
         this.annotations.forEach(annotation => {
@@ -307,6 +348,11 @@ class AnnotationManager {
 
     // 開始繪圖
     startDrawing(e) {
+        // Only the pan tool works off the photo: a drawing tool pressed on
+        // the black bars does nothing, as when the canvas ended at the photo.
+        const pt = this._toWorld(e.clientX, e.clientY);
+        if (this.currentTool !== 'pan' && !this._onPhoto(pt)) return;
+
         if (this.currentTool === 'eraser') {
             this.saveState(); // 紀錄清除前的狀態
             this.clearAnnotations();
@@ -325,9 +371,8 @@ class AnnotationManager {
             return;
         }
 
-        const rect = this.canvas.getBoundingClientRect();
-        const canvasX = (e.clientX - rect.left - this.panX) / this.zoom;
-        const canvasY = (e.clientY - rect.top - this.panY) / this.zoom;
+        const canvasX = pt.x;
+        const canvasY = pt.y;
 
         if (this.currentTool === 'select') {
             const annotation = this.getAnnotationAt(canvasX, canvasY);
@@ -375,9 +420,7 @@ class AnnotationManager {
         }
 
         if (this.isMovingAnnotation && this.selectedAnnotation) {
-            const rect = this.canvas.getBoundingClientRect();
-            const canvasX = (e.clientX - rect.left - this.panX) / this.zoom;
-            const canvasY = (e.clientY - rect.top - this.panY) / this.zoom;
+            const { x: canvasX, y: canvasY } = this._toWorld(e.clientX, e.clientY);
             this.moveAnnotation(this.selectedAnnotation, canvasX - this.moveStartX, canvasY - this.moveStartY);
             this.moveStartX = canvasX;
             this.moveStartY = canvasY;
@@ -387,14 +430,11 @@ class AnnotationManager {
 
         if (!this.isDrawing) return;
 
-        const rect = this.canvas.getBoundingClientRect();
-        const currentX = (e.clientX - rect.left - this.panX) / this.zoom;
-        const currentY = (e.clientY - rect.top - this.panY) / this.zoom;
+        const { x: currentX, y: currentY } = this._clampToPhoto(this._toWorld(e.clientX, e.clientY));
 
         this.redraw();
         this.ctx.save();
-        this.ctx.translate(this.panX, this.panY);
-        this.ctx.scale(this.zoom, this.zoom);
+        this._applyView();
         this.ctx.strokeStyle = this.currentColor;
         this.ctx.lineWidth = this.brushSize;
 
@@ -426,9 +466,7 @@ class AnnotationManager {
         this.isDrawing = false;
         this.updateCursor();
 
-        const rect = this.canvas.getBoundingClientRect();
-        const endX = (e.clientX - rect.left - this.panX) / this.zoom;
-        const endY = (e.clientY - rect.top - this.panY) / this.zoom;
+        const { x: endX, y: endY } = this._clampToPhoto(this._toWorld(e.clientX, e.clientY));
 
         if (Math.abs(endX - this.startX) > 10) {
             const circleCount = this.annotations.filter(a => a.type === 'circle').length;
@@ -461,9 +499,10 @@ class AnnotationManager {
     // Engaged only for the 'pan' tool (see the constants block above); any
     // other tool falls straight back to the original mouse-synthesis touch
     // handling so drawing/erasing/selecting by touch is unchanged.
-    // Touches the preview handlers leave alone: anything on the bars while a
-    // drawing tool is active (drawing stays on the photo, as before), and
-    // the ‹ › buttons, whose tap must reach them as a click.
+    // Touches the preview handlers leave alone: anything on the container
+    // itself while a drawing tool is active, and the ‹ › buttons, whose tap
+    // must reach them as a click. (The bars around the photo are canvas
+    // now; startDrawing ignores a press off the photo, as before.)
     _ignoreTouch(e) {
         if (e.target === this.canvas) return false;
         return this.currentTool !== 'pan' || !!e.target.closest?.('button, a, input, textarea, select');
@@ -490,7 +529,9 @@ class AnnotationManager {
             startX: t.clientX, startY: t.clientY,
             lastX: t.clientX, lastY: t.clientY,
             moved: false,
-            panning: this.zoom > 1, // zoomed in → one-finger drag pans, not swipe-nav
+            // zoomed in → one-finger drag pans, not swipe-nav; one that
+            // barely moves is still a tap (double-tap → back to fit)
+            panning: this.zoom > 1,
         };
     }
 
@@ -502,8 +543,8 @@ class AnnotationManager {
             const [a, b] = e.touches;
             const ratio = gestureTouchDist(a, b) / (this._pinch.startDist || 1);
             const newZoom = Math.max(this.minZoom, Math.min(this.maxZoom, this._pinch.startZoom * ratio));
-            const rect = this.canvas.getBoundingClientRect();
-            this.setZoomAbsolute(newZoom, this._pinch.cx - rect.left, this._pinch.cy - rect.top);
+            const p = this._toLocal(this._pinch.cx, this._pinch.cy);
+            this.setZoomAbsolute(newZoom, p.x, p.y);
             return;
         }
         if (!this._touch) return;
@@ -533,7 +574,10 @@ class AnnotationManager {
         if (this._pinch) { this._pinch = null; return; }
         const touch = this._touch;
         this._touch = null;
-        if (!touch || touch.panning) return; // a pinch, or a pan drag — not a tap/swipe
+        if (!touch) return;                         // the tail of a pinch
+        if (touch.panning && touch.moved) return;   // a pan drag — not a tap/swipe
+        // (A zoomed touch that didn't move past the tap tolerance can't
+        // clear either swipe threshold below, so it can only be a tap.)
 
         const dx = touch.lastX - touch.startX;
         const dy = touch.lastY - touch.startY;
@@ -569,12 +613,15 @@ class AnnotationManager {
         }
     }
 
-    // Guest picking, task: mobile gestures — double-tap toggles ♥ only in
+    // Zoomed in, a double-tap goes back to fit (like iPhone Photos) — for
+    // anyone who can open the preview — and never touches the ♥.
+    // Guest picking, task: mobile gestures — at fit, double-tap toggles ♥ only in
     // pick mode, only for the seat holder, only while canEdit() (picking or
     // submitted, never retouching). Every other case — viewer, wrong seat,
     // retouching, or not a pick link at all — changes nothing, exactly like
     // the pitfall list asks to prove with a negative assertion.
     _handleDoubleTap() {
+        if (this.zoom > 1) { this.resetZoom({ quiet: true }); return; }
         const pc = window.PickController;
         if (!pc || !pc.active || !pc.canEdit()) return;
         if (!this.currentPhoto || !window.app) return;
@@ -636,11 +683,9 @@ class AnnotationManager {
         const delta = e.deltaY > 0 ? -0.1 : 0.1;
 
         // 獲取滑鼠在畫布上的相對位置
-        const rect = this.canvas.getBoundingClientRect();
-        const mouseX = e.clientX - rect.left;
-        const mouseY = e.clientY - rect.top;
+        const p = this._toLocal(e.clientX, e.clientY);
 
-        this.zoomBy(delta, mouseX, mouseY);
+        this.zoomBy(delta, p.x, p.y);
     }
 
     zoomBy(delta, mouseX = null, mouseY = null) {
@@ -648,11 +693,11 @@ class AnnotationManager {
         this.setZoomAbsolute(newZoom, mouseX, mouseY);
     }
 
-    resetZoom() {
+    resetZoom({ quiet = false } = {}) {
         this.zoom = 1; this.panX = 0; this.panY = 0;
         this.redraw();
         this.updateZoomDisplay();
-        toast.info('已重置縮放');
+        if (!quiet) toast.info('已重置縮放'); // the double-tap is its own feedback
     }
 
     updateZoomDisplay() {
