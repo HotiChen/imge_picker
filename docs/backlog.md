@@ -3,7 +3,7 @@
 Decided or discussed, not yet built. Newest decisions at the top of each group.
 
 ## Next up
-- [ ] Phone test of guest picking + gestures on real LINE / iOS Safari (Tim).
+- [ ] Phone test of guest picking + gestures (and the new bright entrance) on real LINE / iOS Safari (Tim).
       Watch: LINE's edge swipe-back vs swipe-right, zoom feel.
 - [ ] Email notifications: Cloudflare Email Routing + `send_email` binding
       `NOTIFY_EMAIL`, vars `PHOTOGRAPHER_EMAIL`, `NOTIFY_FROM` (must be an
@@ -30,7 +30,6 @@ Decided or discussed, not yet built. Newest decisions at the top of each group.
 - Logo route per photographer (`/api/studio/:pid/logo`); today it always
   serves the default studio — fine until a second photographer exists.
 - Strip bidi / zero-width characters from `studio_name` (spoofing only; admin-set).
-- Point imhoti.tw/studio/ at home.html (guest links keep using index.html?t=).
 - Registered-owner invites (editor / viewer) for a project.
 - Link a registered client account to a pick seat (`pickers.user_id`).
 - Long-term storage for registered owners — needs a separate bucket.

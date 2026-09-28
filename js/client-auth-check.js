@@ -47,6 +47,16 @@
     return store.get('studio_token');
   }
 
+  // The four query params the app already gives meaning to on this page
+  // (js/pick.js `?t=`, js/app.js checkUrlParams `?folder=`/`?id=`,
+  // js/project-view.js `?project=`). Any of them picks a mode on its own,
+  // with or without a stored session, so none of them should ever bounce to
+  // home.html — only a truly bare visit does.
+  function hasModeParam() {
+    const params = new URLSearchParams(location.search);
+    return ['t', 'folder', 'id', 'project'].some(key => !!params.get(key));
+  }
+
   // ── folder switcher: every folder this client's token opens, listed in the
   // left 資料夾 panel (docs/guest-picking.md — the same panel js/pick.js uses
   // for guests, and the same one app.js normally fills with the subfolder
@@ -122,8 +132,14 @@
       if (typeof CONFIG !== 'undefined') CONFIG.PHOTOGRAPHER_TOKEN = studioToken;
       addStudioLogout();
       return;
+    } else if (!hasModeParam()) {
+      // ── Root entrance, no auth, no mode: this is imhoti.tw/studio/ opened
+      // cold — send it to the marketing/login page instead of the studio/
+      // client choice overlay. Any recognised param, or a session, keeps the
+      // overlay exactly as before (checked above and by hasModeParam()).
+      window.location.href = 'home.html';
     } else {
-      // ── No auth: show choice overlay ─────────────────────────────────────
+      // ── No auth, but a recognised param owns the page: show choice overlay
       showChoiceOverlay();
     }
   });
