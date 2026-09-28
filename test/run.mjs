@@ -3833,8 +3833,13 @@ await suite('guest picking — a free seat blocks on a name, then loads an edita
     { before: m.attach, initScript: () => localStorage.setItem('pick_key:TOK', 'DORA-KEY') });
 }
 
-await suite('guest picking — the studio/client choice overlay and other modes are untouched without ?t=',
-  `${base}/index.html`,
+// A bare index.html with no recognised mode param and no session now leaves
+// for home.html (see the "studio entrance" suites below) instead of showing
+// the choice overlay, so this "untouched" check needs a URL that still
+// selects a mode without any auth — ?folder= is exactly that (the old magic
+// link), and per spec it "behaves exactly as today".
+await suite('guest picking — the studio/client choice overlay and other modes are untouched with ?folder= and no session',
+  `${base}/index.html?folder=20260819/`,
   async page => {
     const out = [];
     const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
@@ -3848,9 +3853,72 @@ await suite('guest picking — the studio/client choice overlay and other modes 
       await page.evaluate(() => !!document.querySelector('.star-filter') && !!document.getElementById('filterSelectedBtn')));
     ok('the studio/client choice overlay still appears',
       await page.waitForSelector('#auth-overlay', { timeout: 5000 }).then(() => true, () => false));
+    ok('and it was not redirected to home.html', !/home\.html/.test(page.url()), page.url());
     return out;
   },
   { before: mockWorker(1) });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// index.html entrance — imhoti.tw/studio/ serves index.html, and a bare visit
+// (no ?t=/?project=/?folder=/?id= and no studio_token/client_session) should
+// land on home.html instead of the studio/client choice overlay.
+// ═══════════════════════════════════════════════════════════════════════════
+
+await suite('入口 — 沒有模式參數也沒有登入狀態的 index.html 導向 home.html',
+  `${base}/index.html`,
+  async page => {
+    const out = [];
+    const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+    await page.waitForURL('**/home.html', { timeout: 3000 }).catch(() => {});
+    ok('redirected to home.html', /home\.html$/.test(page.url()), page.url());
+    ok('the choice overlay was never shown',
+      await page.evaluate(() => document.getElementById('auth-overlay') === null));
+    return out;
+  },
+  { before: mockWorker(1) });
+
+await suite('入口 — index.html?t=<pick token> 不會被導向 home.html',
+  `${base}/index.html?t=PICK-TOKEN`,
+  async page => {
+    const out = [];
+    const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+    await page.waitForTimeout(500);
+    ok('PickController took the page — active is true',
+      await page.evaluate(() => !!window.PickController && window.PickController.active === true));
+    ok('stayed on index.html, not redirected to home.html',
+      /\/index\.html\?t=PICK-TOKEN$/.test(page.url()), page.url());
+    return out;
+  },
+  { before: pickFakeWorker({ ownerName: 'Ivy' }).attach });
+
+await suite('入口 — sessionStorage 已有 studio_token 的 index.html 不會被導向 home.html',
+  `${base}/index.html`,
+  async page => {
+    const out = [];
+    const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+    await page.waitForTimeout(500);
+    ok('stayed on index.html — the studio token bypasses the redirect',
+      /\/index\.html$/.test(page.url()), page.url());
+    ok('the choice overlay was never shown',
+      await page.evaluate(() => document.getElementById('auth-overlay') === null));
+    return out;
+  },
+  { before: mockWorker(1), initScript: ADMIN });
+
+{
+  const m = clientMock();
+  await suite('入口 — 已登入的客戶（client_session）的 index.html 不會被導向 home.html',
+    `${base}/index.html`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('#client-bar', { timeout: 5000 }).then(() => true, () => false);
+      ok('the client bar rendered instead of a redirect', await page.evaluate(() => !!document.getElementById('client-bar')));
+      ok('stayed on index.html', /\/index\.html$/.test(page.url()), page.url());
+      return out;
+    },
+    { before: m.attach, initScript: CLIENT });
+}
 
 {
   const XSS_NAME = '"><img src=x onerror="window.__xss=1">';
@@ -4834,6 +4902,10 @@ await suite('mobile preview — outside pick mode, double-tap changes nothing (t
     { before: m.attach, initScript: () => localStorage.setItem('pick_key:TOK', 'WILL-KEY'), contextOptions: MOBILE });
 }
 
+// A bare index.html with no session now leaves for home.html (the "studio
+// entrance" suites above), so this desktop-bucket check — which has nothing
+// to do with auth — needs a studio_token to stay on the page, same as the
+// "photographer mode" suite below.
 await suite('responsive preview width — a desktop viewport keeps the 1600 bucket',
   `${base}/index.html`,
   async page => {
@@ -4843,7 +4915,8 @@ await suite('responsive preview width — a desktop viewport keeps the 1600 buck
     const width = await page.evaluate(() => driveManager.previewWidth());
     ok('desktop (1500px, DPR1) keeps the largest bucket', width === 1600, String(width));
     return out;
-  });
+  },
+  { initScript: ADMIN });
 
 {
   const m = pickFakeWorker({ ownerName: 'Xin', ownerKey: 'XIN-KEY', photos: PHOTOS(2) });
@@ -5874,6 +5947,23 @@ await suite('入口 — 未登入時看到品牌、三張特色卡與手機示�
       (await page.$('.phone-mock')) !== null && (await page.$('.phone-mock img')) === null);
     ok('no external script tags', (await page.$$eval('script[src]', els =>
       els.every(e => !/^https?:|^\/\//.test(e.getAttribute('src'))))));
+
+    // Bright design (Tim-approved, /tmp/claude-0/light-design.html): cream
+    // ground, dark-ink text. Pin the exact approved tokens rather than just
+    // computing a contrast ratio, so a palette drift is caught even if it
+    // still happens to clear 4.5:1.
+    const bodyBg = await page.evaluate(() => getComputedStyle(document.body).backgroundColor);
+    ok('page ground is the approved cream, not the old dark theme',
+      bodyBg === 'rgb(255, 248, 238)', bodyBg);
+    const pitchColor = await page.$eval('.pitch', e => getComputedStyle(e).color);
+    ok('body text is the approved dark ink (#5b4f42), readable on cream',
+      pitchColor === 'rgb(91, 79, 66)', pitchColor);
+    const btnColor = await page.$eval('#heroLoginBtn', e => getComputedStyle(e).color);
+    ok('primary button text is the approved dark ink (#231b12), readable on the accent',
+      btnColor === 'rgb(35, 27, 18)', btnColor);
+
+    const clientLink = await page.$eval('a[href="client-login.html"]', e => e.textContent.trim()).catch(() => null);
+    ok('a 客戶登入 link to client-login.html is in the header', clientLink === '客戶登入', String(clientLink));
 
     await page.click('#heroLoginBtn');
     await page.waitForSelector('#loginOverlay.open', { timeout: 3000 });
