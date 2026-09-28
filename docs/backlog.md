@@ -30,6 +30,21 @@ Decided or discussed, not yet built. Newest decisions at the top of each group.
    Needs payments through the platform first; check tax/legal before launch.
 6. Landing page (for photographers once multi-photographer is real).
 
+## Bugs
+- Guest page hides subfolders. Project folder `A/` with `A/a/`, `A/b/`, `A/c/`:
+  the guest sees none of a/b/c and cannot open them. The Worker allows them
+  (prefix match); the page loses them. `js/pick.js` redraws after every load:
+  `applyServerSelections` calls `renderPhotoGrid()` (pick.js:372), replacing
+  the folder cards app.js drew for a photo-less folder, and
+  `renderFolderPanel` (pick.js:415) lists only the project's own folders,
+  replacing app.js's subfolder tree. Also: when `A/` has photos of its own,
+  folder cards never show (app.js:136). Probably the same in the
+  photographer project view (`project-view.js:287` clears currentFolders) —
+  unverified. Workaround: list `A/a/`, `A/b/`, `A/c/` as the project folders.
+  Planned fix: the 資料夾 panel shows subfolders nested under each project
+  folder, all clickable; a photo-less folder opens its first subfolder.
+  Check the ♥ 已選 filter still spans every folder. Test with real hit-testing.
+
 ## Deferred features
 - Edit a project's 張數 / 加挑單價 after creation (today only set at create;
   no update route). Submissions snapshot both at submit, so an edit only
