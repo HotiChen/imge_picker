@@ -66,6 +66,10 @@
   // is never lost to app.js's own tree render, which targets this same
   // container.
   let permittedFolders = [];
+  // path -> [{id,name}] children last seen for it, same lazy nested-tree
+  // cache js/pick.js keeps for guests (docs/backlog.md "Guest page hides
+  // subfolders") — only a folder actually opened has its children on screen.
+  const folderChildren = new Map();
 
   function renderFolderPanel(current) {
     const container = document.getElementById('folderTreeContainer');
@@ -74,24 +78,33 @@
     if (!permittedFolders.length) { container.style.display = 'none'; return; }
     container.style.display = 'block';
     list.innerHTML = '';
-    permittedFolders.forEach(f => {
-      const row = document.createElement('div');
-      row.className = 'tree-row' + (f === current ? ' tree-active' : '');
-      row.dataset.folder = f;
-      const icon = document.createElement('span');
-      icon.className = 'tree-icon';
-      icon.textContent = '📁';
-      const label = document.createElement('span');
-      label.className = 'tree-label';
-      label.textContent = f.replace(/\/$/, '').split('/').pop() || f;
-      label.title = f;
-      row.appendChild(icon);
-      row.appendChild(label);
-      row.addEventListener('click', () => selectFolder(f));
-      list.appendChild(row);
-    });
+    const frag = document.createDocumentFragment();
+    permittedFolders.forEach(f => appendTreeRow(frag, f, 0, current));
+    list.appendChild(frag);
     const scopeEl = document.getElementById('client-scope');
     if (scopeEl) scopeEl.textContent = current || '';
+  }
+
+  // One row for `folder`, then recurses into its cached children (if any)
+  // one level deeper — mirrors js/pick.js's own _appendTreeRow.
+  function appendTreeRow(parent, folder, depth, current) {
+    const row = document.createElement('div');
+    row.className = 'tree-row' + (folder === current ? ' tree-active' : '');
+    row.dataset.folder = folder;
+    row.style.paddingLeft = (4 + depth * 14) + 'px';
+    const icon = document.createElement('span');
+    icon.className = 'tree-icon';
+    icon.textContent = depth === 0 ? '🗂' : '📁';
+    const label = document.createElement('span');
+    label.className = 'tree-label';
+    label.textContent = folder.replace(/\/$/, '').split('/').pop() || folder;
+    label.title = folder;
+    row.appendChild(icon);
+    row.appendChild(label);
+    row.addEventListener('click', () => selectFolder(folder));
+    parent.appendChild(row);
+    (folderChildren.get(folder) || [])
+      .forEach(child => appendTreeRow(parent, child.id, depth + 1, current));
   }
 
   function selectFolder(folder) {
@@ -111,7 +124,20 @@
     const orig = app.handleLoadPhotos.bind(app);
     app.handleLoadPhotos = async (path) => {
       await orig(path);
-      renderFolderPanel(driveManager.currentFolderId || path);
+      const loadedPath = driveManager.currentFolderId || path;
+      folderChildren.set(loadedPath, app.currentFolders.slice());
+      // Rule 2 (docs/backlog.md "Guest page hides subfolders"): a folder
+      // with no photos of its own but with subfolders opens its first
+      // subfolder automatically, instead of leaving app.js's own
+      // photo-less folder-card grid on screen. Recurses until a folder
+      // with photos, or a true leaf, is reached.
+      const first = app.currentFolders[0] && app.currentFolders[0].id;
+      if (app.currentFolders.length > 0 && app.photos.length === 0 &&
+          first && first !== loadedPath) {
+        await app.handleLoadPhotos(first);
+        return;
+      }
+      renderFolderPanel(loadedPath);
     };
   }
 

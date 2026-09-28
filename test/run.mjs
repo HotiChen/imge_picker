@@ -1835,6 +1835,13 @@ function clientMock(opts = {}) {
       if (rec.list !== null) {
         if (!rec.share || !state.minted.includes(rec.share) || !covers(rec.list))
           return json('{"error":"Unauthorized"}', 401);
+        // Nested subfolders (docs/backlog.md "Guest page hides subfolders"),
+        // delimiter-listed exactly like worker.js's own R2 call — see
+        // delimitedListFake.
+        if (opts.clientFiles) {
+          const { data, folders } = delimitedListFake(opts.clientFiles, rec.list);
+          return json(JSON.stringify({ status: 'success', data, folders }));
+        }
         // Distinct photos per folder, when a test needs to prove which one
         // actually loaded rather than just which sidebar row looks active.
         const data = opts.photosByFolder ? (opts.photosByFolder[rec.list] || []) : PHOTOS(state.photos);
@@ -2668,6 +2675,51 @@ await suite('multi-folder — a client sees every folder their token opens, in t
     }).attach,
   });
 
+// docs/backlog.md "Guest page hides subfolders" — the same panel/pattern as
+// js/pick.js's own renderFolderPanel, for a signed-in client's token.
+await suite('multi-folder — subfolders: a client’s photo-less folder opens its first subfolder automatically, nested in the left panel',
+  `${base}/index.html`,
+  async page => {
+    await page.waitForSelector('.photo-card', { timeout: 6000 });
+    const out = [];
+    const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+
+    const r1 = await page.evaluate(() => ({
+      cardNames: [...document.querySelectorAll('.photo-card .photo-name')].map(e => e.textContent),
+      rows: [...document.querySelectorAll('#folderTree .tree-row')].map(el => el.dataset.folder),
+      activeRows: [...document.querySelectorAll('#folderTree .tree-row.tree-active')].map(el => el.dataset.folder),
+    }));
+    ok('A/ itself has no photos, so the client lands on its first subfolder (A/a/) automatically',
+      JSON.stringify(r1.cardNames) === JSON.stringify(['p0.jpg', 'p1.jpg']), JSON.stringify(r1.cardNames));
+    ok('the panel lists the folder and every subfolder, nested under it',
+      JSON.stringify(r1.rows) === JSON.stringify(['A/', 'A/a/', 'A/b/']), JSON.stringify(r1.rows));
+    ok('the subfolder actually opened is the one highlighted',
+      JSON.stringify(r1.activeRows) === JSON.stringify(['A/a/']), JSON.stringify(r1.activeRows));
+
+    await page.click('#folderTree .tree-row[data-folder="A/b/"]');
+    await page.waitForFunction(() => document.querySelectorAll('.photo-card').length === 1,
+      null, { timeout: 5000 });
+    const r2 = await page.evaluate(() => ({
+      cardName: document.querySelector('.photo-card .photo-name')?.textContent,
+      activeRows: [...document.querySelectorAll('#folderTree .tree-row.tree-active')].map(el => el.dataset.folder),
+    }));
+    ok('clicking the nested subfolder loads its own (different) photos',
+      r2.cardName === 'q0.jpg', String(r2.cardName));
+    ok('and moves the highlight to it', JSON.stringify(r2.activeRows) === JSON.stringify(['A/b/']), JSON.stringify(r2.activeRows));
+    return out;
+  },
+  {
+    initScript: () => {
+      sessionStorage.setItem('client_session', JSON.stringify({
+        token: 'sess', user: { name: 'A', email: 'a@b.c' },
+        permissions: { can_book: 0, can_upload: 0 },
+      }));
+    },
+    before: clientMock({
+      folders: ['A/'],
+      clientFiles: ['A/a/p0.jpg', 'A/a/p1.jpg', 'A/b/q0.jpg'],
+    }).attach,
+  });
 
 {
   const m = adminMock({ clients: [
@@ -3230,6 +3282,27 @@ function pickTokenStatusFake(t, now = Date.now()) {
   return 'live';
 }
 
+// Mirrors worker.js's own `GET list` handling of R2's `delimiter: '/'`
+// listing: everything under `prefix` that has no further '/' is a file,
+// everything with one becomes a folder prefix (deduped). Used by fixtures
+// that need real nested-subfolder shapes (docs/backlog.md "Guest page hides
+// subfolders") rather than a hand-authored folders list per level.
+function delimitedListFake(files, prefix) {
+  const data = [];
+  const prefixSet = new Set();
+  for (const key of files) {
+    if (!key.startsWith(prefix)) continue;
+    const rest = key.slice(prefix.length);
+    const slash = rest.indexOf('/');
+    if (slash === -1) {
+      data.push({ id: key, name: key.split('/').pop(), size: 1024, uploaded: '2026-01-01T00:00:00.000Z' });
+    } else {
+      prefixSet.add(prefix + rest.slice(0, slash + 1));
+    }
+  }
+  return { data, folders: Array.from(prefixSet).sort() };
+}
+
 function pickFakeWorker(opts = {}) {
   const state = {
     project: {
@@ -3533,6 +3606,15 @@ function pickFakeWorker(opts = {}) {
       }
 
       if (u.searchParams.has('list')) {
+        // Nested subfolders (docs/backlog.md "Guest page hides subfolders"):
+        // a flat list of full photo keys, delimiter-listed exactly like
+        // worker.js's own R2 call — so `folders` for any prefix reflects
+        // whatever subfolders actually exist under it, at any depth.
+        if (opts.pickFiles) {
+          const prefix = u.searchParams.get('list') || '';
+          const { data, folders } = delimitedListFake(opts.pickFiles, prefix);
+          return json({ status: 'success', data, folders });
+        }
         // the admin create-project folder picker browses the bucket itself,
         // not a pick token's own (single-folder) grid — a distinct fixture
         if (opts.bucketFolders) {
@@ -4036,6 +4118,117 @@ await suite('入口 — 沒登入開 /studio/ 仍導向 home.html',
       return out;
     },
     { before: m.attach, initScript: () => localStorage.setItem('pick_key:TOK', 'FIONA-KEY') });
+}
+
+{
+  // docs/backlog.md "Guest page hides subfolders": project folder A/ has no
+  // photos of its own, only in A/a/, A/b/ and A/c/ — real nested prefixes,
+  // delimiter-listed by the fake exactly like worker.js's own R2 call.
+  const m = pickFakeWorker({
+    ownerName: 'Nina', ownerKey: 'NINA-KEY',
+    folders: ['A/'],
+    pickFiles: ['A/a/p0.jpg', 'A/a/p1.jpg', 'A/b/p0.jpg', 'A/c/p0.jpg'],
+  });
+  await suite('guest picking — subfolders: a photo-less project folder opens its first subfolder automatically, with every subfolder nested and clickable in the panel',
+    `${base}/index.html?t=TOK`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('.photo-card', { timeout: 5000 });
+
+      const r1 = await page.evaluate(() => ({
+        cardNames: [...document.querySelectorAll('.photo-card .photo-name')].map(e => e.textContent),
+        rows: [...document.querySelectorAll('#folderTree .tree-row')].map(el => el.dataset.folder),
+        labels: [...document.querySelectorAll('#folderTree .tree-row .tree-label')].map(el => el.textContent),
+        activeRows: [...document.querySelectorAll('#folderTree .tree-row.tree-active')].map(el => el.dataset.folder),
+      }));
+      ok('A/ itself has no photos, so opening it lands on its first subfolder (A/a/) automatically',
+        JSON.stringify(r1.cardNames) === JSON.stringify(['p0.jpg', 'p1.jpg']), JSON.stringify(r1.cardNames));
+      ok('the panel lists the project folder and every one of its subfolders, nested under it',
+        JSON.stringify(r1.rows) === JSON.stringify(['A/', 'A/a/', 'A/b/', 'A/c/']), JSON.stringify(r1.rows));
+      ok('labels are the last path segment, not the full path',
+        JSON.stringify(r1.labels) === JSON.stringify(['A', 'a', 'b', 'c']), JSON.stringify(r1.labels));
+      ok('the subfolder actually opened (A/a/) is the one highlighted, not the empty parent',
+        JSON.stringify(r1.activeRows) === JSON.stringify(['A/a/']), JSON.stringify(r1.activeRows));
+
+      // a subfolder is reachable and clickable, not just listed
+      await page.click('#folderTree .tree-row[data-folder="A/b/"]');
+      await page.waitForFunction(() => document.querySelectorAll('.photo-card').length === 1,
+        null, { timeout: 5000 });
+      const r2 = await page.evaluate(() => ({
+        cardName: document.querySelector('.photo-card .photo-name')?.textContent,
+        activeRows: [...document.querySelectorAll('#folderTree .tree-row.tree-active')].map(el => el.dataset.folder),
+        rows: [...document.querySelectorAll('#folderTree .tree-row')].map(el => el.dataset.folder),
+      }));
+      ok('clicking a nested subfolder actually loads its own (different) photos',
+        r2.cardName === 'p0.jpg', String(r2.cardName));
+      ok('and moves the highlight to it', JSON.stringify(r2.activeRows) === JSON.stringify(['A/b/']), JSON.stringify(r2.activeRows));
+      ok('the tree still shows every subfolder, not just the one now open',
+        JSON.stringify(r2.rows) === JSON.stringify(['A/', 'A/a/', 'A/b/', 'A/c/']), JSON.stringify(r2.rows));
+
+      // re-opening the empty parent itself re-runs the same auto-navigate,
+      // rather than showing an empty grid (rule 3's fallback never has to
+      // fire here, but re-clicking the empty parent must not get stuck)
+      await page.click('#folderTree .tree-row[data-folder="A/"]');
+      await page.waitForFunction(() => document.querySelectorAll('.photo-card').length === 2,
+        null, { timeout: 5000 });
+      const r3 = await page.evaluate(() => ({
+        activeRows: [...document.querySelectorAll('#folderTree .tree-row.tree-active')].map(el => el.dataset.folder),
+      }));
+      ok('clicking the empty parent again re-lands on its first subfolder',
+        JSON.stringify(r3.activeRows) === JSON.stringify(['A/a/']), JSON.stringify(r3.activeRows));
+
+      // Rule 3's backstop (docs/backlog.md): rule 2's auto-navigate means the
+      // page itself never actually sits in a photo-less-but-has-subfolders
+      // folder, so drive applyServerSelections directly into that state, the
+      // way a future caller other than handleLoadPhotos might, and check it
+      // still renders the folder-card grid rather than wiping it to empty.
+      const r4 = await page.evaluate(() => {
+        app.currentFolders = [{ id: 'A/x/', name: 'x' }];
+        app.photos = [];
+        PickController.applyServerSelections();
+        return {
+          folderCards: document.querySelectorAll('.folder-card').length,
+          photoCards: document.querySelectorAll('.photo-card').length,
+        };
+      });
+      ok('applyServerSelections renders folder cards, not an empty photo grid, for a photo-less-with-subfolders state',
+        r4.folderCards === 1 && r4.photoCards === 0, JSON.stringify(r4));
+      return out;
+    },
+    { before: m.attach, initScript: () => localStorage.setItem('pick_key:TOK', 'NINA-KEY') });
+}
+
+{
+  // ♥ 已選 (docs/backlog.md rule 4) must still reach a subfolder the guest
+  // is not currently viewing, exactly as it already does across sibling
+  // project folders (see the 已選-across-folders suite above).
+  const m = pickFakeWorker({
+    ownerName: 'Omar', ownerKey: 'OMAR-KEY',
+    folders: ['A/'],
+    pickFiles: ['A/a/p0.jpg', 'A/b/p0.jpg'],
+  });
+  m.state.selections.set('A/b/p0.jpg', { rating: 1, note: '', updated_by: 'picker-0', updated_at: 't' });
+  await suite('guest picking — subfolders: ♥ 已選 still reaches a pick made in a sibling subfolder',
+    `${base}/index.html?t=TOK`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('.photo-card', { timeout: 5000 });
+      const landed = await page.evaluate(() =>
+        [...document.querySelectorAll('.photo-card .photo-name')].map(e => e.textContent));
+      ok('landed on A/a/ (its own pick is unrated)', JSON.stringify(landed) === JSON.stringify(['p0.jpg']), JSON.stringify(landed));
+
+      await page.click('#pickFilterBar [data-pick-filter="selected"]');
+      await page.waitForFunction(() => document.querySelectorAll('.photo-card').length === 1, null, { timeout: 5000 });
+      const sel = await page.evaluate(() => ({
+        ids: [...document.querySelectorAll('.photo-card')].map(el => el.dataset.photoId),
+      }));
+      ok('the pick made in A/b/ shows up under 已選 while viewing A/a/',
+        JSON.stringify(sel.ids) === JSON.stringify(['A/b/p0.jpg']), JSON.stringify(sel.ids));
+      return out;
+    },
+    { before: m.attach, initScript: () => localStorage.setItem('pick_key:TOK', 'OMAR-KEY') });
 }
 
 {

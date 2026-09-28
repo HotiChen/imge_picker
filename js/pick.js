@@ -33,6 +33,11 @@
         modifiedAfterSubmit: false,
         submittedAt: null,
         folders: [],
+        // path -> [{id,name}] children last seen for it (from that path's own
+        // `?list=` response). Builds the nested 資料夾 tree lazily: only a
+        // folder actually opened has its children on screen (docs/backlog.md
+        // "Guest page hides subfolders").
+        folderChildren: new Map(),
         selections: new Map(),   // photo_key -> {rating, note}
         // 全部 / 已選 / 未選 — the guest filter bar (docs/guest-picking.md).
         // 'all' and 'unselected' read the current folder's grid; 'selected'
@@ -369,7 +374,7 @@
                 p.note = s ? s.note : '';
             });
             this.app.applyFilters();
-            this.app.renderPhotoGrid();
+            this._renderGrid();
             this.app.updateStats();
             this.renderCounter();
         },
@@ -380,7 +385,24 @@
         rerenderGrid() {
             if (!this.app) return;
             this.app.applyFilters();
-            this.app.renderPhotoGrid();
+            this._renderGrid();
+        },
+
+        // Never let a photo-less-but-has-subfolders folder's card grid
+        // (app.js renderFolderGrid) get silently replaced by an empty photo
+        // grid (docs/backlog.md "Guest page hides subfolders", rule 3) —
+        // handleLoadPhotos's own auto-navigate (see _wireHooks) means this
+        // case is rare in practice, but this is the backstop for whatever
+        // reaches applyServerSelections/rerenderGrid without going through
+        // it. ♥ 已選 is exempt: it reaches across every folder regardless of
+        // what the current one holds, so it must never fall back to cards.
+        _renderGrid() {
+            if (this.filterMode !== 'selected' &&
+                this.app.currentFolders.length > 0 && this.app.photos.length === 0) {
+                this.app.renderFolderGrid();
+            } else {
+                this.app.renderPhotoGrid();
+            }
         },
 
         _hideStudioOnlyUI() {
@@ -409,9 +431,12 @@
         },
 
         // The left 資料夾 panel: every folder this link opens, one click to
-        // load it, the current one highlighted. Re-rendered after every load
-        // (see _wireHooks) so it survives app.js's own subfolder-tree render,
-        // which targets this same container.
+        // load it, the current one highlighted — plus, nested under each,
+        // every subfolder this link has loaded so far (docs/backlog.md
+        // "Guest page hides subfolders"). Lazy: a folder not yet opened has
+        // no children on screen until it is (folderChildren). Re-rendered
+        // after every load (see _wireHooks) so it survives app.js's own
+        // subfolder-tree render, which targets this same container.
         renderFolderPanel() {
             const container = document.getElementById('folderTreeContainer');
             const list = document.getElementById('folderTree');
@@ -420,22 +445,32 @@
             container.style.display = 'block';
             const current = (typeof driveManager !== 'undefined') ? driveManager.currentFolderId : '';
             list.innerHTML = '';
-            this.folders.forEach(f => {
-                const row = document.createElement('div');
-                row.className = 'tree-row' + (f === current ? ' tree-active' : '');
-                row.dataset.folder = f;
-                const icon = document.createElement('span');
-                icon.className = 'tree-icon';
-                icon.textContent = '📁';
-                const label = document.createElement('span');
-                label.className = 'tree-label';
-                label.textContent = f.replace(/\/$/, '').split('/').pop() || f;
-                label.title = f;
-                row.appendChild(icon);
-                row.appendChild(label);
-                row.addEventListener('click', () => this.app.handleLoadPhotos(f));
-                list.appendChild(row);
-            });
+            const frag = document.createDocumentFragment();
+            this.folders.forEach(f => this._appendTreeRow(frag, f, 0, current));
+            list.appendChild(frag);
+        },
+
+        // One row for `folder`, then recurses into its cached children (if
+        // any) one level deeper — the same padding/icon convention app.js's
+        // own _buildTreeEl uses for its single-root tree.
+        _appendTreeRow(parent, folder, depth, current) {
+            const row = document.createElement('div');
+            row.className = 'tree-row' + (folder === current ? ' tree-active' : '');
+            row.dataset.folder = folder;
+            row.style.paddingLeft = (4 + depth * 14) + 'px';
+            const icon = document.createElement('span');
+            icon.className = 'tree-icon';
+            icon.textContent = depth === 0 ? '🗂' : '📁';
+            const label = document.createElement('span');
+            label.className = 'tree-label';
+            label.textContent = folder.replace(/\/$/, '').split('/').pop() || folder;
+            label.title = folder;
+            row.appendChild(icon);
+            row.appendChild(label);
+            row.addEventListener('click', () => this.app.handleLoadPhotos(folder));
+            parent.appendChild(row);
+            (this.folderChildren.get(folder) || [])
+                .forEach(child => this._appendTreeRow(parent, child.id, depth + 1, current));
         },
 
         _showFatalError(msg) {
@@ -473,6 +508,20 @@
             app.handleLoadPhotos = async (path) => {
                 await this.flush();
                 await origLoad(path);
+                const loadedPath = driveManager.currentFolderId;
+                this.folderChildren.set(loadedPath, app.currentFolders.slice());
+                // Rule 2 (docs/backlog.md): a folder with no photos of its
+                // own but with subfolders opens its first subfolder
+                // automatically — including the initial load (loadGrid
+                // already calls this same wrapped method). Recurses until a
+                // folder with photos, or a true leaf (no photos, no
+                // subfolders) is reached.
+                const first = app.currentFolders[0] && app.currentFolders[0].id;
+                if (app.currentFolders.length > 0 && app.photos.length === 0 &&
+                    first && first !== loadedPath) {
+                    await app.handleLoadPhotos(first);
+                    return;
+                }
                 this.applyServerSelections();
                 this.renderFolderPanel();
             };
