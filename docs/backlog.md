@@ -31,6 +31,12 @@ Decided or discussed, not yet built. Newest decisions at the top of each group.
 6. Landing page (for photographers once multi-photographer is real).
 
 ## Deferred features
+- Edit a project's 張數 / 加挑單價 after creation (today only set at create;
+  no update route). Submissions snapshot both at submit, so an edit only
+  affects later submits.
+- Make "no extra picks" explicit: today a blank 加挑單價 only hides the price —
+  guests can still pick past the limit, nothing blocks. Add a choice
+  (可加選 NT$__ / 不可加選) and cap picks at the limit for 不可加選.
 - Logo route per photographer (`/api/studio/:pid/logo`); today it always
   serves the default studio — fine until a second photographer exists.
 - Strip bidi / zero-width characters from `studio_name` (spoofing only; admin-set).
