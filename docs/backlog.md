@@ -31,32 +31,16 @@ Decided or discussed, not yet built. Newest decisions at the top of each group.
 6. Landing page (for photographers once multi-photographer is real).
 
 ## Bugs
-- Guest page hides subfolders. Project folder `A/` with `A/a/`, `A/b/`, `A/c/`:
-  the guest sees none of a/b/c and cannot open them. The Worker allows them
-  (prefix match); the page loses them. `js/pick.js` redraws after every load:
-  `applyServerSelections` calls `renderPhotoGrid()` (pick.js:372), replacing
-  the folder cards app.js drew for a photo-less folder, and
-  `renderFolderPanel` (pick.js:415) lists only the project's own folders,
-  replacing app.js's subfolder tree. Also: when `A/` has photos of its own,
-  folder cards never show (app.js:136). Probably the same in the
-  photographer project view (`project-view.js:287` clears currentFolders) —
-  unverified. Workaround: list `A/a/`, `A/b/`, `A/c/` as the project folders.
-  Planned fix: the 資料夾 panel shows subfolders nested under each project
-  folder, all clickable; a photo-less folder opens its first subfolder.
-  Check the ♥ 已選 filter still spans every folder. Test with real hit-testing.
-- Preview zoom on a phone (Tim, real phone). Decided: double-tap while zoomed
-  = back to fit (like iPhone Photos); double-tap at fit = ♥.
-  1. Zoomed in, a double-tap does nothing: touchstart marks every touch as a
-     pan when zoom > 1 (annotation.js:480) and touchend returns before tap
-     detection (:521). Fix: a touch that barely moved is still a tap.
-  2. No easy way back to fit: the ⟲ (`#zoomResetBtn`) exists in the bottom
-     bar but is a 16px icon. Fix: double-tap resets (above) and a 44px ⟲.
-     Swipe-to-navigate stays off while zoomed (one finger pans) — by design.
-  3. Zooming is clipped to the fitted-photo box: the canvas is sized to the
-     fitted image (annotation.js:197-216) and zoom draws inside it (:237),
-     so the black bars never show the enlarged photo. Fix: canvas fills
-     `.canvas-container`, image drawn centred inside it. Touches annotation
-     coordinates — re-test the photographer's drawing tools.
+- Phone preview: the orange tools toggle (`.mobile-tools-toggle`, fixed
+  bottom-right, 52px) covers the bottom bar's ♥ on a 390px phone. Predates
+  the zoom fix.
+- Annotations drawn by touch are never saved: `stopDrawing` gets a TouchEvent
+  with no `clientX`, so the end point is NaN.
+- Annotation coordinates are fitted-photo pixels, so a circle drawn at one
+  window size lands elsewhere at another. Fixing it changes the stored format
+  (localStorage `r2_photo_picker_annotations`) — needs a migration.
+- Minor: − / + zoom about the photo's top-left, not its centre; panning is
+  unbounded.
 
 ## Deferred features
 - Edit a project's 張數 / 加挑單價 after creation (today only set at create;
