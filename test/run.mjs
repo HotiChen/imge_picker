@@ -20,7 +20,9 @@ const TYPES = {
 };
 
 const server = createServer(async (req, res) => {
-  const rel = normalize(decodeURIComponent(req.url.split('?')[0])).replace(/^(\.\.[/\\])+/, '');
+  let rel = normalize(decodeURIComponent(req.url.split('?')[0])).replace(/^(\.\.[/\\])+/, '');
+  // a directory URL serves its index.html, like the real host (imhoti.tw/studio/)
+  if (rel.endsWith('/')) rel += 'index.html';
   try {
     const body = await readFile(join(ROOT, rel));
     res.writeHead(200, { 'Content-Type': TYPES[extname(rel)] || 'application/octet-stream' });
@@ -3904,6 +3906,42 @@ await suite('入口 — sessionStorage 已有 studio_token 的 index.html 不會
     return out;
   },
   { before: mockWorker(1), initScript: ADMIN });
+
+// imhoti.tw/studio/ itself (the directory URL, what Tim types) with a
+// photographer signed in goes to the dashboard. index.html by name — the side
+// menu's 選圖 and upload's 回選圖 — still opens the workspace (suite above).
+await suite('入口 — 已登入攝影師開 /studio/ 導向 dashboard.html',
+  `${base}/`,
+  async page => {
+    const out = [];
+    const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+    await page.waitForURL('**/dashboard.html', { timeout: 3000 }).catch(() => {});
+    ok('redirected to dashboard.html', /\/dashboard\.html$/.test(page.url()), page.url());
+    return out;
+  },
+  { before: mockWorker(1), initScript: ADMIN });
+
+await suite('入口 — 已登入攝影師開 /studio/?project=<id> 留在原頁',
+  `${base}/?project=P1`,
+  async page => {
+    const out = [];
+    const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+    await page.waitForTimeout(500);
+    ok('a mode param keeps the page', /\/\?project=P1$/.test(page.url()), page.url());
+    return out;
+  },
+  { before: mockWorker(1), initScript: ADMIN });
+
+await suite('入口 — 沒登入開 /studio/ 仍導向 home.html',
+  `${base}/`,
+  async page => {
+    const out = [];
+    const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+    await page.waitForURL('**/home.html', { timeout: 3000 }).catch(() => {});
+    ok('redirected to home.html', /\/home\.html$/.test(page.url()), page.url());
+    return out;
+  },
+  { before: mockWorker(1) });
 
 {
   const m = clientMock();

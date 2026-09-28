@@ -130,6 +130,13 @@
     } else if (studioToken) {
       // ── Admin mode: restore token to CONFIG (auth.js no longer loaded) ───
       if (typeof CONFIG !== 'undefined') CONFIG.PHOTOGRAPHER_TOKEN = studioToken;
+      // imhoti.tw/studio/ itself lands on the dashboard. Only the directory
+      // URL: the side menu's 選圖 and upload's 回選圖 link index.html by name
+      // and must still open this workspace.
+      if (location.pathname.endsWith('/') && !hasModeParam()) {
+        window.location.href = 'dashboard.html';
+        return;
+      }
       addStudioLogout();
       return;
     } else if (!hasModeParam()) {
