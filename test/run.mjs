@@ -4814,6 +4814,50 @@ await suite('admin — escHtml(0): a project with zero submissions shows 送出 
     { before: m.attach, initScript: () => localStorage.setItem('pick_key:TOK', 'OWEN-KEY'), contextOptions: MOBILE });
 }
 
+// A landscape photo on a portrait phone leaves black bars above and below
+// it, and those bars belong to .canvas-container, not #photoCanvas. The
+// helpers above dispatch straight to the canvas; this one uses real touch
+// input, so the finger lands on whatever is really at that point. The 1x1
+// fixture photo makes nearly the whole frame letterbox.
+{
+  const m = pickFakeWorker({ ownerName: 'Lea', ownerKey: 'LEA-KEY', photos: PHOTOS(3) });
+  await suite('mobile preview — double-tap on the black bars around the photo still likes it; the ‹ › buttons still work',
+    `${base}/index.html?t=TOK`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('.photo-card', { timeout: 5000 });
+      await page.locator('.photo-card').first().tap();
+      await page.waitForSelector('#photoModal.active', { timeout: 5000 });
+      await page.waitForTimeout(200);
+      const box = await page.locator('.canvas-container').boundingBox();
+      const x = Math.round(box.x + box.width / 2), y = Math.round(box.y + 20);
+      const hit = await page.evaluate(([x, y]) => {
+        const el = document.elementFromPoint(x, y);
+        return el ? (el.id || el.className) : null;
+      }, [x, y]);
+      ok('the tap point is the bar, not the canvas', hit === 'canvas-container', String(hit));
+      await page.touchscreen.tap(x, y);
+      await page.waitForTimeout(150);
+      await page.touchscreen.tap(x + 3, y + 2);
+      await page.waitForTimeout(50);
+      const r = await page.evaluate(() => ({ rating: app.filteredPhotos[0].rating,
+        burst: !!document.querySelector('.canvas-container .pick-heart-burst'),
+        counter: document.getElementById('photoCounter').textContent }));
+      ok('double-tapping the bar likes the photo', r.rating === 1, JSON.stringify(r));
+      ok('and pops the big ♥', r.burst, JSON.stringify(r));
+      ok('and stays on the same photo', r.counter === '1 / 3', r.counter);
+
+      await page.waitForTimeout(500);
+      await page.locator('#nextPhotoBtn').tap();
+      await page.waitForTimeout(100);
+      ok('tapping › still goes to the next photo', (await page.textContent('#photoCounter')) === '2 / 3',
+        await page.textContent('#photoCounter'));
+      return out;
+    },
+    { before: m.attach, initScript: () => localStorage.setItem('pick_key:TOK', 'LEA-KEY'), contextOptions: MOBILE });
+}
+
 {
   const m = pickFakeWorker({ ownerName: 'Pat', ownerKey: 'PAT-KEY', photos: PHOTOS(3) });
   await suite('mobile preview — a viewer double-tapping the preview changes nothing',

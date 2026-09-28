@@ -72,10 +72,14 @@ class AnnotationManager {
         // 觸控支援 — { passive: false } so preventDefault() on a pan-tool
         // swipe/pinch actually stops the page (and iOS Safari's own
         // pinch-zoom / pull-to-refresh) from also reacting to it.
-        this.canvas.addEventListener('touchstart', this.handleTouchStart.bind(this), { passive: false });
-        this.canvas.addEventListener('touchmove', this.handleTouchMove.bind(this), { passive: false });
-        this.canvas.addEventListener('touchend', this.handleTouchEnd.bind(this), { passive: false });
-        this.canvas.addEventListener('touchcancel', this.handleTouchEnd.bind(this), { passive: false });
+        // Bound on the container, not the canvas: the canvas is only as big
+        // as the fitted photo, so a landscape photo on a portrait phone
+        // leaves black bars that must still take a swipe or a double-tap.
+        const touchHost = this.canvas.parentElement || this.canvas;
+        touchHost.addEventListener('touchstart', this.handleTouchStart.bind(this), { passive: false });
+        touchHost.addEventListener('touchmove', this.handleTouchMove.bind(this), { passive: false });
+        touchHost.addEventListener('touchend', this.handleTouchEnd.bind(this), { passive: false });
+        touchHost.addEventListener('touchcancel', this.handleTouchEnd.bind(this), { passive: false });
 
         // 監聽視窗縮放
         window.addEventListener('resize', () => {
@@ -457,7 +461,16 @@ class AnnotationManager {
     // Engaged only for the 'pan' tool (see the constants block above); any
     // other tool falls straight back to the original mouse-synthesis touch
     // handling so drawing/erasing/selecting by touch is unchanged.
+    // Touches the preview handlers leave alone: anything on the bars while a
+    // drawing tool is active (drawing stays on the photo, as before), and
+    // the ‹ › buttons, whose tap must reach them as a click.
+    _ignoreTouch(e) {
+        if (e.target === this.canvas) return false;
+        return this.currentTool !== 'pan' || !!e.target.closest?.('button, a, input, textarea, select');
+    }
+
     handleTouchStart(e) {
+        if (this._ignoreTouch(e)) return;
         if (this.currentTool !== 'pan') { this.handleTouch(e); return; }
         e.preventDefault();
         if (e.touches.length >= 2) {
@@ -482,6 +495,7 @@ class AnnotationManager {
     }
 
     handleTouchMove(e) {
+        if (this._ignoreTouch(e)) return;
         if (this.currentTool !== 'pan') { this.handleTouch(e); return; }
         e.preventDefault();
         if (e.touches.length >= 2 && this._pinch) {
@@ -513,6 +527,7 @@ class AnnotationManager {
     }
 
     handleTouchEnd(e) {
+        if (this._ignoreTouch(e)) return;
         if (this.currentTool !== 'pan') { this.stopDrawing(e); return; }
         e.preventDefault();
         if (this._pinch) { this._pinch = null; return; }
