@@ -259,6 +259,10 @@
                 b.classList.toggle('active', b.dataset.pickFilter === mode);
             });
             this.rerenderGrid();
+            // The ♥ count itself never depends on filterMode, but this keeps
+            // the header/mobile-bar counters explicitly current on every
+            // filter switch rather than relying on that being incidental.
+            this.renderCounter();
         },
 
         // ── lifecycle ─────────────────────────────────────────────────────
@@ -282,6 +286,11 @@
             this._applyState(data);
             this._renderStudioHeader();
             this._updateSubmitButton();
+            // Before anything else can run (including the claim overlay
+            // below), so a fresh viewer never sees a flash of the mobile
+            // bar's old bulk-select content forced on by the !important
+            // rule in css/styles.css.
+            this.renderCounter();
 
             if (!this.isOwner && this.ownerName === null) {
                 // seat free — block on a name before showing anything else
@@ -311,12 +320,11 @@
         },
 
         // Header branding for a guest pick link (docs/dashboard-settings.md):
-        // GET /api/pick/state's studio.{name, booking_url, has_logo}. Every
-        // value here is guest-untrusted server data — name/alt go through
-        // textContent, the logo is loaded by property assignment (never
-        // built into an HTML string), and the booking link's href is set
-        // only when it starts with https://, so anything else (or nothing)
-        // leaves the link hidden with its href untouched.
+        // GET /api/pick/state's studio.{name, has_logo}. Every value here is
+        // guest-untrusted server data — name/alt go through textContent, the
+        // logo is loaded by property assignment (never built into an HTML
+        // string). booking_url no longer renders here — see renderBanner,
+        // which shows 📅 預約拍攝 only once the guest has actually submitted.
         _renderStudioHeader() {
             const studio = this.studio;
             if (!studio) return;
@@ -334,16 +342,15 @@
                     markEl.replaceWith(img);
                 }
             }
-            const link = document.getElementById('studioBookingLink');
-            if (link && typeof studio.booking_url === 'string' && studio.booking_url.startsWith('https://')) {
-                link.href = studio.booking_url;
-                link.hidden = false;
-            }
         },
 
         _updateSubmitButton() {
             const btn = document.getElementById('submitJobBtn');
             if (btn) btn.style.display = this.isOwner ? 'inline-flex' : 'none';
+            // Drives the mobile bar's owner/viewer gating too (css/styles.css,
+            // the 1024px media query) — this is the one place isOwner ever
+            // changes (start(), afterClaim()), so it is the right choke point.
+            document.body.classList.toggle('pick-active', this.active);
         },
 
         async afterClaim() {
@@ -533,6 +540,8 @@
             const linesEl = document.getElementById('pickBannerLines');
             const hintEl = document.getElementById('pickBannerHint');
             const hintTextEl = document.getElementById('pickBannerHintText');
+            const bookingWrap = document.getElementById('pickBannerBooking');
+            const bookingLink = document.getElementById('studioBookingLink');
             if (!el || !linesEl) return;
 
             const lines = [];
@@ -554,38 +563,75 @@
             });
             if (hintEl) hintEl.hidden = !showHint;
             if (hintTextEl) hintTextEl.textContent = showHint ? `你是 ${this.ownerName} 嗎？` : '';
+
+            // 預約拍攝 — moved out of the header (docs/dashboard-settings.md):
+            // shown only once the seat holder has actually submitted (this
+            // also covers reloading the page after submitting, since phase
+            // is server state, not a one-time event), and only for an https
+            // booking_url. Same safety rules as before: href set only when
+            // it starts with https://, by property, never left to fall
+            // through and get set anyway.
+            if (bookingWrap && bookingLink) {
+                const studio = this.studio;
+                const showBooking = this.isOwner && this.phase === 'submitted' && !!studio &&
+                    typeof studio.booking_url === 'string' && studio.booking_url.startsWith('https://');
+                if (showBooking) bookingLink.href = studio.booking_url;
+                bookingWrap.hidden = !showBooking;
+            }
+
             el.hidden = lines.length === 0 && !showHint;
         },
 
-        // ── counter: "已選 N / limit" + the over-limit warning ──────────────
+        // Shared by the header counter and the mobile bar's counter — numbers
+        // only, no warning sentence (that moved to openSubmitModal, at submit
+        // time, per the product owner's call: docs/guest-picking.md).
+        _counterText(count, limit) {
+            return limit == null ? `已選 ${count} 張` : `已選 ${count} / ${limit}`;
+        },
+
+        // ── counter: "已選 N / limit" ─────────────────────────────────────
         renderCounter() {
             const badgeEl = document.getElementById('pickFilterSelectedCount');
             if (badgeEl) badgeEl.textContent = String(this._selectedCount());
 
             const el = document.getElementById('pickCounter');
             const mainEl = document.getElementById('pickCounterMain');
-            const warnEl = document.getElementById('pickCounterWarn');
-            if (!el || !mainEl) return;
-            if (!this.isOwner) { el.hidden = true; return; }
-
-            const count = this._selectedCount();
-            const limit = this.pickLimit;
-            mainEl.textContent = limit == null ? `已選 ${count} 張` : `已選 ${count} / ${limit}`;
-            el.classList.toggle('over', limit != null && count > limit);
-
-            const over = limit == null ? 0 : Math.max(0, count - limit);
-            if (warnEl) {
-                if (over > 0) {
-                    let msg = `方案 ${limit} 張精修，您已選 ${count} 張，多 ${over} 張`;
-                    if (this.extraPrice != null) msg += `，每張 NT$${this.extraPrice} 加挑費`;
-                    warnEl.textContent = msg;
-                    warnEl.hidden = false;
+            if (el && mainEl) {
+                if (!this.isOwner) {
+                    el.hidden = true;
                 } else {
-                    warnEl.textContent = '';
-                    warnEl.hidden = true;
+                    const count = this._selectedCount();
+                    const limit = this.pickLimit;
+                    mainEl.textContent = this._counterText(count, limit);
+                    el.classList.toggle('over', limit != null && count > limit);
+                    el.hidden = false;
                 }
             }
-            el.hidden = false;
+            this._updateMobileBar();
+        },
+
+        // ── mobile bottom bar: reuses #mobileActionBar (js/app.js's own
+        // bulk-select bar) for pick mode, on the mobile layout only. Owner
+        // sees the same ♥ count as the header, red when over the limit, and
+        // the existing 完成提交 button (already routed through
+        // app.submitJob() → PickController). A viewer sees no bar at all —
+        // css/styles.css's #mobileActionBar.pick-mobile-hidden is what
+        // actually wins the specificity fight against the forced `display:
+        // flex !important` in the 1024px media query. ─────────────────────
+        _updateMobileBar() {
+            const bar = document.getElementById('mobileActionBar');
+            if (!bar) return;
+            const status = document.getElementById('mobileActionStatus');
+            if (status) status.hidden = true;
+            bar.classList.toggle('pick-mobile-hidden', !this.isOwner);
+            const counterEl = document.getElementById('pickMobileCounter');
+            if (!counterEl) return;
+            if (!this.isOwner) { counterEl.hidden = true; return; }
+            const count = this._selectedCount();
+            const limit = this.pickLimit;
+            counterEl.textContent = this._counterText(count, limit);
+            counterEl.classList.toggle('over', limit != null && count > limit);
+            counterEl.hidden = false;
         },
 
         // ── claim overlay: the free-seat name prompt ─────────────────────
@@ -641,7 +687,32 @@
             if (relEl) relEl.value = '';
             if (emailEl) emailEl.value = '';
             if (errEl) errEl.textContent = '';
+            this._renderSubmitOverInfo();
             modal.classList.add('active');
+        },
+
+        // The over-limit warning, moved here from the header counter (the
+        // product owner's call): recomputed fresh every time the modal
+        // opens, so going back to change picks and reopening always shows
+        // the current numbers. Text is entirely built from server-given
+        // numbers (count/limit/extraPrice), never guest input.
+        _renderSubmitOverInfo() {
+            const overEl = document.getElementById('pickSubmitOverInfo');
+            if (!overEl) return;
+            const count = this._selectedCount();
+            const limit = this.pickLimit;
+            const over = limit == null ? 0 : Math.max(0, count - limit);
+            if (over <= 0) {
+                overEl.textContent = '';
+                overEl.hidden = true;
+                return;
+            }
+            let msg = `方案 ${limit} 張，您選了 ${count} 張，多 ${over} 張`;
+            msg += this.extraPrice != null
+                ? `，加挑費用 ${over} × NT$${this.extraPrice} = NT$${over * this.extraPrice}`
+                : '，加挑費用請與攝影師確認';
+            overEl.textContent = msg;
+            overEl.hidden = false;
         },
         closeSubmitModal() {
             document.getElementById('pickSubmitModal')?.classList.remove('active');

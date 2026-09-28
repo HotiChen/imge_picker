@@ -1849,6 +1849,19 @@ body {
   .mobile-action-bar { display: flex !important; }
   .content { padding-bottom: 72px; }
 
+  /* Guest picking only (js/pick.js) — the bar above is repurposed to show
+     the ♥ count + submit for the seat holder, and must stay fully gone for
+     a viewer. #mobileActionBar.pick-mobile-hidden beats the !important flex
+     rule above on specificity alone (id+class > class), no !important arms
+     race needed against source order. */
+  #mobileActionBar.pick-mobile-hidden { display: none !important; }
+
+  /* Duplicated by the bar above once pick mode is on: js/pick.js adds
+     .pick-active to <body> only while a pick link is open, so studio/client
+     mode on mobile is untouched. */
+  body.pick-active #pickCounter,
+  body.pick-active #submitJobBtn { display: none !important; }
+
   .modal-sidebar {
     position: fixed;
     top: auto; bottom: 0; left: 0; right: 0;
@@ -1905,7 +1918,20 @@ body {
 }
 .pick-counter:not([hidden]) { display: flex; flex-direction: column; align-items: flex-end; }
 .pick-counter.over #pickCounterMain { color: var(--danger); }
-.pick-counter-warn { color: var(--danger); font-size: 11px; max-width: 260px; text-align: right; }
+
+/* Guest picking, mobile only — the ♥ count inside #mobileActionBar (see the
+   1024px media query for the bar's own owner/viewer visibility). Numbers
+   only, no warning sentence, so it stays one line next to the submit button
+   on a 390px phone; kept under :not([hidden]) for the same reason as
+   .pick-counter above. */
+.pick-mobile-counter {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--ink-70);
+  white-space: nowrap;
+}
+.pick-mobile-counter:not([hidden]) { display: inline-block; }
+.pick-mobile-counter.over { color: var(--danger); }
 
 .pick-banner {
   background: var(--accent-dim);
@@ -1924,6 +1950,18 @@ body {
 }
 .pick-banner-hint:not([hidden]) { display: flex; align-items: center; }
 .pick-banner-hint .btn { padding: 3px 10px; font-size: 11px; }
+
+/* 預約拍攝 card, shown in #pickBanner only once submitted (js/pick.js,
+   renderBanner) — same [hidden]-vs-author-rule trap as above, so its own
+   display lives under :not([hidden]) rather than unconditionally. */
+.pick-banner-booking {
+  gap: 8px;
+  color: var(--ink-55);
+  font-size: 12px;
+  margin-left: auto;
+}
+.pick-banner-booking:not([hidden]) { display: flex; align-items: center; }
+.pick-banner-booking .btn { padding: 3px 10px; font-size: 11px; }
 
 .pick-claim-overlay {
   position: fixed;
@@ -1970,6 +2008,21 @@ body {
 .pick-field label { display: block; font-size: 12px; color: var(--ink-55); margin-bottom: 6px; }
 .pick-required { color: var(--danger); }
 .pick-submit-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 12px; }
+
+/* Over-the-limit notice inside the submit modal (js/pick.js, openSubmitModal)
+   — the sentence used to live on the header counter; the product owner
+   moved it here so the guest sees the extra fee right before they confirm.
+   [hidden] alone is enough since nothing else forces this block's display. */
+.pick-submit-over {
+  color: var(--danger);
+  font-size: 12px;
+  background: var(--danger-dim, rgba(220, 80, 80, 0.1));
+  border: 1px solid var(--danger);
+  border-radius: 4px;
+  padding: 8px 10px;
+  margin-bottom: 14px;
+  line-height: 1.5;
+}
 
 /* Guest picking — the single ♥ toggle that replaces the star rating and the
    select checkbox (docs/guest-picking.md, task: guest heart-only picking).
@@ -2164,7 +2217,7 @@ span.pick-heart-btn { cursor: default; }
   .pick-heart-btn { width: 44px; height: 44px; font-size: 18px; }
   .pick-heart-btn.pick-heart-static { width: 44px; height: 44px; }
   .pick-filter-btn { min-height: 44px; }
-  #submitJobBtn, #pickSubmitConfirmBtn, #pickSubmitCancelBtn { min-height: 44px; }
+  #submitJobBtn, #pickSubmitConfirmBtn, #pickSubmitCancelBtn, #mobileActionSubmitBtn { min-height: 44px; }
   .pv-banner-btn { min-height: 44px; padding: 10px 16px; }
   /* The preview's − / + / ⟲ (reset to fit) in the bottom bar. The bar gives
      up its dividers and side padding, and the file name shrinks (ellipsis),
