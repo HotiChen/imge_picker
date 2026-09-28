@@ -564,6 +564,7 @@ class AnnotationManager {
         if (!pc || !pc.active || !pc.canEdit()) return;
         if (!this.currentPhoto || !window.app) return;
         window.app.togglePickHeart(this.currentPhoto); // same code path as the ♥ button
+        window.app.burstHeart((this.currentPhoto.rating || 0) > 0);
     }
 
     // Absolute-zoom counterpart of zoomBy's incremental one: sets the zoom to

@@ -4718,8 +4718,30 @@ await suite('admin — escHtml(0): a project with zero submissions shows 送出 
       const out = [];
       const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
       await page.waitForSelector('.photo-card', { timeout: 5000 });
+      // The grid card's ♥ sits in the image's bottom-right corner (Tim's ask),
+      // inside the image container — not the top-right, where ✎ goes.
+      const pos = await page.evaluate(() => {
+        const card = document.querySelector('.photo-card');
+        const heart = card.querySelector('.pick-heart-btn');
+        const img = card.querySelector('.photo-image-container');
+        if (!heart || !img) return null;
+        const h = heart.getBoundingClientRect(), c = img.getBoundingClientRect();
+        return { inImg: heart.parentElement === img, bottomGap: c.bottom - h.bottom, rightGap: c.right - h.right,
+                 lowerHalf: h.top > c.top + c.height / 2 };
+      });
+      ok('the grid ♥ is in the image container', pos?.inImg === true, JSON.stringify(pos));
+      ok('the grid ♥ sits in the bottom-right corner',
+        pos && pos.lowerHalf && pos.bottomGap >= 0 && pos.bottomGap <= 12 && pos.rightGap >= 0 && pos.rightGap <= 12,
+        JSON.stringify(pos));
+
       await page.locator('.photo-card').first().tap();
       await page.waitForSelector('#photoModal.active', { timeout: 5000 });
+
+      const burst = () => page.evaluate(() => {
+        const el = document.querySelector('.canvas-container .pick-heart-burst');
+        return el ? { off: el.classList.contains('off'), text: el.textContent,
+                      display: getComputedStyle(el).display } : null;
+      });
 
       const state = () => page.evaluate(() => ({
         heartOn: document.querySelector('#modalPhotoRating .pick-heart-btn')?.classList.contains('on') ?? null,
@@ -4738,11 +4760,17 @@ await suite('admin — escHtml(0): a project with zero submissions shows 送出 
       ok('a brief pulse plays on toggle-on', s.pulsing === true, JSON.stringify(s));
       ok('the grid card gets the thick-border highlight too', s.cardPicked === true, JSON.stringify(s));
       ok('the two taps of a double-tap never navigate', s.counter === '1 / 3', s.counter);
+      let b = await burst();
+      ok('a big ♥ pops over the photo on toggle-on', b && !b.off && b.text === '♥' && b.display !== 'none', JSON.stringify(b));
+      await page.waitForTimeout(1200);
+      ok('and it clears itself afterwards', (await burst()) === null, JSON.stringify(await burst()));
 
       await doubleTapTouch(page, '#photoCanvas', 195, 400);
       s = await state();
       ok('a second double-tap toggles it back off', s.heartOn === false && s.rating === 0, JSON.stringify(s));
       ok('and the highlight goes with it', s.cardPicked === false, JSON.stringify(s));
+      b = await burst();
+      ok('toggle-off pops the hollow ♡ instead', b && b.off && b.text === '♡' && b.display !== 'none', JSON.stringify(b));
       return out;
     },
     { before: m.attach, initScript: () => localStorage.setItem('pick_key:TOK', 'OWEN-KEY'), contextOptions: MOBILE });
@@ -4763,6 +4791,8 @@ await suite('admin — escHtml(0): a project with zero submissions shows 送出 
       await doubleTapTouch(page, '#photoCanvas', 195, 400);
       const rating = await page.evaluate(() => app.filteredPhotos[0].rating);
       ok('and double-tapping the image changes the rating not at all', rating === 0, String(rating));
+      ok('and pops no ♥ either',
+        await page.evaluate(() => document.querySelectorAll('.pick-heart-burst').length === 0));
       return out;
     },
     { before: m.attach, contextOptions: MOBILE }); // no picker key stored → a plain viewer
