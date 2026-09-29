@@ -1,4 +1,4 @@
-# Products and orders — design (draft, for Tim's review)
+# Products and orders — design (Phase A locked 2026-09-29)
 
 Roadmap item 4 (`docs/backlog.md`). Meant to be the main selling point of the
 SaaS: the photographer sells add-ons (prints, albums, frames, extra
@@ -214,12 +214,35 @@ checked on every write.
 - Phase B is the real attack surface (guest writes): security review
   required, with the seat-key, folder and rate-limit checks above.
 
-## Open questions for Tim
+## Tim's answers (2026-09-29)
 
-1. What do you actually sell today, with rough price/cost? (Seeds the
-   catalogue and tests the option model.)
-2. Extra-pick fee: automatic at start-retouch as above — OK?
-3. Deposits (訂金) common? If yes, a payments table (many payments per order)
-   instead of one `paid_amount` — decide now, it is a schema choice.
-4. Phase B: should delivered projects still accept guest orders?
-5. Do guests need to see a product photo, or is text + price enough for B?
+1. Sells today: **相本書** (album) and **無框畫** (print). The catalogue is
+   entered by Tim in the UI; nothing is seeded.
+2. Extra-pick fee automatic at start-retouch: **yes**.
+3. **No deposits.** One payment per order: `paid_amount` / `paid_at` /
+   `paid_method` stay on `orders`; no payments table.
+4. Delivered projects still accept guest orders (Phase B).
+5. Guests must see a product photo (Phase B). The `image` columns ship in
+   A's migration so B needs no schema change; the image routes come with B.
+
+## Phase A scope (what is built now)
+
+In: products + options CRUD (retire/restore, never delete); project orders
+(create, edit lines/discount/note, payment, status); the automatic
+extra-pick order; `GET /api/admin/orders` across projects; stats `revenue`;
+UI in settings (商品), project detail (訂單), an orders page in the side
+menu, dashboard revenue cards.
+
+Out (later): product image routes and the guest shop (B); CSV export for the
+print lab (small follow-up once lines carry photos in real use); payments
+gateway (C).
+
+### Extra-pick details
+
+- Source: the project's latest `submissions` row (by `created_at`). No
+  submission, `pick_limit` NULL, `extra_price` NULL, or `count ≤ pick_limit`
+  → fee 0.
+- `GET /api/admin/projects/:id/orders` returns
+  `extra_pick: {count, pick_limit, extra_price, extra, fee, order_id,
+  matches}` computed on read, so the photographer sees a mismatch
+  (「加挑張數已變更」) without the Worker ever rewriting a paid order.

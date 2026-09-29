@@ -29,7 +29,15 @@ Decided or discussed, not yet built. Newest decisions at the top of each group.
 5. Referral payouts (single level only — never multi-level): A earns a share
    of B's sales, paid out of the platform's cut, time-limited (e.g. 12 months).
    Needs payments through the platform first; check tax/legal before launch.
-6. Landing page (for photographers once multi-photographer is real).
+6. Operator console (Tim as the SaaS operator, separate from any
+   photographer's back office): photographers registered / active, clients,
+   vendors; GMV this month, photographers with sales, top sellers, projects
+   created or updated per photographer. Needs item 2 first (with one
+   photographer every number is Tim's own). Own auth role — never the
+   photographer token. Aggregates by default; no client personal data unless
+   needed (個資法). "Vendors" (廠商) still to define: print labs fulfilling
+   相本書 / 無框畫?
+7. Landing page (for photographers once multi-photographer is real).
 
 ## Bugs
 - Phone preview: the orange tools toggle (`.mobile-tools-toggle`, fixed
