@@ -429,7 +429,7 @@ test('stats: an empty studio', async () => {
   assert.deepEqual(json.by_phase, { picking: 0, submitted: 0, retouching: 0 });
   assert.equal(json.delivered, 0);
   assert.equal(json.archived, 0);
-  assert.deepEqual(json.todo, { submitted_not_retouching: 0, unnotified_submissions: 0, modified_after_submit: 0 });
+  assert.deepEqual(json.todo, { submitted_not_retouching: 0, unnotified_submissions: 0, modified_after_submit: 0, unpaid_orders: 0 });
   assert.equal(json.per_month.length, 12);
   assert.equal(json.per_month[11].month, monthKey(Date.now()));
   assert.equal(json.per_month[0].month, monthKey(taipeiMonthStart(11)));
@@ -460,7 +460,7 @@ test('stats: counts by phase, delivered, archived and to-do, this photographer o
   assert.deepEqual(json.by_phase, { picking: 2, submitted: 2, retouching: 1 });
   assert.equal(json.delivered, 3);
   assert.equal(json.archived, 3);
-  assert.deepEqual(json.todo, { submitted_not_retouching: 2, unnotified_submissions: 1, modified_after_submit: 2 });
+  assert.deepEqual(json.todo, { submitted_not_retouching: 2, unnotified_submissions: 1, modified_after_submit: 2, unpaid_orders: 0 });
 });
 
 test('stats per_month: Asia/Taipei boundaries, last 12 months, created and delivered', async () => {

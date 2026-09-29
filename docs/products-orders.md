@@ -85,7 +85,8 @@ requested ──confirm──▶ confirmed ──▶ fulfilled
 
 ## Schema (Phase A — new tables only)
 
-`worker/migrations/2026-xx-xx-products-orders.sql`, hand-run before the merge:
+`worker/migrations/2026-09-29-products-orders.sql`, hand-run before the merge
+(until it runs, the order routes, stats and start-retouch answer 500):
 
 ```sql
 CREATE TABLE IF NOT EXISTS products (
@@ -246,3 +247,60 @@ gateway (C).
   `extra_pick: {count, pick_limit, extra_price, extra, fee, order_id,
   matches}` computed on read, so the photographer sees a mismatch
   (「加挑張數已變更」) without the Worker ever rewriting a paid order.
+
+### Worker decisions (Phase A build)
+
+Where the design above left a choice open, the Worker does this:
+
+- **Limits (400 `{error, code}`, nothing written):** name and option label
+  ≤ 60, description and note ≤ 500, ≤ 20 options per product, ≤ 50 lines per
+  order, qty 1–999, one unit price/cost ≤ NT$10,000,000, ≤ 500 photo keys per
+  line and 1000 per order. Codes: `invalid_kind|name|description|photo_count|
+  guest_visible|sort|options|label|price|cost`, `invalid_lines`,
+  `too_many_lines`, `unknown_line`, `unknown_option`, `retired_option`,
+  `invalid_qty`, `invalid_unit_price`, `invalid_photo_keys`,
+  `photo_not_in_project`, `invalid_discount`, `discount_exceeds_subtotal`,
+  `invalid_note`, `below_paid`, `invalid_paid_amount|method|at`, `overpaid`,
+  `invalid_status`.
+- **Photos on a line:** unique, inside the project's folders, never a `_`
+  key. print: at most one per unit (none yet is fine); album: any number —
+  `photo_count` is advisory only (a studio often settles the count later) and
+  is kept on albums only; service and extra_pick: none.
+- **Options** are the active set: the array order is the sort order.
+- **Order lines on PUT** are the whole set: `{id, qty?, photo_keys?,
+  unit_price?}` keeps a line and its snapshot (its option cannot change —
+  remove it and add a new one), `{option_id, …}` adds one, a line left out is
+  removed. At least one line; there is no DELETE — cancel instead.
+  `unit_price` absent or `null` = the catalogue's (new) / unchanged (kept).
+- **Status:** asking for the current status is a 200 no-op. fulfilled →
+  confirmed is allowed (undo; clears `fulfilled_at`). `confirmed_at` keeps its
+  first stamp. A move that loses a race is 409 `bad_transition` with the real
+  `from`.
+- **Cancelled** orders: lines, discount and a non-zero payment are 409
+  `cancelled`; the note can change and a payment can be cleared (refund).
+- **Money guards:** a payment may not exceed the total (400 `overpaid`), and
+  a PUT may not bring the total under what was paid (400 `below_paid`: record
+  the refund first). `paid_at` is a date or ISO time, 2000 → now + 1 day,
+  default now. `outstanding` counts only confirmed/fulfilled orders.
+- **Concurrent edits:** PUT and payment are conditional on the order's
+  `updated_at`; the loser is 409 `conflict` and writes nothing.
+- **source** flips `system → admin` on any admin write (PUT, payment,
+  status); a guest order stays `guest`.
+- **Extra-pick order:** written in the same D1 batch as the start-retouch
+  phase move, gated on the latest submission not having changed (a submit
+  landing in between retries, up to 3 times, then 409 `busy`). A new one is
+  created only when the project has no system order **and** no order with an
+  extra-pick line, so a cancelled or edited one is never replaced; to waive
+  the fee, cancel it or set its `unit_price` to 0 (removing the line and
+  pressing start-retouch again recreates it). `extra_pick` also carries
+  `order_extra` (the photo count on the charged line); `matches` compares
+  that count with `extra`, so a waived price is not a mismatch.
+- **Archived projects:** orders are still readable and can still be created
+  and edited (a late reprint is a real sale).
+- `GET /api/admin/orders`: newest 500, with `project_title`, lines and money;
+  an unknown `status` is 400.
+- **Stats:** `revenue: [{month, paid, cost, margin}]` (12 months, same Taipei
+  window as `per_month`, by `paid_at`, cost of the whole order counted in the
+  month it was paid, cancelled excluded), `outstanding` (NT$), and
+  `todo.unpaid_orders` (orders with outstanding > 0, archived projects
+  included — the money is still owed).

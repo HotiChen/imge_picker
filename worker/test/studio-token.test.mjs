@@ -283,8 +283,10 @@ test('a studio token is not listed among an album’s client links', async () =>
 
 // the column and the comment block that introduces it, comma and all, and
 // every column appended after it (project_id): a database that predates the
-// kind column predates those too
+// kind column predates those too, and the products/orders tables (which have
+// kind columns of their own)
 const PRE_MIGRATION = readFileSync(new URL('../schema.sql', import.meta.url), 'utf8')
+  .replace(/\n-- ─── Products and orders[\s\S]*$/, '\n')
   .replace(/,\n(?:\s*--[^\n]*\n)*\s*kind\s+TEXT[\s\S]*?(\n\);)/, '$1');
 
 test('a database that predates the kind column still serves client links', async () => {
