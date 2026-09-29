@@ -208,13 +208,13 @@ const OLD_FIT_RECT = ([iw, ih]) => {
   return { left: left + (cw - w) / 2, top: top + (ch - h) / 2, w, h, s };
 };
 
-// ONLY=<text> runs just the suites whose name contains that text, for quick
+// ONLY=<text>[|<text>…] runs just the suites whose name contains that text, for quick
 // iterations while developing; run everything before a commit or merge.
 const ONLY = process.env.ONLY || '';
 let ran = 0;
 
 async function suite(name, url, run, { initScript, before, contextOptions } = {}) {
-  if (ONLY && !name.includes(ONLY)) return;
+  if (ONLY && !ONLY.split('|').some(t => t && name.includes(t))) return;
   ran++;
   const context = await browser.newContext({ viewport: { width: 1500, height: 950 }, ...contextOptions });
   if (initScript) await context.addInitScript(initScript);
@@ -2502,7 +2502,7 @@ const revokeCalls = m => m.seen.filter(r =>
 {
   console.log('\n# asset versions — every local asset on a page moves together');
   const PAGES = ['index.html', 'upload.html', 'tutorial.html', 'admin.html', 'client-login.html',
-                 'home.html', 'dashboard.html', 'settings.html',
+                 'home.html', 'dashboard.html', 'settings.html', 'orders.html',
                  'book_editor/index.html', 'book_editor/view.html', 'r2_designer/index.html'];
   const lines = [];
   const seenVersions = new Set();
@@ -6957,8 +6957,8 @@ await suite('儀表板 — 沒有 studio_token 時，還沒發出任何請求就
       ok('says nothing pending', (await page.textContent('#todo-list')).includes('目前沒有待處理事項'));
 
       const navHrefs = await page.$$eval('.side-nav-item[href]', els => els.map(e => e.getAttribute('href')));
-      ok('side menu has all six destinations',
-        JSON.stringify(navHrefs) === JSON.stringify(['dashboard.html', 'admin.html#projects', 'admin.html', 'index.html', 'upload.html', 'book_editor/', 'settings.html']),
+      ok('side menu has every destination, 訂單 after 選片專案',
+        JSON.stringify(navHrefs) === JSON.stringify(['dashboard.html', 'admin.html#projects', 'orders.html', 'admin.html', 'index.html', 'upload.html', 'book_editor/', 'settings.html']),
         JSON.stringify(navHrefs));
       const active = await page.$eval('.side-nav-item.active', e => e.textContent);
       ok('儀表板 is marked active on this page', active === '儀表板', active);
@@ -7277,6 +7277,870 @@ await suite('設定 — 沒有 studio_token 時跳轉回 home.html',
       return out;
     },
     { before: m.attach, initScript: ADMIN });
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Products and orders (docs/products-orders.md, Phase A) — settings 商品,
+// admin project 訂單, orders.html, dashboard revenue
+// ═══════════════════════════════════════════════════════════════════════════
+
+// A fake of the Phase A admin API that mirrors the real Worker's shapes and
+// arithmetic (worker.js: readOrders, ORDER_*_SQL, the 400 {error, code} and
+// 409 answers) — never a friendlier version of it. Chain it AFTER the fake
+// that serves the rest of the page: anything it does not own falls through.
+function ordersFake(opts = {}) {
+  const st = {
+    products: opts.products || [],
+    orders: opts.orders || [],
+    titles: opts.titles || {},
+    extra: opts.extra || { count: null, pick_limit: null, extra_price: null, extra: 0, fee: 0, order_id: null, order_extra: null, matches: true },
+    inject: null,            // (method, path, body) => {status, body} | null
+    calls: [],
+    n: 0,
+  };
+  const id = p => `${p}-${++st.n}`;
+  const NOW = '2026-09-29T02:00:00.000Z';
+  const money = o => {
+    const subtotal = o.items.reduce((n, i) => n + i.unit_price * i.qty, 0);
+    const total = Math.max(0, subtotal - o.discount);
+    const cost = o.items.reduce((n, i) => n + i.unit_cost * i.qty, 0);
+    const outstanding = ['confirmed', 'fulfilled'].includes(o.status) ? Math.max(0, total - o.paid_amount) : 0;
+    return { subtotal, total, cost, outstanding };
+  };
+  const view = o => ({ ...o, project_title: st.titles[o.project_id] ?? '', ...money(o), items: o.items.map(i => ({ ...i, photo_keys: [...i.photo_keys] })) });
+  st.addOrder = (o = {}) => {
+    const order = {
+      id: o.id || id('ord'), photographer_id: 'default', project_id: o.project_id || 'proj-1', source: o.source || 'admin',
+      status: o.status || 'confirmed', picker_id: null, discount: o.discount || 0, paid_amount: o.paid_amount || 0,
+      paid_at: o.paid_at || null, paid_method: o.paid_method || null, note: o.note || '', guest_note: '',
+      created_at: o.created_at || NOW, updated_at: o.updated_at || NOW,
+      confirmed_at: NOW, fulfilled_at: null, cancelled_at: null,
+      items: (o.items || []).map(i => ({
+        id: i.id || id('item'), order_id: '', kind: i.kind || 'album', product_id: i.product_id ?? 'prod-x', option_id: i.option_id ?? 'opt-x',
+        name: i.name, option_label: i.option_label || '', unit_price: i.unit_price, unit_cost: i.unit_cost || 0, qty: i.qty || 1,
+        photo_keys: i.photo_keys || [],
+      })),
+    };
+    order.items.forEach(i => { i.order_id = order.id; });
+    st.orders.push(order);
+    return order;
+  };
+  const optionOf = optionId => {
+    for (const p of st.products) for (const op of p.options) if (op.id === optionId) return { p, op };
+    return null;
+  };
+  const bad = (code, status = 400) => ({ status, body: { error: code.replace(/_/g, ' '), code } });
+
+  function handle(method, path, params, body) {
+    if (st.inject) { const hit = st.inject(method, path, body); if (hit) return hit; }
+    let m;
+    if (path === '/api/admin/products' && method === 'GET') return { body: { products: st.products } };
+    if (path === '/api/admin/products' && method === 'POST') {
+      if (!['album', 'print', 'service'].includes(body.kind)) return bad('invalid_kind');
+      if (!body.name || !String(body.name).trim()) return bad('invalid_name');
+      if (!Array.isArray(body.options) || !body.options.length) return bad('invalid_options');
+      if (body.options.some(o => !Number.isSafeInteger(o.price) || o.price < 0)) return bad('invalid_price');
+      const p = {
+        id: id('prod'), kind: body.kind, name: body.name.trim(), description: body.description || '',
+        photo_count: body.kind === 'album' ? (body.photo_count ?? null) : null, guest_visible: 0, active: 1, sort: 0,
+        has_image: false, image_type: null, image_updated_at: null, created_at: NOW, updated_at: NOW,
+        options: body.options.map((o, i) => ({ id: id('opt'), label: o.label || '', price: o.price, cost: o.cost ?? 0, active: 1, sort: i })),
+      };
+      st.products.push(p);
+      return { status: 201, body: { product: p } };
+    }
+    if ((m = /^\/api\/admin\/products\/([^/]+)$/.exec(path)) && method === 'PUT') {
+      const p = st.products.find(x => x.id === m[1]);
+      if (!p) return { status: 404, body: { error: 'Not found' } };
+      if (!body.name || !String(body.name).trim()) return bad('invalid_name');
+      if (!Array.isArray(body.options) || !body.options.length) return bad('invalid_options');
+      p.name = body.name.trim();
+      if ('description' in body) p.description = body.description;
+      if ('photo_count' in body) p.photo_count = p.kind === 'album' ? body.photo_count : null;
+      const keep = new Set(body.options.filter(o => o.id).map(o => o.id));
+      p.options.forEach(o => { if (!keep.has(o.id)) o.active = 0; });
+      body.options.forEach((o, i) => {
+        if (o.id) Object.assign(p.options.find(x => x.id === o.id), { label: o.label, price: o.price, cost: o.cost, sort: i, active: 1 });
+        else p.options.push({ id: id('opt'), label: o.label, price: o.price, cost: o.cost, active: 1, sort: i });
+      });
+      return { body: { product: p } };
+    }
+    if ((m = /^\/api\/admin\/products\/([^/]+)\/(retire|restore)$/.exec(path)) && method === 'POST') {
+      const p = st.products.find(x => x.id === m[1]);
+      if (!p) return { status: 404, body: { error: 'Not found' } };
+      p.active = m[2] === 'restore' ? 1 : 0;
+      return { body: { ok: true, active: p.active } };
+    }
+    if (path === '/api/admin/orders' && method === 'GET') {
+      const wanted = params.get('status');
+      let list = st.orders.map(view);
+      if (wanted) list = list.filter(o => o.status === wanted);
+      if (params.get('unpaid') === '1') list = list.filter(o => o.outstanding > 0);
+      return { body: { orders: list.slice().reverse() } };
+    }
+    if ((m = /^\/api\/admin\/projects\/([^/]+)\/orders$/.exec(path))) {
+      const pid = decodeURIComponent(m[1]);
+      if (method === 'GET') return { body: { orders: st.orders.filter(o => o.project_id === pid).map(view).reverse(), extra_pick: st.extra } };
+      if (method === 'POST') {
+        if (!Array.isArray(body.lines) || !body.lines.length) return bad('invalid_lines');
+        const items = [];
+        for (const l of body.lines) {
+          const hit = optionOf(l.option_id);
+          if (!hit) return bad('unknown_option');
+          if (!hit.op.active || !hit.p.active) return bad('retired_option');
+          if (!(Number.isSafeInteger(l.qty) && l.qty >= 1 && l.qty <= 999)) return bad('invalid_qty');
+          items.push({ kind: hit.p.kind, product_id: hit.p.id, option_id: hit.op.id, name: hit.p.name, option_label: hit.op.label,
+            unit_price: l.unit_price ?? hit.op.price, unit_cost: hit.op.cost, qty: l.qty, photo_keys: l.photo_keys || [] });
+        }
+        const sub = items.reduce((n, i) => n + i.unit_price * i.qty, 0);
+        if ((body.discount ?? 0) > sub) return bad('discount_exceeds_subtotal');
+        const order = st.addOrder({ project_id: pid, items, discount: body.discount ?? 0, note: body.note || '' });
+        return { status: 201, body: { order: view(order) } };
+      }
+    }
+    if ((m = /^\/api\/admin\/orders\/([^/]+)$/.exec(path)) && method === 'PUT') {
+      const o = st.orders.find(x => x.id === m[1]);
+      if (!o) return { status: 404, body: { error: 'Not found' } };
+      if (o.status === 'cancelled' && ('lines' in body || 'discount' in body)) return { status: 409, body: { error: '訂單已取消', code: 'cancelled' } };
+      const items = [];
+      for (const l of body.lines ?? o.items.map(i => ({ id: i.id }))) {
+        const old = l.id ? o.items.find(i => i.id === l.id) : null;
+        if (l.id && !old) return bad('unknown_line');
+        if (old) items.push({ ...old, qty: l.qty ?? old.qty, unit_price: l.unit_price ?? old.unit_price, photo_keys: l.photo_keys ?? old.photo_keys });
+        else {
+          const hit = optionOf(l.option_id);
+          if (!hit) return bad('unknown_option');
+          if (!hit.op.active || !hit.p.active) return bad('retired_option');
+          items.push({ id: id('item'), order_id: o.id, kind: hit.p.kind, product_id: hit.p.id, option_id: hit.op.id, name: hit.p.name,
+            option_label: hit.op.label, unit_price: l.unit_price ?? hit.op.price, unit_cost: hit.op.cost, qty: l.qty, photo_keys: l.photo_keys || [] });
+        }
+      }
+      const discount = 'discount' in body ? body.discount : o.discount;
+      const sub = items.reduce((n, i) => n + i.unit_price * i.qty, 0);
+      if (discount > sub) return bad('discount_exceeds_subtotal');
+      if (sub - discount < o.paid_amount) return bad('below_paid');
+      o.items = items; o.discount = discount;
+      if ('note' in body) o.note = body.note;
+      if (o.source === 'system') o.source = 'admin';
+      return { body: { order: view(o) } };
+    }
+    if ((m = /^\/api\/admin\/orders\/([^/]+)\/payment$/.exec(path)) && method === 'POST') {
+      const o = st.orders.find(x => x.id === m[1]);
+      if (!o) return { status: 404, body: { error: 'Not found' } };
+      const amount = body.paid_amount;
+      if (!Number.isSafeInteger(amount) || amount < 0) return bad('invalid_paid_amount');
+      if (amount > 0) {
+        if (!['cash', 'transfer', 'other'].includes(body.paid_method)) return bad('invalid_paid_method');
+        if (o.status === 'cancelled') return { status: 409, body: { error: '訂單已取消', code: 'cancelled' } };
+        if (amount > money(o).total) return bad('overpaid');
+        o.paid_amount = amount; o.paid_method = body.paid_method;
+        o.paid_at = body.paid_at ? new Date(body.paid_at).toISOString() : NOW;
+      } else { o.paid_amount = 0; o.paid_method = null; o.paid_at = null; }
+      return { body: { order: view(o) } };
+    }
+    if ((m = /^\/api\/admin\/orders\/([^/]+)\/status$/.exec(path)) && method === 'POST') {
+      const o = st.orders.find(x => x.id === m[1]);
+      if (!o) return { status: 404, body: { error: 'Not found' } };
+      const arrows = { requested: ['confirmed', 'cancelled'], confirmed: ['fulfilled', 'cancelled'], fulfilled: ['confirmed', 'cancelled'], cancelled: [] };
+      if (body.status === o.status) return { body: { order: view(o) } };
+      if (!arrows[o.status].includes(body.status))
+        return { status: 409, body: { error: `無法從 ${o.status} 改為 ${body.status}`, code: 'bad_transition', from: o.status, to: body.status } };
+      o.status = body.status;
+      return { body: { order: view(o) } };
+    }
+    return null;
+  }
+
+  const attach = async page => {
+    await page.route('**/imagepicker.hotichen.workers.dev/**', async route => {
+      const req = route.request();
+      const u = new URL(req.url());
+      const method = req.method();
+      const p = u.pathname;
+      const mine = /^\/api\/admin\/(products|orders)(\/|$)/.test(p) || /^\/api\/admin\/projects\/[^/]+\/orders$/.test(p);
+      if (!mine) return route.fallback();
+      let body = null;
+      try { body = JSON.parse(req.postData() || 'null'); } catch (e) { /* none */ }
+      const h = await req.allHeaders();
+      st.calls.push({ method, path: p, search: u.search, body, auth: h['authorization'] || null });
+      if ((h['authorization'] || null) !== 'Bearer adm')
+        return route.fulfill({ status: 401, contentType: 'application/json', body: JSON.stringify({ error: 'Unauthorized' }) });
+      const res = handle(method, p, u.searchParams, body || {}) || { status: 404, body: { error: 'Not found' } };
+      route.fulfill({ status: res.status || 200, contentType: 'application/json', body: JSON.stringify(res.body) });
+    });
+  };
+  return { st, attach };
+}
+
+const PROD_ALBUM = { id: 'prod-album', kind: 'album', name: '相本書', description: '20 頁精裝', photo_count: 20, guest_visible: 0, active: 1, sort: 0,
+  has_image: false, image_type: null, image_updated_at: null, created_at: '', updated_at: '',
+  options: [
+    { id: 'opt-album-s', label: '8×8 吋', price: 3800, cost: 1500, active: 1, sort: 0 },
+    { id: 'opt-album-l', label: '12×12 吋', price: 5800, cost: 2400, active: 1, sort: 1 },
+    { id: 'opt-album-old', label: '舊規格', price: 100, cost: 50, active: 0, sort: 2 },
+  ] };
+const PROD_PRINT = { id: 'prod-print', kind: 'print', name: '無框畫', description: '', photo_count: null, guest_visible: 0, active: 1, sort: 1,
+  has_image: false, image_type: null, image_updated_at: null, created_at: '', updated_at: '',
+  options: [{ id: 'opt-print', label: '', price: 1200, cost: 500, active: 1, sort: 0 }] };
+const PROD_SERVICE_OFF = { id: 'prod-svc', kind: 'service', name: '急件加修', description: '', photo_count: null, guest_visible: 0, active: 0, sort: 2,
+  has_image: false, image_type: null, image_updated_at: null, created_at: '', updated_at: '',
+  options: [{ id: 'opt-svc', label: '', price: 500, cost: 0, active: 1, sort: 0 }] };
+const clone = x => JSON.parse(JSON.stringify(x));
+const waitText = (page, sel, pred, timeout = 4000) =>
+  page.waitForFunction(([s, src]) => { const el = document.querySelector(s); return !!el && new Function('t', `return (${src})(t)`)(el.textContent); },
+    [sel, pred.toString()], { timeout });
+
+// ── settings: 商品 ──────────────────────────────────────────────────────────
+{
+  const m = dashSettingsMock();
+  const o = ordersFake({ products: [clone(PROD_ALBUM), clone(PROD_PRINT), clone(PROD_SERVICE_OFF)] });
+  await suite('設定 — 商品清單：相本／輸出品／服務用友善名稱，下架的灰掉並可重新上架，金額為 NT$',
+    `${base}/settings.html`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('.prod-row', { timeout: 5000 });
+      const rows = await page.$$eval('.prod-row', els => els.map(e => ({
+        id: e.dataset.productId, retired: e.classList.contains('retired'), opacity: getComputedStyle(e).opacity,
+        kind: e.querySelector('.pill[data-kind]').textContent, text: e.textContent.replace(/\s+/g, ' '),
+        buttons: [...e.querySelectorAll('button')].map(b => b.textContent),
+      })));
+      ok('three products listed, active first', rows.map(r => r.id).join() === 'prod-album,prod-print,prod-svc', JSON.stringify(rows.map(r => r.id)));
+      ok('kinds shown as 相本 / 輸出品 / 服務, not album/print/service',
+        rows.map(r => r.kind).join() === '相本,輸出品,服務', JSON.stringify(rows.map(r => r.kind)));
+      ok('an album shows its options with 售價 and 成本 as NT$1,234-style money',
+        rows[0].text.includes('8×8 吋 · 售價 NT$3,800 · 成本 NT$1,500') && rows[0].text.includes('12×12 吋 · 售價 NT$5,800 · 成本 NT$2,400'), rows[0].text);
+      ok('a retired option of an active product is not listed', !rows[0].text.includes('舊規格'));
+      ok('an option with no label reads （單一規格）', rows[1].text.includes('（單一規格） · 售價 NT$1,200'), rows[1].text);
+      ok('the album says how many photos it is set for', rows[0].text.includes('指定 20 張'));
+      ok('active rows are full strength and offer 下架 (not 重新上架)',
+        !rows[0].retired && rows[0].opacity === '1' && rows[0].buttons.includes('下架') && !rows[0].buttons.includes('重新上架'), JSON.stringify(rows[0]));
+      ok('the retired row is greyed (computed opacity < 1), tagged 已下架 and offers 重新上架 (not 下架)',
+        rows[2].retired && Number(rows[2].opacity) < 1 && rows[2].text.includes('已下架') && rows[2].buttons.includes('重新上架') && !rows[2].buttons.includes('下架'), JSON.stringify(rows[2]));
+      ok('the catalogue was read with the admin token', o.st.calls[0]?.auth === 'Bearer adm');
+
+      await page.click('[data-product-id="prod-svc"] [data-restore]');
+      await page.waitForFunction(() => document.querySelector('[data-product-id="prod-svc"]')?.dataset.active === '1', null, { timeout: 3000 });
+      ok('重新上架 posts /restore and the row comes back at full strength',
+        o.st.calls.some(c => c.method === 'POST' && c.path === '/api/admin/products/prod-svc/restore') &&
+        (await page.$eval('[data-product-id="prod-svc"]', e => getComputedStyle(e).opacity)) === '1');
+      await page.click('[data-product-id="prod-print"] [data-retire]');
+      await page.waitForFunction(() => document.querySelector('[data-product-id="prod-print"]')?.dataset.active === '0', null, { timeout: 3000 });
+      ok('下架 posts /retire and greys the row',
+        o.st.calls.some(c => c.method === 'POST' && c.path === '/api/admin/products/prod-print/retire') &&
+        Number(await page.$eval('[data-product-id="prod-print"]', e => getComputedStyle(e).opacity)) < 1);
+      ok('retire/restore sent no body', o.st.calls.filter(c => /retire|restore/.test(c.path)).every(c => c.body === null));
+      return out;
+    },
+    { before: async p => { await m.attach(p); await o.attach(p); }, initScript: SEED_TOKEN });
+}
+
+{
+  const m = dashSettingsMock();
+  const o = ordersFake({ products: [] });
+  await suite('設定 — 新增商品：驗證、規格列增減（至少一列）、只有相本才問張數，送出的內容正確',
+    `${base}/settings.html`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('#prod-list .hint', { timeout: 5000 });
+      ok('an empty catalogue says so', (await page.textContent('#prod-list')).includes('還沒有商品'));
+      ok('no form until asked', (await page.$('#prod-form')) === null);
+      await page.click('#prod-add-btn');
+      await page.waitForSelector('#prod-form');
+      const disp = sel => page.$eval(sel, e => getComputedStyle(e).display);
+      ok('an album asks for a photo count (computed display, not just the attribute)', (await disp('#pf-count-group')) !== 'none');
+      await page.selectOption('#pf-kind', 'print');
+      ok('a print does not', (await disp('#pf-count-group')) === 'none');
+      await page.selectOption('#pf-kind', 'service');
+      ok('nor does a service', (await disp('#pf-count-group')) === 'none');
+      await page.selectOption('#pf-kind', 'album');
+      ok('back to an album it is asked again', (await disp('#pf-count-group')) !== 'none');
+      ok('the add button hides while the form is open', (await disp('#prod-add-btn')) === 'none');
+
+      await page.click('#pf-save');
+      ok('no name → a Chinese error and nothing sent', (await page.textContent('#pf-err')).includes('商品名稱必填') && !o.st.calls.some(c => c.method === 'POST'));
+      await page.fill('#pf-name', '相本書');
+      await page.click('#pf-save');
+      ok('a blank price is refused client-side', (await page.textContent('#pf-err')).includes('售價需為 0 以上的整數') && !o.st.calls.some(c => c.method === 'POST'));
+
+      await page.click('#pf-options .opt-del');
+      ok('removing the only option row is refused, the row stays',
+        (await page.$$('#pf-options .opt-row')).length === 1 && (await page.textContent('#pf-err')).includes('至少保留一個規格'));
+
+      await page.fill('#pf-desc', '20 頁精裝');
+      await page.fill('#pf-count', '20');
+      await page.fill('#pf-options .opt-row:nth-child(1) .opt-label', '8×8 吋');
+      await page.fill('#pf-options .opt-row:nth-child(1) .opt-price', '3800');
+      await page.fill('#pf-options .opt-row:nth-child(1) .opt-cost', '1500');
+      await page.click('#pf-add-option');
+      ok('新增規格 adds a row', (await page.$$('#pf-options .opt-row')).length === 2);
+      await page.fill('#pf-options .opt-row:nth-child(2) .opt-label', '12×12 吋');
+      await page.fill('#pf-options .opt-row:nth-child(2) .opt-price', '5800');
+      // cost left blank → 0
+      await page.click('#pf-add-option');
+      await page.click('#pf-options .opt-row:nth-child(3) .opt-del');
+      ok('a row can be removed while others remain', (await page.$$('#pf-options .opt-row')).length === 2);
+      await page.click('#pf-save');
+      await page.waitForFunction(() => !document.getElementById('prod-form'), null, { timeout: 3000 });
+      const post = o.st.calls.find(c => c.method === 'POST' && c.path === '/api/admin/products');
+      ok('POST carries kind, name, description, photo_count and the options (blank cost = 0)',
+        JSON.stringify(post?.body) === JSON.stringify({
+          name: '相本書', description: '20 頁精裝', photo_count: 20,
+          options: [{ label: '8×8 吋', price: 3800, cost: 1500 }, { label: '12×12 吋', price: 5800, cost: 0 }], kind: 'album',
+        }), JSON.stringify(post?.body));
+      ok('the form is gone from the DOM and 新增商品 is back', (await page.$('#prod-form')) === null && (await disp('#prod-add-btn')) !== 'none');
+      await page.waitForSelector('.prod-row');
+      ok('the new product is listed with its money', (await page.textContent('.prod-row')).includes('12×12 吋 · 售價 NT$5,800 · 成本 NT$0'));
+      ok('and 已儲存商品 is shown', (await page.textContent('#prod-ok')).includes('已儲存商品'));
+
+      // the Worker's own refusal is shown in Chinese, and the form stays
+      o.st.inject = (method, path) => (method === 'POST' && path === '/api/admin/products') ? { status: 400, body: { error: 'invalid price', code: 'invalid_price' } } : null;
+      await page.click('#prod-add-btn');
+      await page.fill('#pf-name', '無框畫');
+      await page.selectOption('#pf-kind', 'print');
+      await page.fill('#pf-options .opt-row .opt-price', '1200');
+      await page.click('#pf-save');
+      await waitText(page, '#pf-err', t => t.includes('售價需為'));
+      ok('a server error code becomes a Chinese sentence and the form stays open', (await page.$('#prod-form')) !== null);
+      const post2 = o.st.calls.filter(c => c.method === 'POST' && c.path === '/api/admin/products').pop();
+      ok('a print sends photo_count null', post2.body.photo_count === null && post2.body.kind === 'print', JSON.stringify(post2.body));
+      return out;
+    },
+    { before: async p => { await m.attach(p); await o.attach(p); }, initScript: SEED_TOKEN });
+}
+
+{
+  const m = dashSettingsMock();
+  const o = ordersFake({ products: [clone(PROD_ALBUM)] });
+  await suite('設定 — 編輯商品：類型鎖定、規格帶入（含 id），改價／刪／加後 PUT 的內容正確',
+    `${base}/settings.html`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('.prod-row', { timeout: 5000 });
+      await page.click('[data-product-id="prod-album"] [data-edit]');
+      await page.waitForSelector('#prod-form');
+      ok('title says 編輯商品 and the kind cannot be changed', (await page.textContent('#prod-form h3')) === '編輯商品' && await page.$eval('#pf-kind', e => e.disabled));
+      const rows = await page.$$eval('#pf-options .opt-row', els => els.map(e => ({ id: e.dataset.optionId, label: e.querySelector('.opt-label').value, price: e.querySelector('.opt-price').value, cost: e.querySelector('.opt-cost').value })));
+      ok('only the active options are prefilled, each keeping its id',
+        JSON.stringify(rows) === JSON.stringify([
+          { id: 'opt-album-s', label: '8×8 吋', price: '3800', cost: '1500' },
+          { id: 'opt-album-l', label: '12×12 吋', price: '5800', cost: '2400' }]), JSON.stringify(rows));
+      ok('name, description and photo count are prefilled',
+        (await page.inputValue('#pf-name')) === '相本書' && (await page.inputValue('#pf-desc')) === '20 頁精裝' && (await page.inputValue('#pf-count')) === '20');
+
+      await page.fill('#pf-options .opt-row:nth-child(1) .opt-price', '4000');
+      await page.click('#pf-options .opt-row:nth-child(2) .opt-del');
+      await page.click('#pf-add-option');
+      await page.fill('#pf-options .opt-row:nth-child(2) .opt-label', '10×10 吋');
+      await page.fill('#pf-options .opt-row:nth-child(2) .opt-price', '4900');
+      await page.fill('#pf-count', '');
+      await page.click('#pf-save');
+      await page.waitForFunction(() => !document.getElementById('prod-form'), null, { timeout: 3000 });
+      const put = o.st.calls.find(c => c.method === 'PUT');
+      ok('PUT goes to the product, without kind; the kept option carries its id, the new one none, the removed one is absent; blank count = null',
+        put?.path === '/api/admin/products/prod-album' && JSON.stringify(put.body) === JSON.stringify({
+          name: '相本書', description: '20 頁精裝', photo_count: null,
+          options: [{ label: '8×8 吋', price: 4000, cost: 1500, id: 'opt-album-s' }, { label: '10×10 吋', price: 4900, cost: 0 }],
+        }), JSON.stringify(put));
+      await page.waitForFunction(() => document.querySelector('.prod-row')?.textContent.includes('NT$4,900'), null, { timeout: 3000 });
+      const text = await page.textContent('.prod-row');
+      ok('the list shows the new set and no longer the dropped option', text.includes('NT$4,000') && text.includes('10×10 吋') && !text.includes('12×12 吋'), text);
+
+      await page.click('[data-edit]');
+      await page.waitForSelector('#prod-form');
+      await page.click('#pf-cancel');
+      ok('取消 closes the form without a request', (await page.$('#prod-form')) === null && o.st.calls.filter(c => c.method === 'PUT').length === 1);
+      return out;
+    },
+    { before: async p => { await m.attach(p); await o.attach(p); }, initScript: SEED_TOKEN });
+}
+
+// ── admin.html project detail: 訂單 ────────────────────────────────────────
+const ADMIN_PICKS = m => {
+  const at = '2026-01-01T00:00:00.000Z';
+  m.state.selections.set('20260819/IMG_1.jpg', { rating: 1, note: '', updated_by: 'x', updated_at: at });
+  m.state.selections.set('20260819/IMG_2.jpg', { rating: 1, note: '', updated_by: 'x', updated_at: at });
+  m.state.selections.set('20260819/IMG_3.jpg', { rating: 0, note: '', updated_by: 'x', updated_at: at });
+};
+const todayTaipeiNode = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Taipei', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+
+{
+  const m = pickFakeWorker({ projectId: 'proj-1', title: '訂單專案' });
+  const o = ordersFake({ products: [clone(PROD_ALBUM), clone(PROD_PRINT)] });
+  o.st.addOrder({ id: 'ord-a', project_id: 'proj-1', status: 'confirmed', discount: 300, note: '週五取件',
+    items: [{ name: '相本書', option_label: '8×8 吋', kind: 'album', unit_price: 1500, unit_cost: 600, qty: 2, photo_keys: ['20260819/IMG_1.jpg', '20260819/IMG_2.jpg'] },
+            { name: '急件加修', kind: 'service', unit_price: 500, unit_cost: 0, qty: 1 }] });
+  o.st.addOrder({ id: 'ord-b', project_id: 'proj-1', status: 'fulfilled', paid_amount: 1200, paid_method: 'cash', paid_at: '2026-09-20T04:00:00.000Z',
+    items: [{ name: '無框畫', kind: 'print', unit_price: 1200, unit_cost: 500, qty: 1 }] });
+  o.st.addOrder({ id: 'ord-c', project_id: 'proj-1', status: 'cancelled', source: 'system',
+    items: [{ name: '加挑照片', kind: 'extra_pick', unit_price: 200, qty: 10 }] });
+  o.st.addOrder({ id: 'ord-other', project_id: 'proj-2', status: 'confirmed', items: [{ name: '別的專案', unit_price: 1, qty: 1 }] });
+  await suite('admin — 專案訂單：品項、合計、未收、狀態與付款標籤，按鈕依狀態顯示',
+    `${base}/admin.html#project=proj-1`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('#pd-orders .ord-card', { timeout: 5000 });
+      const cards = await page.$$eval('#pd-order-list > .ord-card', els => els.map(e => ({
+        id: e.dataset.orderId, status: e.dataset.status, source: e.dataset.source, text: e.textContent.replace(/\s+/g, ' '),
+        statusText: e.querySelector('.ord-status').textContent, pay: e.querySelector('.ord-pay')?.textContent ?? null,
+        total: e.querySelector('.ord-total').textContent, owed: e.querySelector('.ord-owed').textContent, paid: e.querySelector('.ord-paid').textContent,
+        buttons: [...e.querySelectorAll('.ord-actions button')].map(b => b.textContent),
+        opacity: getComputedStyle(e).opacity,
+      })));
+      ok('only this project’s three orders, in the container under 訂單', cards.length === 3 && !cards.some(c => c.id === 'ord-other'), JSON.stringify(cards.map(c => c.id)));
+      const a = cards.find(c => c.id === 'ord-a'), b = cards.find(c => c.id === 'ord-b'), c = cards.find(c => c.id === 'ord-c');
+      ok('lines with name · option, unit price, qty and line subtotal', a.text.includes('相本書 · 8×8 吋') && a.text.includes('NT$1,500') && a.text.includes('× 2') && a.text.includes('NT$3,000') && a.text.includes('急件加修'), a.text);
+      ok('total = Σ price×qty − discount (3,500 − 300 = NT$3,200), owed the same when unpaid', a.total === 'NT$3,200' && a.owed === 'NT$3,200' && a.paid === 'NT$0', JSON.stringify([a.total, a.owed, a.paid]));
+      ok('the discount is shown', a.text.includes('折扣 −NT$300') && a.text.includes('小計 NT$3,500'));
+      ok('cost and margin are shown to the photographer (2×600 = NT$1,200 → 毛利 NT$2,000)', a.text.includes('成本 NT$1,200') && a.text.includes('毛利 NT$2,000'), a.text);
+      ok('the note is shown', a.text.includes('備註：週五取件'));
+      ok('the photos on a line are listed (2 張)', a.text.includes('照片 2 張'));
+      ok('status and payment labels: 已確認 / 未付款', a.statusText === '已確認' && a.pay === '未付款', JSON.stringify([a.statusText, a.pay]));
+      ok('a fulfilled, paid order: 已完成 / 已付清, owed NT$0, method and date shown', b.statusText === '已完成' && b.pay === '已付清' && b.owed === 'NT$0' && b.text.includes('現金') && b.text.includes('2026-09-20'), b.text);
+      ok('a cancelled order is greyed, tagged 已取消 and 系統建立, with no payment badge', c.statusText === '已取消' && Number(c.opacity) < 1 && c.pay === null && c.text.includes('系統建立'), JSON.stringify(c));
+      ok('confirmed: 完成 / 取消訂單 (not 確認), and 編輯 + 記錄收款, no 清除收款',
+        a.buttons.join() === '完成,取消訂單,編輯,記錄收款', a.buttons.join());
+      ok('fulfilled: 復原為已確認 / 取消訂單, paid so 清除收款 too',
+        b.buttons.join() === '復原為已確認,取消訂單,編輯,記錄收款,清除收款', b.buttons.join());
+      ok('cancelled: no buttons at all', c.buttons.length === 0, c.buttons.join());
+      ok('with no extra_pick to report, the block is absent', (await page.$('#pd-extra-pick')) === null);
+      return out;
+    },
+    { before: async p => { ADMIN_PICKS(m); await m.attach(p); await o.attach(p); }, initScript: ADMIN });
+}
+
+{
+  const m = pickFakeWorker({ projectId: 'proj-x', title: '加挑專案' });
+  const o = ordersFake({ products: [], extra: { count: 14, pick_limit: 4, extra_price: 200, extra: 10, fee: 2000, order_id: 'ord-e', order_extra: 6, matches: false } });
+  o.st.addOrder({ id: 'ord-e', project_id: 'proj-x', source: 'system', items: [{ name: '加挑照片', kind: 'extra_pick', unit_price: 200, qty: 6, product_id: null, option_id: null }] });
+  await suite('admin — 加挑張數與訂單不符時顯示「加挑張數已變更（原 X → 現 Y），請確認」',
+    `${base}/admin.html#project=proj-x`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('#pd-extra-pick', { timeout: 5000 });
+      const warn = await page.textContent('#pd-extra-warn').catch(() => null);
+      ok('the warning names the old and new counts', warn === '加挑張數已變更（原 6 → 現 10），請確認', String(warn));
+      const info = await page.textContent('#pd-extra-pick');
+      ok('and the block explains the fee: 14 張，上限 4，多挑 10 張 × NT$200 = NT$2,000', info.includes('14 張') && info.includes('上限 4') && info.includes('10 張 × NT$200 = NT$2,000'), info);
+      ok('the warning sits inside 訂單, above the list', await page.evaluate(() => {
+        const w = document.getElementById('pd-extra-warn'); const l = document.getElementById('pd-order-list');
+        return !!document.getElementById('pd-orders').contains(w) && !!(w.compareDocumentPosition(l) & Node.DOCUMENT_POSITION_FOLLOWING);
+      }));
+      return out;
+    },
+    { before: async p => { await m.attach(p); await o.attach(p); }, initScript: ADMIN });
+}
+
+{
+  const m = pickFakeWorker({ projectId: 'proj-y', title: '加挑吻合' });
+  const o = ordersFake({ products: [], extra: { count: 14, pick_limit: 4, extra_price: 200, extra: 10, fee: 2000, order_id: 'ord-e', order_extra: 10, matches: true } });
+  o.st.addOrder({ id: 'ord-e', project_id: 'proj-y', source: 'system', items: [{ name: '加挑照片', kind: 'extra_pick', unit_price: 200, qty: 10, product_id: null, option_id: null }] });
+  await suite('admin — 加挑張數吻合時只顯示說明，沒有警告',
+    `${base}/admin.html#project=proj-y`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('#pd-extra-pick', { timeout: 5000 });
+      ok('the fee block is there…', (await page.textContent('#pd-extra-pick')).includes('NT$2,000'));
+      ok('…and no warning', (await page.$('#pd-extra-warn')) === null && !(await page.textContent('#pd-orders')).includes('加挑張數已變更'));
+      return out;
+    },
+    { before: async p => { await m.attach(p); await o.attach(p); }, initScript: ADMIN });
+}
+
+{
+  const m = pickFakeWorker({ projectId: 'proj-z', title: '新增訂單專案' });
+  ADMIN_PICKS(m);
+  const o = ordersFake({ products: [clone(PROD_ALBUM), clone(PROD_PRINT), clone(PROD_SERVICE_OFF)] });
+  await suite('admin — 新增訂單：只列上架商品的上架規格、挑專案選中的照片、單價可覆寫，送出後列出',
+    `${base}/admin.html#project=proj-z`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('#pd-order-add-btn', { timeout: 5000 });
+      ok('a project with no orders says 尚無訂單', (await page.textContent('#pd-orders-empty')) === '尚無訂單');
+      await page.click('#pd-order-add-btn');
+      await page.waitForSelector('#pd-add-option', { timeout: 3000 });
+      const optTexts = await page.$$eval('#pd-add-option option', els => els.map(e => e.textContent));
+      ok('the picker lists active options of active products only (no 舊規格, no retired 急件加修)',
+        optTexts.length === 3 && optTexts.some(t => t.includes('相本書 · 8×8 吋 — NT$3,800')) && optTexts.some(t => t.includes('無框畫 — NT$1,200')) &&
+        !optTexts.some(t => t.includes('舊規格') || t.includes('急件')), JSON.stringify(optTexts));
+      ok('the add-order button is replaced by the editor while it is open', (await page.$('#pd-order-add-btn')) === null);
+
+      await page.selectOption('#pd-add-option', 'opt-album-s');
+      await page.click('#pd-add-line');
+      await page.selectOption('#pd-add-option', 'opt-print');
+      await page.click('#pd-add-line');
+      const lines = await page.$$eval('.ord-line-edit', els => els.map(e => ({ name: e.querySelector('.ord-line-name').textContent.replace(/\s+/g, ' ').trim(), qty: e.querySelector('.ord-qty').value, ph: e.querySelector('.ord-price').placeholder, price: e.querySelector('.ord-price').value,
+        photos: [...e.querySelectorAll('.ord-photo')].map(c => c.value) })));
+      ok('two lines, qty 1, the catalogue price as placeholder and an empty override',
+        lines.length === 2 && lines[0].qty === '1' && lines[0].ph === '3800' && lines[0].price === '' && lines[1].ph === '1200', JSON.stringify(lines));
+      ok('each photo line offers exactly the project’s picks (IMG_1, IMG_2 — not the unpicked IMG_3)',
+        JSON.stringify(lines[0].photos) === JSON.stringify(['20260819/IMG_1.jpg', '20260819/IMG_2.jpg']) && JSON.stringify(lines[1].photos) === JSON.stringify(lines[0].photos), JSON.stringify(lines.map(l => l.photos)));
+
+      await page.fill('.ord-line-edit:nth-child(1) .ord-qty', '2');
+      await page.fill('.ord-line-edit:nth-child(2) .ord-price', '1000');
+      await page.click('.ord-line-edit:nth-child(1) summary');
+      await page.check('.ord-line-edit:nth-child(1) .ord-photo[value="20260819/IMG_1.jpg"]');
+      await page.check('.ord-line-edit:nth-child(1) .ord-photo[value="20260819/IMG_2.jpg"]');
+      ok('the photo summary follows the ticks', (await page.textContent('.ord-line-edit:nth-child(1) [data-photo-summary]')) === '照片（2 張）');
+      await page.fill('#pd-ed-discount', '100');
+      await page.fill('#pd-ed-note', '婚禮加購');
+      await page.click('#pd-editor-save');
+      await page.waitForSelector('#pd-order-list .ord-card', { timeout: 3000 });
+      const post = o.st.calls.find(c => c.method === 'POST' && c.path === '/api/admin/projects/proj-z/orders');
+      ok('POST sends option ids, qty, ticked photos, an override only where typed, the discount and note',
+        JSON.stringify(post?.body) === JSON.stringify({
+          lines: [{ qty: 2, photo_keys: ['20260819/IMG_1.jpg', '20260819/IMG_2.jpg'], option_id: 'opt-album-s' },
+                  { qty: 1, photo_keys: [], option_id: 'opt-print', unit_price: 1000 }],
+          discount: 100, note: '婚禮加購' }), JSON.stringify(post?.body));
+      const card = await page.$eval('#pd-order-list .ord-card', e => ({ total: e.querySelector('.ord-total').textContent, text: e.textContent.replace(/\s+/g, ' ') }));
+      ok('the editor closes and the order is listed with its computed total (2×3,800 + 1,000 − 100 = NT$8,500)', card.total === 'NT$8,500' && (await page.$('#pd-order-editor')) === null, JSON.stringify(card));
+      ok('the add button is back', (await page.$('#pd-order-add-btn')) !== null);
+
+      // errors: a retired option (raced with the catalogue), empty lines
+      await page.click('#pd-order-add-btn');
+      await page.waitForSelector('#pd-add-option');
+      await page.click('#pd-editor-save');
+      ok('saving with no lines is refused client-side', (await page.textContent('#pd-editor-err')).includes('請至少加入一個品項') && o.st.calls.filter(c => c.method === 'POST' && /orders$/.test(c.path)).length === 1);
+      await page.selectOption('#pd-add-option', 'opt-print');
+      await page.click('#pd-add-line');
+      await page.fill('.ord-line-edit .ord-qty', '0');
+      await page.click('#pd-editor-save');
+      ok('qty 0 is refused client-side', (await page.textContent('#pd-editor-err')).includes('數量需為 1–999'));
+      await page.fill('.ord-line-edit .ord-qty', '1');
+      o.st.products.find(p => p.id === 'prod-print').options[0].active = 0;
+      await page.click('#pd-editor-save');
+      await waitText(page, '#pd-editor-err', t => t.includes('已下架'));
+      ok('retired_option → 「這個商品規格已下架…」 and the editor stays', (await page.$('#pd-order-editor')) !== null);
+      await page.click('#pd-editor-cancel');
+      ok('取消 closes the editor', (await page.$('#pd-order-editor')) === null && (await page.$$('#pd-order-list .ord-card')).length === 1);
+      return out;
+    },
+    { before: async p => { await m.attach(p); await o.attach(p); }, initScript: ADMIN });
+}
+
+{
+  const m = pickFakeWorker({ projectId: 'proj-n', title: '沒商品' });
+  const o = ordersFake({ products: [clone(PROD_SERVICE_OFF)] });
+  await suite('admin — 沒有上架商品時，新增訂單指引到設定，而不是給空選單',
+    `${base}/admin.html#project=proj-n`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('#pd-order-add-btn', { timeout: 5000 });
+      await page.click('#pd-order-add-btn');
+      await page.waitForSelector('#pd-order-editor');
+      await page.waitForFunction(() => !document.getElementById('pd-order-editor').textContent.includes('載入商品中'), null, { timeout: 3000 });
+      ok('no picker, a link to settings.html', (await page.$('#pd-add-option')) === null &&
+        (await page.$eval('#pd-order-editor a', e => e.getAttribute('href'))) === 'settings.html');
+      return out;
+    },
+    { before: async p => { await m.attach(p); await o.attach(p); }, initScript: ADMIN });
+}
+
+{
+  const m = pickFakeWorker({ projectId: 'proj-e', title: '編輯訂單' });
+  ADMIN_PICKS(m);
+  const o = ordersFake({ products: [clone(PROD_ALBUM), clone(PROD_PRINT)] });
+  o.st.addOrder({ id: 'ord-e1', project_id: 'proj-e', items: [
+    { id: 'it-1', name: '相本書', option_label: '8×8 吋', kind: 'album', option_id: 'opt-album-s', unit_price: 3800, qty: 1, photo_keys: ['20260819/IMG_1.jpg'] },
+    { id: 'it-2', name: '無框畫', kind: 'print', option_id: 'opt-print', unit_price: 1200, qty: 1 }] });
+  o.st.addOrder({ id: 'ord-e2', project_id: 'proj-e', paid_amount: 5000, paid_method: 'cash', paid_at: '2026-09-20T04:00:00.000Z',
+    items: [{ id: 'it-3', name: '相本書', kind: 'album', option_id: 'opt-album-s', unit_price: 5000, qty: 1 }] });
+  await suite('admin — 編輯訂單：帶入現有品項，改數量／刪品項／加品項／折扣，PUT 整組；below_paid 與 conflict 顯示中文',
+    `${base}/admin.html#project=proj-e`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('#pd-order-list .ord-card', { timeout: 5000 });
+      // newest first: ord-e2 then ord-e1
+      await page.click('[data-order-id="ord-e1"] [data-order-edit]');
+      await page.waitForSelector('#pd-order-editor[data-mode="edit"]');
+      ok('the editor replaces that order’s card, in place', (await page.$('[data-order-id="ord-e1"].ord-card')) === null && (await page.$('[data-order-id="ord-e2"].ord-card')) !== null);
+      const lines = await page.$$eval('.ord-line-edit', els => els.map(e => ({ qty: e.querySelector('.ord-qty').value, price: e.querySelector('.ord-price').value,
+        checked: [...e.querySelectorAll('.ord-photo:checked')].map(c => c.value) })));
+      ok('existing lines are prefilled: qty, the snapshot price, ticked photos',
+        JSON.stringify(lines) === JSON.stringify([{ qty: '1', price: '3800', checked: ['20260819/IMG_1.jpg'] }, { qty: '1', price: '1200', checked: [] }]), JSON.stringify(lines));
+      await page.fill('.ord-line-edit:nth-child(1) .ord-qty', '3');
+      await page.click('.ord-line-edit:nth-child(2) [data-line-del]');
+      ok('移除 drops the line from the editor', (await page.$$('.ord-line-edit')).length === 1);
+      await page.selectOption('#pd-add-option', 'opt-print');
+      await page.click('#pd-add-line');
+      await page.fill('#pd-ed-discount', '50');
+      await page.fill('#pd-ed-note', '改過');
+      await page.click('#pd-editor-save');
+      await page.waitForSelector('[data-order-id="ord-e1"].ord-card', { timeout: 3000 });
+      const put = o.st.calls.find(c => c.method === 'PUT');
+      ok('PUT is the whole set: the kept line by id with its snapshot price, the new one by option_id with no override',
+        put?.path === '/api/admin/orders/ord-e1' && JSON.stringify(put.body) === JSON.stringify({
+          lines: [{ qty: 3, photo_keys: ['20260819/IMG_1.jpg'], id: 'it-1', unit_price: 3800 }, { qty: 1, photo_keys: [], option_id: 'opt-print' }],
+          discount: 50, note: '改過' }), JSON.stringify(put));
+      ok('the card shows the new total (3×3,800 + 1,200 − 50 = NT$12,550)', (await page.textContent('[data-order-id="ord-e1"] .ord-total')) === 'NT$12,550');
+
+      // below_paid: shrink the paid order under what was received
+      await page.click('[data-order-id="ord-e2"] [data-order-edit]');
+      await page.waitForSelector('#pd-order-editor');
+      await page.fill('.ord-line-edit .ord-price', '1000');
+      await page.click('#pd-editor-save');
+      await waitText(page, '#pd-editor-err', t => t.includes('不能低於已收金額'));
+      ok('below_paid → 「訂單總額不能低於已收金額…」, the editor stays for a correction', (await page.$('#pd-order-editor')) !== null);
+      // conflict: the page says so and re-reads
+      o.st.inject = (method, path) => (method === 'PUT') ? { status: 409, body: { error: '訂單剛被修改，請重新整理', code: 'conflict' } } : null;
+      await page.click('#pd-editor-save');
+      await waitText(page, '#pd-order-err', t => t.includes('資料已被更新，請重新整理'));
+      ok('conflict → 「資料已被更新，請重新整理」 and the orders are re-read (editor closed, cards back)',
+        (await page.$('#pd-order-editor')) === null && (await page.$$('#pd-order-list .ord-card')).length === 2);
+      return out;
+    },
+    { before: async p => { await m.attach(p); await o.attach(p); }, initScript: ADMIN });
+}
+
+{
+  const m = pickFakeWorker({ projectId: 'proj-p', title: '收款' });
+  const o = ordersFake({ products: [] });
+  o.st.addOrder({ id: 'ord-u', project_id: 'proj-p', items: [{ name: '相本書', unit_price: 3200, qty: 1 }] });
+  o.st.addOrder({ id: 'ord-part', project_id: 'proj-p', paid_amount: 1000, paid_method: 'cash', paid_at: '2026-09-20T04:00:00.000Z', items: [{ name: '無框畫', unit_price: 3200, qty: 1 }] });
+  let dialogs = [];
+  let answer = true;
+  await suite('admin — 記錄收款：預設金額為訂單總額、方式與日期，overpaid 中文提示並留著表單，清除收款要確認',
+    `${base}/admin.html#project=proj-p`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      page.on('dialog', d => { dialogs.push(d.message()); answer ? d.accept() : d.dismiss(); });
+      await page.waitForSelector('#pd-order-list .ord-card', { timeout: 5000 });
+      ok('no payment form until asked', (await page.$('[data-pay-form]')) === null);
+      await page.click('[data-order-id="ord-u"] [data-pay-open]');
+      await page.waitForSelector('[data-order-id="ord-u"] [data-pay-form]');
+      const f = await page.$eval('[data-order-id="ord-u"] [data-pay-form]', e => ({ amount: e.querySelector('.pay-amount').value, method: e.querySelector('.pay-method').value,
+        methods: [...e.querySelectorAll('.pay-method option')].map(x => x.textContent), date: e.querySelector('.pay-date').value }));
+      ok('default amount is what is owed (the whole NT$3,200)', f.amount === '3200', f.amount);
+      ok('methods are 現金 / 轉帳 / 其他', f.methods.join() === '現金,轉帳,其他', f.methods.join());
+      ok('the date defaults to today (a YYYY-MM-DD, Taipei)', f.date === todayTaipeiNode(), f.date);
+      ok('the 記錄收款 button gives way to the form', (await page.$('[data-order-id="ord-u"] [data-pay-open]')) === null);
+
+      await page.fill('[data-order-id="ord-u"] .pay-amount', '9999');
+      await page.click('[data-order-id="ord-u"] [data-pay-save]');
+      await waitText(page, '[data-order-id="ord-u"] [data-order-err]', t => t.includes('收款金額不能超過訂單總額'));
+      ok('overpaid → 「收款金額不能超過訂單總額」, the form stays so the amount can be fixed', (await page.$('[data-order-id="ord-u"] [data-pay-form]')) !== null);
+      await page.fill('[data-order-id="ord-u"] .pay-amount', '3200');
+      await page.selectOption('[data-order-id="ord-u"] .pay-method', 'transfer');
+      await page.click('[data-order-id="ord-u"] [data-pay-save]');
+      await page.waitForFunction(() => document.querySelector('[data-order-id="ord-u"] .ord-pay')?.textContent === '已付清', null, { timeout: 3000 });
+      const pay = o.st.calls.filter(c => c.path === '/api/admin/orders/ord-u/payment').pop();
+      ok('POST /payment carries amount, method and the date', JSON.stringify(pay.body) === JSON.stringify({ paid_amount: 3200, paid_method: 'transfer', paid_at: todayTaipeiNode() }), JSON.stringify(pay.body));
+      ok('the card is now 已付清 with 未收 NT$0 and offers 清除收款',
+        (await page.textContent('[data-order-id="ord-u"] .ord-owed')) === 'NT$0' && (await page.$('[data-order-id="ord-u"] [data-pay-clear]')) !== null);
+
+      // a part-paid order: the default settles it (paid_amount is the running total, not an extra instalment)
+      ok('the part-paid order says 部分已付 and owes NT$2,200', (await page.textContent('[data-order-id="ord-part"] .ord-pay')) === '部分已付' &&
+        (await page.textContent('[data-order-id="ord-part"] .ord-owed')) === 'NT$2,200');
+      await page.click('[data-order-id="ord-part"] [data-pay-open]');
+      ok('its form defaults to the total (NT$3,200) with the earlier method preselected',
+        (await page.inputValue('[data-order-id="ord-part"] .pay-amount')) === '3200' && (await page.inputValue('[data-order-id="ord-part"] .pay-method')) === 'cash' &&
+        (await page.inputValue('[data-order-id="ord-part"] .pay-date')) === '2026-09-20');
+      await page.click('[data-order-id="ord-part"] [data-pay-cancel]');
+      ok('取消 closes the form, nothing sent', (await page.$('[data-pay-form]')) === null && o.st.calls.filter(c => /ord-part\/payment/.test(c.path)).length === 0);
+
+      // clearing
+      answer = false;
+      await page.click('[data-order-id="ord-u"] [data-pay-clear]');
+      await page.waitForTimeout(300);
+      ok('declining the confirm sends nothing', o.st.calls.filter(c => c.body?.paid_amount === 0).length === 0 && dialogs.some(t => t.includes('清除')));
+      answer = true;
+      await page.click('[data-order-id="ord-u"] [data-pay-clear]');
+      await page.waitForFunction(() => document.querySelector('[data-order-id="ord-u"] .ord-pay')?.textContent === '未付款', null, { timeout: 3000 });
+      ok('confirming posts paid_amount 0 and the order is 未付款 again, NT$3,200 owed',
+        JSON.stringify(o.st.calls.filter(c => c.body?.paid_amount === 0).pop()?.body) === JSON.stringify({ paid_amount: 0 }) &&
+        (await page.textContent('[data-order-id="ord-u"] .ord-owed')) === 'NT$3,200' && (await page.$('[data-order-id="ord-u"] [data-pay-clear]')) === null);
+      return out;
+    },
+    { before: async p => { await m.attach(p); await o.attach(p); }, initScript: ADMIN });
+}
+
+{
+  const m = pickFakeWorker({ projectId: 'proj-s', title: '狀態' });
+  const o = ordersFake({ products: [] });
+  o.st.addOrder({ id: 'ord-s', project_id: 'proj-s', items: [{ name: '相本書', unit_price: 3000, qty: 1 }] });
+  o.st.addOrder({ id: 'ord-r', project_id: 'proj-s', status: 'requested', items: [{ name: '無框畫', unit_price: 1200, qty: 1 }] });
+  let answer = false;
+  const dialogs = [];
+  await suite('admin — 狀態按鈕：確認／完成／復原／取消（取消要確認），bad_transition 顯示中文',
+    `${base}/admin.html#project=proj-s`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      page.on('dialog', d => { dialogs.push(d.message()); answer ? d.accept() : d.dismiss(); });
+      await page.waitForSelector('#pd-order-list .ord-card', { timeout: 5000 });
+      const btns = id => page.$$eval(`[data-order-id="${id}"] [data-status-to]`, els => els.map(e => `${e.dataset.statusTo}:${e.textContent}`).join());
+      ok('requested offers 確認 and 取消訂單 (and not 完成)', (await btns('ord-r')) === 'confirmed:確認,cancelled:取消訂單', await btns('ord-r'));
+      ok('confirmed offers 完成 and 取消訂單 (and not 確認)', (await btns('ord-s')) === 'fulfilled:完成,cancelled:取消訂單', await btns('ord-s'));
+
+      await page.click('[data-order-id="ord-r"] [data-status-to="confirmed"]');
+      await page.waitForFunction(() => document.querySelector('[data-order-id="ord-r"]')?.dataset.status === 'confirmed', null, { timeout: 3000 });
+      ok('確認 posts {status: confirmed} with no confirm dialog', o.st.calls.some(c => c.path === '/api/admin/orders/ord-r/status' && c.body.status === 'confirmed') && dialogs.length === 0);
+
+      await page.click('[data-order-id="ord-s"] [data-status-to="fulfilled"]');
+      await page.waitForFunction(() => document.querySelector('[data-order-id="ord-s"]')?.dataset.status === 'fulfilled', null, { timeout: 3000 });
+      ok('完成 → 已完成, and the buttons become 復原為已確認 / 取消訂單', (await btns('ord-s')) === 'confirmed:復原為已確認,cancelled:取消訂單' &&
+        (await page.textContent('[data-order-id="ord-s"] .ord-status')) === '已完成');
+      await page.click('[data-order-id="ord-s"] [data-status-to="confirmed"]');
+      await page.waitForFunction(() => document.querySelector('[data-order-id="ord-s"]')?.dataset.status === 'confirmed', null, { timeout: 3000 });
+      ok('復原 goes back to 已確認', (await btns('ord-s')) === 'fulfilled:完成,cancelled:取消訂單');
+
+      await page.click('[data-order-id="ord-s"] [data-status-to="cancelled"]');
+      await page.waitForTimeout(300);
+      ok('取消訂單 asks first; declining sends nothing and changes nothing',
+        dialogs.length === 1 && dialogs[0].includes('取消') && !o.st.calls.some(c => c.body?.status === 'cancelled') &&
+        (await page.$eval('[data-order-id="ord-s"]', e => e.dataset.status)) === 'confirmed');
+      answer = true;
+      await page.click('[data-order-id="ord-s"] [data-status-to="cancelled"]');
+      await page.waitForFunction(() => document.querySelector('[data-order-id="ord-s"]')?.dataset.status === 'cancelled', null, { timeout: 3000 });
+      ok('accepting cancels: greyed, 已取消, and no buttons left', (await page.$$('[data-order-id="ord-s"] .ord-actions button')).length === 0 &&
+        Number(await page.$eval('[data-order-id="ord-s"]', e => getComputedStyle(e).opacity)) < 1);
+
+      // a move that lost a race: the Worker says where the order really is
+      o.st.inject = (method, path) => /ord-r\/status/.test(path) ? { status: 409, body: { error: '無法從 cancelled 改為 fulfilled', code: 'bad_transition', from: 'cancelled', to: 'fulfilled' } } : null;
+      await page.click('[data-order-id="ord-r"] [data-status-to="fulfilled"]');
+      await waitText(page, '[data-order-id="ord-r"] [data-order-err]', t => t.includes('無法執行'));
+      ok('bad_transition → 「訂單目前是「已取消」，無法執行這個操作，請重新整理」',
+        (await page.textContent('[data-order-id="ord-r"] [data-order-err]')) === '訂單目前是「已取消」，無法執行這個操作，請重新整理');
+      return out;
+    },
+    { before: async p => { await m.attach(p); await o.attach(p); }, initScript: ADMIN });
+}
+
+// ── orders.html ────────────────────────────────────────────────────────────
+{
+  const m = dashSettingsMock();
+  const o = ordersFake({ products: [], titles: { 'proj-1': '海邊系列', 'proj-2': '婚紗 & 外拍' } });
+  o.st.addOrder({ id: 'o1', project_id: 'proj-1', status: 'confirmed', items: [{ name: '相本書', option_label: '8×8 吋', unit_price: 1234, qty: 1 }] });
+  o.st.addOrder({ id: 'o2', project_id: 'proj-2', status: 'fulfilled', paid_amount: 3000, paid_method: 'cash', items: [{ name: '無框畫', unit_price: 3000, qty: 1 }] });
+  o.st.addOrder({ id: 'o3', project_id: 'proj-2', status: 'cancelled', items: [{ name: '加挑照片', kind: 'extra_pick', unit_price: 200, qty: 5 }] });
+  o.st.addOrder({ id: 'o4', project_id: 'proj-1', status: 'fulfilled', paid_amount: 500, paid_method: 'cash', items: [{ name: '相框', unit_price: 1500, qty: 1 }] });
+  await suite('訂單頁 — 跨專案列表：專案名、合計、未收、連到專案；全部／未付款／狀態篩選',
+    `${base}/orders.html`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('.ord-row', { timeout: 5000 });
+      const rows = async () => page.$$eval('.ord-row', els => els.map(e => ({
+        id: e.dataset.orderId, status: e.dataset.status, title: e.querySelector('.ord-proj').textContent,
+        hrefs: [...e.querySelectorAll('a')].map(a => a.getAttribute('href')), total: e.querySelector('.ord-total').textContent,
+        owed: e.querySelector('.ord-owed').textContent, owedRed: e.querySelector('.ord-owed').classList.contains('owed'),
+        text: e.textContent.replace(/\s+/g, ' '), opacity: getComputedStyle(e).opacity })));
+      let r = await rows();
+      ok('全部 asks for /api/admin/orders with no filter and lists all four',
+        r.length === 4 && o.st.calls.at(-1).path === '/api/admin/orders' && o.st.calls.at(-1).search === '', JSON.stringify([r.length, o.st.calls.at(-1)]));
+      const r1 = r.find(x => x.id === 'o1');
+      ok('a row shows project title, NT$1,234-style total, outstanding and its lines', r1.title === '海邊系列' && r1.total === 'NT$1,234' && r1.owed === 'NT$1,234' && r1.owedRed && r1.text.includes('相本書 · 8×8 吋 × 1'), JSON.stringify(r1));
+      ok('every link on a row goes to that project’s detail (a &-title is escaped, the id URL-encoded)',
+        r.every(x => x.hrefs.length === 2 && x.hrefs.every(h => h === `admin.html#project=${x.id === 'o1' || x.id === 'o4' ? 'proj-1' : 'proj-2'}`)), JSON.stringify(r.map(x => x.hrefs)));
+      ok('title text with & renders literally', r.find(x => x.id === 'o2').title === '婚紗 & 外拍');
+      ok('a fully paid order owes NT$0 and is not red; a cancelled one is greyed',
+        r.find(x => x.id === 'o2').owed === 'NT$0' && !r.find(x => x.id === 'o2').owedRed && Number(r.find(x => x.id === 'o3').opacity) < 1);
+      ok('status labels are Chinese', r.find(x => x.id === 'o2').text.includes('已完成') && r.find(x => x.id === 'o3').text.includes('已取消') && r1.text.includes('已確認'));
+      ok('the side menu marks 訂單 active', (await page.$eval('.side-nav-item.active', e => e.textContent)) === '訂單');
+      ok('the summary adds up what is owed (1,234 + 1,000 = NT$2,234)', (await page.textContent('#summary')).includes('未付款'.slice(0, 0) + '未收合計 NT$2,234'), await page.textContent('#summary'));
+
+      await page.click('[data-filter="unpaid"]');
+      await page.waitForFunction(() => document.querySelectorAll('.ord-row').length === 2, null, { timeout: 3000 });
+      ok('未付款 asks for ?unpaid=1 and shows only orders that still owe', o.st.calls.at(-1).search === '?unpaid=1' &&
+        JSON.stringify((await rows()).map(x => x.id).sort()) === JSON.stringify(['o1', 'o4']), o.st.calls.at(-1).search);
+      ok('the active chip moved', (await page.$eval('.chip.active', e => e.textContent)) === '未付款' && (await page.$$('.chip.active')).length === 1);
+
+      await page.click('[data-filter="cancelled"]');
+      await page.waitForFunction(() => document.querySelectorAll('.ord-row').length === 1, null, { timeout: 3000 });
+      ok('已取消 asks for ?status=cancelled and shows only that', o.st.calls.at(-1).search === '?status=cancelled' && (await rows())[0].id === 'o3');
+      await page.click('[data-filter="requested"]');
+      await waitText(page, '#order-list', t => t.includes('沒有符合的訂單'));
+      ok('a filter with no orders says so instead of a blank page', (await page.textContent('#order-list')).includes('沒有符合的訂單') && (await page.$$('.ord-row')).length === 0);
+      return out;
+    },
+    { before: async p => { await m.attach(p); await o.attach(p); }, initScript: SEED_TOKEN });
+}
+
+{
+  const m = dashSettingsMock();
+  const o = ordersFake({ products: [], titles: { 'proj-1': 'A' } });
+  o.st.addOrder({ id: 'q1', project_id: 'proj-1', items: [{ name: '相本書', unit_price: 100, qty: 1 }] });
+  o.st.addOrder({ id: 'q2', project_id: 'proj-1', paid_amount: 100, paid_method: 'cash', items: [{ name: '無框畫', unit_price: 100, qty: 1 }] });
+  await suite('訂單頁 — ?filter=unpaid（儀表板的待辦連結）直接套用未付款篩選',
+    `${base}/orders.html?filter=unpaid`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('.ord-row', { timeout: 5000 });
+      ok('the unpaid chip is active and only the unpaid order is listed', (await page.$eval('.chip.active', e => e.textContent)) === '未付款' &&
+        (await page.$$eval('.ord-row', els => els.map(e => e.dataset.orderId).join())) === 'q1' && o.st.calls[0].search === '?unpaid=1');
+      return out;
+    },
+    { before: async p => { await m.attach(p); await o.attach(p); }, initScript: SEED_TOKEN });
+}
+
+await suite('訂單頁 — 沒有 studio_token 時跳轉回 home.html',
+  `${base}/orders.html`,
+  async page => {
+    await page.waitForURL('**/home.html', { timeout: 3000 }).catch(() => {});
+    return [`${/home\.html/.test(page.url()) ? 'ok  ' : 'FAIL'}  redirected to home.html   [${page.url()}]`];
+  });
+
+// ── dashboard revenue ──────────────────────────────────────────────────────
+{
+  const m = dashSettingsMock({
+    stats: {
+      by_phase: { picking: 0, submitted: 0, retouching: 0 }, delivered: 0, archived: 0,
+      per_month: [{ month: '2026-08', created: 1, delivered: 1 }, { month: '2026-09', created: 2, delivered: 2 }],
+      revenue: [{ month: '2026-08', paid: 5000, cost: 1000, margin: 4000 }, { month: '2026-09', paid: 12345, cost: 4000, margin: 8345 }],
+      outstanding: 6000,
+      todo: { submitted_not_retouching: 0, unnotified_submissions: 0, modified_after_submit: 0, unpaid_orders: 3 },
+    },
+  });
+  await suite('儀表板 — 本月營收／毛利／未收款卡片、每月營收圖、待辦「未付款訂單 N」',
+    `${base}/dashboard.html`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForFunction(() => document.getElementById('stat-revenue').textContent !== '–', null, { timeout: 5000 });
+      const cards = await page.evaluate(() => ['stat-revenue', 'stat-margin', 'stat-outstanding'].map(id => {
+        const n = document.getElementById(id); return [n.textContent, n.parentElement.querySelector('.label').textContent];
+      }));
+      ok('the cards read the last (current) month: 本月營收 NT$12,345 / 本月毛利 NT$8,345 / 未收款 NT$6,000',
+        JSON.stringify(cards) === JSON.stringify([['NT$12,345', '本月營收'], ['NT$8,345', '本月毛利'], ['NT$6,000', '未收款']]), JSON.stringify(cards));
+      const bars = await page.$$eval('#rev-chart .chart-col', cols => cols.map(c => ({ rev: c.querySelector('.chart-bar.revenue').style.height, margin: c.querySelector('.chart-bar.margin').style.height, title: c.title })));
+      ok('two months; the biggest revenue is 100%, August 5,000/12,345 = 41%; margin scales on the same axis (8,345 → 68%)',
+        bars.length === 2 && bars[1].rev === '100%' && bars[0].rev === '41%' && bars[1].margin === '68%' && bars[0].margin === '32%', JSON.stringify(bars));
+      ok('the tooltip carries the exact money', bars[1].title.includes('營收 NT$12,345') && bars[1].title.includes('毛利 NT$8,345'), bars[1].title);
+      ok('month labels under the revenue chart', (await page.$$eval('#rev-chart-labels span', els => els.map(e => e.textContent).join())) === '08,09');
+      const todo = await page.$$eval('#todo-list li', els => els.map(e => ({ text: e.textContent.replace(/\s+/g, ' ').trim(), href: e.querySelector('a').getAttribute('href') })));
+      ok('待辦 gains 未付款訂單 3, linking to the unpaid filter', todo.length === 1 && todo[0].text.startsWith('未付款訂單 3') && todo[0].href === 'orders.html?filter=unpaid', JSON.stringify(todo));
+      const cols = await page.$eval('.stat-cards.money', e => getComputedStyle(e).gridTemplateColumns.split(' ').length);
+      ok('the money cards are a row of three', cols === 3, String(cols));
+      return out;
+    },
+    { before: m.attach, initScript: SEED_TOKEN });
+}
+
+{
+  const m = dashSettingsMock();
+  await suite('儀表板 — 舊版 Worker（stats 沒有 revenue）：卡片顯示 –，不當掉，也沒有未付款待辦',
+    `${base}/dashboard.html`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('#todo-list .todo-empty', { timeout: 5000 });
+      const vals = await page.evaluate(() => ['stat-revenue', 'stat-margin', 'stat-outstanding'].map(id => document.getElementById(id).textContent));
+      ok('the three cards stay on –', vals.join() === '–,–,–', vals.join());
+      ok('the revenue chart says 尚無資料', (await page.textContent('#rev-chart')).includes('尚無資料'));
+      ok('no 未付款訂單 line', !(await page.textContent('#todo-list')).includes('未付款訂單'));
+      return out;
+    },
+    { before: m.attach, initScript: SEED_TOKEN });
 }
 
 await suite('版本號 — admin shows the asset version it loaded',

@@ -57,6 +57,8 @@
   .stat-card { background: var(--surface); border-radius: 14px; padding: 16px 18px; box-shadow: 0 2px 10px rgba(90,60,20,.06); }
   .stat-card .n { font-size: 28px; font-weight: 700; font-family: 'IBM Plex Mono', monospace; color: var(--accent); }
   .stat-card .label { font-size: 12px; color: var(--ink-55); margin-top: 4px; }
+  .stat-cards.money { grid-template-columns: repeat(3, 1fr); }
+  .stat-cards.money .n { font-size: 22px; }
 
   .panel { border-radius: 14px; background: var(--surface); margin-bottom: 24px; box-shadow: 0 2px 10px rgba(90,60,20,.06); }
   .panel-body { padding: 18px 20px; }
@@ -66,11 +68,15 @@
   .chart-legend .sw { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 5px; vertical-align: middle; }
   .sw-created { background: var(--accent); }
   .sw-delivered { background: var(--success); }
+  .sw-revenue { background: var(--accent); }
+  .sw-margin { background: var(--success); }
   .chart { display: flex; align-items: flex-end; gap: 6px; height: 140px; }
   .chart-col { flex: 1; display: flex; align-items: flex-end; justify-content: center; gap: 2px; height: 100%; min-width: 0; }
   .chart-bar { width: 40%; border-radius: 2px 2px 0 0; min-height: 1px; }
   .chart-bar.created { background: var(--accent); }
   .chart-bar.delivered { background: var(--success); }
+  .chart-bar.revenue { background: var(--accent); }
+  .chart-bar.margin { background: var(--success); }
   .chart-labels { display: flex; gap: 6px; margin-top: 6px; }
   .chart-labels span { flex: 1; text-align: center; font-size: 9px; color: var(--ink-55); font-family: 'IBM Plex Mono', monospace; white-space: nowrap; }
 
@@ -112,6 +118,12 @@
       <div class="stat-card"><div class="n" id="stat-delivered">–</div><div class="label">已交付</div></div>
     </div>
 
+    <div class="stat-cards money">
+      <div class="stat-card"><div class="n" id="stat-revenue">–</div><div class="label">本月營收</div></div>
+      <div class="stat-card"><div class="n" id="stat-margin">–</div><div class="label">本月毛利</div></div>
+      <div class="stat-card"><div class="n" id="stat-outstanding">–</div><div class="label">未收款</div></div>
+    </div>
+
     <h2>每月新增 / 交付</h2>
     <div class="panel">
       <div class="panel-body">
@@ -121,6 +133,18 @@
         </div>
         <div class="chart" id="stat-chart"><div class="empty">載入中…</div></div>
         <div class="chart-labels" id="stat-chart-labels"></div>
+      </div>
+    </div>
+
+    <h2>每月營收 / 毛利</h2>
+    <div class="panel">
+      <div class="panel-body">
+        <div class="chart-legend">
+          <span><span class="sw sw-revenue"></span>營收</span>
+          <span><span class="sw sw-margin"></span>毛利</span>
+        </div>
+        <div class="chart" id="rev-chart"><div class="empty">載入中…</div></div>
+        <div class="chart-labels" id="rev-chart-labels"></div>
       </div>
     </div>
 
@@ -140,8 +164,9 @@
   </main>
 </div>
 
-<script src="js/build-version.js?v=20260928j"></script>
-<script src="js/side-nav.js?v=20260928j"></script>
+<script src="js/build-version.js?v=20260929a"></script>
+<script src="js/side-nav.js?v=20260929a"></script>
+<script src="js/orders-common.js?v=20260929a"></script>
 <script>
 (function () {
   const WORKER_URL = 'https://imagepicker.hotichen.workers.dev';
@@ -166,6 +191,36 @@
       if (r.status === 401) { SideNav.logoutToHome(); return null; }
       if (!r.ok) throw new Error(`${r.status}`);
       return r.json();
+    }
+
+    // 本月營收 / 毛利 / 未收款 and the per-month revenue chart. `revenue` is
+    // the 12 months the Worker counts by paid date, oldest first, so the last
+    // entry is this month. An older Worker without it leaves the cards on "–".
+    function renderRevenue(s) {
+      const O = window.Orders;
+      const rev = Array.isArray(s.revenue) ? s.revenue : [];
+      const now = rev.length ? rev[rev.length - 1] : null;
+      document.getElementById('stat-revenue').textContent = now ? O.money(now.paid) : '–';
+      document.getElementById('stat-margin').textContent = now ? O.money(now.margin) : '–';
+      document.getElementById('stat-outstanding').textContent = s.outstanding != null ? O.money(s.outstanding) : '–';
+
+      const chart = document.getElementById('rev-chart');
+      const labels = document.getElementById('rev-chart-labels');
+      if (!rev.length) {
+        chart.innerHTML = '<div class="empty">尚無資料</div>';
+        labels.innerHTML = '';
+        return;
+      }
+      const max = Math.max(1, ...rev.map(m => Math.max(m.paid || 0, m.margin || 0)));
+      chart.innerHTML = rev.map(m => {
+        const pH = Math.round(Math.max(0, m.paid || 0) / max * 100);
+        const mH = Math.round(Math.max(0, m.margin || 0) / max * 100);
+        return `<div class="chart-col" title="${escHtml(m.month)} 營收 ${escHtml(O.money(m.paid))}、毛利 ${escHtml(O.money(m.margin))}">
+          <div class="chart-bar revenue" style="height:${pH}%"></div>
+          <div class="chart-bar margin" style="height:${mH}%"></div>
+        </div>`;
+      }).join('');
+      labels.innerHTML = rev.map(m => `<span>${escHtml((m.month || '').slice(5))}</span>`).join('');
     }
 
     function renderStats(s) {
@@ -194,15 +249,18 @@
         labels.innerHTML = months.map(m => `<span>${escHtml((m.month || '').slice(5))}</span>`).join('');
       }
 
+      renderRevenue(s);
+
       const todo = s.todo || {};
       const items = [
         { n: todo.submitted_not_retouching || 0, label: '個專案已送出但尚未開始精修' },
         { n: todo.unnotified_submissions || 0, label: '次送出尚未寄信通知' },
         { n: todo.modified_after_submit || 0, label: '個專案送出後又被修改' },
+        { n: todo.unpaid_orders || 0, label: '', href: 'orders.html?filter=unpaid', prefix: '未付款訂單' },
       ].filter(i => i.n > 0);
       const list = document.getElementById('todo-list');
       list.innerHTML = items.length
-        ? items.map(i => `<li><span>${escHtml(i.n)} ${escHtml(i.label)}</span><a href="admin.html#projects">查看 →</a></li>`).join('')
+        ? items.map(i => `<li${i.href ? ' data-todo="unpaid-orders"' : ''}><span>${i.prefix ? `${escHtml(i.prefix)} ${escHtml(i.n)}` : `${escHtml(i.n)} ${escHtml(i.label)}`}</span><a href="${i.href || 'admin.html#projects'}">查看 →</a></li>`).join('')
         : '<li class="todo-empty">目前沒有待處理事項</li>';
     }
 

@@ -74,6 +74,27 @@
   .logo-preview-box .none { font-size: 11px; color: var(--ink-55); text-align: center; padding: 4px; }
   .logo-actions { display: flex; flex-direction: column; gap: 8px; }
   .logo-actions input[type="file"] { font-size: 12px; color: var(--ink-70); }
+  [hidden] { display: none !important; }
+  .btn-sm { padding: 5px 12px; font-size: 12px; }
+  .pill { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 11px; background: var(--mint); color: var(--success); font-family: 'IBM Plex Mono', monospace; }
+  .pill-off { background: var(--rule); color: var(--ink-55); }
+  .prod-row { display: flex; justify-content: space-between; gap: 12px; padding: 12px 0; border-top: 1px solid var(--rule); }
+  .prod-row:first-child { border-top: none; }
+  .prod-row.retired { opacity: .55; }
+  .prod-main { min-width: 0; }
+  .prod-name { font-size: 14px; margin-right: 6px; }
+  .prod-opts { list-style: none; margin-top: 6px; font-size: 12px; color: var(--ink-70); }
+  .prod-opts li { padding: 1px 0; }
+  .prod-actions { display: flex; gap: 6px; align-items: flex-start; flex-shrink: 0; }
+  .prod-form { border: 1px solid var(--rule); border-radius: 12px; background: var(--card); padding: 16px; margin-top: 14px; }
+  .prod-form h3 { font-size: 14px; margin-bottom: 12px; }
+  .opt-head, .opt-row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+  .opt-head { font-size: 11px; color: var(--ink-55); margin-bottom: 4px; }
+  .opt-head span, .opt-row .field { min-width: 0; }
+  .opt-label { flex: 1; } .opt-price, .opt-cost { width: 96px; flex: none; }
+  .opt-head .opt-label { flex: 1; } .opt-head .opt-price, .opt-head .opt-cost { width: 96px; flex: none; }
+  .opt-del { flex: none; width: 34px; height: 34px; padding: 0; }
+  .form-actions { display: flex; gap: 8px; margin-top: 12px; }
 </style>
 </head>
 <body>
@@ -133,11 +154,22 @@
         <div id="logo-ok" class="ok-msg"></div>
       </div>
     </div>
+    <h2>商品</h2>
+    <div class="panel">
+      <div class="panel-body">
+        <div id="prod-list"><div class="hint">載入中…</div></div>
+        <button id="prod-add-btn" class="btn btn-outline" type="button" style="margin-top:12px;">＋ 新增商品</button>
+        <div id="prod-form-box"></div>
+        <div id="prod-err" class="err"></div>
+        <div id="prod-ok" class="ok-msg"></div>
+      </div>
+    </div>
   </main>
 </div>
 
-<script src="js/build-version.js?v=20260928j"></script>
-<script src="js/side-nav.js?v=20260928j"></script>
+<script src="js/build-version.js?v=20260929a"></script>
+<script src="js/side-nav.js?v=20260929a"></script>
+<script src="js/orders-common.js?v=20260929a"></script>
 <script>
 (function () {
   const WORKER_URL = 'https://imagepicker.hotichen.workers.dev';
@@ -249,6 +281,189 @@
       } finally {
         saveBtn.disabled = false;
       }
+    });
+
+    // ── 商品 (docs/products-orders.md) ──────────────────────────────────────
+    const O = window.Orders;
+    const api = O.client({ workerUrl: WORKER_URL, getToken: () => token, onUnauthorized: SideNav.logoutToHome });
+    const prodList = document.getElementById('prod-list');
+    const prodFormBox = document.getElementById('prod-form-box');
+    const prodErr = document.getElementById('prod-err');
+    const prodOk = document.getElementById('prod-ok');
+    const prodAddBtn = document.getElementById('prod-add-btn');
+    let products = [];
+
+    function activeOptions(p) { return (p.options || []).filter(o => o.active); }
+
+    function productRowHtml(p) {
+      const opts = activeOptions(p).map(o =>
+        `<li data-option-id="${O.esc(o.id)}">${o.label ? O.esc(o.label) : '（單一規格）'} · 售價 ${O.money(o.price)} · 成本 ${O.money(o.cost)}</li>`).join('');
+      const retired = !p.active;
+      return `<div class="prod-row${retired ? ' retired' : ''}" data-product-id="${O.esc(p.id)}" data-active="${retired ? '0' : '1'}">
+        <div class="prod-main">
+          <strong class="prod-name">${O.esc(p.name)}</strong>
+          <span class="pill" data-kind="${O.esc(p.kind)}">${O.esc(O.KIND_LABEL[p.kind] || p.kind)}</span>
+          ${retired ? '<span class="pill pill-off">已下架</span>' : ''}
+          ${p.kind === 'album' && p.photo_count ? `<span class="hint">指定 ${O.esc(p.photo_count)} 張</span>` : ''}
+          ${p.description ? `<div class="hint">${O.esc(p.description)}</div>` : ''}
+          <ul class="prod-opts">${opts}</ul>
+        </div>
+        <div class="prod-actions">
+          <button type="button" class="btn btn-outline btn-sm" data-edit>編輯</button>
+          ${retired
+            ? '<button type="button" class="btn btn-outline btn-sm" data-restore>重新上架</button>'
+            : '<button type="button" class="btn btn-danger btn-sm" data-retire>下架</button>'}
+        </div>
+      </div>`;
+    }
+
+    function renderProducts() {
+      prodList.innerHTML = products.length
+        ? products.map(productRowHtml).join('')
+        : '<div class="hint">還沒有商品。按「新增商品」開始（例如：相本、無框畫）。</div>';
+    }
+
+    async function loadProducts() {
+      const r = await api('/api/admin/products');
+      if (!r.ok) { prodList.innerHTML = `<div class="err">讀取商品失敗：${O.esc(O.errorText(r.data, r.status))}</div>`; return; }
+      products = r.data.products || [];
+      renderProducts();
+    }
+    loadProducts();
+
+    function optionRowHtml(o) {
+      o = o || {};
+      return `<div class="opt-row" data-option-id="${O.esc(o.id || '')}">
+        <input class="field opt-label" type="text" maxlength="60" placeholder="例如：16×20 無框（單一規格可留空）" value="${O.esc(o.label || '')}">
+        <input class="field opt-price" type="number" min="0" step="1" placeholder="售價" value="${o.price != null ? O.esc(o.price) : ''}">
+        <input class="field opt-cost" type="number" min="0" step="1" placeholder="成本" value="${o.cost != null ? O.esc(o.cost) : ''}">
+        <button type="button" class="btn btn-outline opt-del" title="移除規格">×</button>
+      </div>`;
+    }
+
+    function openForm(product) {
+      const editing = !!product;
+      const p = product || { kind: 'album', name: '', description: '', photo_count: null, options: [] };
+      const opts = editing ? activeOptions(p) : [];
+      prodFormBox.innerHTML = `<div class="prod-form" id="prod-form" data-mode="${editing ? 'edit' : 'new'}">
+        <h3>${editing ? '編輯商品' : '新增商品'}</h3>
+        <div class="field-row">
+          <div class="field-group">
+            <label for="pf-kind">類型</label>
+            <select id="pf-kind" class="field" ${editing ? 'disabled' : ''}>
+              <option value="album">相本（相本書）</option>
+              <option value="print">輸出品（無框畫、放大）</option>
+              <option value="service">服務（加修、急件）</option>
+            </select>
+          </div>
+          <div class="field-group">
+            <label for="pf-name">名稱</label>
+            <input id="pf-name" class="field" type="text" maxlength="60" placeholder="例如：相本書" value="${O.esc(p.name)}">
+          </div>
+        </div>
+        <div class="field-group">
+          <label for="pf-desc">說明（選填）</label>
+          <input id="pf-desc" class="field" type="text" maxlength="500" value="${O.esc(p.description || '')}">
+        </div>
+        <div class="field-group" id="pf-count-group">
+          <label for="pf-count">相本指定張數（選填，留空 = 不限）</label>
+          <input id="pf-count" class="field" type="number" min="1" step="1" value="${p.photo_count != null ? O.esc(p.photo_count) : ''}">
+        </div>
+        <div class="opt-head"><span class="opt-label">規格</span><span class="opt-price">售價 NT$</span><span class="opt-cost">成本 NT$</span><span class="opt-del"></span></div>
+        <div id="pf-options">${(opts.length ? opts : [{}]).map(optionRowHtml).join('')}</div>
+        <button type="button" id="pf-add-option" class="btn btn-outline btn-sm">＋ 新增規格</button>
+        <div id="pf-err" class="err"></div>
+        <div class="form-actions">
+          <button type="button" id="pf-save" class="btn btn-accent">儲存商品</button>
+          <button type="button" id="pf-cancel" class="btn btn-outline">取消</button>
+        </div>
+      </div>`;
+      const form = document.getElementById('prod-form');
+      const kindSel = document.getElementById('pf-kind');
+      kindSel.value = p.kind;
+      const countGroup = document.getElementById('pf-count-group');
+      const syncKind = () => { countGroup.hidden = kindSel.value !== 'album'; };
+      syncKind();
+      kindSel.addEventListener('change', syncKind);
+      const optsBox = document.getElementById('pf-options');
+      const formErr = document.getElementById('pf-err');
+      document.getElementById('pf-add-option').addEventListener('click', () => {
+        optsBox.insertAdjacentHTML('beforeend', optionRowHtml());
+      });
+      optsBox.addEventListener('click', e => {
+        const del = e.target.closest('.opt-del');
+        if (!del) return;
+        if (optsBox.querySelectorAll('.opt-row').length <= 1) { formErr.textContent = O.errorText({ code: 'invalid_options' }); return; }
+        del.closest('.opt-row').remove();
+        formErr.textContent = '';
+      });
+      document.getElementById('pf-cancel').addEventListener('click', closeForm);
+      document.getElementById('pf-save').addEventListener('click', () => saveForm(product));
+      prodAddBtn.hidden = true;
+      document.getElementById('pf-name').focus();
+    }
+
+    function closeForm() { prodFormBox.innerHTML = ''; prodAddBtn.hidden = false; }
+
+    const isInt = s => /^\d+$/.test(s);
+
+    async function saveForm(product) {
+      const formErr = document.getElementById('pf-err');
+      formErr.textContent = '';
+      const kind = document.getElementById('pf-kind').value;
+      const name = document.getElementById('pf-name').value.trim();
+      if (!name) { formErr.textContent = O.errorText({ code: 'invalid_name' }); return; }
+      const countRaw = document.getElementById('pf-count').value.trim();
+      if (kind === 'album' && countRaw !== '' && (!isInt(countRaw) || Number(countRaw) < 1)) {
+        formErr.textContent = O.errorText({ code: 'invalid_photo_count' }); return;
+      }
+      const rows = [...document.querySelectorAll('#pf-options .opt-row')];
+      const options = [];
+      for (const row of rows) {
+        const priceRaw = row.querySelector('.opt-price').value.trim();
+        const costRaw = row.querySelector('.opt-cost').value.trim();
+        if (!isInt(priceRaw)) { formErr.textContent = O.errorText({ code: 'invalid_price' }); return; }
+        if (costRaw !== '' && !isInt(costRaw)) { formErr.textContent = O.errorText({ code: 'invalid_cost' }); return; }
+        const o = { label: row.querySelector('.opt-label').value.trim(), price: Number(priceRaw), cost: costRaw === '' ? 0 : Number(costRaw) };
+        if (row.dataset.optionId) o.id = row.dataset.optionId;
+        options.push(o);
+      }
+      if (!options.length) { formErr.textContent = O.errorText({ code: 'invalid_options' }); return; }
+      const body = {
+        name, description: document.getElementById('pf-desc').value.trim(),
+        photo_count: kind === 'album' && countRaw !== '' ? Number(countRaw) : null,
+        options,
+      };
+      if (!product) body.kind = kind;
+      const saveBtn = document.getElementById('pf-save');
+      saveBtn.disabled = true;
+      const r = product
+        ? await api(`/api/admin/products/${encodeURIComponent(product.id)}`, 'PUT', body)
+        : await api('/api/admin/products', 'POST', body);
+      saveBtn.disabled = false;
+      if (!r.ok) { formErr.textContent = O.errorText(r.data, r.status); return; }
+      closeForm();
+      prodErr.textContent = '';
+      prodOk.textContent = '已儲存商品';
+      setTimeout(() => { prodOk.textContent = ''; }, 2500);
+      await loadProducts();
+    }
+
+    prodAddBtn.addEventListener('click', () => { prodOk.textContent = ''; openForm(null); });
+    prodList.addEventListener('click', async e => {
+      const row = e.target.closest('.prod-row');
+      if (!row) return;
+      const p = products.find(x => x.id === row.dataset.productId);
+      if (!p) return;
+      prodErr.textContent = '';
+      prodOk.textContent = '';
+      if (e.target.closest('[data-edit]')) { openForm(p); return; }
+      const retire = e.target.closest('[data-retire]');
+      const restore = e.target.closest('[data-restore]');
+      if (!retire && !restore) return;
+      const r = await api(`/api/admin/products/${encodeURIComponent(p.id)}/${retire ? 'retire' : 'restore'}`, 'POST');
+      if (!r.ok) { prodErr.textContent = O.errorText(r.data, r.status); return; }
+      await loadProducts();
     });
 
     fileInput.addEventListener('change', async function () {
