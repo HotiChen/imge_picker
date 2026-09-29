@@ -349,13 +349,33 @@ own prints with their own lab would pay the platform nothing.
   PNG/JPEG/WebP by magic bytes (same rules as the logo). Served publicly at
   `GET /api/platform/products/:id/image` (nosniff, CSP `default-src 'none'`,
   ETag) — product photos are not secret and the guest shop (B) needs them.
-- **Future platform fee (basis decided 2026-09-29, not charged yet):**
-  15% of the photographer's **margin** on platform lines — (price −
-  platform price) × qty, after the order's discount — never of the sale
-  price. Nothing is charged now; lines keep `platform_option_id` and the
-  platform price (`unit_cost`) so the fee can be computed once it starts.
-  If the platform price is ever set above vendor cost, the platform earns
-  that spread as well — say so when telling photographers.
+- **Future platform fee — rules decided by Tim 2026-09-29, not charged yet.**
+  Whoever gives a discount absorbs it.
+  1. **Fee = (list price − platform price) × qty × 15%** per platform line.
+     List price = the photographer's catalogue price when the line was made;
+     platform price = the regular platform price (never a promotional one).
+  2. **Photographer's discounts** (order discount, a lowered unit price on a
+     line) come out of the photographer's share; the fee is still computed
+     from the list price. **Cap:** the fee never exceeds the line's actual
+     margin (what the guest paid − platform price, floor 0), so a deep
+     discount can cost the photographer their margin but never makes them
+     pay to sell.
+     Example: list 1000, platform 800 → fee 30. At 85% (850): photographer
+     keeps 850 − 800 − 30 = 20. At 80% (800): margin 0 → fee 0.
+  3. **Platform's discounts** (a platform-run promotion) come out of the
+     platform's fee; the photographer's income is unchanged. If the
+     promotion is larger than the fee, **the platform pays the photographer
+     the difference** (Tim chose (a)). Example: list 1000, platform 800,
+     platform promo −50 → guest pays 950, photographer still nets 170, the
+     platform's fee 30 − 50 = −20 (the platform pays 20).
+  4. Orders therefore need two discounts kept apart: the photographer's
+     (`orders.discount` today) and the platform's (new, with the promotion).
+  5. If the platform price is ever set above vendor cost, the platform also
+     earns that spread — say so when telling photographers.
+  Nothing is charged now. Lines keep `platform_option_id` and the platform
+  price (`unit_cost`). **Before the fee starts**, lines must also snapshot
+  the list price (a new `order_items.list_price`), because `unit_price` can
+  be overridden; the fee applies only to orders created after that.
 
 ### Schema
 
