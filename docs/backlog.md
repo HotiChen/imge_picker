@@ -35,9 +35,24 @@ Decided or discussed, not yet built. Newest decisions at the top of each group.
    created or updated per photographer. Needs item 2 first (with one
    photographer every number is Tim's own). Own auth role — never the
    photographer token. Aggregates by default; no client personal data unless
-   needed (個資法). "Vendors" (廠商) still to define: print labs fulfilling
-   相本書 / 無框畫?
+   needed (個資法). Vendors = see "Vendor jobs" below.
 7. Landing page (for photographers once multi-photographer is real).
+
+## Vendor jobs (discussed 2026-09-29, not scheduled)
+Vendors (廠商) are outside businesses doing work on an order: print labs
+(相本書, 無框畫) and layout designers (婚紗廠商 排版). Flow: order line →
+job sent to a vendor → vendor downloads exactly those photos → (layout) uploads
+a proof → photographer / client approves → printed → shipped (tracking no.).
+- v1: no vendor account. A job link per job, reusing share-token machinery
+  (new kind, photo-key snapshot, revocable, expiring), like pick links. Works
+  before photographer accounts.
+- v2: vendor accounts, a vendor sees jobs from many photographers; vendor
+  directory on the platform (possible second revenue side).
+- Cost on the order line = the vendor's price → payable per vendor per month.
+- Proofs uploaded to R2 fall under the 180-day lifecycle — fine for proofs,
+  not for anything kept long-term.
+- Open: how Tim sends jobs today (LINE + Drive?); does the client approve a
+  layout proof, or only the photographer?
 
 ## Bugs
 - Phone preview: the orange tools toggle (`.mobile-tools-toggle`, fixed
