@@ -2,6 +2,27 @@
 
 Decided or discussed, not yet built. Newest decisions at the top of each group.
 
+## Two-week plan (from the PM review, 2026-09-29)
+No new big features until steps 1–3 have results.
+1. Merge A + A2 + the switch and check them on prod (checklist below); do the
+   phone test and the email setup in the same sitting.
+2. Tim runs his own real shoots through it for two weeks: list 相本書 /
+   無框畫, then pick → 加挑 → order → payment with real clients. Note what
+   gets stuck and what nobody uses.
+3. Interview 5+ photographers — `docs/photographer-interviews.md` (questions,
+   log table, and what each answer decides).
+4. Data duties before a second photographer: 180-day countdown (reuse the
+   old picker's countdown in `js/app.js`), a reminder email N days before
+   deletion, export picks + orders as CSV, D1 backup / restore drill
+   (Time Travel), Worker error alerts. Decide the R2 retention (180 vs 365
+   days) from the interviews first.
+5. Minimum legal pages before outsiders use it: terms of service, privacy
+   policy / 個資告知 (guest names, emails and photos pass through the
+   platform). License of the repo is undecided (README).
+
+Held until the interviews: guest shop B, photographer accounts, full operator
+console, referral payouts, vendor v2.
+
 ## Next up
 - [ ] Merge products & orders (A) + platform catalogue (A2) + the
       `CUSTOM_PRODUCTS` switch (branch `claude/lucid-cori-viif3w`). Tim, in order:
