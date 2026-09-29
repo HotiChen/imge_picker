@@ -3553,6 +3553,40 @@ function delimitedListFake(files, prefix) {
   return { data, folders: Array.from(prefixSet).sort() };
 }
 
+// Mirrors worker.js's pickReadScope: delivered = delivered_at AND a valid
+// finals snapshot; a legacy stamp without one stays 'picking'.
+function pickScopeFake(project) {
+  const finals = Array.isArray(project.final_folders) && project.final_folders.length ? project.final_folders : null;
+  if (project.delivered_at && finals) {
+    return { mode: 'delivered', finals, proofs: project.allow_proof_download ? project.folders : [] };
+  }
+  return { mode: 'picking', finals: [], proofs: project.folders };
+}
+// worker.js's finalFolders()/pickFolders(): trimmed, trailing '/', deduped;
+// null when any entry cannot name a folder.
+function finalFoldersFake(value) {
+  if (!Array.isArray(value) || !value.length) return null;
+  const out = [];
+  for (const f of value) {
+    if (typeof f !== 'string' || !f.trim()) return null;
+    const t = f.trim();
+    const slashed = t.endsWith('/') ? t : t + '/';
+    if (slashed.startsWith('/') || slashed.startsWith('_')) return null;
+    const seg = slashed.split('/');
+    if (seg.includes('..') || seg.includes('.')) return null;
+    if ([...slashed].length > 256 || /[\x00-\x1f\x7f]/.test(slashed)) return null;
+    if (!out.includes(slashed)) out.push(slashed);
+  }
+  return out;
+}
+// worker.js attachmentDisposition
+function attachmentFake(key) {
+  const name = key.split('/').pop() || 'photo';
+  const ascii = name.replace(/[^\x20-\x7e]|["\\]/g, '_');
+  const utf8 = encodeURIComponent(name).replace(/['()*]/g, c => '%' + c.charCodeAt(0).toString(16).toUpperCase());
+  return `attachment; filename="${ascii}"; filename*=UTF-8''${utf8}`;
+}
+
 function pickFakeWorker(opts = {}) {
   const state = {
     project: {
@@ -3562,10 +3596,15 @@ function pickFakeWorker(opts = {}) {
       extra_price: opts.extraPrice ?? null,
       folders: opts.folders || ['20260819/'],
       owner_picker_id: null,
-      phase: 'picking',
+      phase: opts.phase || 'picking',
       modified_after_submit: 0,
       archived_at: opts.archivedAt || null,
       delivered_at: opts.deliveredAt || null,
+      // docs/delivery.md: final_folders is an array once delivered, else
+      // null; allow_proof_download is a boolean (the Worker's row/detail
+      // shape — never 0/1)
+      final_folders: opts.finalFolders || null,
+      allow_proof_download: !!opts.allowProofDownload,
     },
     // GET /api/pick/state's studio.{name, booking_url, has_logo}
     // (docs/dashboard-settings.md) — omitted from the response unless a test
@@ -3610,7 +3649,7 @@ function pickFakeWorker(opts = {}) {
       const pickerKey = h['x-picker-key'] || '';
       let body = null;
       try { body = JSON.parse(req.postData() || 'null'); } catch (e) { /* not JSON */ }
-      requests.push({ method, path: u.pathname, search: u.search, t: shareTok, key: pickerKey, body });
+      requests.push({ method, path: u.pathname, search: u.search, t: shareTok, key: pickerKey, body, range: h['range'] || null });
       const json = (data, status = 200) =>
         route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(data) });
 
@@ -3619,12 +3658,17 @@ function pickFakeWorker(opts = {}) {
         const isOwner = !!picker && state.project.owner_picker_id === picker.id;
         const ownerPicker = state.project.owner_picker_id ? state.pickers.get(state.project.owner_picker_id) : null;
         const subs = state.submissions;
+        const scope = pickScopeFake(state.project);
         const resp = {
           project: {
             id: state.project.id, title: state.project.title,
             pick_limit: state.project.pick_limit, extra_price: state.project.extra_price,
           },
-          folders: state.project.folders,
+          mode: scope.mode,
+          folders: scope.proofs,
+          final_folders: scope.finals,
+          allow_proof_download: state.project.allow_proof_download,
+          delivered_at: scope.mode === 'delivered' ? state.project.delivered_at : null,
           owner: ownerPicker ? ownerPicker.name : null,
           is_owner: isOwner,
           phase: state.project.phase,
@@ -3753,6 +3797,8 @@ function pickFakeWorker(opts = {}) {
           created_at: '2026-01-01T00:00:00.000Z',
           archived_at: state.project.archived_at,
           delivered_at: state.project.delivered_at,
+          final_folders: state.project.final_folders,
+          allow_proof_download: state.project.allow_proof_download,
           submission_count: subs.length,
           last_submitted_at: subs.length ? subs[subs.length - 1].created_at : null,
           unnotified_submissions: unnotifiedCountFake(subs),
@@ -3839,6 +3885,7 @@ function pickFakeWorker(opts = {}) {
         state.project.phase = 'picking';
         state.project.modified_after_submit = 0;
         state.project.delivered_at = null; // reopen always implies retouching's stamp is gone too
+        state.project.final_folders = null;
         return json({ ok: true, phase: 'picking' });
       }
       // Delivered projects (docs/dashboard-settings.md) — a stamp, not a
@@ -3846,13 +3893,65 @@ function pickFakeWorker(opts = {}) {
       // and only from retouching.
       if (/\/api\/admin\/projects\/[^/]+\/deliver$/.test(u.pathname) && method === 'POST') {
         if (state.project.phase !== 'retouching')
-          return json({ error: '尚未開始精修', code: 'not_retouching', phase: state.project.phase }, 409);
+          return json({ error: '尚未開始修圖，無法標記為已交付', code: 'not_retouching', phase: state.project.phase }, 409);
+        const raw = body && typeof body === 'object' && !Array.isArray(body) ? body.final_folders : undefined;
+        if (Array.isArray(raw) && raw.length > 20)
+          return json({ error: '交件資料夾最多 20 個', code: 'too_many_final_folders', max: 20 }, 400);
+        const finals = finalFoldersFake(raw);
+        if (!finals) return json({ error: '交件資料夾不正確', code: 'invalid_final_folders' }, 400);
+        const proofs = state.project.folders.concat(...state.tokens.map(t => t.folders || []));
+        const clash = finals.find(f => proofs.some(p => f.startsWith(p) || p.startsWith(f)));
+        if (clash) return json({ error: `「${clash}」與毛片資料夾重疊，精修請放在獨立的資料夾`, code: 'final_overlaps_proofs', folder: clash }, 400);
+        // a repeat deliver replaces the finals and keeps the first stamp
         if (!state.project.delivered_at) state.project.delivered_at = new Date().toISOString();
-        return json({ ok: true, delivered_at: state.project.delivered_at });
+        state.project.final_folders = finals;
+        return json({ ok: true, delivered_at: state.project.delivered_at, final_folders: finals });
       }
       if (/\/api\/admin\/projects\/[^/]+\/undeliver$/.test(u.pathname) && method === 'POST') {
         state.project.delivered_at = null;
+        state.project.final_folders = null; // clears the snapshot too
         return json({ ok: true, delivered_at: null });
+      }
+      if (/^\/api\/admin\/projects\/[^/]+$/.test(u.pathname) && method === 'PATCH') {
+        if (opts.patchStatus && opts.patchStatus !== 200)
+          return json(opts.patchBody || { error: 'DB error' }, opts.patchStatus);
+        if (!body || typeof body !== 'object' || Array.isArray(body) ||
+            Object.keys(body).join() !== 'allow_proof_download' || typeof body.allow_proof_download !== 'boolean')
+          return json({ error: 'Only {allow_proof_download: true|false}', code: 'invalid_body' }, 400);
+        state.project.allow_proof_download = body.allow_proof_download;
+        return json({ ok: true, allow_proof_download: body.allow_proof_download });
+      }
+
+      // A pick link's reads (docs/delivery.md): a listing outside the link's
+      // scope is 401 when the fixture asks for scoped reads; an original (no
+      // ?w=, or ?download=1) is finals once delivered, proofs only while the
+      // switch is on — else 403 original_not_allowed. Downloads carry the
+      // real Content-Disposition; a Range request gets a real 206.
+      if (shareTok && method === 'GET' && !u.pathname.startsWith('/api/') && u.pathname !== '/' && !u.searchParams.has('list')) {
+        const key = decodeURIComponent(u.pathname.slice(1));
+        const scope = pickScopeFake(state.project);
+        const cors = { 'Access-Control-Allow-Origin': '*' };
+        const isDownload = u.searchParams.get('download') === '1';
+        const isOriginal = isDownload || !u.searchParams.has('w');
+        if (isOriginal) {
+          const isFinal = scope.finals.some(f => key.startsWith(f));
+          if (!isFinal && !state.project.allow_proof_download) {
+            return route.fulfill({ status: 403, contentType: 'application/json', headers: cors,
+              body: JSON.stringify({ error: '原檔未開放下載', code: 'original_not_allowed' }) });
+          }
+        }
+        const headers = { ...cors, 'Accept-Ranges': 'bytes', 'Cache-Control': 'private, max-age=86400' };
+        if (isDownload) headers['Content-Disposition'] = attachmentFake(key);
+        const full = opts.image || PIXEL;
+        if (h['range']) {
+          const m = /^bytes=(\d+)-(\d*)$/.exec(h['range']);
+          if (m) {
+            const start = +m[1], end = m[2] === '' ? full.length - 1 : Math.min(+m[2], full.length - 1);
+            headers['Content-Range'] = `bytes ${start}-${end}/${full.length}`;
+            return route.fulfill({ status: 206, contentType: 'image/png', headers, body: full.subarray(start, end + 1) });
+          }
+        }
+        return route.fulfill({ status: 200, contentType: 'image/png', headers, body: full });
       }
 
       if (u.searchParams.has('list')) {
@@ -7379,39 +7478,524 @@ await suite('設定 — 沒有 studio_token 時跳轉回 home.html',
 // Delivered projects (docs/dashboard-settings.md) — admin.html project detail
 // ═══════════════════════════════════════════════════════════════════════════
 
+// ═══════════════════════════════════════════════════════════════════════════
+// Delivery (docs/delivery.md) — admin.html 交件 block + the proof-download
+// switch, and the guest link's delivery gallery
+// ═══════════════════════════════════════════════════════════════════════════
+
+const WORKER = 'https://imagepicker.hotichen.workers.dev';
+const ADMIN_BUCKET = ['shoot/', 'shoot/毛片/', 'shoot/精修/', 'shoot/精修二/', 'shoot/毛片/sub/', '_hidden/'];
+
+// Opens the folder picker's overlay, walks into `path` (a list of prefixes,
+// each entered from the one before) and ticks `folders`, then confirms.
+async function adminPickFinals(page, enterPath, folders) {
+  await page.waitForSelector('#folder-picker[style*="flex"]', { timeout: 3000 });
+  for (const prefix of enterPath) {
+    await page.click(`#folder-picker [data-browse="${prefix}"]`);
+    await page.waitForFunction(p => document.getElementById('folder-picker-path').textContent === p, prefix, { timeout: 3000 });
+  }
+  for (const f of folders) {
+    await page.waitForSelector(`#folder-picker [data-pick-folder="${f}"]`, { timeout: 3000 });
+    await page.evaluate(x => {
+      const box = document.querySelector(`#folder-picker [data-pick-folder="${x}"]`);
+      if (!box.checked) box.click();
+    }, f);
+  }
+  await page.click('#folder-picker [data-confirm-folders]');
+}
+const deliverBodies = m => m.requests.filter(r => r.method === 'POST' && r.path.endsWith('/deliver')).map(r => r.body);
+const chipTexts = (page, sel) => page.$$eval(sel, els => els.map(e => e.dataset.finalChip));
+
 {
-  const m = pickFakeWorker({ projectId: 'proj-deliver', title: '待交付專案' });
-  m.state.project.phase = 'retouching';
-  await suite('admin — 精修中專案顯示「標記已交付」，點下去之後變成「取消交付」＋已交付徽章，清單也跟著顯示',
+  const m = pickFakeWorker({ projectId: 'proj-deliver', title: '待交件專案', phase: 'retouching', folders: ['shoot/毛片/'], bucketFolders: ADMIN_BUCKET });
+  await suite('admin 交件 — 精修中：選精修資料夾（附警語）→ 交件 → 已交件＋資料夾；更換（再交件）；取消交件（要確認）',
     `${base}/admin.html#project=proj-deliver`,
     async page => {
       const out = [];
       const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
-      await page.waitForSelector('#pd-deliver-btn', { timeout: 5000 });
-      // "標記已交付" (the deliver button's own label) contains the substring
-      // "已交付" too, so the badge is checked by its own [data-delivered-badge]
-      // marker rather than a plain text search.
-      ok('no 取消交付 yet, no 已交付 badge yet',
-        (await page.$('#pd-undeliver-btn')) === null && (await page.$('[data-delivered-badge]')) === null);
+      await page.waitForSelector('#pd-delivery #pd-final-pick-btn', { timeout: 5000 });
+      const txt = () => page.$eval('#pd-delivery', e => e.textContent);
+      ok('the old 標記已交付 button is gone', !(await page.textContent('#project-detail-body')).includes('標記已交付'));
+      ok('the block warns that finals must be a separate folder, not inside the proof folder',
+        /獨立的資料夾/.test(await txt()) && /不能放在毛片/.test(await txt()), await txt());
+      ok('交件 is disabled until a folder is chosen', await page.$eval('#pd-deliver-btn', b => b.disabled));
+      ok('nothing is shown as delivered yet',
+        (await page.$('[data-delivered-status]')) === null && (await page.$('#pd-undeliver-btn')) === null);
+
+      await page.click('#pd-final-pick-btn');
+      await adminPickFinals(page, ['shoot/'], ['shoot/精修/']);
+      await page.waitForSelector('#pd-final-chips [data-final-chip]', { timeout: 3000 });
+      ok('the chosen folder shows as a chip', JSON.stringify(await chipTexts(page, '#pd-final-chips [data-final-chip]')) === '["shoot/精修/"]');
+      ok('交件 is enabled now', !(await page.$eval('#pd-deliver-btn', b => b.disabled)));
+      ok('nothing was sent yet', deliverBodies(m).length === 0);
 
       await page.click('#pd-deliver-btn');
-      await page.waitForSelector('#pd-undeliver-btn', { timeout: 3000 });
-      ok('標記已交付 is gone, replaced by 取消交付', (await page.$('#pd-deliver-btn')) === null);
-      ok('已交付 badge shows in the detail panel',
-        (await page.$('#project-detail-body [data-delivered-badge]')) !== null);
-      ok('the deliver call actually reached the Worker',
-        m.requests.some(r => r.method === 'POST' && r.path.endsWith('/deliver')));
-      ok('and the projects list picked up the badge too', await page.waitForSelector(
-        '#proj-recent-list [data-delivered-badge]', { timeout: 3000 }).then(() => true, () => false));
+      await page.waitForSelector('[data-delivered-status]', { timeout: 3000 });
+      ok('the deliver call carried final_folders', JSON.stringify(deliverBodies(m)) === '[{"final_folders":["shoot/精修/"]}]', JSON.stringify(deliverBodies(m)));
+      ok('the block says 已交件 and lists the final folder',
+        (await page.$eval('[data-delivered-status]', e => e.textContent)) === '已交件' &&
+        JSON.stringify(await chipTexts(page, '#pd-delivered-folders [data-final-chip]')) === '["shoot/精修/"]');
+      ok('更換精修資料夾 and 取消交件 are offered; 交件 is gone',
+        !!(await page.$('#pd-replace-final-btn')) && !!(await page.$('#pd-undeliver-btn')) && (await page.$('#pd-deliver-btn')) === null);
+      ok('the detail header and the project list both show the 已交件 badge',
+        (await page.$('.pd-head [data-delivered-badge]')) !== null &&
+        await page.waitForSelector('#proj-recent-list [data-delivered-badge]', { timeout: 3000 }).then(() => true, () => false));
+      const firstStamp = m.state.project.delivered_at;
 
+      // repeat deliver: the picker opens with the current finals ticked
+      await page.click('#pd-replace-final-btn');
+      await page.waitForSelector('#folder-picker[style*="flex"]', { timeout: 3000 });
+      await page.click('#folder-picker [data-browse="shoot/"]');
+      await page.waitForSelector('#folder-picker [data-pick-folder="shoot/精修/"]', { timeout: 3000 });
+      ok('the current finals are pre-ticked in the picker',
+        await page.$eval('#folder-picker [data-pick-folder="shoot/精修/"]', b => b.checked));
+      await page.evaluate(() => {
+        document.querySelector('#folder-picker [data-pick-folder="shoot/精修/"]').click();
+        document.querySelector('#folder-picker [data-pick-folder="shoot/精修二/"]').click();
+      });
+      await page.click('#folder-picker [data-confirm-folders]');
+      await page.waitForSelector('#pd-final-chips [data-final-chip]', { timeout: 3000 });
+      ok('nothing is sent until 確定更換', deliverBodies(m).length === 1);
+      ok('the button now reads 確定更換', (await page.textContent('#pd-deliver-btn')) === '確定更換');
+      await page.click('#pd-deliver-btn');
+      await page.waitForFunction(() => document.querySelector('#pd-delivered-folders [data-final-chip]')?.dataset.finalChip === 'shoot/精修二/', null, { timeout: 3000 });
+      ok('the second deliver replaced the finals', JSON.stringify(deliverBodies(m)[1]) === '{"final_folders":["shoot/精修二/"]}', JSON.stringify(deliverBodies(m)));
+      ok('and kept the first delivered_at', m.state.project.delivered_at === firstStamp);
+      ok('the chooser is closed again (更換 offered)', !!(await page.$('#pd-replace-final-btn')));
+
+      // cancelling the chooser sends nothing
+      await page.click('#pd-replace-final-btn');
+      await page.click('#folder-picker-close');
+      await page.click('#pd-final-cancel-btn');
+      await page.waitForSelector('#pd-replace-final-btn', { timeout: 3000 });
+      ok('取消 leaves the delivery alone', deliverBodies(m).length === 2);
+
+      // undeliver asks first
+      let dialogText = '';
+      page.once('dialog', d => { dialogText = d.message(); d.dismiss(); });
       await page.click('#pd-undeliver-btn');
-      await page.waitForSelector('#pd-deliver-btn', { timeout: 3000 });
-      ok('取消交付 reverts to 標記已交付, no more 已交付 badge',
-        (await page.$('#pd-undeliver-btn')) === null &&
-        (await page.$('#project-detail-body [data-delivered-badge]')) === null);
+      await page.waitForTimeout(300);
+      ok('取消交件 shows a confirm dialog that says what happens', /取消交件/.test(dialogText) && /選片畫面/.test(dialogText), dialogText);
+      ok('dismissing it keeps the delivery',
+        m.state.project.delivered_at !== null && !m.requests.some(r => r.path.endsWith('/undeliver')));
+      page.once('dialog', d => d.accept());
+      await page.click('#pd-undeliver-btn');
+      await page.waitForSelector('#pd-final-pick-btn', { timeout: 3000 });
+      ok('accepting it undelivers: the chooser is back, no 已交件',
+        m.requests.some(r => r.path.endsWith('/undeliver')) && (await page.$('[data-delivered-status]')) === null &&
+        (await page.$('.pd-head [data-delivered-badge]')) === null);
+      ok('and the snapshot is gone on the server side too', m.state.project.final_folders === null);
       return out;
     },
     { before: m.attach, initScript: ADMIN });
+}
+
+{
+  const m = pickFakeWorker({ projectId: 'proj-codes', phase: 'retouching', folders: ['shoot/毛片/'],
+    bucketFolders: ADMIN_BUCKET.concat(Array.from({ length: 21 }, (_, i) => `many/f${i}/`), ['many/']) });
+  await suite('admin 交件 — Worker 的錯誤碼各有中文：not_retouching / too_many_final_folders / invalid_final_folders / final_overlaps_proofs（指名資料夾）',
+    `${base}/admin.html#project=proj-codes`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('#pd-final-pick-btn', { timeout: 5000 });
+      const err = () => page.$eval('#pd-deliver-err', e => e.textContent);
+      const tryDeliver = async (enterPath, folders) => {
+        await page.click('#pd-final-pick-btn');
+        await adminPickFinals(page, enterPath, folders);
+        await page.waitForSelector('#pd-final-chips [data-final-chip]', { timeout: 3000 });
+        await page.click('#pd-deliver-btn');
+        await page.waitForFunction(() => document.getElementById('pd-deliver-err').textContent !== '', null, { timeout: 3000 });
+      };
+
+      await tryDeliver(['shoot/'], ['shoot/毛片/sub/']);
+      ok('final_overlaps_proofs names the folder', /shoot\/毛片\/sub\//.test(await err()) && /毛片資料夾/.test(await err()), await err());
+      ok('the chosen folder stays so it can be fixed, and the button is usable again',
+        (await chipTexts(page, '#pd-final-chips [data-final-chip]')).length === 1 && !(await page.$eval('#pd-deliver-btn', b => b.disabled)));
+      ok('nothing became delivered', m.state.project.delivered_at === null && (await page.$('[data-delivered-status]')) === null);
+
+      // another folder replaces the clash and the message clears
+      await page.click('#pd-final-pick-btn');
+      await page.click('#folder-picker [data-browse="shoot/"]');
+      await page.waitForSelector('#folder-picker [data-pick-folder="shoot/精修/"]', { timeout: 3000 });
+      await page.evaluate(() => {
+        document.querySelector('#folder-picker [data-pick-folder="shoot/毛片/sub/"]')?.click();
+        document.querySelector('#folder-picker [data-pick-folder="shoot/精修/"]').click();
+      });
+      await page.click('#folder-picker [data-confirm-folders]');
+
+      // invalid_final_folders
+      await page.click('#pd-final-pick-btn');
+      await page.waitForSelector('#folder-picker [data-pick-folder]', { timeout: 3000 });
+      await page.evaluate(() => {
+        for (const b of document.querySelectorAll('#folder-picker [data-pick-folder]')) if (b.checked) b.click();
+        document.querySelector('#folder-picker [data-pick-folder="_hidden/"]').click();
+      });
+      await page.click('#folder-picker [data-confirm-folders]');
+      await page.click('#pd-deliver-btn');
+      await page.waitForFunction(() => /不正確/.test(document.getElementById('pd-deliver-err').textContent), null, { timeout: 3000 });
+      ok('invalid_final_folders gets its own sentence', /精修資料夾不正確/.test(await err()), await err());
+
+      // too_many_final_folders: 21 folders
+      await page.$$eval('[data-remove-final]', bs => bs.forEach(b => b.click()));
+      await page.click('#pd-final-pick-btn');
+      await page.click('#folder-picker [data-browse="many/"]');
+      await page.waitForSelector('#folder-picker [data-pick-folder="many/f0/"]', { timeout: 3000 });
+      await page.evaluate(() => {
+        for (const b of document.querySelectorAll('#folder-picker [data-pick-folder]')) if (b.checked) b.click();
+        for (const b of document.querySelectorAll('#folder-picker [data-pick-folder^="many/f"]')) b.click();
+      });
+      await page.click('#folder-picker [data-confirm-folders]');
+      ok('21 chips chosen', (await chipTexts(page, '#pd-final-chips [data-final-chip]')).length === 21);
+      await page.click('#pd-deliver-btn');
+      await page.waitForFunction(() => /最多/.test(document.getElementById('pd-deliver-err').textContent), null, { timeout: 3000 });
+      ok('too_many_final_folders says the max (20)', /最多 20 個/.test(await err()), await err());
+
+      // not_retouching: the project was reopened meanwhile
+      m.state.project.phase = 'picking';
+      await page.$$eval('[data-remove-final]', bs => bs.forEach(b => b.click()));
+      await page.click('#pd-final-pick-btn');
+      await page.waitForSelector('#folder-picker [data-pick-folder]', { timeout: 3000 });
+      await page.evaluate(() => {
+        for (const b of document.querySelectorAll('#folder-picker [data-pick-folder]')) if (b.checked) b.click();
+        document.querySelector('#folder-picker [data-pick-folder="many/f0/"]').click();
+      });
+      await page.click('#folder-picker [data-confirm-folders]');
+      await page.click('#pd-deliver-btn');
+      await page.waitForFunction(() => /開始精修/.test(document.getElementById('pd-deliver-err').textContent), null, { timeout: 3000 });
+      ok('not_retouching tells the photographer to press 開始精修', /尚未開始精修/.test(await err()), await err());
+      ok('none of the four was delivered', m.state.project.delivered_at === null);
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN });
+}
+
+{
+  const m = pickFakeWorker({ projectId: 'proj-sw', title: '開關', phase: 'picking' });
+  await suite('admin — 「允許客人下載毛片原檔」開關：狀態來自專案、開關送 PATCH、重新開啟仍是新狀態',
+    `${base}/admin.html#project=proj-sw`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('#pd-allow-proof-dl', { timeout: 5000 });
+      const patches = () => m.requests.filter(r => r.method === 'PATCH').map(r => r.body);
+      ok('the switch is present in 選片中 (any phase) and off by default',
+        (await page.$eval('#pd-allow-proof-dl', i => i.checked)) === false);
+      ok('the block explains what it does', /毛片的原始檔/.test(await page.$eval('#pd-proofdl', e => e.textContent)));
+      ok('no 交件 block while still picking', (await page.$('#pd-delivery #pd-final-pick-btn')) === null);
+      await page.click('#pd-allow-proof-dl');
+      await page.waitForFunction(() => !document.getElementById('pd-allow-proof-dl').disabled, null, { timeout: 3000 });
+      ok('turning on sends PATCH {allow_proof_download:true}', JSON.stringify(patches()) === '[{"allow_proof_download":true}]', JSON.stringify(patches()));
+      ok('the switch stays on', await page.$eval('#pd-allow-proof-dl', i => i.checked));
+      ok('and the server has it', m.state.project.allow_proof_download === true);
+      await page.reload({ waitUntil: 'load' });
+      await page.waitForSelector('#pd-allow-proof-dl', { timeout: 5000 });
+      ok('reopening the detail shows it on (state comes from the project)', await page.$eval('#pd-allow-proof-dl', i => i.checked));
+      await page.click('#pd-allow-proof-dl');
+      await page.waitForFunction(() => !document.getElementById('pd-allow-proof-dl').disabled, null, { timeout: 3000 });
+      ok('turning off sends {allow_proof_download:false}', JSON.stringify(patches()[1]) === '{"allow_proof_download":false}', JSON.stringify(patches()));
+      ok('and it is off on the server', m.state.project.allow_proof_download === false);
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN });
+}
+
+{
+  const m = pickFakeWorker({ projectId: 'proj-sw-err', phase: 'retouching', patchStatus: 500, patchBody: { error: 'no such column: allow_proof_download' } });
+  await suite('admin — 開關失敗（例如 migration 還沒跑）：顯示錯誤並把開關放回原位',
+    `${base}/admin.html#project=proj-sw-err`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('#pd-allow-proof-dl', { timeout: 5000 });
+      await page.click('#pd-allow-proof-dl');
+      await page.waitForFunction(() => document.getElementById('pd-proofdl-err').textContent !== '', null, { timeout: 3000 });
+      ok('the server message is shown', /allow_proof_download/.test(await page.textContent('#pd-proofdl-err')));
+      ok('the switch is back off (nothing was saved)', (await page.$eval('#pd-allow-proof-dl', i => i.checked)) === false);
+      ok('and usable again', !(await page.$eval('#pd-allow-proof-dl', i => i.disabled)));
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN });
+}
+
+{
+  const m = pickFakeWorker({ projectId: 'proj-sw-on', phase: 'retouching', allowProofDownload: true });
+  await suite('admin — 專案本來就開著開關時，畫面一打開就是開的',
+    `${base}/admin.html#project=proj-sw-on`,
+    async page => {
+      await page.waitForSelector('#pd-allow-proof-dl', { timeout: 5000 });
+      return [(await page.$eval('#pd-allow-proof-dl', i => i.checked)) ? 'ok    switch reads allow_proof_download from the project' : 'FAIL  switch not checked'];
+    },
+    { before: m.attach, initScript: ADMIN });
+}
+
+{
+  const m = pickFakeWorker({ projectId: 'proj-legacy', phase: 'retouching', deliveredAt: '2026-09-01T00:00:00.000Z' });
+  await suite('admin — 舊資料（有交付時間、沒有精修資料夾）：仍顯示已交件，並能用「更換精修資料夾」補上',
+    `${base}/admin.html#project=proj-legacy`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('[data-delivered-status]', { timeout: 5000 });
+      ok('a legacy stamp is shown as 已交件 with a note instead of folders',
+        /舊資料/.test(await page.textContent('#pd-delivered-folders')) && !!(await page.$('#pd-replace-final-btn')));
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN });
+}
+
+// ─── guest link ──────────────────────────────────────────────────────────────
+
+const GUEST_FILES = [
+  'shoot/毛片/a.jpg', 'shoot/毛片/b.jpg',
+  'shoot/精修/f1.jpg', 'shoot/精修/f2.jpg', 'shoot/精修/sub/f3.jpg',
+];
+const DL = key => `${WORKER}/${key}?download=1&t=TOK`;
+const guestCards = page => page.$$eval('.photo-card', cs => cs.map(c => c.dataset.photoId));
+const listed = m => m.requests.filter(r => r.search.includes('list=')).map(r => decodeURIComponent(new URLSearchParams(r.search).get('list')));
+
+{
+  const m = pickFakeWorker({ ownerName: 'Zoe', ownerKey: 'ZOE-KEY', folders: ['shoot/毛片/'], pickFiles: GUEST_FILES });
+  await suite('guest picking, switch OFF — no download button anywhere (absent from the DOM, not merely hidden)',
+    `${base}/index.html?t=TOK`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('.photo-card', { timeout: 5000 });
+      ok('positive: the proofs and the ♥ are there', (await guestCards(page)).length === 2 && !!(await page.$('.pick-heart-btn')));
+      await page.click('.photo-card', { position: { x: 5, y: 5 } });
+      await page.waitForSelector('#photoModal.active', { timeout: 5000 });
+      const gone = await page.evaluate(() => ({
+        modalBtn: document.getElementById('modalDownloadBtn'),
+        previewBtn: document.getElementById('previewDownloadBtn'),
+        anyDl: document.querySelectorAll('[data-download], [download], a[href*="download=1"]').length,
+        zip: ['downloadAllBtn', 'downloadSelectedHeaderBtn', 'bulkActionBar'].filter(id => document.getElementById(id)),
+      }));
+      ok('#modalDownloadBtn is not in the DOM', gone.modalBtn === null);
+      ok('#previewDownloadBtn is not in the DOM', gone.previewBtn === null);
+      ok('no download link or attribute exists at all', gone.anyDl === 0, String(gone.anyDl));
+      ok('the zip downloads (which would fetch originals) are gone too', gone.zip.length === 0, JSON.stringify(gone.zip));
+      ok('no delivery bar', (await page.$eval('#deliveryBar', e => e.hidden)) === true);
+      return out;
+    },
+    { before: m.attach, initScript: () => localStorage.setItem('pick_key:TOK', 'ZOE-KEY') });
+}
+
+{
+  const m = pickFakeWorker({ ownerName: 'Zoe', ownerKey: 'ZOE-KEY', folders: ['shoot/毛片/'], pickFiles: GUEST_FILES, allowProofDownload: true });
+  await suite('guest picking, switch ON — 下載原檔 in the preview with ?download=1&t=; a refusal says 原檔未開放下載',
+    `${base}/index.html?t=TOK`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('.photo-card', { timeout: 5000 });
+      ok('the grid still has ♥ (picking as before)', !!(await page.$('.pick-heart-btn')));
+      ok('grid cards carry no download link while picking', (await page.$('.photo-card [data-download]')) === null);
+      await page.click('.photo-card', { position: { x: 5, y: 5 } });
+      await page.waitForSelector('#photoModal.active', { timeout: 5000 });
+      const modal = await page.$eval('#modalDownloadBtn', e => ({ href: decodeURI(e.href), text: e.textContent, disp: getComputedStyle(e).display }));
+      ok('the modal has the button, visible, labelled 下載原檔',
+        modal.text === '下載原檔' && modal.disp !== 'none', JSON.stringify(modal));
+      ok('with the exact download URL', modal.href === DL('shoot/毛片/a.jpg'), modal.href);
+      const pv = await page.$eval('#previewDownloadBtn', e => ({ href: decodeURI(e.href), disp: getComputedStyle(e).display, text: e.textContent }));
+      ok('the preview pane has it too', pv.href === DL('shoot/毛片/a.jpg') && pv.disp !== 'none' && pv.text === '下載原檔', JSON.stringify(pv));
+
+      await page.click('#nextPhotoBtn');
+      await page.waitForFunction(() => document.getElementById('modalDownloadBtn').href.endsWith('b.jpg?download=1&t=TOK'), null, { timeout: 3000 });
+      ok('the link follows the photo when navigating', true);
+      await page.click('#prevPhotoBtn');
+      await page.waitForFunction(() => document.getElementById('modalDownloadBtn').href.includes('a.jpg'), null, { timeout: 3000 });
+
+      const [dl] = await Promise.all([page.waitForEvent('download', { timeout: 5000 }), page.click('#modalDownloadBtn')]);
+      ok('clicking saves the file under the Worker’s Content-Disposition name', dl.suggestedFilename() === 'a.jpg', dl.suggestedFilename());
+      ok('a one-byte Range probe went first, then the real download request',
+        m.requests.some(r => r.path.endsWith('a.jpg') && r.range === 'bytes=0-0') &&
+        m.requests.filter(r => r.path.endsWith('a.jpg') && r.search.includes('download=1') && !r.range).length >= 1);
+
+      // the photographer turns the switch off while this page is open
+      m.state.project.allow_proof_download = false;
+      let saved = false;
+      page.once('download', () => { saved = true; });
+      await page.click('#modalDownloadBtn');
+      await page.waitForSelector('.toast.error .toast-message', { timeout: 3000 });
+      ok('a 403 original_not_allowed shows 原檔未開放下載', (await page.textContent('.toast.error .toast-message')) === '原檔未開放下載');
+      await page.waitForTimeout(300);
+      ok('and nothing was downloaded or navigated to', !saved && page.url().startsWith(`${base}/index.html`));
+      return out;
+    },
+    { before: m.attach, initScript: () => localStorage.setItem('pick_key:TOK', 'ZOE-KEY') });
+}
+
+{
+  const m = pickFakeWorker({ ownerName: 'Zoe', ownerKey: 'ZOE-KEY', folders: ['shoot/毛片/'], pickFiles: GUEST_FILES, allowProofDownload: true });
+  await suite('guest viewer, switch ON — a viewer gets the same download button in the preview',
+    `${base}/index.html?t=TOK`,
+    async page => {
+      await page.waitForSelector('.photo-card', { timeout: 5000 });
+      await page.click('.photo-card', { position: { x: 5, y: 5 } });
+      await page.waitForSelector('#photoModal.active', { timeout: 5000 });
+      const href = await page.$eval('#modalDownloadBtn', e => decodeURI(e.href));
+      return [href === DL('shoot/毛片/a.jpg') ? 'ok    viewer sees the button with the right URL' : `FAIL  ${href}`];
+    },
+    { before: m.attach });
+}
+
+// delivered gallery — owner, viewer with a taken seat, viewer with a free seat
+for (const who of [
+  { label: 'the owner', o: { ownerName: 'Zoe', ownerKey: 'ZOE-KEY' }, init: () => localStorage.setItem('pick_key:TOK', 'ZOE-KEY') },
+  { label: 'a viewer (seat taken)', o: { ownerName: 'Zoe', ownerKey: 'ZOE-KEY' }, init: null },
+  { label: 'a viewer (seat never claimed)', o: {}, init: null },
+]) {
+  const m = pickFakeWorker({ ...who.o, phase: 'retouching', folders: ['shoot/毛片/'], finalFolders: ['shoot/精修/'],
+    deliveredAt: '2026-09-20T00:00:00.000Z', pickFiles: GUEST_FILES });
+  await suite(`guest delivered — ${who.label} sees the 精修成品 gallery: finals only, no picking UI, 下載 per photo`,
+    `${base}/index.html?t=TOK`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('.photo-card', { timeout: 5000 });
+      const cards = await guestCards(page);
+      ok('the finals are listed (f1, f2)', JSON.stringify(cards) === '["shoot/精修/f1.jpg","shoot/精修/f2.jpg"]', JSON.stringify(cards));
+      ok('the claim overlay never appears, even with a free seat', (await page.$eval('#pickClaimOverlay', e => e.hidden)) === true);
+      ok('the title says 精修成品', (await page.textContent('#deliveryTitle')).startsWith('精修成品') &&
+        (await page.$eval('#deliveryBar', e => e.hidden)) === false);
+      ok('only the finals folder was listed; the proofs never were', listed(m).length > 0 && listed(m).every(f => f.startsWith('shoot/精修/')), JSON.stringify(listed(m)));
+      const imgs = await page.$$eval('.photo-card img', is => is.map(i => i.src));
+      ok('thumbnails are ?w=400 through the token', imgs.every(s => s.includes('?w=400') && s.includes('t=TOK') && s.includes('%E7%B2%BE%E4%BF%AE')), JSON.stringify(imgs));
+      ok('no request touched a proof photo', !m.requests.some(r => decodeURIComponent(r.path).includes('毛片')));
+      ok('no ♥, no submit, no counter, no filter bar, no picking banner',
+        (await page.$('.pick-heart-btn')) === null && (await page.$('#submitJobBtn')) === null &&
+        (await page.$('#pickCounter')) === null && (await page.$('#pickBanner')) === null &&
+        (await page.$eval('#pickFilterBar', e => e.hidden)) === true);
+      ok('no way to reach the proofs: no 下載毛片原檔 entry while the switch is off', (await page.$('#deliveryProofsBtn')) === null);
+      const dls = await page.$$eval('.photo-card [data-download]', as => as.map(a => ({ href: decodeURI(a.href), text: a.textContent })));
+      ok('every card has a 下載 link with its own ?download=1&t= URL',
+        dls.length === 2 && dls[0].href === DL('shoot/精修/f1.jpg') && dls[1].href === DL('shoot/精修/f2.jpg') && dls.every(d => d.text === '下載'), JSON.stringify(dls));
+      ok('the subfolder is in the folder panel', (await page.$$eval('#folderTree .tree-row', rs => rs.map(r => r.dataset.folder))).includes('shoot/精修/'));
+
+      // preview: swipe/zoom machinery is the pick preview's own
+      await page.click('.photo-card', { position: { x: 5, y: 5 } });
+      await page.waitForSelector('#photoModal.active', { timeout: 5000 });
+      ok('no ♥ / note box in the preview',
+        (await page.$('#modalPhotoRating .pick-heart-btn')) === null && (await page.$eval('#noteInputGroup', e => e.hidden)) === true);
+      ok('the preview has 下載 with the photo’s URL',
+        (await page.$eval('#modalDownloadBtn', e => decodeURI(e.href))) === DL('shoot/精修/f1.jpg') && (await page.textContent('#modalDownloadBtn')) === '下載');
+      ok('the preview image is the ?w= bucket, not the original',
+        /\?w=\d+/.test(await page.$eval('#previewImg', i => i.src)));
+      await page.click('#zoomInBtn');
+      ok('zoom works', (await page.textContent('#zoomLevel')) !== '100%', await page.textContent('#zoomLevel'));
+      await page.click('#zoomResetBtn');
+      await page.keyboard.press('ArrowRight');
+      await page.waitForFunction(() => document.getElementById('photoCounter').textContent === '2 / 2', null, { timeout: 3000 });
+      ok('next photo works and the download link follows', (await page.$eval('#modalDownloadBtn', e => decodeURI(e.href))) === DL('shoot/精修/f2.jpg'));
+      const [dl] = await Promise.all([page.waitForEvent('download', { timeout: 5000 }), page.click('#modalDownloadBtn')]);
+      ok('downloading a final saves f2.jpg', dl.suggestedFilename() === 'f2.jpg', dl.suggestedFilename());
+      await page.keyboard.press('Escape');
+
+      // a subfolder opens like a proof subfolder does
+      await page.click('#folderTree .tree-row');
+      ok('the finals folder row is clickable and keeps the gallery', (await guestCards(page)).length === 2);
+      ok('and no picking write was ever sent', !m.requests.some(r => r.path === '/api/pick/selections'));
+      return out;
+    },
+    { before: m.attach, initScript: who.init || undefined });
+}
+
+{
+  const m = pickFakeWorker({ ownerName: 'Zoe', ownerKey: 'ZOE-KEY', phase: 'retouching', folders: ['shoot/毛片/'], finalFolders: ['shoot/精修/'],
+    deliveredAt: '2026-09-20T00:00:00.000Z', pickFiles: GUEST_FILES, allowProofDownload: true });
+  await suite('guest delivered + switch ON — a secondary 下載毛片原檔 lists the proofs, download-only; 回精修成品 comes back',
+    `${base}/index.html?t=TOK`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('.photo-card', { timeout: 5000 });
+      ok('the gallery still opens on the finals', (await guestCards(page)).every(k => k.startsWith('shoot/精修/')));
+      ok('the proofs were not listed yet', listed(m).every(f => f.startsWith('shoot/精修/')), JSON.stringify(listed(m)));
+      ok('the entry is 下載毛片原檔', (await page.textContent('#deliveryProofsBtn')) === '下載毛片原檔' && !(await page.$eval('#deliveryProofsBtn', e => e.hidden)));
+      await page.click('#deliveryProofsBtn');
+      await page.waitForFunction(() => document.querySelector('.photo-card')?.dataset.photoId.includes('毛片'), null, { timeout: 5000 });
+      ok('the proofs are listed (a, b)', JSON.stringify(await guestCards(page)) === '["shoot/毛片/a.jpg","shoot/毛片/b.jpg"]', JSON.stringify(await guestCards(page)));
+      ok('the proof folder was listed now', listed(m).includes('shoot/毛片/'));
+      ok('download-only: no ♥, no submit, no note box',
+        (await page.$('.pick-heart-btn')) === null && (await page.$('#submitJobBtn')) === null);
+      ok('each proof has a 下載原檔 link',
+        JSON.stringify(await page.$$eval('.photo-card [data-download]', as => as.map(a => [decodeURI(a.href), a.textContent]))) ===
+        JSON.stringify([[DL('shoot/毛片/a.jpg'), '下載原檔'], [DL('shoot/毛片/b.jpg'), '下載原檔']]));
+      ok('the title says it is the proofs', /毛片原檔/.test(await page.textContent('#deliveryTitle')));
+      const [dl] = await Promise.all([page.waitForEvent('download', { timeout: 5000 }), page.click('.photo-card [data-download]')]);
+      ok('downloading a proof original works (switch on)', dl.suggestedFilename() === 'a.jpg');
+      ok('the card click did not also open the preview', (await page.$('#photoModal.active')) === null);
+      ok('the button now leads back', (await page.textContent('#deliveryProofsBtn')) === '← 回精修成品');
+      await page.click('#deliveryProofsBtn');
+      await page.waitForFunction(() => document.querySelector('.photo-card')?.dataset.photoId.includes('精修'), null, { timeout: 5000 });
+      ok('back on the finals', JSON.stringify(await guestCards(page)) === '["shoot/精修/f1.jpg","shoot/精修/f2.jpg"]');
+      ok('and the folder panel follows the view', (await page.$$eval('#folderTree .tree-row', rs => rs.every(r => r.dataset.folder.includes('精修')))));
+
+      // switch turned off while open: the proof download is refused politely
+      await page.click('#deliveryProofsBtn');
+      await page.waitForFunction(() => document.querySelector('.photo-card')?.dataset.photoId.includes('毛片'), null, { timeout: 5000 });
+      m.state.project.allow_proof_download = false;
+      let saved = false;
+      page.once('download', () => { saved = true; });
+      await page.click('.photo-card [data-download]');
+      await page.waitForSelector('.toast.error .toast-message', { timeout: 3000 });
+      ok('a refused proof download says 原檔未開放下載', (await page.textContent('.toast.error .toast-message')) === '原檔未開放下載');
+      await page.waitForTimeout(200);
+      ok('and saved nothing', !saved);
+      return out;
+    },
+    { before: m.attach, initScript: () => localStorage.setItem('pick_key:TOK', 'ZOE-KEY') });
+}
+
+{
+  const m = pickFakeWorker({ ownerName: 'Zoe', ownerKey: 'ZOE-KEY', phase: 'retouching', folders: ['shoot/毛片/'], finalFolders: ['shoot/精修/'],
+    deliveredAt: '2026-09-20T00:00:00.000Z', pickFiles: GUEST_FILES, allowProofDownload: true });
+  await suite('guest delivered gallery on a phone — no sideways scroll, 44px download targets, everything inside 390px',
+    `${base}/index.html?t=TOK`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('.photo-card', { timeout: 5000 });
+      const geo = await page.evaluate(() => {
+        const r = s => { const e = document.querySelector(s); if (!e) return null; const b = e.getBoundingClientRect(); return { w: b.width, h: b.height, l: b.left, r: b.right }; };
+        return { sw: document.documentElement.scrollWidth, iw: innerWidth, dl: r('.photo-card [data-download]'), proofs: r('#deliveryProofsBtn'), bar: r('#deliveryBar') };
+      });
+      ok('the page does not scroll sideways', geo.sw <= geo.iw, JSON.stringify(geo));
+      ok('the card 下載 is >= 44 tall and inside the phone', !!geo.dl && geo.dl.h >= 44 && geo.dl.r <= geo.iw + 1 && geo.dl.l >= 0, JSON.stringify(geo.dl));
+      ok('下載毛片原檔 is >= 44 tall and inside the phone', !!geo.proofs && geo.proofs.h >= 44 && geo.proofs.r <= geo.iw + 1, JSON.stringify(geo.proofs));
+      await page.click('.photo-card', { position: { x: 5, y: 5 } });
+      await page.waitForSelector('#photoModal.active', { timeout: 5000 });
+      const modal = await page.evaluate(() => {
+        const e = document.getElementById('modalDownloadBtn');
+        const b = e.getBoundingClientRect();
+        return { h: b.height, l: b.left, r: b.right, vis: getComputedStyle(e).display !== 'none', iw: innerWidth };
+      });
+      ok('the preview 下載 is visible, >= 44 tall and inside the phone', modal.vis && modal.h >= 44 && modal.r <= modal.iw + 1 && modal.l >= 0, JSON.stringify(modal));
+      const before = await page.textContent('#photoCounter');
+      await swipeTouch(page, '#photoCanvas', 300, 400, 60, 410);
+      await page.waitForFunction(b => document.getElementById('photoCounter').textContent !== b, before, { timeout: 3000 });
+      ok('swiping moves to the next final and the link follows', (await page.$eval('#modalDownloadBtn', e => decodeURI(e.href))) === DL('shoot/精修/f2.jpg'));
+      ok('still no sideways scroll with the preview open', await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+      return out;
+    },
+    { before: m.attach, initScript: () => localStorage.setItem('pick_key:TOK', 'ZOE-KEY'), contextOptions: MOBILE });
+}
+
+{
+  const m = pickFakeWorker({ ownerName: 'Zoe', ownerKey: 'ZOE-KEY', phase: 'retouching', folders: ['shoot/毛片/'],
+    deliveredAt: '2026-09-01T00:00:00.000Z', pickFiles: GUEST_FILES });
+  await suite('guest — a legacy delivered stamp without finals stays the (read-only) picking view, no gallery',
+    `${base}/index.html?t=TOK`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('.photo-card', { timeout: 5000 });
+      ok('the proofs are shown with the read-only ♥', (await guestCards(page)).every(k => k.includes('毛片')) && !!(await page.$('.pick-heart-btn')));
+      ok('no delivery bar, no download link', (await page.$eval('#deliveryBar', e => e.hidden)) === true && (await page.$('[data-download]')) === null);
+      return out;
+    },
+    { before: m.attach, initScript: () => localStorage.setItem('pick_key:TOK', 'ZOE-KEY') });
 }
 
 {

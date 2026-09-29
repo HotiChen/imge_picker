@@ -2149,6 +2149,17 @@ span.pick-heart-btn { cursor: default; }
   font-family: var(--font-mono);
 }
 
+/* Delivery gallery (docs/delivery.md). [hidden] must beat .btn's display. */
+.delivery-bar .pick-banner-line { font-size: 15px; letter-spacing: .04em; }
+.pick-dl-link[hidden], #deliveryProofsBtn[hidden], .note-input-group[hidden], #previewRatingSection[hidden] { display: none !important; }
+.pick-dl-link { color: var(--ink); text-decoration: none; cursor: pointer; }
+.pick-card-dl { display: flex; justify-content: center; margin-top: 6px; padding: 4px 10px; font-size: 12px; }
+#modalDownloadBtn {
+  flex-shrink: 0; padding: 6px 12px; border: 1px solid rgba(255,255,255,.35);
+  color: #fff; font-size: 12px; white-space: nowrap; margin-left: 8px;
+}
+#previewDownloadBtn { justify-content: center; }
+
 /* The project-view banner's "← 回專案" and "複製選片連結" — real controls
    (an <a href>, a <button>), styled as ordinary .btn so they read as
    clickable, not stray underlined words (task: 專案選片 — banner button
@@ -2166,6 +2177,7 @@ span.pick-heart-btn { cursor: default; }
   .pick-filter-btn { min-height: 44px; }
   #submitJobBtn, #pickSubmitConfirmBtn, #pickSubmitCancelBtn { min-height: 44px; }
   .pv-banner-btn { min-height: 44px; padding: 10px 16px; }
+  .pick-card-dl, #modalDownloadBtn, #previewDownloadBtn { min-height: 44px; display: inline-flex; align-items: center; justify-content: center; }
   /* The preview's − / + / ⟲ (reset to fit) in the bottom bar. The bar gives
      up its dividers and side padding, and the file name shrinks (ellipsis),
      so the bigger buttons and the ♥ still fit a 390px phone. */

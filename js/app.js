@@ -787,13 +787,19 @@ class App {
             .filter(Boolean).join(' ');
         card.dataset.photoId = photo.id;
 
-        const heartTag = pickMode
+        // Delivery gallery (docs/delivery.md): no picking UI at all — no ♥ (not
+        // even the read-only one), no select toggle — and a 下載 link per photo.
+        const gallery = pickMode && PickController.isGallery();
+        const heartTag = gallery ? '' : pickMode
             ? (canEdit
                 ? `<button type="button" class="pick-heart-btn${isPicked ? ' on' : ''}" title="選">♥</button>`
                 : `<span class="pick-heart-btn${isPicked ? ' on' : ''}" title="選">♥</span>`)
             : (projectMode ? `<span class="pick-heart-btn on" title="已選">♥</span>` : '');
         const noteMarker = projectMode && photo.note
             ? '<span class="pv-note-badge" title="有備註">💬</span>' : '';
+        const dlTag = gallery
+            ? `<a class="btn btn-outline pick-dl-link pick-card-dl" href="${escapeHtml(driveManager.downloadUrl(photo))}" data-download>${escapeHtml(PickController.downloadLabel())}</a>`
+            : '';
         card.innerHTML = `
             <div class="photo-image-container">
                 <img src="${escapeHtml(imageUrl)}" class="photo-image" loading="lazy" decoding="async">
@@ -806,8 +812,13 @@ class App {
             <div class="photo-info-section">
                 <div class="photo-name">${escapeHtml(photo.name)}</div>
                 <div class="rating-container" id="rating-${escapeHtml(photo.id.replace(/\//g, '_'))}"></div>
+                ${dlTag}
             </div>
         `;
+        card.querySelector('.pick-card-dl')?.addEventListener('click', (e) => {
+            e.stopPropagation(); // 不要順便開預覽
+            PickController.download(e, photo);
+        });
 
         if (!pickMode && canEdit) {
             const rc = card.querySelector('.rating-container');
@@ -936,6 +947,20 @@ class App {
         return span;
     }
 
+    // Guest download link (docs/delivery.md) in the preview pane / modal bar.
+    // Pick.js removes these elements from the DOM when this link may not
+    // download at all, so a missing element is the normal "no" here.
+    _syncDownloadBtn(id, photo) {
+        const el = document.getElementById(id);
+        if (!el) return;
+        const pc = window.PickController;
+        if (!pc || !pc.active || !pc.canDownload() || !photo) { el.hidden = true; return; }
+        el.href = driveManager.downloadUrl(photo);
+        el.textContent = pc.downloadLabel();
+        el.hidden = false;
+        el.onclick = (e) => pc.download(e, photo);
+    }
+
     updatePreviewPane(photo) {
         const empty   = document.getElementById('previewEmpty');
         const content = document.getElementById('previewContent');
@@ -978,6 +1003,10 @@ class App {
         }
         const hintEl = document.getElementById('previewStarsHint');
         if (hintEl) hintEl.hidden = projectMode;
+        // Delivery gallery: nothing to rate.
+        const ratingSection = document.getElementById('previewRatingSection');
+        if (ratingSection) ratingSection.hidden = pickMode && PickController.isGallery();
+        this._syncDownloadBtn('previewDownloadBtn', photo);
 
         const noteSection = document.getElementById('pvPreviewNoteSection');
         if (noteSection) noteSection.hidden = !projectMode;
@@ -1009,6 +1038,11 @@ class App {
         const projectMode = !!(window.ProjectViewController && ProjectViewController.active);
         const canEdit = !projectMode && (!pickMode || PickController.canEdit());
         noteEl.readOnly = !canEdit;
+        // Delivery gallery: the guest's note box has no meaning (nothing is
+        // picked); in the photographer/other modes this group is untouched.
+        const noteGroup = document.getElementById('noteInputGroup');
+        if (noteGroup) noteGroup.hidden = pickMode && PickController.isGallery();
+        this._syncDownloadBtn('modalDownloadBtn', photo);
 
         const mpr = document.getElementById('modalPhotoRating');
         mpr.innerHTML = '';

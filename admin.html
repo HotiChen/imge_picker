@@ -153,6 +153,11 @@
   .pd-submission { padding: 10px 0; border-top: 1px solid var(--rule); font-size: 12px; }
   .pd-submission:first-child { border-top: none; }
   .pd-diff { color: var(--ink-55); margin-top: 4px; word-break: break-word; }
+  .pd-block { border: 1px solid var(--rule); border-radius: 6px; padding: 12px 14px; margin: 14px 0; }
+  .pd-block h4 { margin: 0 0 8px; }
+  .pd-block .pd-note { color: var(--ink-55); font-size: 12px; margin: 6px 0 10px; line-height: 1.6; }
+  .pd-block .pd-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
+  .pd-switch { display: flex; align-items: center; gap: 8px; font-size: 14px; cursor: pointer; }
   #project-detail-panel h4 { font-size: 13px; margin: 18px 0 8px; color: var(--ink-90); }
   #project-detail-panel h4 a.pd-link,
   #project-detail-panel summary a.pd-link,
@@ -307,10 +312,10 @@
   </div>
 </div>
 
-<script src="js/shoot-types.js?v=20260929d"></script>
-<script src="js/build-version.js?v=20260929d"></script>
-<script src="js/side-nav.js?v=20260929d"></script>
-<script src="js/orders-common.js?v=20260929d"></script>
+<script src="js/shoot-types.js?v=20260929e"></script>
+<script src="js/build-version.js?v=20260929e"></script>
+<script src="js/side-nav.js?v=20260929e"></script>
+<script src="js/orders-common.js?v=20260929e"></script>
 <script>
 (function() {
   const WORKER_URL = 'https://imagepicker.hotichen.workers.dev';
@@ -631,6 +636,12 @@
       renderProjectFolders();
       return;
     }
+    if (pickerMode === 'final') {
+      finalDraft = pickerChosen.slice();
+      close();
+      renderDeliveryBlock();
+      return;
+    }
     const row = document.querySelector(`tr[data-id="${pickerFor}"]`);
     // a repair starts from nothing; an add keeps what is already there
     const existing = row && !row.querySelector('[data-folders-broken]') ? rowFolders(row) : [];
@@ -638,6 +649,19 @@
     close();
     saveFolders(pickerFor, merged);
   });
+  }
+
+  // 交件: pick the final (retouched) folders. Same overlay as project
+  // creation; the Worker refuses a folder inside/containing a proof folder.
+  async function openFinalFolderPicker() {
+    if (!pickerWired) { wireFolderPicker(); pickerWired = true; }
+    pickerMode = 'final';
+    pickerFor = null;
+    pickerChosen = finalDraft.slice();
+    pickerDate = '';
+    pickerMatch = null;
+    document.getElementById('folder-picker').style.display = 'flex';
+    await browseFolders('');
   }
 
   async function browseFolders(prefix) {
@@ -655,7 +679,8 @@
 
     document.getElementById('folder-picker-path').textContent = prefix || '（根目錄）';
     document.getElementById('folder-picker-head-hint').textContent =
-      pickerMatch ? `拍攝日期 ${pickerDate} 的資料夾排在最前面` : '';
+      pickerMatch ? `拍攝日期 ${pickerDate} 的資料夾排在最前面`
+        : (pickerMode === 'final' ? '精修資料夾要獨立，不能在毛片資料夾裡面' : '');
     // A hint, not a filter. The names are typed by hand, so the rule misses
     // some and can point at another client who shot the same day; floating the
     // matches to the top and saying why costs a scroll when it is wrong, where
@@ -729,7 +754,7 @@
         <div>
           <span>${escHtml(p.title || '（未命名）')}</span>
           <span class="badge badge-approved">${escHtml(PHASE_LABEL[p.phase] || p.phase || '')}</span>
-          ${p.delivered_at ? '<span class="badge badge-approved" data-delivered-badge>已交付</span>' : ''}
+          ${p.delivered_at ? '<span class="badge badge-approved" data-delivered-badge>已交件</span>' : ''}
           ${p.archived_at ? '<span class="badge badge-pending">已封存</span>' : ''}
           ${p.modified_after_submit ? '<span class="badge badge-pending">已修改</span>' : ''}
           ${p.unnotified_submissions ? `<span class="badge badge-pending">${escHtml(p.unnotified_submissions)} 次送出未寄信</span>` : ''}
@@ -870,7 +895,7 @@
       <div class="pd-head">
         <h3>${escHtml(project.title || '（未命名）')}</h3>
         <span class="badge badge-approved">${escHtml(PHASE_LABEL[project.phase] || project.phase || '')}</span>
-        ${project.delivered_at ? '<span class="badge badge-approved" data-delivered-badge>已交付</span>' : ''}
+        ${project.delivered_at ? '<span class="badge badge-approved" data-delivered-badge>已交件</span>' : ''}
         ${project.archived_at ? '<span class="badge badge-pending">已封存</span>' : ''}
         ${project.modified_after_submit ? '<span class="badge badge-pending">已修改，尚未重新送出</span>' : ''}
         ${data.unnotified_submissions ? `<span class="badge badge-pending">${escHtml(data.unnotified_submissions)} 次送出未寄信</span>` : ''}
@@ -880,10 +905,6 @@
         <button id="pd-reset-seat-btn" class="btn btn-ghost" type="button">重設主人</button>
         <button id="pd-start-retouch-btn" class="btn btn-accent" type="button">開始精修</button>
         <button id="pd-reopen-btn" class="btn btn-ghost" type="button">開放修改</button>
-        ${project.phase === 'retouching' && !project.delivered_at
-          ? '<button id="pd-deliver-btn" class="btn btn-accent" type="button">標記已交付</button>' : ''}
-        ${project.delivered_at
-          ? '<button id="pd-undeliver-btn" class="btn btn-ghost" type="button">取消交付</button>' : ''}
         <button id="pd-download-btn" class="btn btn-outline" type="button">下載選片</button>
         ${project.archived_at
           ? '<button id="pd-unarchive-btn" class="btn btn-ghost" type="button">取消封存</button>'
@@ -891,6 +912,9 @@
         ${!submissions.length ? '<button id="pd-delete-btn" class="btn btn-danger" type="button">刪除</button>' : ''}
       </div>
       <div id="pd-action-err" class="err"></div>
+
+      <div id="pd-delivery" class="pd-block"></div>
+      <div id="pd-proofdl" class="pd-block"></div>
 
       <details id="pd-selections-details">
         <summary>目前選取（${selected.length} 張） <a class="pd-link" href="index.html?project=${encodeURIComponent(project.id)}">看照片 →</a></summary>
@@ -945,31 +969,12 @@
     });
     document.getElementById('pd-start-retouch-btn').addEventListener('click', () => projectAction('start-retouch'));
     document.getElementById('pd-reopen-btn').addEventListener('click', () => projectAction('reopen'));
-    // Deliver gets its own handler rather than the generic projectAction:
-    // a 409 here means "not retouching yet" and deserves a sentence that says
-    // what to do (docs/dashboard-settings.md), not just the raw server error.
-    document.getElementById('pd-deliver-btn')?.addEventListener('click', async function () {
-      const errEl = document.getElementById('pd-action-err');
-      if (errEl) errEl.textContent = '';
-      this.disabled = true;
-      try {
-        const r = await fetch(`${WORKER_URL}/api/admin/projects/${encodeURIComponent(currentProjectId)}/deliver`, {
-          method: 'POST', headers: { 'Authorization': `Bearer ${getToken()}` },
-        });
-        const data = await r.json().catch(() => ({}));
-        if (!r.ok) {
-          if (errEl) errEl.textContent = data.code === 'not_retouching'
-            ? '尚未開始精修，無法標記為已交付，請先按「開始精修」' : (data.error || `失敗（${r.status}）`);
-          return;
-        }
-        await Promise.all([openProjectDetail(currentProjectId), loadProjectList()]);
-      } catch (e) {
-        if (errEl) errEl.textContent = '無法連線到 Worker';
-      } finally {
-        this.disabled = false;
-      }
-    });
-    document.getElementById('pd-undeliver-btn')?.addEventListener('click', () => projectAction('undeliver'));
+    // 交件 / 毛片下載 have their own blocks (docs/delivery.md).
+    currentProject = project;
+    finalDraft = [];
+    finalEditing = false;
+    renderDeliveryBlock();
+    renderProofDownloadBlock();
     document.getElementById('pd-archive-btn')?.addEventListener('click', async () => {
       if (!confirm('封存後連結會立即失效，資料會保留')) return;
       await projectAction('archive'); // refreshes the list too, see projectAction
@@ -1047,6 +1052,148 @@
     });
     document.getElementById('pd-download-btn').addEventListener('click', () => downloadSelectedKeys(project, selected));
     initOrders(project, selected.map(x => x.photo_key));
+  }
+
+  // ── 交件 (docs/delivery.md) ────────────────────────────────────────────────
+  // finalDraft: the folders chosen in the picker but not delivered yet.
+  // finalEditing: a delivered project's 更換精修資料夾 chooser is open.
+  let currentProject = null;
+  let finalDraft = [];
+  let finalEditing = false;
+
+  const DELIVER_ERRORS = {
+    not_retouching: () => '尚未開始精修，無法交件，請先按「開始精修」',
+    too_many_final_folders: d => `精修資料夾最多 ${d.max || 20} 個`,
+    invalid_final_folders: () => '精修資料夾不正確，請重新選擇',
+    final_overlaps_proofs: d => `「${d.folder || ''}」與毛片資料夾重疊：精修資料夾必須獨立，不能在毛片資料夾裡面，也不能包含毛片資料夾`,
+  };
+
+  function chipsHtml(folders, removable) {
+    return folders.map(f => `<span class="folder-chip" data-final-chip="${escHtml(f)}">${escHtml(f)}${
+      removable ? `<button type="button" data-remove-final="${escHtml(f)}" title="移除">×</button>` : ''}</span>`).join('');
+  }
+
+  function renderDeliveryBlock() {
+    const box = document.getElementById('pd-delivery');
+    const project = currentProject;
+    if (!box || !project) return;
+    const delivered = !!project.delivered_at;
+    const finals = Array.isArray(project.final_folders) ? project.final_folders : [];
+    if (!delivered && project.phase !== 'retouching') { box.style.display = 'none'; box.innerHTML = ''; return; }
+    box.style.display = '';
+
+    const chooser = `
+      <div class="pd-note">精修成品必須放在<strong>獨立的資料夾</strong>（例如毛片旁邊的「精修」），不能放在毛片（選片用）資料夾裡面，否則會被拒絕。</div>
+      <div id="pd-final-chips">${draftChips()}</div>
+      <div class="pd-row">
+        <button id="pd-final-pick-btn" class="btn btn-outline" type="button">選擇精修資料夾</button>
+        <button id="pd-deliver-btn" class="btn btn-accent" type="button"${finalDraft.length ? '' : ' disabled'}>${delivered ? '確定更換' : '交件'}</button>
+        ${delivered ? '<button id="pd-final-cancel-btn" class="btn btn-ghost" type="button">取消</button>' : ''}
+      </div>`;
+    function draftChips() {
+      return finalDraft.length ? chipsHtml(finalDraft, true) : '<span class="folder-none">尚未選擇</span>';
+    }
+
+    if (!delivered) {
+      box.innerHTML = `<h4>交件</h4>${chooser}<div id="pd-deliver-err" class="err"></div>`;
+    } else {
+      box.innerHTML = `
+        <h4>交件 <span class="badge badge-approved" data-delivered-status>已交件</span>
+          <span class="folder-none">${escHtml(fmtTime(project.delivered_at))}</span></h4>
+        <div id="pd-delivered-folders">${finals.length ? chipsHtml(finals, false)
+          : '<span class="folder-none">（舊資料：沒有指定精修資料夾，客人仍看到選片畫面）</span>'}</div>
+        ${finalEditing ? chooser : `<div class="pd-row">
+          <button id="pd-replace-final-btn" class="btn btn-outline" type="button">更換精修資料夾</button>
+          <button id="pd-undeliver-btn" class="btn btn-ghost" type="button">取消交件</button>
+        </div>`}
+        <div id="pd-deliver-err" class="err"></div>`;
+    }
+
+    box.querySelector('#pd-final-pick-btn')?.addEventListener('click', openFinalFolderPicker);
+    box.querySelectorAll('[data-remove-final]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        finalDraft = finalDraft.filter(f => f !== btn.dataset.removeFinal);
+        renderDeliveryBlock();
+      });
+    });
+    box.querySelector('#pd-replace-final-btn')?.addEventListener('click', async () => {
+      finalDraft = finals.slice();
+      finalEditing = true;
+      renderDeliveryBlock();
+      await openFinalFolderPicker();
+    });
+    box.querySelector('#pd-final-cancel-btn')?.addEventListener('click', () => {
+      finalEditing = false;
+      finalDraft = [];
+      renderDeliveryBlock();
+    });
+    box.querySelector('#pd-undeliver-btn')?.addEventListener('click', async () => {
+      if (!confirm('取消交件後，客人的連結會回到選片畫面（唯讀），精修成品不再顯示。確定要取消交件嗎？')) return;
+      await projectAction('undeliver');
+    });
+    box.querySelector('#pd-deliver-btn')?.addEventListener('click', async function () {
+      const errEl = document.getElementById('pd-deliver-err');
+      if (errEl) errEl.textContent = '';
+      this.disabled = true;
+      try {
+        const r = await fetch(`${WORKER_URL}/api/admin/projects/${encodeURIComponent(currentProjectId)}/deliver`, {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${getToken()}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ final_folders: finalDraft }),
+        });
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok) {
+          const map = DELIVER_ERRORS[data.code];
+          if (errEl) errEl.textContent = map ? map(data) : (data.error || `失敗（${r.status}）`);
+          this.disabled = false;
+          return;
+        }
+        await Promise.all([openProjectDetail(currentProjectId), loadProjectList()]);
+      } catch (e) {
+        if (errEl) errEl.textContent = '無法連線到 Worker';
+        this.disabled = false;
+      }
+    });
+  }
+
+  // 允許客人下載毛片原檔 — PATCH allow_proof_download. The checkbox follows
+  // the server's answer, so a refused change puts it back where it was.
+  function renderProofDownloadBlock() {
+    const box = document.getElementById('pd-proofdl');
+    const project = currentProject;
+    if (!box || !project) return;
+    box.innerHTML = `
+      <label class="pd-switch"><input type="checkbox" id="pd-allow-proof-dl"${project.allow_proof_download ? ' checked' : ''}>
+        允許客人下載毛片原檔</label>
+      <div class="pd-note">開啟後，客人選片時可在預覽下載毛片的原始檔；交件後選片頁不再顯示，但會多一個「下載毛片原檔」入口。預設關閉。</div>
+      <div id="pd-proofdl-err" class="err"></div>`;
+    const input = box.querySelector('#pd-allow-proof-dl');
+    input.addEventListener('change', async () => {
+      const errEl = document.getElementById('pd-proofdl-err');
+      if (errEl) errEl.textContent = '';
+      const want = input.checked;
+      input.disabled = true;
+      try {
+        const r = await fetch(`${WORKER_URL}/api/admin/projects/${encodeURIComponent(currentProjectId)}`, {
+          method: 'PATCH',
+          headers: { 'Authorization': `Bearer ${getToken()}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ allow_proof_download: want }),
+        });
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok) {
+          input.checked = !want;
+          if (errEl) errEl.textContent = data.error || `設定失敗（${r.status}）`;
+          return;
+        }
+        project.allow_proof_download = data.allow_proof_download === true;
+        input.checked = project.allow_proof_download;
+      } catch (e) {
+        input.checked = !want;
+        if (errEl) errEl.textContent = '無法連線到 Worker';
+      } finally {
+        input.disabled = false;
+      }
+    });
   }
 
   async function projectAction(action) {

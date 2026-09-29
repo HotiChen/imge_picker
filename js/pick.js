@@ -33,6 +33,17 @@
         modifiedAfterSubmit: false,
         submittedAt: null,
         folders: [],
+        // Delivery (docs/delivery.md), from GET /api/pick/state. `mode` is
+        // 'picking' or 'delivered'; `folders` above is the proofs this link
+        // may read right now ([] once delivered unless the switch is on).
+        mode: 'picking',
+        finalFolders: [],
+        allowProofDownload: false,
+        deliveredAt: null,
+        // What the page shows: 'picking' (today's view), 'finals' (the
+        // delivery gallery) or 'proofs' (delivered + switch on: a
+        // download-only list of the proofs).
+        view: 'picking',
         // path -> [{id,name}] children last seen for it (from that path's own
         // `?list=` response). Builds the nested 資料夾 tree lazily: only a
         // folder actually opened has its children on screen (docs/backlog.md
@@ -111,7 +122,104 @@
         // False for every viewer (no seat, or someone else's), and false for
         // the owner too once the photographer has started retouching.
         canEdit() {
-            return this.active && this.isOwner && (this.phase === 'picking' || this.phase === 'submitted');
+            return this.active && this.isOwner && this.mode === 'picking' &&
+                (this.phase === 'picking' || this.phase === 'submitted');
+        },
+
+        // ── delivery (docs/delivery.md) ─────────────────────────────────
+        // The delivery gallery / proof-download list: no picking UI at all.
+        isGallery() { return this.active && this.view !== 'picking'; },
+
+        // Whether this link may show a download button. Picking: only when
+        // the photographer switched proof downloads on. Gallery: always (the
+        // finals are the deliverable; the proofs list only exists when the
+        // switch is on).
+        canDownload() {
+            return this.active && (this.view === 'picking' ? this.allowProofDownload : true);
+        },
+
+        downloadLabel() { return this.view === 'finals' ? '下載' : '下載原檔'; },
+
+        // The folders the page lists for the current view.
+        viewFolders() {
+            return this.view === 'finals' ? this.finalFolders : this.folders;
+        },
+
+        // A plain link to `?download=1` would navigate a guest away to a JSON
+        // error page on a 403 (attachment headers only come with a success),
+        // so ask for one byte first: only a success is followed, and the
+        // refusal the photographer's switch causes gets its own sentence.
+        async download(e, photo) {
+            if (e) e.preventDefault();
+            const url = driveManager.downloadUrl(photo);
+            let res;
+            try {
+                res = await fetch(url, { headers: { Range: 'bytes=0-0' } });
+            } catch (err) {
+                if (typeof toast !== 'undefined') toast.error('無法連線，請檢查網路');
+                return;
+            }
+            if (!res.ok) {
+                let data = null;
+                try { data = await res.json(); } catch (err) { /* not JSON */ }
+                if (typeof toast !== 'undefined') {
+                    toast.error(res.status === 403 && data && data.code === 'original_not_allowed'
+                        ? '原檔未開放下載'
+                        : (res.status === 401 ? '連結已失效，請向攝影師索取新的連結' : '下載失敗，請稍後再試'));
+                }
+                return;
+            }
+            const a = document.createElement('a');
+            a.href = url;
+            a.rel = 'noopener';
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+        },
+
+        async switchView(view) {
+            if (this.view === view) return;
+            this.view = view;
+            this.folderChildren = new Map();
+            this._applyView();
+            await this.loadGrid();
+        },
+
+        // Everything that depends on which view is showing.
+        _applyView() {
+            const gallery = this.isGallery();
+            const bar = document.getElementById('pickFilterBar');
+            if (bar) bar.hidden = gallery;
+            if (gallery && !this._galleryUIRemoved) {
+                // removed, not hidden (.btn's display beats [hidden])
+                document.getElementById('pickCounter')?.remove();
+                document.getElementById('submitJobBtn')?.remove();
+                document.getElementById('pickBanner')?.remove();
+                this._galleryUIRemoved = true;
+            }
+            this._renderDeliveryBar();
+            const noteGroup = document.getElementById('noteInputGroup');
+            if (noteGroup) noteGroup.hidden = gallery;
+        },
+
+        _renderDeliveryBar() {
+            const el = document.getElementById('deliveryBar');
+            if (!el) return;
+            const titleEl = document.getElementById('deliveryTitle');
+            const btn = document.getElementById('deliveryProofsBtn');
+            if (this.mode !== 'delivered') { el.hidden = true; return; }
+            const t = this.projectTitle ? ` · ${this.projectTitle}` : '';
+            if (titleEl) titleEl.textContent = this.view === 'finals' ? `精修成品${t}` : `毛片原檔（僅供下載）${t}`;
+            if (btn) {
+                if (this.allowProofDownload) {
+                    btn.textContent = this.view === 'finals' ? '下載毛片原檔' : '← 回精修成品';
+                    btn.hidden = false;
+                    btn.onclick = () => this.switchView(this.view === 'finals' ? 'proofs' : 'finals');
+                } else {
+                    btn.remove(); // removed, not hidden: no proof-download entry exists
+                }
+            }
+            el.hidden = false;
         },
 
         // ── autosave: debounced, batched ─────────────────────────────────
@@ -268,6 +376,7 @@
             this._hideStudioOnlyUI();
             this._removeSourceControls();
             this._removeAnnotationToolbox();
+            this._removeZipDownloads();
             this._replaceFilterBar();
             this._wireHooks(app);
             this._wireSubmitModal();
@@ -282,8 +391,15 @@
             this._applyState(data);
             this._renderStudioHeader();
             this._updateSubmitButton();
+            // No download button exists for a guest unless this link may
+            // download: removed from the DOM, not hidden.
+            if (!this.canDownload()) {
+                document.getElementById('previewDownloadBtn')?.remove();
+                document.getElementById('modalDownloadBtn')?.remove();
+            }
+            this._applyView();
 
-            if (!this.isOwner && this.ownerName === null) {
+            if (!this.isOwner && this.ownerName === null && this.mode === 'picking') {
                 // seat free — block on a name before showing anything else
                 this._showClaimOverlay();
                 return;
@@ -304,6 +420,12 @@
             this.modifiedAfterSubmit = !!data.modified_after_submit;
             this.submittedAt = data.submitted_at || null;
             this.folders = Array.isArray(data.folders) ? data.folders : [];
+            // A delivered project shows the gallery to owner and viewers alike.
+            this.mode = data.mode === 'delivered' ? 'delivered' : 'picking';
+            this.finalFolders = Array.isArray(data.final_folders) ? data.final_folders : [];
+            this.allowProofDownload = data.allow_proof_download === true;
+            this.deliveredAt = data.delivered_at || null;
+            this.view = this.mode === 'delivered' ? 'finals' : 'picking';
             this.selections = new Map(
                 (data.selections || []).map(s => [s.photo_key, { rating: s.rating || 0, note: s.note || '' }])
             );
@@ -343,7 +465,7 @@
 
         _updateSubmitButton() {
             const btn = document.getElementById('submitJobBtn');
-            if (btn) btn.style.display = this.isOwner ? 'inline-flex' : 'none';
+            if (btn) btn.style.display = (this.isOwner && !this.isGallery()) ? 'inline-flex' : 'none';
         },
 
         async afterClaim() {
@@ -357,8 +479,12 @@
             const emptyP = document.querySelector('#emptyState p');
             if (emptyH2) emptyH2.textContent = this.isOwner ? '正在準備您的照片' : '正在載入相簿';
             if (emptyP) emptyP.textContent = '請稍候…';
-            const folder = this.folders[0] || '';
+            const folder = this.viewFolders()[0] || '';
             await this.app.handleLoadPhotos(folder);
+            if (this.isGallery() && !this.app.photos.length && !this.app.currentFolders.length) {
+                if (emptyH2) emptyH2.textContent = '這裡還沒有照片';
+                if (emptyP) emptyP.textContent = '';
+            }
             this.renderCounter();
         },
 
@@ -423,6 +549,14 @@
         // annotations column, and guests are never minted a studio token to
         // write one through anyway. The note box and the canvas itself
         // (still the photo viewer) stay.
+        // 打包全部下載 / 下載選取 / 全選 fetch full-resolution originals, which
+        // a guest link is refused (docs/delivery.md) — and a photo's download
+        // is the per-photo link instead. Removed, not hidden.
+        _removeZipDownloads() {
+            ['downloadAllBtn', 'downloadSelectedHeaderBtn', 'selectAllBtn', 'deselectAllBtn', 'bulkActionBar']
+                .forEach(id => document.getElementById(id)?.remove());
+        },
+
         _removeAnnotationToolbox() {
             document.querySelector('.tool-buttons')?.remove();
             document.querySelector('.color-picker')?.remove();
@@ -441,12 +575,13 @@
             const container = document.getElementById('folderTreeContainer');
             const list = document.getElementById('folderTree');
             if (!container || !list) return;
-            if (!this.folders.length) { container.style.display = 'none'; return; }
+            const roots = this.viewFolders();
+            if (!roots.length) { container.style.display = 'none'; return; }
             container.style.display = 'block';
             const current = (typeof driveManager !== 'undefined') ? driveManager.currentFolderId : '';
             list.innerHTML = '';
             const frag = document.createDocumentFragment();
-            this.folders.forEach(f => this._appendTreeRow(frag, f, 0, current));
+            roots.forEach(f => this._appendTreeRow(frag, f, 0, current));
             list.appendChild(frag);
         },
 
@@ -534,6 +669,8 @@
             const hintEl = document.getElementById('pickBannerHint');
             const hintTextEl = document.getElementById('pickBannerHintText');
             if (!el || !linesEl) return;
+            // the delivery gallery has its own bar; picking notices don't apply
+            if (this.mode === 'delivered') { el.hidden = true; return; }
 
             const lines = [];
             if (!this.isOwner && this.ownerName) lines.push(`此相簿由 ${this.ownerName} 選片中`);
@@ -566,7 +703,7 @@
             const mainEl = document.getElementById('pickCounterMain');
             const warnEl = document.getElementById('pickCounterWarn');
             if (!el || !mainEl) return;
-            if (!this.isOwner) { el.hidden = true; return; }
+            if (!this.isOwner || this.isGallery()) { el.hidden = true; return; }
 
             const count = this._selectedCount();
             const limit = this.pickLimit;

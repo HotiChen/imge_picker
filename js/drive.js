@@ -49,6 +49,18 @@ class DriveManager {
         return `${base}${base.includes('?') ? '&' : '?'}t=${encodeURIComponent(t)}`;
     }
 
+    // The full-resolution original as an attachment (docs/delivery.md):
+    // `<key>?download=1&t=<token>`. The Worker answers with a
+    // Content-Disposition, so following it saves the file rather than
+    // navigating — but an error (403 original_not_allowed) is plain JSON, which
+    // is why pick.js probes before it follows the link.
+    downloadUrl(photo) {
+        if (!photo || !photo.id) return '';
+        const base = `${CONFIG.WORKER_URL}/${photo.id}?download=1`;
+        const t = (typeof CONFIG !== 'undefined' && CONFIG.SHARE_TOKEN) || '';
+        return t ? `${base}&t=${encodeURIComponent(t)}` : base;
+    }
+
     // The bare object URL, for fetch() — which sends the real credential in a
     // header and has nothing to gain from a token in the query string.
     objectUrl(photoId, width) {
