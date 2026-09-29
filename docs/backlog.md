@@ -2,48 +2,50 @@
 
 Decided or discussed, not yet built. Newest decisions at the top of each group.
 
-## Two-week plan (from the PM review, 2026-09-29)
-No new big features until steps 1–3 have results.
-1. Merge A + A2 + the switch and check them on prod (checklist below); do the
-   phone test and the email setup in the same sitting.
-2. Tim runs his own real shoots through it for two weeks: list 相本書 /
-   無框畫, then pick → 加挑 → order → payment with real clients. Note what
-   gets stuck and what nobody uses.
-3. Interview 5+ photographers — `docs/photographer-interviews.md` (questions,
-   log table, and what each answer decides).
-4. Data duties before a second photographer: 180-day countdown (reuse the
-   old picker's countdown in `js/app.js`), a reminder email N days before
-   deletion, export picks + orders as CSV, D1 backup / restore drill
-   (Time Travel), Worker error alerts. Decide the R2 retention (180 vs 365
-   days) from the interviews first.
-5. Minimum legal pages before outsiders use it: terms of service, privacy
-   policy / 個資告知 (guest names, emails and photos pass through the
-   platform). License of the repo is undecided (README).
+## THE ORDER (agreed with Tim 2026-09-29 — the only main line)
+Run one real job end to end → connect Album / Proof / Delivery → validate
+with 5 photographers → only then multi-tenant SaaS. No new big features
+outside this list.
 
-Held until the interviews: guest shop B, photographer accounts, full operator
-console, referral payouts, vendor v2.
+1. **Make what exists run for real.**
+   - Products / orders migration ✅ run, merged, deployed. `OPERATOR_TOKEN` set.
+   - Delivery (交件: finals separate from proofs on the same link, proof
+     original download switch) — `docs/delivery.md`; finishing now. Needs
+     `worker/migrations/2026-09-30-delivery.sql` in D1 before its merge, and
+     a check in `ping.html` for photos without thumbnails (they no longer fall
+     back to the original in the picking view).
+   - Email: Cloudflare Email Routing on, verify the photographer's inbox,
+     `wrangler secret put PHOTOGRAPHER_EMAIL`, submit a test pick.
+   - Real phone: iPhone / LINE in-app browser / Safari — picking, gestures,
+     delivery gallery, admin pages.
+   - Fix known P0/P1 bugs (see Bugs): touch annotations never saved; orange
+     tools toggle covering ♥ on a 390px phone.
+2. **Tim runs 2–3 real jobs end to end:** project → upload → guest picks →
+   submission → retouch → products / 加挑 → order → manual print → delivery.
+   Log every snag here. No new big features during this step.
+3. **Album back into the project:** Project → Picker → Retouch → Album.
+   Integrate the existing `book_editor` (auto-layout, viewer, export); do not
+   build a new album engine. Album layouts/print files and the 180-day rule:
+   see item 3 "Album chain" in the earlier roadmap notes below.
+4. **Proof → Approval → Delivery:** album → guest proofs → changes →
+   approval → final → delivery. From here the product is a photo-project
+   delivery system, not just a picking tool.
+5. **5 photographers test it for real** (`docs/photographer-interviews.md`).
+   Start booking during steps 2–4 — interviews cost no dev time. Three
+   questions: would you use it? pay monthly? print albums / 無框畫 through
+   the platform?
+6. **Decide the business model from the results:** monthly SaaS, platform
+   products, print commission, own lab vs the photographer's lab. The 15%
+   fee stays off until then.
+7. **Only then SaaS:** photographer accounts → multi-tenant → subscriptions
+   → isolation between photographers.
 
-## Next up
-- [ ] Merge products & orders (A) + platform catalogue (A2) + the
-      `CUSTOM_PRODUCTS` switch (branch `claude/lucid-cori-viif3w`). Tim, in order:
-      1. D1 Console: `PRAGMA table_info(products)` must return nothing.
-      2. Run `worker/migrations/2026-09-29-products-orders.sql`.
-      3. `wrangler secret put OPERATOR_TOKEN` — `openssl rand -hex 32`, never
-         the photographer's token.
-      4. Merge, then Cloudflare → Caching → Purge Everything.
-      5. Check: operator.html lists a 無框畫 with an image; settings 從平台加入
-         adopts it (no 新增服務 button); an order + payment shows up in the
-         dashboard and the operator sales table; start-retouch on an over-limit
-         project creates the 加挑 order; pages on a phone.
-- [ ] Phone test of guest picking + gestures (and the bright entrance) on real
-      LINE / iOS Safari (Tim). Watch: LINE's edge swipe-back vs swipe-right, zoom feel.
-- [ ] Email notifications — code and the `send_email` binding are on main.
-      Tim: Cloudflare → Email Routing on (check MX first), verify the
-      photographer's inbox as a destination, `wrangler secret put
-      PHOTOGRAPHER_EMAIL`, then submit a test pick (inbox + spam); admin
-      未寄信 should clear. Sender `notify@imhoti.tw` (`NOTIFY_FROM`).
+**Parked — do not start:** referral, client hub, online payment, vendor
+accounts, AI (layout or otherwise), more products, big operator console,
+complex membership, any new engine. The notes further down stay as
+reference only.
 
-## Product roadmap (order agreed 2026-09-29)
+## Earlier roadmap notes (reference only — THE ORDER above wins)
 Done: back-office shell (dashboard, 已交付); studio settings (name, logo,
 default plan); products & orders A and platform catalogue A2 — built, waiting
 on the merge above. Design: `docs/products-orders.md`.
