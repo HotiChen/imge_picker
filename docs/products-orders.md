@@ -1,6 +1,6 @@
 # Products and orders — design (Phase A locked 2026-09-29)
 
-Roadmap item 4 (`docs/backlog.md`). Meant to be the main selling point of the
+Products & orders, in the product roadmap in `docs/backlog.md`. Meant to be the main selling point of the
 SaaS: the photographer sells add-ons (prints, albums, frames, extra
 retouching, extra picks) and sees what every shoot really earned.
 
@@ -15,7 +15,7 @@ spreadsheet + bank transfer) lose that moment.
 |---|---|---|---|
 | **A** | Catalogue, orders recorded by the photographer, extra-pick fee added automatically, revenue on the dashboard | admin only | High (money data) |
 | **B** | Guest add-on shop on the pick page: pick a product for a photo, send an order request; photographer confirms; payment off-platform (transfer / cash) | guest + admin | High + security review (guest writes) |
-| **C** | Online payment (ECPay / TapPay / LINE Pay), e-invoice, platform fee | guest + admin | High; legal/tax check first. Referral payouts (roadmap 5) need this |
+| **C** | Online payment (ECPay / TapPay / LINE Pay), e-invoice, platform fee | guest + admin | High; legal/tax check first. 「Referral payouts」 (`docs/backlog.md`) need this |
 
 A is built so B needs no schema change, only new routes and UI. C adds
 payment tables; it does not change A/B's.
@@ -333,8 +333,9 @@ own prints with their own lab would pay the platform nothing.
   | `vendor_cost` (what the lab charges Tim) | operator | operator only |
   | `platform_price` (the photographer's cost) | operator | operator, photographer |
   | `price` (the guest's price) | photographer | everyone |
-  Today `platform_price` = `vendor_cost` (no platform cut); both are kept so
-  a margin or fee can start without a schema change.
+  Today `platform_price` = `vendor_cost` (no platform cut) **and no platform fee
+  is charged**; both prices are kept so a margin or fee can start without a
+  schema change. The 15% fee below is planned for later (with online payment).
 - **Photographer's price ≥ platform price**, checked on adopt, on edit, and
   again when a line is created (the operator may have raised the platform
   price since): 400 `below_platform_price`; the photographer's catalogue

@@ -1,271 +1,99 @@
-# Image Picker Studio — 攝影師選圖與相本工具
+# Image Picker Studio — 攝影師選圖工作室
 
-一個專為攝影師設計的工作流程工具，從 Cloudflare R2 載入照片、評分標注、快速篩選交付，並支援相本排版與 JPG 匯出。
-
----
-
-## 功能概覽
-
-- **R2 照片庫** — 直接從 Cloudflare R2 載入資料夾，無需 Google 帳號
-- **評分系統** — 每張照片 1–5 星，支援批次評分
-- **旗標（Flags）** — Pick / Review / Reject 三種狀態標記
-- **圖片標注** — 在照片上手繪圈記，多色 + 可調筆刷
-- **備註** — 每張照片可附文字備註
-- **即時預覽窗格** — 滑鼠懸停立即大圖預覽，無需開啟 Modal
-- **篩選 + 排序** — 依星級、旗標、標注狀態、檔名快速過濾
-- **相本排版編輯器** — 多頁版型、自動排版、匯出每頁 JPG（ZIP）
-- **相簿排版工具** — 基於 Fabric.js 的自由排版畫布
-- **本地儲存** — 評分、標注、備註全存 localStorage，換機不丟失
-- **資料匯出** — 下載含評分 + 標注資料的 JSON
+攝影師的選圖工作室（imhoti.tw/studio）：照片上傳後把一條連結傳給客人，客人在手機上挑片，
+攝影師收到選片結果、排相本、記錄加購訂單。目前是攝影師自用，方向是做成多攝影師的 SaaS
+（`projects.photographer_id` 已存在，目前都是 `default`）。
 
 ---
 
-## 技術架構
+## 架構
 
-| 層次 | 技術 |
-|------|------|
-| 前端 | 純 JavaScript（無框架） |
-| 樣式 | 原生 CSS + CSS Variables（Studio Dark 設計系統） |
-| 字型 | IBM Plex Sans + IBM Plex Mono |
-| 照片儲存 | Cloudflare R2 |
-| 後端 API | Cloudflare Worker（`imagepicker.hotichen.workers.dev`）|
-| 本地資料 | localStorage |
-| 畫布 | HTML5 Canvas API + Fabric.js（r2_designer）|
-| 打包匯出 | JSZip |
+| 層 | 技術 |
+|---|---|
+| 前端 | 純 JavaScript 靜態頁（無框架），用 SFTP 上傳到 imhoti.tw/studio |
+| API | Cloudflare Worker：`worker/worker.js`（設定在 `worker/wrangler.toml`） |
+| 照片儲存 | R2 bucket `imagepicker`（所有讀取都經過 Worker 的 token 閘門；r2.dev 公開網址已關閉） |
+| 資料庫 | D1 `imagepicker-db`（專案、分享連結、選片、訂單、設定等，結構見 `worker/schema.sql`） |
 
----
-
-## 專案結構
-
-```
-imge_picker/
-├── index.html              # 主選圖介面
-├── tutorial.html           # 使用說明頁
-├── css/
-│   └── styles.css          # Studio Dark 設計系統
-├── js/
-│   ├── config.js           # Worker URL + Token 設定
-│   ├── app.js              # 主應用邏輯
-│   ├── drive.js            # R2 資料載入（舊名保留）
-│   ├── rating.js           # 星級評分系統
-│   ├── annotation.js       # 圖片標注工具
-│   ├── logger.js           # 開發除錯 Logger
-│   ├── diagnostics.js      # 診斷工具
-│   └── toast.js            # 通知系統
-├── book_editor/            # 相本書編輯器（Phase 1 完成）
-│   ├── index.html
-│   ├── view.html           # 客戶預覽頁
-│   ├── css/
-│   └── js/
-│       ├── layouts.js      # 版型定義
-│       ├── auto_layout.js  # 自動排版演算法
-│       ├── book_editor.js  # 主狀態管理
-│       ├── exporter.js     # Canvas 渲染 + ZIP 匯出
-│       ├── layout_editor.js
-│       ├── viewer.js
-│       └── tour.js
-├── r2_designer/            # 自由排版工具（Fabric.js）
-│   ├── index.html
-│   ├── css/
-│   └── js/
-│       └── designer_core.js
-├── worker/                 # Cloudflare Worker
-│   ├── worker.js
-│   └── wrangler.toml
-├── design_handoff_studio_dark/  # 設計規格文件
-└── .claude/
-    └── settings.json       # PreToolUse 程式碼審查 Hook
-```
+注意：R2 有 lifecycle，**上傳 180 天後刪除 bucket 內所有物件**（沒有 prefix 例外）。
+要長期保存的東西（logo、長期備份）不能放在這個 bucket。
 
 ---
 
-## 快速開始
+## 頁面
 
-### 1. 設定 Worker URL 與 Token
+| 檔案 | 用途 |
+|---|---|
+| `home.html` | 入口首頁（明亮版），登入後進 dashboard |
+| `dashboard.html` | 攝影師後台儀表板：專案、已交付狀態、營收 |
+| `admin.html` | 專案 / 客戶管理：上傳、分享連結、選片狀態 |
+| `settings.html` | 工作室設定（名稱、logo、預設方案）與商品目錄（從平台加入商品、定價） |
+| `orders.html` | 訂單列表與編輯 |
+| `operator.html` | 平台營運者（OPERATOR_TOKEN）管理平台商品 |
+| `upload.html` | 上傳照片到 R2 |
+| `index.html` | 選圖介面（評分、旗標、標注；客人用選片連結開啟） |
+| `client-login.html` | 客戶登入 |
+| `tutorial.html` | 操作說明 |
+| `ping.html` | 連線診斷 |
+| `book_editor/` | 相本排版：`index.html` 編輯器（自動排版、匯出 JPG ZIP）、`view.html` 客戶預覽 / 核准 |
+| `r2_designer/` | 自由排版畫布（Fabric.js） |
 
-開啟 `js/config.js`：
+設計文件在 `docs/`：`backlog.md`（路線圖與待辦）、`guest-picking.md`、`dashboard-settings.md`、
+`products-orders.md`。`CLAUDE.md` 是工作約定。
 
-```javascript
-const CONFIG = {
-    WORKER_URL: 'https://imagepicker.hotichen.workers.dev',
-    PHOTOGRAPHER_TOKEN: 'YOUR_TOKEN',  // 與 Worker 的 PHOTOGRAPHER_TOKEN secret 相同
-    // ...
-};
-```
+---
 
-### 2. 部署 Cloudflare Worker
+## 部署
+
+Push 到 `main` 才會部署（`.github/workflows/deploy.yml`）：
+
+1. CI 跑 Worker 測試與前端 JS 語法檢查（不跑瀏覽器測試）
+2. 用 SFTP 上傳靜態檔案到 `/public_html/studio/`（排除 `worker/`、`*.md` 等）
+3. `wrangler deploy` 部署 Worker
+4. 部署後手動：Cloudflare → imhoti.tw → Caching → Purge Everything
+
+前端每次改動要更新資源的 `?v=` 版本戳。開發在 `claude/<topic>` 分支，Tim 說了才 push main。
+
+### Secrets 與變數（只列名稱，值不進 repo）
+
+- Secrets（`wrangler secret put <名稱>`）：`PHOTOGRAPHER_TOKEN`、`OPERATOR_TOKEN`、`PHOTOGRAPHER_EMAIL`
+- `[vars]`（`worker/wrangler.toml`）：`NOTIFY_FROM`、`CUSTOM_PRODUCTS`
+- Bindings：R2 `imagepicker`、D1 `DB`、send_email `NOTIFY_EMAIL`
+
+**任何 token 都不能放進 `js/config.js`**：它是公開檔案。攝影師 token 只在登入時由使用者輸入，
+存在瀏覽器 sessionStorage。
+
+### D1 migration
+
+Schema 只做 append-only 變更（`ALTER TABLE ... ADD COLUMN`）。SQL 放在 `worker/migrations/`，
+並記在 `worker/schema.sql`。**由 Tim 在 D1 Console 手動執行，要在需要它的那次 merge 之前跑。**
+
+---
+
+## 測試
 
 ```bash
-cd worker
-npx wrangler login
-npx wrangler deploy
-
-# 設定 secret（需與 config.js 中的 token 一致）
-npx wrangler secret put PHOTOGRAPHER_TOKEN
-```
-
-Worker 提供以下端點：
-- `GET /api/list?prefix=FOLDER/` — 列出 R2 物件
-- `GET /api/photo?key=PATH` — 取得照片（帶授權快取）
-- `PUT /_assets/PATH` — 上傳素材（需 Bearer Token）
-- `POST /api/books/:id/approve` — 核准相本，觸發 Webhook
-
-### 3. 本地執行
-
-```bash
-# Python
-python3 -m http.server 8000
-
-# Node.js
-npx http-server -p 8000
-```
-
-開啟瀏覽器：`http://localhost:8000`
-
----
-
-## 使用說明
-
-### 載入照片
-
-1. 在左側欄「SOURCE」區輸入 R2 資料夾路徑（例如 `2026/wedding/`）
-2. 點擊「LOAD」
-3. 照片以網格方式顯示，支援子資料夾導航
-
-### 評分
-
-- 在照片卡片上直接點擊星星
-- 或在預覽窗格（右側）評分
-- 支援鍵盤 1–5 快速評分（待實作）
-
-### 旗標
-
-- **PICK** — 選取交付
-- **REVIEW** — 待確認
-- **REJECT** — 淘汰
-
-### 標注
-
-1. 點擊照片開啟 Modal
-2. 選擇顏色 + 調整筆刷大小
-3. 在照片上拖曳畫圈
-4. 點「儲存標注」
-
-### 預覽窗格
-
-滑鼠懸停照片卡片即可在右側窗格預覽大圖，無需開啟 Modal。
-寬度不足 1200px 時窗格自動隱藏。
-
-### 相本排版
-
-點擊頁首「相本排版」進入 `book_editor/`：
-
-1. 設定書本尺寸（cm）與 DPI
-2. 選取照片 → 執行「自動排版」
-3. 手動調整頁面版型（全出血、單張、左右兩張、四格等）
-4. 雙擊格子進入裁切模式
-5. 「匯出 JPG」→ 下載 ZIP
-
-### 匯出資料
-
-點擊側欄「SYNC」區的匯出按鈕，下載含評分 + 標注的 JSON 檔。
-
----
-
-## 設計系統：Studio Dark
-
-本專案採用 Studio Dark 設計語言：
-
-| Token | 值 | 用途 |
-|-------|----|------|
-| `--bg` | `#15120d` | 頁面背景 |
-| `--surface` | `#1d1a14` | 卡片背景 |
-| `--card` | `#221f18` | 元件背景 |
-| `--accent` | `#e5a448` | 主強調色（琥珀）|
-| `--ink-90` | `#e8e3da` | 主文字 |
-| `--ink-55` | `#8c8375` | 次要文字 |
-| `--rule` | `#2e2a22` | 分隔線 |
-| `--border` | `#3a3528` | 元件邊框 |
-
-字型：IBM Plex Sans（內文）+ IBM Plex Mono（標籤、badge）
-
----
-
-## 開發工具
-
-### 測試
-
-Worker 的測試不需要安裝任何套件，用 Node 內建的 test runner：
-
-```bash
+# Worker（幾秒）
 node --test "worker/test/*.test.mjs"
+node --check worker/worker.js
+
+# 瀏覽器（幾分鐘；Playwright 在 repo 外，Chromium 在 /opt/pw-browsers）
+NODE_PATH=/tmp/pwinstall/node_modules node test/run.mjs
+# 只跑符合名稱的 suite（沒有任何 suite 符合會失敗）
+ONLY=<suite 名稱片段> NODE_PATH=/tmp/pwinstall/node_modules node test/run.mjs
 ```
 
-測試用假的 R2 binding（`worker/test/fakes.mjs`）模擬 Cloudflare 的行為，
-涵蓋縮圖路由與原檔 fallback、conditional request（304）、資料夾列表分頁、
-相本讀寫權限與快取標頭。
-
-瀏覽器端的測試（裁切幾何、上傳縮圖）需要 Playwright：
-
-```bash
-node test/run.mjs
-```
-
-GitHub Actions 在每次 push 與 PR 都會跑 Worker 測試，**測試沒過就不會部署**。
-
-### Claude Code Hook（自動程式碼審查）
-
-每次 `git commit` / `git push` 前，Hook 會自動執行四軸審查：
-
-1. **SCOPE** — 是否只改了本次任務相關的程式碼？
-2. **CORRECTNESS** — 邏輯是否正確？有無邊界條件漏洞？
-3. **STYLE** — 是否符合現有程式碼風格？
-4. **MINIMALITY** — 變動是否可以更精簡？
-
-發現問題自動用繁體中文說明並阻止 commit。
-
-設定檔：`.claude/settings.json`
+開發時只跑相關測試，commit / merge 前全部跑。CI 只跑 Worker 測試。
 
 ---
 
-## Cloudflare 部署
+## Claude Code Hook
 
-### Worker 部署
-
-```bash
-cd worker
-npx wrangler deploy
-npx wrangler secret put PHOTOGRAPHER_TOKEN
-```
-
-### 靜態檔案
-
-整個根目錄可部署到任何靜態主機：
-- Cloudflare Pages
-- Cloudways（FTP 上傳即可）
-- GitHub Pages
-- 任意 HTTP 伺服器
-
----
-
-## 版本路線圖
-
-| 階段 | 狀態 | 內容 |
-|------|------|------|
-| P1 視覺翻新 | ✅ 完成 | Studio Dark 設計系統、預覽窗格 |
-| P2 旗標系統 | 🔲 規劃中 | Pick/Review/Reject 持久化儲存 |
-| P3 鍵盤快捷鍵 | 🔲 規劃中 | 數字鍵評分、方向鍵導航 |
-| P4 批次操作 | 🔲 規劃中 | 多選 + 批次評分 / 旗標 |
-| P5 比較模式 | 🔲 規劃中 | 並排比較兩張照片 |
-| P6 相本 Phase 2 | 🔲 規劃中 | R2 儲存、客戶預覽連結 |
-| P7 協作 | 🔲 規劃中 | 多人同時標注 |
+`.claude/settings.json` 有一個 PreToolUse hook：`git commit` 前自動做四軸審查
+（範圍、正確性、風格、精簡），有問題會用繁體中文回報並擋下這次 commit；它只審查，不會動檔案。
 
 ---
 
 ## 授權
 
-MIT License
-
-## 開發者
-
-Built by Antigravity AI
+授權：待定（商業化前需決定）
