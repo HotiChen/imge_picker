@@ -304,3 +304,100 @@ Where the design above left a choice open, the Worker does this:
   month it was paid, cancelled excluded), `outstanding` (NT$), and
   `todo.unpaid_orders` (orders with outstanding > 0, archived projects
   included — the money is still owed).
+
+## Platform catalogue (A2 — built before A merges, decided 2026-09-29)
+
+Tim is the operator. He lists printable products (相本書, 無框畫, …) with
+their cost; photographers pick from that catalogue and set their own price.
+The platform lives on the product flow: a photographer who could add their
+own prints with their own lab would pay the platform nothing.
+
+### Decisions
+
+- **Two catalogues.** `platform_products` / `platform_product_options`,
+  written only by the operator. A photographer's `products` row is either
+  **custom** (kind `service` only — 加修, 急件, …) or **adopted** from a
+  platform product (kind `album` / `print`, `platform_product_id` set).
+  A photographer can no longer create an album/print product of their own
+  (400 `platform_only`).
+- **Three prices per option.**
+  | | set by | seen by |
+  |---|---|---|
+  | `vendor_cost` (what the lab charges Tim) | operator | operator only |
+  | `platform_price` (the photographer's cost) | operator | operator, photographer |
+  | `price` (the guest's price) | photographer | everyone |
+  Today `platform_price` = `vendor_cost` (no platform cut); both are kept so
+  a margin or fee can start without a schema change.
+- **Photographer's price ≥ platform price**, checked on adopt, on edit, and
+  again when a line is created (the operator may have raised the platform
+  price since): 400 `below_platform_price`; the photographer's catalogue
+  flags such options.
+- **Subset of options.** Adopting picks some of the platform options; each
+  adopted option carries `platform_option_id` and the photographer's price.
+  Name, description, kind, photo_count and image come from the platform
+  product (not editable by the photographer).
+- **Cost on an order line** for an adopted option is the platform price at
+  line creation (snapshot); the line also snapshots `platform_option_id` and
+  `vendor_cost`. `vendor_cost` never leaves operator routes.
+- A retired platform product or option makes the adopted one unusable for
+  new lines (`retired_option`); existing orders keep their snapshots.
+- **Operator auth (temporary until accounts):** `OPERATOR_TOKEN` secret,
+  fails closed when unset, and is refused if it equals `PHOTOGRAPHER_TOKEN`.
+  Photographer, pick, client, studio and session tokens → 401 on
+  `/api/operator/*`; the operator token → 401 on `/api/admin/*`.
+- **Product images:** uploaded by the operator only, D1 blob ≤ 200 KB,
+  PNG/JPEG/WebP by magic bytes (same rules as the logo). Served publicly at
+  `GET /api/platform/products/:id/image` (nosniff, CSP `default-src 'none'`,
+  ETag) — product photos are not secret and the guest shop (B) needs them.
+- **Future platform fee.** Tim plans to tell photographers a 15% fee will
+  apply later; none is charged now. Order lines keep `platform_option_id`,
+  so any fee can be computed per line once its basis is decided.
+
+### Schema
+
+A's migration has not been run yet, so its CREATEs gain the link columns
+directly (no ALTER): `products.platform_product_id`,
+`product_options.platform_option_id`, `order_items.platform_option_id`,
+`order_items.vendor_cost`. Two new tables:
+
+```sql
+CREATE TABLE IF NOT EXISTS platform_products (
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL CHECK (kind IN ('print','album')),
+  name TEXT NOT NULL, description TEXT NOT NULL DEFAULT '',
+  photo_count INTEGER, active INTEGER NOT NULL DEFAULT 1,
+  sort INTEGER NOT NULL DEFAULT 0,
+  image BLOB, image_type TEXT, image_updated_at TEXT,
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS platform_product_options (
+  id TEXT PRIMARY KEY, platform_product_id TEXT NOT NULL,
+  label TEXT NOT NULL,
+  vendor_cost INTEGER NOT NULL CHECK (vendor_cost >= 0),
+  platform_price INTEGER NOT NULL CHECK (platform_price >= 0),
+  active INTEGER NOT NULL DEFAULT 1, sort INTEGER NOT NULL DEFAULT 0
+);
+```
+
+### API
+
+| Route | Auth | |
+|---|---|---|
+| `GET/POST /api/operator/products`, `PUT /api/operator/products/:id`, `POST …/retire`, `…/restore` | operator | same shape and rules as the photographer's products (options as a set, never deleted) |
+| `PUT/DELETE /api/operator/products/:id/image` | operator | logo rules |
+| `GET /api/operator/stats` | operator | this month and 12 months: per platform product, qty sold, platform revenue, vendor cost, margin (paid orders, cancelled excluded) |
+| `GET /api/platform/products/:id/image` | public | the image, 404 when none |
+| `GET /api/admin/platform-products` | photographer | active platform products + active options with `platform_price`, never `vendor_cost`; which ones this photographer already adopted |
+| `POST /api/admin/products/from-platform` | photographer | `{platform_product_id, options: [{platform_option_id, price}]}`; one adopted product per platform product (409 `already_adopted`) |
+| `PUT /api/admin/products/:id` on an adopted product | photographer | only the option set (platform option ids + prices), active, sort |
+
+### UI
+
+- `operator.html` — own sign-in (operator token, stored apart from the
+  photographer's), platform catalogue (options: label, 廠商成本, 平台價),
+  image upload, a small sales table from `/api/operator/stats`. Not in the
+  photographer's side menu.
+- Settings → 商品: 「從平台加入」 (pick product, tick sizes, set prices, shows
+  平台價 as the floor), adopted products show the platform image and a
+  warning when a price has fallen below the platform price; 「新增服務」 for
+  custom (service only).
