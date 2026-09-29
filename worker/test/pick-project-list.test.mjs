@@ -81,12 +81,14 @@ test('each project shows phase, flag, seat holder, submits and its live link', a
     created_at: created,
     archived_at: null, // the default list only ever shows active projects
     delivered_at: null, // not delivered (docs/dashboard-settings.md)
+    final_folders: null, // no finals snapshot yet (docs/delivery.md)
+    allow_proof_download: false, // the proof-originals switch, off by default
     submission_count: 2,
     last_submitted_at: latest,
     unnotified_submissions: 2, // no mail binding here, so neither was emailed
     token: p.token,
   });
-  assert.doesNotMatch(JSON.stringify(projects), /key_hash|folders|photo_keys/);
+  assert.doesNotMatch(JSON.stringify(projects), /key_hash|"folders"|photo_keys/);
 });
 
 test('a free seat, no submits and a dead link each read as null or zero', async () => {

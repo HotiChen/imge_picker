@@ -130,7 +130,19 @@ CREATE TABLE IF NOT EXISTS projects (
   -- the guest's writes stay refused. Appended, from a hand-run
   --   ALTER TABLE projects ADD COLUMN delivered_at TEXT;
   -- (worker/migrations/2026-09-28-dashboard-settings.sql).
-  delivered_at    TEXT
+  delivered_at    TEXT,
+  -- the finals folder snapshot the delivery gallery shows (JSON array, the
+  -- same canonical form as `folders`); NULL = not delivered. Written together
+  -- with delivered_at by POST .../deliver, cleared with it by undeliver and
+  -- reopen. Never inside or around a proof folder (docs/delivery.md).
+  -- 1 = the guest may download the proof originals (full resolution); 0 =
+  -- thumbnails only, the default. Set by PATCH /api/admin/projects/:id.
+  -- Both appended, from a hand-run
+  --   ALTER TABLE projects ADD COLUMN final_folders TEXT;
+  --   ALTER TABLE projects ADD COLUMN allow_proof_download INTEGER NOT NULL DEFAULT 0;
+  -- (worker/migrations/2026-09-30-delivery.sql).
+  final_folders   TEXT,
+  allow_proof_download INTEGER NOT NULL DEFAULT 0
 );
 
 -- Everyone who ever held the seat. key_hash is the SHA-256 of the bearer key

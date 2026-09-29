@@ -93,12 +93,25 @@ test('the pick routes refuse every token that is not a pick token', async () => 
   assert.equal(rows(env, 'SELECT * FROM selections').length, 0);
 });
 
-test('a pick token reads photos, thumbnails and listings inside its folders', async () => {
+test('a pick token reads thumbnails and listings inside its folders; originals only with the switch (docs/delivery.md)', async () => {
   const env = setup();
   const { token } = await createProject(env);
-  for (const path of ['/20260819/a.jpg', '/20260819/sub/d.jpg', '/_thumbs/400/20260819/a.jpg.thumb', '/20260819/a.jpg?w=400']) {
+  await env.imagepicker.put('_thumbs/400/20260819/sub/d.jpg.thumb', 'MINE-SUB-D-THUMB');
+  for (const path of ['/20260819/sub/d.jpg?w=400', '/_thumbs/400/20260819/a.jpg.thumb', '/20260819/a.jpg?w=400']) {
     const res = await call(env, withT(path, token));
     assert.equal(res.status, 200, path);
+    assert.match(await res.text(), /THUMB$/, path);
+  }
+  for (const path of ['/20260819/a.jpg', '/20260819/sub/d.jpg']) {
+    const res = await call(env, withT(path, token));
+    assert.equal(res.status, 403, path);
+    assert.equal((await res.json()).code, 'original_not_allowed');
+  }
+  env.DB._db.prepare('UPDATE projects SET allow_proof_download = 1').run();
+  for (const [path, body] of [['/20260819/a.jpg', 'MINE-A'], ['/20260819/sub/d.jpg', 'MINE-SUB-D']]) {
+    const res = await call(env, withT(path, token));
+    assert.equal(res.status, 200, path);
+    assert.equal(await res.text(), body);
   }
   const list = await call(env, withT(`/?list=${encodeURIComponent(MINE)}`, token));
   assert.equal(list.status, 200);

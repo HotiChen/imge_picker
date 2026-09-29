@@ -1081,6 +1081,85 @@ function pickFolders(value) {
   return out;
 }
 
+// ─── Delivery (docs/delivery.md) ─────────────────────────────────────────────
+// The same pick link turns into the delivery gallery once the photographer
+// delivers: projects.final_folders (a snapshot taken by POST .../deliver,
+// never from a guest request) together with delivered_at. The most final
+// folders one delivery may name. Change it here only.
+const DELIVER_MAX_FOLDERS = 20;
+
+// The finals folders a delivery body names: pickFolders' rules, plus the
+// bounds a photo key has (length, no control characters). null when any is
+// not a folder a delivery may name.
+function finalFolders(value) {
+  const out = pickFolders(value);
+  if (!out) return null;
+  if (out.some(f => charCount(f) > PICK_PHOTO_KEY_MAX || PICK_KEY_CONTROL.test(f))) return null;
+  return out;
+}
+
+// The finals a project is delivered with, or null when it is not delivered.
+// Delivered needs both the stamp and a readable snapshot: a stamp from before
+// this feature (no snapshot) or a snapshot that no longer parses is not a
+// delivery, and the link keeps the picking scope. Re-validated on every read,
+// so a snapshot edited by hand in the console cannot name `_` objects or `/`.
+function pickFinals(project) {
+  if (!project || !project.delivered_at || typeof project.final_folders !== 'string') return null;
+  let raw;
+  try { raw = JSON.parse(project.final_folders); } catch { return null; }
+  return finalFolders(raw);
+}
+
+// What a pick link may read, as two folder sets. `preview`: listings and
+// thumbnails. `full`: the originals (full resolution, downloads). Proofs are
+// the link's own snapshot; they are previews while picking and originals only
+// when the photographer turned allow_proof_download on. Once delivered, the
+// finals are both, and the proofs are gone unless the switch is on (then they
+// come back for download). Nothing else, ever. A pick row with no project
+// (only ever made by hand) gets its proofs as previews and nothing in full.
+function pickReadScope(share) {
+  const project = share.project;
+  const proofs = Array.isArray(share.folders) ? share.folders : [];
+  const proofOriginals = !!project && project.allow_proof_download === 1;
+  const finals = pickFinals(project);
+  if (finals) {
+    const both = proofOriginals ? [...finals, ...proofs] : finals;
+    return { mode: 'delivered', finals, proofs: proofOriginals ? proofs : [], proofOriginals, preview: both, full: both };
+  }
+  return { mode: 'picking', finals: [], proofs, proofOriginals, preview: proofs, full: proofOriginals ? proofs : [] };
+}
+
+// Content-Disposition for a download: an ASCII fallback with anything that is
+// not printable ASCII, a quote or a backslash replaced, and the real name as
+// RFC 5987 UTF-8 (encodeURIComponent leaves ' ( ) * raw, which attr-char does
+// not allow).
+function attachmentDisposition(key) {
+  const name = key.split('/').pop() || 'photo';
+  const ascii = name.replace(/[^\x20-\x7e]|["\\]/g, '_');
+  const utf8 = encodeURIComponent(name).replace(/['()*]/g, c => '%' + c.charCodeAt(0).toString(16).toUpperCase());
+  return `attachment; filename="${ascii}"; filename*=UTF-8''${utf8}`;
+}
+
+// A statement that names a column a hand-run migration adds, retried without
+// it when the database has not had that migration yet, so a deploy that lands
+// first does not take down what already worked.
+async function withoutMissingColumn(primary, fallback) {
+  try { return await primary(); } catch (e) {
+    if (!isMissingColumn(e)) throw e;
+    return fallback();
+  }
+}
+
+// The admin view of the two delivery columns: the snapshot parsed (null when
+// there is none) and the switch as a boolean.
+function deliveryFields(row) {
+  let finals = null;
+  if (typeof row.final_folders === 'string') {
+    try { finals = JSON.parse(row.final_folders); } catch {}
+  }
+  return { final_folders: Array.isArray(finals) ? finals : null, allow_proof_download: row.allow_proof_download === 1 };
+}
+
 // The project behind a pick token and, when the request carries a picker key,
 // the picker it belongs to. The key is looked up by its hash and only within
 // the token's own project, so a key from another project finds nobody. null
@@ -1622,9 +1701,11 @@ export default {
       if (!env.DB) return jsonErr('DB not configured', 500);
       const now = Date.now();
       const archivedFilter = params.get('archived') === '1' ? 'p.archived_at IS NOT NULL' : 'p.archived_at IS NULL';
-      const { results } = await env.DB.prepare(
+      // the delivery columns come from a hand-run migration: until it runs the
+      // list still loads, with every project undelivered and the switch off
+      const listed = delivery => env.DB.prepare(
         `SELECT p.id, p.title, p.phase, p.modified_after_submit,
-                o.name AS owner_name, p.created_at, p.archived_at, p.delivered_at,
+                o.name AS owner_name, p.created_at, p.archived_at, p.delivered_at,${delivery}
                 (SELECT COUNT(*) FROM submissions s WHERE s.project_id = p.id) AS submission_count,
                 (SELECT MAX(s.created_at) FROM submissions s WHERE s.project_id = p.id) AS last_submitted_at,
                 ${PICK_UNNOTIFIED_SQL} AS unnotified_submissions,
@@ -1642,7 +1723,11 @@ export default {
         new Date(now - SHARE_MAX_LIFE_MS).toISOString(),
         DEFAULT_PHOTOGRAPHER_ID,
       ).all();
-      return jsonOk({ projects: results }, 200, ADMIN_ONLY_HEADERS);
+      const { results } = await withoutMissingColumn(
+        () => listed(' p.final_folders, p.allow_proof_download,'),
+        () => listed(''),
+      );
+      return jsonOk({ projects: results.map(r => ({ ...r, ...deliveryFields(r) })) }, 200, ADMIN_ONLY_HEADERS);
     }
 
     // GET /api/admin/projects/:id — the seat holder, every submit record and
@@ -1682,7 +1767,7 @@ export default {
       let folders = null;
       try { folders = JSON.parse(project.folders); } catch {}
       return jsonOk({
-        project: { ...project, folders },
+        project: { ...project, folders, ...deliveryFields(project) },
         owner: pickers.find(p => p.id === project.owner_picker_id) || null,
         pickers, selections, tokens, submissions, unnotified_submissions: unnotified,
       }, 200, ADMIN_ONLY_HEADERS);
@@ -1722,9 +1807,11 @@ export default {
       // each is one conditional UPDATE, so it cannot interleave with a save
       // or a submit: those re-check the phase inside their own writes
       if (pathParts[4] === 'reopen') {
-        const moved = await env.DB.prepare(
-          "UPDATE projects SET phase = 'picking', modified_after_submit = 0, delivered_at = NULL WHERE id = ? AND photographer_id = ?"
+        // the finals snapshot goes with the stamp (not before the migration)
+        const reopen = delivery => env.DB.prepare(
+          `UPDATE projects SET phase = 'picking', modified_after_submit = 0, delivered_at = NULL${delivery} WHERE id = ? AND photographer_id = ?`
         ).bind(id, DEFAULT_PHOTOGRAPHER_ID).run();
+        const moved = await withoutMissingColumn(() => reopen(', final_folders = NULL'), () => reopen(''));
         if (!moved.meta?.changes) return jsonErr('Not found', 404);
         return jsonOk({ ok: true, phase: 'picking' });
       }
@@ -1854,35 +1941,89 @@ export default {
       return jsonOk({ token, expires_at: expiresAt, created_at: createdAt, status: 'live' }, 201, ADMIN_ONLY_HEADERS);
     }
 
-    // POST /api/admin/projects/:id/deliver — the finished photos went out.
-    // A stamp, not a phase (the phase CHECK cannot change without a table
-    // rebuild): only from 'retouching', so the guest's writes stay refused.
-    // A second press keeps the first stamp.
-    // POST /api/admin/projects/:id/undeliver — clear it (reopen clears it too).
+    // POST /api/admin/projects/:id/deliver {final_folders: [...]} — the
+    // finished photos went out: the pick link becomes the delivery gallery
+    // (docs/delivery.md). A stamp, not a phase (the phase CHECK cannot change
+    // without a table rebuild): only from 'retouching', so the guest's writes
+    // stay refused. The finals snapshot is validated like the project's own
+    // folders and may not be inside, equal to or around any proof folder (the
+    // project's, or any of its pick links' snapshots): the picking view shows
+    // a folder's subfolders, so a finals folder there would leak before
+    // delivery. The snapshot and the stamp are one conditional UPDATE. A
+    // repeat while delivered may change the finals and keeps the first stamp.
+    // POST /api/admin/projects/:id/undeliver — takes the gallery down: clears
+    // the stamp and the snapshot (reopen clears them too).
     if (request.method === 'POST' && pathParts[0] === 'api' && pathParts[1] === 'admin' && pathParts[2] === 'projects' && pathParts[3] && !pathParts[5] &&
         (pathParts[4] === 'deliver' || pathParts[4] === 'undeliver')) {
       if (!isAdminToken(request, env)) return jsonErr('Unauthorized', 401);
       if (!env.DB) return jsonErr('DB not configured', 500);
       const id = pathParts[3];
       if (pathParts[4] === 'undeliver') {
-        const result = await env.DB.prepare('UPDATE projects SET delivered_at = NULL WHERE id = ? AND photographer_id = ?')
+        const undeliver = delivery => env.DB.prepare(`UPDATE projects SET delivered_at = NULL${delivery} WHERE id = ? AND photographer_id = ?`)
           .bind(id, DEFAULT_PHOTOGRAPHER_ID).run();
+        const result = await withoutMissingColumn(() => undeliver(', final_folders = NULL'), () => undeliver(''));
         if (!result.meta?.changes) return jsonErr('Not found', 404);
         return jsonOk({ ok: true, delivered_at: null }, 200, ADMIN_ONLY_HEADERS);
       }
+      const notRetouching = phase =>
+        jsonOk({ error: '尚未開始修圖，無法標記為已交付', code: 'not_retouching', phase }, 409, ADMIN_ONLY_HEADERS);
+      const invalid = (code, extra = {}, error = '交件資料夾不正確') => jsonOk({ error, code, ...extra }, 400, ADMIN_ONLY_HEADERS);
+      const project = await env.DB.prepare('SELECT phase, folders FROM projects WHERE id = ? AND photographer_id = ?')
+        .bind(id, DEFAULT_PHOTOGRAPHER_ID).first();
+      if (!project) return jsonErr('Not found', 404);
+      if (project.phase !== 'retouching') return notRetouching(project.phase);
+      let body = null;
+      try { body = await request.json(); } catch {}
+      const raw = isPlainObject(body) ? body.final_folders : undefined;
+      if (Array.isArray(raw) && raw.length > DELIVER_MAX_FOLDERS) {
+        return invalid('too_many_final_folders', { max: DELIVER_MAX_FOLDERS }, `交件資料夾最多 ${DELIVER_MAX_FOLDERS} 個`);
+      }
+      const finals = finalFolders(raw);
+      if (!finals) return invalid('invalid_final_folders');
+      // every folder a pick link of this project was ever given, and the
+      // project's own
+      const proofs = [];
+      const addProofs = json => {
+        let v = null;
+        try { v = JSON.parse(json); } catch {}
+        if (Array.isArray(v)) proofs.push(...v.filter(f => typeof f === 'string'));
+      };
+      addProofs(project.folders);
+      const { results: links } = await env.DB.prepare("SELECT folders FROM share_tokens WHERE kind = 'pick' AND project_id = ?").bind(id).all();
+      for (const l of links) addProofs(l.folders);
+      const clash = finals.find(f => proofs.some(p => folderCovers(p, f) || folderCovers(f, p)));
+      if (clash) return invalid('final_overlaps_proofs', { folder: clash }, `「${clash}」與毛片資料夾重疊，精修請放在獨立的資料夾`);
       const at = new Date().toISOString();
+      // gated on the phase and on the folders the check above read
       const result = await env.DB.prepare(
-        "UPDATE projects SET delivered_at = COALESCE(delivered_at, ?) WHERE id = ? AND photographer_id = ? AND phase = 'retouching'"
-      ).bind(at, id, DEFAULT_PHOTOGRAPHER_ID).run();
+        "UPDATE projects SET delivered_at = COALESCE(delivered_at, ?), final_folders = ? WHERE id = ? AND photographer_id = ? AND phase = 'retouching' AND folders = ?"
+      ).bind(at, JSON.stringify(finals), id, DEFAULT_PHOTOGRAPHER_ID, project.folders).run();
       const row = await env.DB.prepare('SELECT phase, delivered_at FROM projects WHERE id = ? AND photographer_id = ?')
         .bind(id, DEFAULT_PHOTOGRAPHER_ID).first();
       if (!row) return jsonErr('Not found', 404);
       // No change, or a reopen landed between the write and this read and
       // cleared the stamp: either way the project is not delivered now.
-      if (!result.meta?.changes || !row.delivered_at) {
-        return jsonOk({ error: '尚未開始修圖，無法標記為已交付', code: 'not_retouching', phase: row.phase }, 409, ADMIN_ONLY_HEADERS);
+      if (!result.meta?.changes || !row.delivered_at) return notRetouching(row.phase);
+      return jsonOk({ ok: true, delivered_at: row.delivered_at, final_folders: finals }, 200, ADMIN_ONLY_HEADERS);
+    }
+
+    // PATCH /api/admin/projects/:id {allow_proof_download: bool} — the
+    // per-project switch that lets the guest download the proof originals
+    // (docs/delivery.md). The only field this route takes today; anything
+    // else in the body is refused, so a typo cannot pass for a change.
+    if (request.method === 'PATCH' && pathParts[0] === 'api' && pathParts[1] === 'admin' && pathParts[2] === 'projects' && pathParts[3] && !pathParts[4]) {
+      if (!isAdminToken(request, env)) return jsonErr('Unauthorized', 401);
+      if (!env.DB) return jsonErr('DB not configured', 500);
+      let body = null;
+      try { body = await request.json(); } catch {}
+      if (!isPlainObject(body) || Object.keys(body).join() !== 'allow_proof_download' || typeof body.allow_proof_download !== 'boolean') {
+        return jsonOk({ error: 'Only {allow_proof_download: true|false}', code: 'invalid_body' }, 400, ADMIN_ONLY_HEADERS);
       }
-      return jsonOk({ ok: true, delivered_at: row.delivered_at }, 200, ADMIN_ONLY_HEADERS);
+      const on = body.allow_proof_download;
+      const result = await env.DB.prepare('UPDATE projects SET allow_proof_download = ? WHERE id = ? AND photographer_id = ?')
+        .bind(on ? 1 : 0, pathParts[3], DEFAULT_PHOTOGRAPHER_ID).run();
+      if (!result.meta?.changes) return jsonErr('Not found', 404);
+      return jsonOk({ ok: true, allow_proof_download: on }, 200, ADMIN_ONLY_HEADERS);
     }
 
     // ─── The platform catalogue: operator routes ───────────────────────────
@@ -2659,9 +2800,18 @@ export default {
         const last = isOwner ? await env.DB.prepare(
           'SELECT created_at FROM submissions WHERE project_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1'
         ).bind(project.id).first() : null;
+        // which page to show: 'picking' (the proofs) or 'delivered' (the
+        // gallery of finals). `folders` is the proofs this link can read now
+        // ([] once delivered unless the switch is on), `final_folders` the
+        // finals ([] until delivered); the page lists each through ?list=.
+        const scope = pickReadScope(s);
         return jsonOk({
           project: { id: project.id, title: project.title, pick_limit: project.pick_limit, extra_price: project.extra_price },
-          folders: s.folders,
+          mode: scope.mode,
+          folders: scope.proofs,
+          final_folders: scope.finals,
+          allow_proof_download: scope.proofOriginals,
+          delivered_at: scope.mode === 'delivered' ? project.delivered_at : null,
           owner: await pickOwnerName(env, project.id),
           is_owner: isOwner,
           phase: project.phase,
@@ -3143,9 +3293,11 @@ export default {
       let listShare = null;
       if (!isAdminToken(request, env)) {
         listShare = await share();
-        if (!listShare || !(isStudioShare(listShare) || shareCovers(listShare, listPrefix))) {
-          return jsonErr('Unauthorized', 401);
-        }
+        // a pick link lists what it may preview now (pickReadScope)
+        const covered = listShare && (isPickShare(listShare)
+          ? pickKeyAllowed({ folders: pickReadScope(listShare).preview }, listPrefix)
+          : isStudioShare(listShare) || shareCovers(listShare, listPrefix));
+        if (!covered) return jsonErr('Unauthorized', 401);
         await touchShareToken(listShare, request, env);
       }
       try {
@@ -3184,13 +3336,26 @@ export default {
     const key = decodeURIComponent(url.pathname.slice(1));
     if (key) {
       let viaShare = false;
+      // whether the original (full resolution) may be served; only a pick
+      // link is ever told no
+      let original = true;
+      const source = sourceKey(key);
+      const isThumb = source !== key;
+      // ?download=1: the original as an attachment. Never a thumbnail.
+      const download = params.get('download') === '1';
+      if (download && isThumb) return jsonErr('Invalid Request', 400);
       if (!isAdminToken(request, env)) {
         const s = await share();
         // checked on the source key, so a thumbnail of a book is a book, and
         // ahead of every kind — a studio token is unscoped, and a folder
         // snapshot naming `_books/` would be one editor typo away
-        const source = sourceKey(key);
-        if (!s || isInternalKey(source) || !(isStudioShare(s) || shareCovers(s, source))) {
+        if (!s || isInternalKey(source)) return jsonErr('Unauthorized', 401);
+        if (isPickShare(s)) {
+          // previews and originals are two checks (docs/delivery.md)
+          const scope = pickReadScope(s);
+          if (!pickKeyAllowed({ folders: scope.preview }, source)) return jsonErr('Unauthorized', 401);
+          original = pickKeyAllowed({ folders: scope.full }, source);
+        } else if (!(isStudioShare(s) || shareCovers(s, source))) {
           return jsonErr('Unauthorized', 401);
         }
         await touchShareToken(s, request, env);
@@ -3198,13 +3363,17 @@ export default {
       }
 
       // ?w=N serves a pre-generated thumbnail (written at upload time) when one
-      // exists, falling back to the original so old uploads keep working.
+      // exists, falling back to the original so old uploads keep working —
+      // unless the original is not this reader's to have: then a photo with
+      // no thumbnail is a 404, and asking for the original itself is a 403.
       const wanted = parseInt(params.get('w'), 10);
-      const candidates = [];
-      if (Number.isFinite(wanted) && wanted > 0 && !key.startsWith(THUMB_PREFIX)) {
-        candidates.push(...thumbCandidates(wanted, key));
+      const thumbs = !download && Number.isFinite(wanted) && wanted > 0 && !key.startsWith(THUMB_PREFIX);
+      if (!original && !isThumb && !thumbs) {
+        return jsonOk({ error: '原檔未開放下載', code: 'original_not_allowed' }, 403, SHARED_LINK_HEADERS);
       }
-      candidates.push(key);
+      const candidates = [];
+      if (thumbs) candidates.push(...thumbCandidates(wanted, key));
+      if (original || isThumb) candidates.push(key);
 
       for (const candidate of candidates) {
         const isLast = candidate === candidates[candidates.length - 1];
@@ -3230,6 +3399,7 @@ export default {
         // because there is no credential in the URL to tell the two apart by.
         headers.set('Cache-Control', 'private, max-age=86400, stale-while-revalidate=604800');
         headers.set('Vary', viaShare ? 'X-Share-Token' : 'Authorization');
+        if (download) headers.set('Content-Disposition', attachmentDisposition(key));
 
         // onlyIf failed the precondition → R2 returns metadata with no body
         if (!('body' in object)) {

@@ -255,7 +255,7 @@ test('a brand-new live link to an archived project opens nothing either', async 
   assert.equal((await call(env, withT('/20260819/a.jpg', 'FRESH'))).status, 401);
   // while the project's neighbours are not caught by it
   const q = await createProject(env);
-  assert.equal((await call(env, withT('/20260819/a.jpg', q.token))).status, 200);
+  assert.equal((await call(env, withT('/20260819/a.jpg?w=400', q.token))).status, 200);
 });
 
 // an archive landing after the route's reads: the writes re-check it
@@ -322,7 +322,7 @@ test('unarchive clears the stamp; the links stay dead and a new one works', asyn
   const state = await pick(env, 'GET', 'state', minted.token, { key: p.key });
   assert.equal(state.status, 200);
   assert.equal((await state.json()).is_owner, true, 'same seat through the new link');
-  assert.equal((await call(env, withT('/20260819/a.jpg', minted.token))).status, 200);
+  assert.equal((await call(env, withT('/20260819/a.jpg?w=400', minted.token))).status, 200);
 });
 
 test('unarchive of a project that is not archived is a harmless 200', async () => {
@@ -492,9 +492,10 @@ test('the archive migration is one ALTER, and fresh == old migration + it', () =
   // the database as the guest-picking migration left it: no archived_at, and
   // none of the columns appended after it (delivered_at, which the next
   // migration adds, is appended on top so the column order is pinned too)
-  const deployed = fresh.replace(/,\n(?:\s*--[^\n]*\n)*\s*archived_at\s+TEXT,\n(?:\s*--[^\n]*\n)*\s*delivered_at\s+TEXT\n\);/, '\n);');
-  assert.doesNotMatch(deployed, /archived_at|delivered_at/, 'fixture still has the column');
-  const later = 'ALTER TABLE projects ADD COLUMN delivered_at TEXT;';
+  const deployed = fresh.replace(/,\n(?:\s*--[^\n]*\n)*\s*archived_at\s+TEXT,\n(?:\s*--[^\n]*\n)*\s*delivered_at\s+TEXT,\n(?:\s*--[^\n]*\n)*\s*final_folders\s+TEXT,\n\s*allow_proof_download[^\n]*\n\);/, '\n);');
+  assert.doesNotMatch(deployed, /archived_at|delivered_at|final_folders|allow_proof_download/, 'fixture still has the column');
+  const later = 'ALTER TABLE projects ADD COLUMN delivered_at TEXT;\n' +
+    readFileSync(new URL('../migrations/2026-09-30-delivery.sql', import.meta.url), 'utf8');
   const shape = db => db._db.prepare('PRAGMA table_info(projects)').all();
   assert.deepEqual(shape(fakeDB({ schema: deployed + '\n' + migration + '\n' + later })), shape(fakeDB({ schema: fresh })));
   assert.match(fresh, /ALTER TABLE projects ADD COLUMN archived_at TEXT;/, 'schema.sql names the hand-run ALTER');

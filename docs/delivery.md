@@ -54,6 +54,72 @@ ALTER TABLE projects ADD COLUMN final_folders TEXT;            -- JSON array, NU
 ALTER TABLE projects ADD COLUMN allow_proof_download INTEGER NOT NULL DEFAULT 0;
 ```
 
+## Worker decisions (2026-09-30)
+
+Migration: `worker/migrations/2026-09-30-delivery.sql` (the two ALTERs above).
+Before it runs, deliver and the switch answer 500; the list, detail, reopen,
+undeliver and every pick link keep working (not delivered, switch off).
+
+**Admin** (photographer token only; another photographer's project is 404):
+
+| Route | Body | Answer |
+|---|---|---|
+| `POST /api/admin/projects/:id/deliver` | `{final_folders: [...]}` | 200 `{ok, delivered_at, final_folders}` (canonical: trimmed, trailing `/`, deduped) |
+| `POST /api/admin/projects/:id/undeliver` | — | 200 `{ok, delivered_at: null}`; clears `final_folders` too |
+| `PATCH /api/admin/projects/:id` | `{allow_proof_download: true\|false}` | 200 `{ok, allow_proof_download}` |
+
+- Deliver checks, in order: 404; phase ≠ `retouching` → 409 `not_retouching`
+  (with `phase`, before the body is read, as today); more than 20 folders →
+  400 `too_many_final_folders` (`max: 20`); any folder that fails the
+  `pickFolders` rules, is over 256 characters or has a control character, an
+  empty list or a missing/non-JSON body → 400 `invalid_final_folders`; a
+  folder equal to, inside or containing a proof folder (the project's
+  `folders` or any of its pick links' snapshots) → 400
+  `final_overlaps_proofs` with `folder`. A sibling that only shares the prefix
+  (`毛片x/` next to `毛片/`) is fine.
+- The snapshot and the stamp are one conditional `UPDATE` (gated on
+  `phase = 'retouching'` and the proof folders read), so a reopen racing it
+  wins (409, nothing written).
+- **A repeat deliver while delivered replaces the finals** and keeps the
+  first `delivered_at`. Reopen clears both columns, like undeliver.
+- The PATCH body takes only that one boolean key; anything else (other keys,
+  `1`, `"true"`, `null`, not an object) → 400 `invalid_body`.
+- `GET /api/admin/projects` rows and `GET /api/admin/projects/:id`'s
+  `project` carry `final_folders` (array, or `null` when not delivered) and
+  `allow_proof_download` (boolean).
+
+**Guest** — `GET /api/pick/state` adds (same for owner and viewers):
+
+- `mode`: `'picking'` or `'delivered'`. Delivered = `delivered_at` set **and**
+  a valid finals snapshot; a legacy stamp without one (delivered before this
+  feature) stays `'picking'` (the read-only view, as before).
+- `folders`: the proof folders the link can read now — as before while
+  picking; `[]` once delivered unless the switch is on.
+- `final_folders`: `[]` until delivered. The page lists each folder (and its
+  subfolders) with the usual `?list=<folder>&t=<token>`.
+- `allow_proof_download` (boolean), `delivered_at` (`null` unless delivered).
+
+**Reads through a pick link** (object route `/<key>?t=`, `?list=`):
+
+- Preview scope (listing, `?w=N`, `_thumbs/...` keys): proofs while picking;
+  finals once delivered, plus proofs when the switch is on.
+- Originals (a request without `?w=`, or `?download=1`): finals only once
+  delivered; proofs only while the switch is on. Otherwise **403
+  `{code: 'original_not_allowed'}`**; outside the preview scope 401.
+- **Found while building this:** before this change a pick link *did* get
+  proof originals — any URL without `?w=`, and `?w=` fell back to the
+  original when a photo had no thumbnail. Both are closed now: with the
+  switch off, a proof with no thumbnail answers 404 in the picking view (it
+  used to show the original). Photos uploaded without thumbnails need their
+  thumbnails made (ping.html shows which) or the switch turned on.
+- **Download:** `GET /<key>?download=1&t=<token>` serves the original
+  (ignores `?w=`) with `Content-Disposition: attachment; filename="<ASCII
+  fallback>"; filename*=UTF-8''<RFC 5987 name>`, and the object route's usual
+  headers (ETag, Range, `Cache-Control: private`, `Vary`). A thumbnail key
+  with `download=1` is 400. Works for the photographer and album links too.
+- Guest save/submit after delivery: still 409 `retouching`. Archived,
+  revoked and expired links: 401 for everything, finals included.
+
 ## Out of scope for this step
 
 Zip download of everything; watermarks; a second link just for delivery;

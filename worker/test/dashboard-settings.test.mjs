@@ -12,8 +12,11 @@ import {
 
 const A = '20260819/a.jpg';
 
-const admin = (env, id, action, token = SECRET) =>
-  call(env, `/api/admin/projects/${id}/${action}`, { method: 'POST', token });
+const admin = (env, id, action, token = SECRET, body) =>
+  call(env, `/api/admin/projects/${id}/${action}`, { method: 'POST', token, body });
+// deliver takes the finals folder snapshot (docs/delivery.md)
+const FINALS = { final_folders: ['20260819-final/'] };
+const deliver = (env, id) => admin(env, id, 'deliver', SECRET, FINALS);
 const getSettings = (env, token = SECRET) => call(env, '/api/admin/settings', { token });
 const putSettings = (env, body, token = SECRET) => call(env, '/api/admin/settings', { method: 'PUT', token, body });
 // raw bytes: `call` would JSON-encode anything that is not a string
@@ -49,7 +52,7 @@ const text = s => new TextEncoder().encode(s);
 test('deliver stamps delivered_at from retouching; a repeat keeps the first stamp', async () => {
   const env = setup();
   const p = await retouching(env);
-  const res = await admin(env, p.project.id, 'deliver');
+  const res = await deliver(env, p.project.id);
   assert.equal(res.status, 200);
   const json = await res.json();
   assert.equal(json.ok, true);
@@ -57,7 +60,7 @@ test('deliver stamps delivered_at from retouching; a repeat keeps the first stam
   assert.equal(one(env, 'SELECT delivered_at FROM projects').delivered_at, json.delivered_at);
   assert.equal(one(env, 'SELECT phase FROM projects').phase, 'retouching', 'the phase does not move');
   env.DB._db.prepare("UPDATE projects SET delivered_at = '2026-01-01T00:00:00.000Z'").run();
-  const again = await (await admin(env, p.project.id, 'deliver')).json();
+  const again = await (await deliver(env, p.project.id)).json();
   assert.equal(again.delivered_at, '2026-01-01T00:00:00.000Z');
 });
 
@@ -94,13 +97,13 @@ test('deliver / undeliver: unknown or other photographer is 404, untouched', asy
 test('undeliver clears the stamp; reopen clears it too (delivered implies retouching)', async () => {
   const env = setup();
   const p = await retouching(env);
-  await admin(env, p.project.id, 'deliver');
+  assert.equal((await deliver(env, p.project.id)).status, 200);
   const res = await admin(env, p.project.id, 'undeliver');
   assert.equal(res.status, 200);
   assert.deepEqual(await res.json(), { ok: true, delivered_at: null });
   assert.equal(one(env, 'SELECT delivered_at FROM projects').delivered_at, null);
   assert.equal(one(env, 'SELECT phase FROM projects').phase, 'retouching');
-  await admin(env, p.project.id, 'deliver');
+  assert.equal((await deliver(env, p.project.id)).status, 200);
   assert.equal((await admin(env, p.project.id, 'reopen')).status, 200);
   assert.deepEqual({ ...one(env, 'SELECT phase, delivered_at FROM projects') }, { phase: 'picking', delivered_at: null });
 });
@@ -108,7 +111,7 @@ test('undeliver clears the stamp; reopen clears it too (delivered implies retouc
 test('a delivered project refuses guest saves and submits like retouching', async () => {
   const env = setup();
   const p = await retouching(env);
-  await admin(env, p.project.id, 'deliver');
+  assert.equal((await deliver(env, p.project.id)).status, 200);
   assert.equal(one(env, 'SELECT phase FROM projects').phase, 'retouching');
   const s = await save(env, p.token, p.key, { upsert: [{ photo_key: A, rating: 3 }] });
   assert.equal(s.status, 409);
@@ -124,7 +127,7 @@ test('the project list and detail carry delivered_at', async () => {
   const env = setup();
   const p = await retouching(env);
   const other = await createProject(env);
-  const { delivered_at } = await (await admin(env, p.project.id, 'deliver')).json();
+  const { delivered_at } = await (await deliver(env, p.project.id)).json();
   const list = await (await call(env, '/api/admin/projects', { token: SECRET })).json();
   const byId = Object.fromEntries(list.projects.map(r => [r.id, r]));
   assert.equal(byId[p.project.id].delivered_at, delivered_at);
@@ -548,15 +551,18 @@ test('the dashboard migration: fresh == archive-era database + it', () => {
   assert.equal(statements[0], 'ALTER TABLE projects ADD COLUMN delivered_at TEXT');
   assert.match(statements[1], /^CREATE TABLE IF NOT EXISTS studio_settings /);
   assert.equal(statements.length, 2);
+  // (the delivery columns appended after delivered_at go too, and come back
+  // from their own migration on top, so the column order is pinned)
   const deployed = fresh
-    .replace(/,\n(?:\s*--[^\n]*\n)*\s*delivered_at\s+TEXT\n\);/, '\n);')
+    .replace(/,\n(?:\s*--[^\n]*\n)*\s*delivered_at\s+TEXT,\n(?:\s*--[^\n]*\n)*\s*final_folders\s+TEXT,\n\s*allow_proof_download[^\n]*\n\);/, '\n);')
     .replace(/\n-- ─── Studio settings[\s\S]*$/, '\n');
-  assert.doesNotMatch(deployed, /delivered_at|studio_settings/, 'fixture still has the new schema');
+  assert.doesNotMatch(deployed, /delivered_at|studio_settings|final_folders/, 'fixture still has the new schema');
+  const later = readFileSync(new URL('../migrations/2026-09-30-delivery.sql', import.meta.url), 'utf8');
   const shape = db => ['projects', 'studio_settings'].map(t => db._db.prepare(`PRAGMA table_info(${t})`).all());
-  assert.deepEqual(shape(fakeDB({ schema: deployed + '\n' + migration })), shape(fakeDB({ schema: fresh })));
+  assert.deepEqual(shape(fakeDB({ schema: deployed + '\n' + migration + '\n' + later })), shape(fakeDB({ schema: fresh })));
   assert.match(fresh, /ALTER TABLE projects ADD COLUMN delivered_at TEXT;/, 'schema.sql names the hand-run ALTER');
   // the CREATE is safe to paste twice
-  const twice = fakeDB({ schema: deployed + '\n' + migration });
+  const twice = fakeDB({ schema: deployed + '\n' + migration + '\n' + later });
   twice._db.exec(migration.replace(/ALTER TABLE[^;]*;/, ''));
 });
 
@@ -572,7 +578,7 @@ test('a reopen landing between deliver\'s write and its read is a 409, not ok wi
     }
     return prepare(s);
   };
-  const res = await admin(env, p.project.id, 'deliver');
+  const res = await deliver(env, p.project.id);
   assert.equal(res.status, 409);
   assert.equal((await res.json()).code, 'not_retouching');
   assert.match(res.headers.get('Cache-Control') || '', /no-store/);
