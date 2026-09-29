@@ -14,17 +14,18 @@ Decided or discussed, not yet built. Newest decisions at the top of each group.
       Sender is `notify@imhoti.tw` (`NOTIFY_FROM` var). Until then admin shows 未寄信.
 
 ## Product roadmap (agreed order)
-1. Back-office shell: side menu, dashboard (projects by phase, per month,
+1. ✅ Back-office shell: side menu, dashboard (projects by phase, per month,
    to-do), add a 已交付 phase so "completed" can be counted.
 2. Photographer accounts with real login (replaces the shared
    PHOTOGRAPHER_TOKEN). Record `referred_by` on each account from day one.
    Registration stays closed until a second photographer joins; then add
    cross-account isolation tests.
-3. Settings: studio name, logo, default plan (張數, 加挑單價).
+3. ✅ Settings: studio name, logo, default plan (張數, 加挑單價).
    Logo must NOT live in the `imagepicker` bucket (180-day lifecycle).
    Guest page shows the studio brand + a booking link.
 4. Products and sales: catalogue (cost, price), orders per project. First
-   version: orders recorded by hand, no payment gateway.
+   version: orders recorded by hand, no payment gateway. Design draft:
+   `docs/products-orders.md` (phases A admin / B guest shop / C payments).
 5. Referral payouts (single level only — never multi-level): A earns a share
    of B's sales, paid out of the platform's cut, time-limited (e.g. 12 months).
    Needs payments through the platform first; check tax/legal before launch.
