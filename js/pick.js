@@ -193,6 +193,7 @@
             if (gallery && !this._galleryUIRemoved) {
                 // removed, not hidden (.btn's display beats [hidden])
                 document.getElementById('pickCounter')?.remove();
+                document.getElementById('mobileActionBar')?.remove(); // the counter lives here
                 document.getElementById('submitJobBtn')?.remove();
                 document.getElementById('pickBanner')?.remove();
                 this._galleryUIRemoved = true;
@@ -398,6 +399,7 @@
                 document.getElementById('modalDownloadBtn')?.remove();
             }
             this._applyView();
+            this.renderCounter();
 
             if (!this.isOwner && this.ownerName === null && this.mode === 'picking') {
                 // seat free — block on a name before showing anything else
@@ -694,35 +696,45 @@
             el.hidden = lines.length === 0 && !showHint;
         },
 
-        // ── counter: "已選 N / limit" + the over-limit warning ──────────────
+        // ── counter: the one pick counter, bottom-left ───────────────────────
+        // "已選 N / limit 張" (no limit: "已選 N 張"). It lives in the bottom
+        // bar (#mobileActionBar's status), which replaces that bar's generic
+        // "已選取 0 張" — that one counts bulk-selected cards, never picks.
+        // Over the limit it only changes colour (.over): no message while
+        // picking; the warning is the modal at submit (requestSubmit).
         renderCounter() {
             const badgeEl = document.getElementById('pickFilterSelectedCount');
             if (badgeEl) badgeEl.textContent = String(this._selectedCount());
 
-            const el = document.getElementById('pickCounter');
-            const mainEl = document.getElementById('pickCounterMain');
-            const warnEl = document.getElementById('pickCounterWarn');
-            if (!el || !mainEl) return;
-            if (!this.isOwner || this.isGallery()) { el.hidden = true; return; }
+            const bar = document.getElementById('mobileActionBar');
+            const status = document.getElementById('mobileActionStatus');
+            if (!bar || !status || this.isGallery()) return;
+            document.body.classList.add('pick-active');
+            // a viewer (no seat) picks nothing: no counter, no submit
+            bar.classList.toggle('pick-bar-off', !this.isOwner);
+            if (!this.isOwner) return;
 
+            let el = document.getElementById('pickCounter');
+            if (!el) {
+                el = document.createElement('span');
+                el.id = 'pickCounter';
+                el.className = 'pick-counter';
+                status.replaceChildren(el);
+            }
             const count = this._selectedCount();
             const limit = this.pickLimit;
-            mainEl.textContent = limit == null ? `已選 ${count} 張` : `已選 ${count} / ${limit}`;
+            el.textContent = limit == null ? `已選 ${count} 張` : `已選 ${count} / ${limit} 張`;
             el.classList.toggle('over', limit != null && count > limit);
+        },
 
-            const over = limit == null ? 0 : Math.max(0, count - limit);
-            if (warnEl) {
-                if (over > 0) {
-                    let msg = `方案 ${limit} 張精修，您已選 ${count} 張，多 ${over} 張`;
-                    if (this.extraPrice != null) msg += `，每張 NT$${this.extraPrice} 加挑費`;
-                    warnEl.textContent = msg;
-                    warnEl.hidden = false;
-                } else {
-                    warnEl.textContent = '';
-                    warnEl.hidden = true;
-                }
-            }
-            el.hidden = false;
+        // How many picks exceed the plan (0 when there is no limit).
+        overCount() {
+            const limit = this.pickLimit;
+            return limit == null ? 0 : Math.max(0, this._selectedCount() - limit);
+        },
+
+        _fmtMoney(n) {
+            return Number(n).toLocaleString('en-US');
         },
 
         // ── claim overlay: the free-seat name prompt ─────────────────────
@@ -766,6 +778,38 @@
             setTimeout(() => input.focus(), 30);
         },
 
+        // ── submit: over the limit, warn first (never block) ─────────────────
+        // The over-limit modal comes first; 確認送出 there opens the ordinary
+        // submit form (relationship / email), so that step is unchanged.
+        requestSubmit() {
+            if (this.overCount() > 0) this.openOverModal();
+            else this.openSubmitModal();
+        },
+        openOverModal() {
+            const modal = document.getElementById('pickOverModal');
+            const body = document.getElementById('pickOverBody');
+            if (!modal || !body) { this.openSubmitModal(); return; }
+            const limit = this.pickLimit;
+            const n = this._selectedCount();
+            const over = this.overCount();
+            const lines = [`方案 ${limit} 張，目前已選 ${n} 張，超出 ${over} 張`];
+            const price = this.extraPrice;
+            if (price != null && Number(price) > 0) {
+                const p = this._fmtMoney(price);
+                lines.push(`加挑每張 NT$${p}，加價 NT$${p} × ${over} = NT$${this._fmtMoney(price * over)}`);
+            }
+            body.replaceChildren(...lines.map((t, i) => {
+                const p = document.createElement('p');
+                p.className = i === 0 ? 'pick-over-line' : 'pick-over-price';
+                p.textContent = t;
+                return p;
+            }));
+            modal.classList.add('active');
+        },
+        closeOverModal() {
+            document.getElementById('pickOverModal')?.classList.remove('active');
+        },
+
         // ── submit modal ──────────────────────────────────────────────────
         openSubmitModal() {
             const modal = document.getElementById('pickSubmitModal');
@@ -785,6 +829,11 @@
         },
 
         _wireSubmitModal() {
+            document.getElementById('pickOverBackBtn')?.addEventListener('click', () => this.closeOverModal());
+            document.getElementById('pickOverConfirmBtn')?.addEventListener('click', () => {
+                this.closeOverModal();
+                this.openSubmitModal();
+            });
             document.getElementById('pickSubmitCancelBtn')?.addEventListener('click', () => this.closeSubmitModal());
             document.getElementById('pickSubmitConfirmBtn')?.addEventListener('click', () => this._confirmSubmit());
         },

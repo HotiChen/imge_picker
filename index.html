@@ -13,7 +13,7 @@
     <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 
     <!-- Stylesheets -->
-    <link rel="stylesheet" href="css/styles.css?v=20260929e">
+    <link rel="stylesheet" href="css/styles.css?v=20260929f">
 
     <!-- Shows a startup error on screen instead of leaving a blank page.
          Stays inline and first so it is listening before anything else runs. -->
@@ -79,10 +79,6 @@
         </div>
 
         <div class="header-right">
-            <span id="pickCounter" class="pick-counter" hidden>
-                <span id="pickCounterMain"></span>
-                <span id="pickCounterWarn" class="pick-counter-warn" hidden></span>
-            </span>
             <button id="submitJobBtn" class="btn btn-success" style="display: none;">✅ 完成挑圖</button>
             <!-- Guest pick page only (js/pick.js, docs/dashboard-settings.md):
                  href is set from the server's studio.booking_url and only
@@ -385,7 +381,9 @@
 
         <!-- 手機版專用底部操作列 (P0) -->
         <div id="mobileActionBar" class="mobile-action-bar" style="display: none;">
-            <div class="mobile-action-status">
+            <!-- Guest pick page: js/pick.js swaps this status for the single
+                 pick counter (#pickCounter, 已選 N / limit 張). -->
+            <div class="mobile-action-status" id="mobileActionStatus">
                 <span style="font-size: 0.8rem; color: var(--text-secondary);">已選取</span>
                 <span id="mobileSelectedCount"
                     style="font-weight: bold; font-size: 1.1rem; color: var(--primary);">0</span>
@@ -619,6 +617,21 @@
         </div>
     </div>
 
+    <!-- Guest picking — shown before the form above when the picked count is
+         over the project's pick_limit (docs/guest-picking.md: warn, never
+         block). Its lines are built by js/pick.js with textContent. -->
+    <div id="pickOverModal" class="modal">
+        <div class="modal-overlay"></div>
+        <div class="modal-content pick-submit-content pick-over-content" role="dialog" aria-labelledby="pickOverTitle">
+            <h3 id="pickOverTitle">已超出可挑張數</h3>
+            <div id="pickOverBody" class="pick-over-body"></div>
+            <div class="pick-submit-actions">
+                <button id="pickOverBackBtn" class="btn btn-outline">返回修改</button>
+                <button id="pickOverConfirmBtn" class="btn btn-success">確認送出</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Global Loading Modal -->
     <div id="loadingModal" class="modal">
         <div class="modal-overlay"></div>
@@ -642,20 +655,20 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 
     <!-- Scripts -->
-    <script src="js/build-version.js?v=20260929e"></script>
-    <script src="js/config.js?v=20260929e"></script>
-    <script src="js/studio-token.js?v=20260929e"></script>
-    <script src="js/session-token.js?v=20260929e"></script>
-    <script src="js/pick.js?v=20260929e"></script>
-    <script src="js/project-view.js?v=20260929e"></script>
-    <script src="js/client-auth-check.js?v=20260929e"></script>
-    <script src="js/toast.js?v=20260929e"></script>
-    <script src="js/logger.js?v=20260929e"></script>
-    <script src="js/diagnostics.js?v=20260929e"></script>
-    <script src="js/drive.js?v=20260929e"></script>
-    <script src="js/annotation.js?v=20260929e"></script>
-    <script src="js/rating.js?v=20260929e"></script>
-    <script src="js/app.js?v=20260929e"></script>
+    <script src="js/build-version.js?v=20260929f"></script>
+    <script src="js/config.js?v=20260929f"></script>
+    <script src="js/studio-token.js?v=20260929f"></script>
+    <script src="js/session-token.js?v=20260929f"></script>
+    <script src="js/pick.js?v=20260929f"></script>
+    <script src="js/project-view.js?v=20260929f"></script>
+    <script src="js/client-auth-check.js?v=20260929f"></script>
+    <script src="js/toast.js?v=20260929f"></script>
+    <script src="js/logger.js?v=20260929f"></script>
+    <script src="js/diagnostics.js?v=20260929f"></script>
+    <script src="js/drive.js?v=20260929f"></script>
+    <script src="js/annotation.js?v=20260929f"></script>
+    <script src="js/rating.js?v=20260929f"></script>
+    <script src="js/app.js?v=20260929f"></script>
 </body>
 
 </html>

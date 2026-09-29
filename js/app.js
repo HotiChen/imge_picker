@@ -676,7 +676,7 @@ class App {
                     : '目前無法送出');
                 return;
             }
-            PickController.openSubmitModal();
+            PickController.requestSubmit();
             return;
         }
 

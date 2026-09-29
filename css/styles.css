@@ -1896,16 +1896,38 @@ body {
    coming later in the sheet — the same trap noted in client-auth-check.js.
    Scoping every `display` under :not([hidden]) raises its specificity instead
    of depending on source order. */
+/* The one pick counter: bottom-left, inside #mobileActionBar's status.
+   Over the plan's limit it only turns orange (--warning); no message. */
 .pick-counter {
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: 14px;
   color: var(--ink-70);
   line-height: 1.4;
-  margin-right: 4px;
 }
-.pick-counter:not([hidden]) { display: flex; flex-direction: column; align-items: flex-end; }
-.pick-counter.over #pickCounterMain { color: var(--danger); }
-.pick-counter-warn { color: var(--danger); font-size: 11px; max-width: 260px; text-align: right; }
+.pick-counter.over { color: var(--warning); font-weight: 600; }
+
+/* The bottom bar is a phone/tablet thing (<= 1024px, always on there). On a
+   wide screen the pick page shows just the counter as a small pill,
+   bottom-left; the header's 完成挑圖 stays the submit button. A viewer with no
+   seat gets no bar at all. */
+@media (min-width: 1025px) {
+  body.pick-active .mobile-action-bar {
+    display: flex !important;
+    right: auto; left: 16px; bottom: 16px;
+    padding: 8px 14px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+  }
+  body.pick-active .mobile-action-bar > .btn { display: none; }
+}
+body .mobile-action-bar.pick-bar-off,
+body.pick-active .mobile-action-bar.pick-bar-off { display: none !important; }
+
+/* Over-limit modal (shown before the submit form) */
+.pick-over-content { height: auto; max-height: 92dvh; overflow-y: auto; }
+.pick-over-line { color: var(--ink); font-size: 15px; margin: 0 0 10px; }
+.pick-over-price { color: var(--ink-70); font-size: 14px; margin: 0 0 10px; }
+.pick-over-content .pick-submit-actions .btn { min-height: 44px; }
 
 .pick-banner {
   background: var(--accent-dim);
@@ -2168,7 +2190,6 @@ span.pick-heart-btn { cursor: default; }
 
 @media (max-width: 768px) {
   .pick-banner { padding: 8px 12px; font-size: 12px; }
-  .pick-counter { align-items: flex-start; }
 
   /* Mobile task: tap targets >= 44x44 CSS px — the ♥ toggle, the 全部/已選/
      未選 filter buttons, and 完成挑圖 / 確認送出 (both .btn.btn-success). */

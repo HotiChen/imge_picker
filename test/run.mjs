@@ -4111,7 +4111,7 @@ await suite('guest picking — a free seat blocks on a name, then loads an edita
 
 {
   const m = pickFakeWorker({ ownerName: 'Alice', ownerKey: 'ALICE-KEY', pickLimit: 1, extraPrice: 50 });
-  await suite('guest picking — ratings autosave debounced and batched, and the counter warns over the limit',
+  await suite('guest picking — ratings autosave debounced and batched, and the counter turns orange over the limit',
     `${base}/index.html?t=TOK`,
     async page => {
       const out = [];
@@ -4134,21 +4134,21 @@ await suite('guest picking — a free seat blocks on a name, then loads an edita
       ok('the card now shows the heart on',
         await card(0).locator('.pick-heart-btn.on').count() === 1);
 
-      const counter1 = await page.evaluate(() => document.getElementById('pickCounterMain').textContent);
-      ok('the counter shows the plan’s limit', counter1 === '已選 1 / 1', counter1);
-      ok('no over-limit warning yet',
-        await page.evaluate(() => document.getElementById('pickCounterWarn').hidden === true));
+      const counter1 = await page.evaluate(() => document.getElementById('pickCounter').textContent);
+      ok('the counter shows the plan’s limit', counter1 === '已選 1 / 1 張', counter1);
+      ok('no over-limit message yet',
+        await page.evaluate(() => !document.getElementById('pickCounter').classList.contains('over') && !/超出|加挑費/.test(document.body.innerText)));
 
       await card(1).locator('.pick-heart-btn').click();
       await page.waitForTimeout(1000);
-      const counter2 = await page.evaluate(() => document.getElementById('pickCounterMain').textContent);
-      ok('the counter now reads 2', counter2 === '已選 2 / 1', counter2);
+      const counter2 = await page.evaluate(() => document.getElementById('pickCounter').textContent);
+      ok('the counter now reads 2', counter2 === '已選 2 / 1 張', counter2);
       const warn = await page.evaluate(() => ({
-        hidden: document.getElementById('pickCounterWarn').hidden,
-        text: document.getElementById('pickCounterWarn').textContent,
+        over: document.getElementById('pickCounter').classList.contains('over'),
+        text: document.body.innerText,
       }));
-      ok('warns over the limit, with the per-photo fee, and never blocks anything',
-        !warn.hidden && warn.text === '方案 1 張精修，您已選 2 張，多 1 張，每張 NT$50 加挑費', warn.text);
+      ok('over the limit only the counter changes (colour) — no message, and nothing is blocked',
+        warn.over && !/超出|多 1 張|加挑費/.test(warn.text), warn.text.slice(0, 200));
 
       const badge1 = await page.evaluate(() => document.getElementById('pickFilterSelectedCount').textContent);
       ok('the ♥ 已選 filter badge tracks the same count', badge1 === '2', badge1);
@@ -4161,8 +4161,8 @@ await suite('guest picking — a free seat blocks on a name, then loads an edita
         JSON.stringify(put2[put2.length - 1].body) === JSON.stringify({ upsert: [{ photo_key: '20260819/p0.jpg', rating: 0, note: '' }], delete: [] }),
         JSON.stringify(put2[put2.length - 1]));
       ok('the heart is off again', await card(0).locator('.pick-heart-btn.on').count() === 0);
-      const counter3 = await page.evaluate(() => document.getElementById('pickCounterMain').textContent);
-      ok('the counter drops back to 1', counter3 === '已選 1 / 1', counter3);
+      const counter3 = await page.evaluate(() => document.getElementById('pickCounter').textContent);
+      ok('the counter drops back to 1', counter3 === '已選 1 / 1 張', counter3);
       return out;
     },
     {
@@ -4280,8 +4280,9 @@ await suite('guest picking — the studio/client choice overlay and other modes 
     const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
     ok('PickController exists but is inactive', await page.evaluate(() =>
       !!window.PickController && window.PickController.active === false));
-    ok('the pick counter never appears in a mode that never turns it on',
-      await page.evaluate(() => getComputedStyle(document.getElementById('pickCounter')).display === 'none'));
+    ok('the pick counter never appears in a mode that never turns it on (not in the DOM, bottom bar keeps its own 已選取)',
+      await page.evaluate(() => document.getElementById('pickCounter') === null && !document.body.classList.contains('pick-active') &&
+        !!document.getElementById('mobileSelectedCount')));
     ok('the ♥ filter bar stays hidden too — no pick mode to unhide it',
       await page.evaluate(() => getComputedStyle(document.getElementById('pickFilterBar')).display === 'none'));
     ok('the star filter and 只看選取 are untouched, still in the DOM',
@@ -6142,6 +6143,223 @@ await suite('responsive preview width — a desktop viewport keeps the 1600 buck
     { before: m.attach, initScript: () => localStorage.setItem('pick_key:TOK', 'ZOE-KEY'), contextOptions: MOBILE });
 }
 
+// ── one pick counter (bottom-left), over-limit colour, over-limit submit modal ──
+const pickHeart = (page, i) => page.locator('.photo-card').nth(i).locator('.pick-heart-btn').click();
+const pickSubmits = m => m.requests.filter(r => r.method === 'POST' && r.path === '/api/pick/submit');
+
+for (const [label, co] of [['desktop', undefined], ['phone 390px', MOBILE]]) {
+  const m = pickFakeWorker({ ownerName: 'Zoe', ownerKey: 'ZOE-KEY', pickLimit: 40, extraPrice: 500 });
+  await suite(`pick counter — one counter only, bottom-left, 已選 N / limit 張 (${label})`,
+    `${base}/index.html?t=TOK`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('.photo-card', { timeout: 5000 });
+      await pickHeart(page, 0);
+      await page.waitForTimeout(300);
+      // the old header counter is gone from the DOM (not hidden)
+      ok('#pickCounterMain and #pickCounterWarn no longer exist',
+        await page.evaluate(() => !document.getElementById('pickCounterMain') && !document.getElementById('pickCounterWarn')));
+      ok('nothing inside the header renders a count',
+        await page.evaluate(() => !document.querySelector('header.header #pickCounter') && !/已選\s*\d/.test(document.querySelector('header.header').textContent)));
+      // exactly one element anywhere shows the pick count
+      const found = await page.evaluate(() => [...document.querySelectorAll('body *')]
+        .filter(e => e.children.length === 0 && /已選\s*\d+\s*(\/|張)/.test(e.textContent) && e.getBoundingClientRect().width > 0)
+        .map(e => ({ id: e.id, text: e.textContent.trim(), x: e.getBoundingClientRect().left, y: e.getBoundingClientRect().top })));
+      ok('exactly one visible pick counter', found.length === 1, JSON.stringify(found));
+      ok('its text is 已選 1 / 40 張', found[0] && found[0].text === '已選 1 / 40 張', JSON.stringify(found));
+      const vp = page.viewportSize();
+      ok('and it sits bottom-left', found[0] && found[0].x < vp.width / 3 && found[0].y > vp.height * 0.8, JSON.stringify(found[0]));
+      ok('the photo position counter of the preview is untouched',
+        await page.evaluate(() => !!document.getElementById('photoCounter')));
+      ok('the counter is inside the bottom bar', await page.evaluate(() => !!document.querySelector('#mobileActionBar #pickCounter')));
+      return out;
+    },
+    { before: m.attach, initScript: () => localStorage.setItem('pick_key:TOK', 'ZOE-KEY'), contextOptions: co });
+}
+
+{
+  const m = pickFakeWorker({ ownerName: 'Zoe', ownerKey: 'ZOE-KEY' });
+  await suite('pick counter — no limit reads 已選 N 張',
+    `${base}/index.html?t=TOK`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('.photo-card', { timeout: 5000 });
+      const t0 = await page.textContent('#pickCounter');
+      ok('0 picks, no limit', t0 === '已選 0 張', t0);
+      await pickHeart(page, 0); await pickHeart(page, 1);
+      const t2 = await page.textContent('#pickCounter');
+      ok('2 picks, no limit', t2 === '已選 2 張', t2);
+      ok('never in over state without a limit', await page.evaluate(() => !document.getElementById('pickCounter').classList.contains('over')));
+      return out;
+    },
+    { before: m.attach, initScript: () => localStorage.setItem('pick_key:TOK', 'ZOE-KEY') });
+}
+
+for (const [label, co] of [['desktop', undefined], ['phone 390px', MOBILE]]) {
+  const m = pickFakeWorker({ ownerName: 'Zoe', ownerKey: 'ZOE-KEY', pickLimit: 2, extraPrice: 500 });
+  await suite(`pick counter — turns orange only above the limit, and nothing else is said while picking (${label})`,
+    `${base}/index.html?t=TOK`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('.photo-card', { timeout: 5000 });
+      const color = () => page.evaluate(() => getComputedStyle(document.getElementById('pickCounter')).color);
+      const bodyText = () => page.evaluate(() => document.body.innerText);
+      const normal = await color();
+      await pickHeart(page, 0); await pickHeart(page, 1);
+      const atLimit = await color();
+      ok('at exactly the limit (2 / 2) the colour is unchanged', atLimit === normal, `${atLimit} vs ${normal}`);
+      ok('at the limit the text is 已選 2 / 2 張', (await page.textContent('#pickCounter')) === '已選 2 / 2 張');
+      await pickHeart(page, 2);
+      const over = await color();
+      ok('above the limit (3 / 2) the colour differs', over !== normal, `${over} vs ${normal}`);
+      const accent = await page.evaluate(() => {
+        const t = document.createElement('i'); t.style.color = getComputedStyle(document.documentElement).getPropertyValue('--warning');
+        document.body.appendChild(t); const c = getComputedStyle(t).color; t.remove(); return c;
+      });
+      ok('and it is the warning/accent token', over === accent, `${over} vs ${accent}`);
+      ok('the text still reads 已選 3 / 2 張', (await page.textContent('#pickCounter')) === '已選 3 / 2 張');
+      const txt = await bodyText();
+      ok('no over-limit message anywhere while picking',
+        !/超出|多 \d+ 張|加挑費|已超出可挑張數/.test(txt), txt.slice(0, 200));
+      ok('no toast/banner element about the limit',
+        await page.evaluate(() => !document.querySelector('.toast') || !/超|加挑|方案/.test(document.querySelector('.toast').textContent)));
+      ok('the over-limit modal is not open', await page.evaluate(() => !document.getElementById('pickOverModal').classList.contains('active')));
+      await pickHeart(page, 2);
+      await page.waitForTimeout(200);
+      ok('back to the limit → normal colour again', (await color()) === normal);
+      return out;
+    },
+    { before: m.attach, initScript: () => localStorage.setItem('pick_key:TOK', 'ZOE-KEY'), contextOptions: co });
+}
+
+{
+  const m = pickFakeWorker({ ownerName: 'Zoe', ownerKey: 'ZOE-KEY', pickLimit: 1, extraPrice: 500 });
+  await suite('over-limit submit — modal with exact texts and price math, 返回修改 sends nothing, 確認送出 goes on to the form',
+    `${base}/index.html?t=TOK`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('.photo-card', { timeout: 5000 });
+      await pickHeart(page, 0); await pickHeart(page, 1); await pickHeart(page, 2);
+      await page.waitForTimeout(300);
+      await page.click('#submitJobBtn');
+      await page.waitForSelector('#pickOverModal.active', { timeout: 3000 });
+      ok('the title is 已超出可挑張數', (await page.textContent('#pickOverTitle')) === '已超出可挑張數');
+      const lines = await page.$$eval('#pickOverBody p', ps => ps.map(p => p.textContent));
+      ok('line 1 is exact', lines[0] === '方案 1 張，目前已選 3 張，超出 2 張', JSON.stringify(lines));
+      ok('line 2 has price math with thousands separators',
+        lines[1] === '加挑每張 NT$500，加價 NT$500 × 2 = NT$1,000', JSON.stringify(lines));
+      ok('exactly two lines', lines.length === 2, JSON.stringify(lines));
+      ok('the submit form is not open yet', await page.evaluate(() => !document.getElementById('pickSubmitModal').classList.contains('active')));
+      await page.waitForTimeout(600); // slideUp animation
+      const box = await page.evaluate(() => { const r = document.querySelector('#pickOverModal .modal-content').getBoundingClientRect(); return { cx: r.left + r.width / 2, cy: r.top + r.height / 2, vw: innerWidth, vh: innerHeight }; });
+      ok('centred', Math.abs(box.cx - box.vw / 2) < 4 && Math.abs(box.cy - box.vh / 2) < 4, JSON.stringify(box));
+      const btnTexts = await page.$$eval('#pickOverModal .pick-submit-actions button', bs => bs.map(b => b.textContent.trim()));
+      ok('buttons 返回修改 / 確認送出', JSON.stringify(btnTexts) === JSON.stringify(['返回修改', '確認送出']), JSON.stringify(btnTexts));
+
+      await page.click('#pickOverBackBtn');
+      await page.waitForTimeout(300);
+      ok('返回修改 closes the modal', await page.evaluate(() => !document.getElementById('pickOverModal').classList.contains('active')));
+      ok('返回修改 does not open the form either', await page.evaluate(() => !document.getElementById('pickSubmitModal').classList.contains('active')));
+      ok('and sends no submit request', pickSubmits(m).length === 0, JSON.stringify(pickSubmits(m)));
+
+      await page.click('#submitJobBtn');
+      await page.waitForSelector('#pickOverModal.active', { timeout: 3000 });
+      await page.click('#pickOverConfirmBtn');
+      await page.waitForSelector('#pickSubmitModal.active', { timeout: 3000 });
+      ok('確認送出 closes the warning and opens the ordinary form', await page.evaluate(() => !document.getElementById('pickOverModal').classList.contains('active')));
+      ok('still nothing sent before the form is confirmed', pickSubmits(m).length === 0);
+      await page.selectOption('#pickSubmitRelationship', '朋友');
+      await page.click('#pickSubmitConfirmBtn');
+      await page.waitForTimeout(400);
+      ok('the form then submits once', pickSubmits(m).length === 1, String(pickSubmits(m).length));
+      ok('with the relationship', pickSubmits(m)[0] && pickSubmits(m)[0].body.relationship === '朋友');
+      return out;
+    },
+    { before: m.attach, initScript: () => localStorage.setItem('pick_key:TOK', 'ZOE-KEY') });
+}
+
+{
+  const m = pickFakeWorker({ ownerName: 'Zoe', ownerKey: 'ZOE-KEY', pickLimit: 1 });
+  await suite('over-limit submit — no extra_price means no price line',
+    `${base}/index.html?t=TOK`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('.photo-card', { timeout: 5000 });
+      await pickHeart(page, 0); await pickHeart(page, 1);
+      await page.click('#submitJobBtn');
+      await page.waitForSelector('#pickOverModal.active', { timeout: 3000 });
+      const lines = await page.$$eval('#pickOverBody p', ps => ps.map(p => p.textContent));
+      ok('only the count line', lines.length === 1 && lines[0] === '方案 1 張，目前已選 2 張，超出 1 張', JSON.stringify(lines));
+      ok('no NT$ anywhere in the modal', await page.evaluate(() => !document.getElementById('pickOverModal').textContent.includes('NT$')));
+      return out;
+    },
+    { before: m.attach, initScript: () => localStorage.setItem('pick_key:TOK', 'ZOE-KEY') });
+}
+
+for (const [label, opts] of [['at exactly the limit', { pickLimit: 2, extraPrice: 500, n: 2 }], ['no limit at all', { n: 2 }], ['under the limit', { pickLimit: 3, extraPrice: 500, n: 1 }]]) {
+  const m = pickFakeWorker({ ownerName: 'Zoe', ownerKey: 'ZOE-KEY', pickLimit: opts.pickLimit, extraPrice: opts.extraPrice });
+  await suite(`over-limit submit — not over (${label}) opens the ordinary form, no warning modal`,
+    `${base}/index.html?t=TOK`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('.photo-card', { timeout: 5000 });
+      for (let i = 0; i < opts.n; i++) await pickHeart(page, i);
+      await page.click('#submitJobBtn');
+      await page.waitForSelector('#pickSubmitModal.active', { timeout: 3000 });
+      ok('the form opens directly', true);
+      ok('the warning modal never opened', await page.evaluate(() => !document.getElementById('pickOverModal').classList.contains('active')));
+      return out;
+    },
+    { before: m.attach, initScript: () => localStorage.setItem('pick_key:TOK', 'ZOE-KEY') });
+}
+
+{
+  const m = pickFakeWorker({ ownerName: 'Zoe', ownerKey: 'ZOE-KEY', pickLimit: 1, extraPrice: 1500 });
+  await suite('over-limit submit — phone width (390px): modal fits, buttons >= 44px, no horizontal scroll, bottom bar submit works',
+    `${base}/index.html?t=TOK`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('.photo-card', { timeout: 5000 });
+      await pickHeart(page, 0); await pickHeart(page, 1); await pickHeart(page, 2);
+      await page.click('#mobileActionBar .btn-success'); // the phone's bottom-bar submit
+      await page.waitForSelector('#pickOverModal.active', { timeout: 3000 });
+      const r = await page.evaluate(() => {
+        const box = s => { const r = document.querySelector(s).getBoundingClientRect(); return { l: r.left, r: r.right, t: r.top, b: r.bottom, w: r.width, h: r.height }; };
+        return { vw: innerWidth, vh: innerHeight, sw: document.documentElement.scrollWidth, modal: box('#pickOverModal .modal-content'), back: box('#pickOverBackBtn'), conf: box('#pickOverConfirmBtn'),
+          price: document.querySelector('.pick-over-price').textContent };
+      });
+      ok('price with 1,500 separators', r.price === '加挑每張 NT$1,500，加價 NT$1,500 × 2 = NT$3,000', r.price);
+      ok('modal inside the viewport', r.modal.l >= 0 && r.modal.r <= r.vw && r.modal.t >= 0 && r.modal.b <= r.vh, JSON.stringify(r.modal));
+      ok('buttons >= 44px tall', r.back.h >= 44 && r.conf.h >= 44, `${r.back.h} ${r.conf.h}`);
+      ok('buttons inside the modal', r.back.l >= r.modal.l && r.conf.r <= r.modal.r, JSON.stringify(r));
+      ok('no horizontal scroll', r.sw <= r.vw, `${r.sw} > ${r.vw}`);
+      return out;
+    },
+    { before: m.attach, initScript: () => localStorage.setItem('pick_key:TOK', 'ZOE-KEY'), contextOptions: MOBILE });
+}
+
+{
+  const m = pickFakeWorker({ ownerName: 'Vic', ownerKey: 'VIC-KEY' });
+  await suite('pick counter — a viewer without the seat gets no counter and no bottom bar',
+    `${base}/index.html?t=TOK`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('.photo-card', { timeout: 5000 });
+      ok('bar hidden (computed display none)', await page.evaluate(() => getComputedStyle(document.getElementById('mobileActionBar')).display === 'none'));
+      ok('no counter shows a count', await page.evaluate(() => !/已選\s*\d/.test(document.getElementById('mobileActionBar').innerText)));
+      return out;
+    },
+    { before: m.attach });
+}
+
 await suite('desktop preview — arrow keys and mouse click still navigate/open exactly as before',
   `${base}/index.html`,
   async page => {
@@ -7867,6 +8085,10 @@ for (const who of [
         (await page.$('.pick-heart-btn')) === null && (await page.$('#submitJobBtn')) === null &&
         (await page.$('#pickCounter')) === null && (await page.$('#pickBanner')) === null &&
         (await page.$eval('#pickFilterBar', e => e.hidden)) === true);
+      ok('delivered: no pick counter of any kind (bar removed, no 已選 N text visible, no pick-active body class)',
+        (await page.$('#mobileActionBar')) === null &&
+        !(await page.evaluate(() => /已選\s*\d/.test(document.body.innerText) || document.body.classList.contains('pick-active'))));
+      ok('no over-limit modal element is open', await page.evaluate(() => !document.getElementById('pickOverModal').classList.contains('active')));
       ok('no way to reach the proofs: no 下載毛片原檔 entry while the switch is off', (await page.$('#deliveryProofsBtn')) === null);
       const dls = await page.$$eval('.photo-card [data-download]', as => as.map(a => ({ href: decodeURI(a.href), text: a.textContent })));
       ok('every card has a 下載 link with its own ?download=1&t= URL',
