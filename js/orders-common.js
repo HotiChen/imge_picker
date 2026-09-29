@@ -50,6 +50,7 @@
     invalid_cost: '成本需為 0 以上的整數',
     // platform catalogue (A2)
     platform_only: '相本與輸出品要從「從平台加入」新增，自訂商品只能是服務',
+    custom_products_disabled: '目前只能從平台加入商品',
     platform_managed: '名稱、類型、說明與張數由平台管理，無法修改',
     below_platform_price: '售價不能低於平台價',
     already_adopted: '已經加入過這個平台商品了',

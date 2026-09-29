@@ -320,6 +320,13 @@ own prints with their own lab would pay the platform nothing.
   platform product (kind `album` / `print`, `platform_product_id` set).
   A photographer can no longer create an album/print product of their own
   (400 `platform_only`).
+- **Custom products are switched off** (Tim, 2026-09-29): photographers sell
+  platform products only. `CUSTOM_PRODUCTS` in wrangler.toml `[vars]` turns
+  them on when exactly `"on"` (unset / anything else = off). Off: create,
+  edit and restore of a custom product → 403 `custom_products_disabled`;
+  retire, adopted products, reads, old order lines and the extra-pick order
+  are unaffected. `GET /api/admin/products` returns `custom_products_enabled`;
+  settings leaves 「新增服務」 out of the page when it is false.
 - **Three prices per option.**
   | | set by | seen by |
   |---|---|---|

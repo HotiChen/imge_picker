@@ -82,6 +82,10 @@ a proof → photographer / client approves → printed → shipped (tracking no.
 - Logo route per photographer (`/api/studio/:pid/logo`); today it always
   serves the default studio — fine until a second photographer exists.
 - Strip bidi / zero-width characters from `studio_name` (spoofing only; admin-set).
+- Custom (non-platform) products for photographers — built, off by
+  `CUSTOM_PRODUCTS`; ideas: invite a photographer's own print lab onto the
+  platform as a vendor (keeps the 15% margin fee); a paid plan allowing their
+  own lab (fee on sale price or monthly, since a self-declared cost can be gamed).
 - Registered-owner invites (editor / viewer) for a project.
 - Link a registered client account to a pick seat (`pickers.user_id`).
 - Long-term storage for registered owners — needs a separate bucket.

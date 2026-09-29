@@ -606,6 +606,13 @@ const PAID_AT_AHEAD_MS = 24 * 60 * 60 * 1000;
 const isMoney = v => Number.isSafeInteger(v) && v >= 0 && v <= MONEY_MAX;
 const hasField = (body, k) => Object.prototype.hasOwnProperty.call(body, k);
 const isPlainObject = v => !!v && typeof v === 'object' && !Array.isArray(v);
+// A photographer's own (non-platform) products are service-only today and
+// switched off: they sell platform products only. CUSTOM_PRODUCTS (a [vars]
+// entry in wrangler.toml) turns them on when it is exactly "on"; unset or
+// anything else is off, so a typo fails closed.
+const customProductsEnabled = env => env.CUSTOM_PRODUCTS === 'on';
+const CUSTOM_PRODUCTS_DISABLED = { error: '目前只能從平台加入商品', code: 'custom_products_disabled' };
+
 // 400 {error, code}, the settings route's shape
 const orderBad = (code, error) => jsonOk({ error: error ?? `${code.replace(/_/g, ' ')}`, code }, 400);
 
@@ -2092,7 +2099,7 @@ export default {
       // GET /api/admin/products — the catalogue, retired products and
       // options included (active = 0), never the image bytes.
       if (route === 'products' && request.method === 'GET') {
-        return done({ products: await readProducts(env) });
+        return done({ products: await readProducts(env), custom_products_enabled: customProductsEnabled(env) });
       }
 
       // GET /api/admin/platform-products — what the platform offers: active
@@ -2167,6 +2174,7 @@ export default {
       // The photographer's own products are services; albums and prints come
       // from the platform (400 platform_only).
       if (route === 'products') {
+        if (!customProductsEnabled(env)) return done(CUSTOM_PRODUCTS_DISABLED, 403);
         const fields = productFields(body, false);
         if (fields.bad) return orderBad(fields.bad);
         if (fields.set.kind !== 'service') return orderBad('platform_only');
@@ -2215,6 +2223,7 @@ export default {
           }
           statements = catalogueWrites(env, ADOPTED_TABLES, id, fields.set, opts, now);
         } else {
+          if (!customProductsEnabled(env)) return done(CUSTOM_PRODUCTS_DISABLED, 403);
           const fields = productFields(body, true);
           if (fields.bad) return orderBad(fields.bad);
           if (fields.set.kind !== undefined && fields.set.kind !== 'service') return orderBad('platform_only');
@@ -2235,8 +2244,16 @@ export default {
 
       // POST /api/admin/products/:id/retire | /restore — off (or back on)
       // the list new lines are made from. Existing lines keep their snapshot.
+      // With custom products off, a custom one can still be retired (taken
+      // off sale) but not restored.
       if (route === 'product-active') {
         const active = action === 'restore' ? 1 : 0;
+        if (active && !customProductsEnabled(env)) {
+          const current = await env.DB.prepare('SELECT platform_product_id FROM products WHERE id = ? AND photographer_id = ?')
+            .bind(id, DEFAULT_PHOTOGRAPHER_ID).first();
+          // no row (unknown, or another photographer's) is the 404 below
+          if (current && !current.platform_product_id) return done(CUSTOM_PRODUCTS_DISABLED, 403);
+        }
         const result = await env.DB.prepare('UPDATE products SET active = ?, updated_at = ? WHERE id = ? AND photographer_id = ?')
           .bind(active, now, id, DEFAULT_PHOTOGRAPHER_ID).run();
         if (!result.meta?.changes) return jsonErr('Not found', 404);

@@ -25,6 +25,9 @@ allowed_sender_addresses = ["notify@imhoti.tw"]
 
 [vars]
 NOTIFY_FROM = "notify@imhoti.tw"
+# 攝影師自建商品（非平台商品）。只有 "on" 才開；其他值或沒設都算關。
+# 目前只賣平台商品，保留功能供日後開放。
+CUSTOM_PRODUCTS = "off"
 
 # 收件人用 Secret（不進 repo，deploy 也不會被清掉）：
 # wrangler secret put PHOTOGRAPHER_EMAIL

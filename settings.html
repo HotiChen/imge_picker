@@ -173,7 +173,6 @@
         <div id="prod-list"><div class="hint">載入中…</div></div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;">
           <button id="plat-add-btn" class="btn btn-accent" type="button">從平台加入</button>
-          <button id="prod-add-btn" class="btn btn-outline" type="button">＋ 新增服務</button>
         </div>
         <div id="plat-box"></div>
         <div id="prod-form-box"></div>
@@ -184,9 +183,9 @@
   </main>
 </div>
 
-<script src="js/build-version.js?v=20260929b"></script>
-<script src="js/side-nav.js?v=20260929b"></script>
-<script src="js/orders-common.js?v=20260929b"></script>
+<script src="js/build-version.js?v=20260929c"></script>
+<script src="js/side-nav.js?v=20260929c"></script>
+<script src="js/orders-common.js?v=20260929c"></script>
 <script>
 (function () {
   const WORKER_URL = 'https://imagepicker.hotichen.workers.dev';
@@ -304,7 +303,10 @@
     // Two kinds of product: 自訂 (service only — 加修, 急件) that the photographer
     // fully owns, and 平台商品 adopted from the operator's catalogue, whose name,
     // description, image and 平台價 are the platform's; only the option set and
-    // 售價 (never below 平台價) are the photographer's.
+    // 售價 (never below 平台價) are the photographer's. 自訂 products are off
+    // unless the Worker says custom_products_enabled (CUSTOM_PRODUCTS = "on"):
+    // until then 新增服務 is not in the page at all, and an old custom product
+    // can only be taken off sale (下架).
     const O = window.Orders;
     const api = O.client({ workerUrl: WORKER_URL, getToken: () => token, onUnauthorized: SideNav.logoutToHome });
     const prodList = document.getElementById('prod-list');
@@ -312,14 +314,30 @@
     const platBox = document.getElementById('plat-box');
     const prodErr = document.getElementById('prod-err');
     const prodOk = document.getElementById('prod-ok');
-    const prodAddBtn = document.getElementById('prod-add-btn');
     const platAddBtn = document.getElementById('plat-add-btn');
+    let prodAddBtn = null;       // 新增服務, only in the DOM while custom products are on
+    let customEnabled = false;   // fail closed until the Worker says otherwise
     let products = [];
     let catalogue = null;   // GET /api/admin/platform-products, loaded on first use
 
     const isInt = s => /^\d+$/.test(s);
     function activeOptions(p) { return (p.options || []).filter(o => o.active); }
-    function setAddButtons(hidden) { prodAddBtn.hidden = hidden; platAddBtn.hidden = hidden; }
+    function setAddButtons(hidden) { if (prodAddBtn) prodAddBtn.hidden = hidden; platAddBtn.hidden = hidden; }
+    function syncCustomButton() {
+      if (customEnabled && !prodAddBtn) {
+        prodAddBtn = document.createElement('button');
+        prodAddBtn.id = 'prod-add-btn';
+        prodAddBtn.className = 'btn btn-outline';
+        prodAddBtn.type = 'button';
+        prodAddBtn.textContent = '＋ 新增服務';
+        prodAddBtn.hidden = platAddBtn.hidden;
+        prodAddBtn.addEventListener('click', () => openForm(null));
+        platAddBtn.after(prodAddBtn);
+      } else if (!customEnabled && prodAddBtn) {
+        prodAddBtn.remove();
+        prodAddBtn = null;
+      }
+    }
     function say(ok, text) {
       prodErr.textContent = ok ? '' : text;
       prodOk.textContent = ok ? text : '';
@@ -344,6 +362,8 @@
           below ? ' <span class="warn-below">平台價已調整，售價低於平台價，請更新</span>' : ''}</li>`;
       }).join('');
       const retired = !p.active;
+      // a custom product with custom products off: 下架 only
+      const locked = !adopted && !customEnabled;
       const thumb = adopted
         ? (p.has_image
           ? `<img class="prod-thumb" alt="" src="${O.esc(O.platformImageUrl(WORKER_URL, p.platform_product_id, p.image_updated_at))}">`
@@ -362,9 +382,9 @@
           <ul class="prod-opts">${opts}</ul>
         </div>
         <div class="prod-actions">
-          <button type="button" class="btn btn-outline btn-sm" data-edit>編輯</button>
+          ${locked ? '' : '<button type="button" class="btn btn-outline btn-sm" data-edit>編輯</button>'}
           ${retired
-            ? '<button type="button" class="btn btn-outline btn-sm" data-restore>重新上架</button>'
+            ? (locked ? '' : '<button type="button" class="btn btn-outline btn-sm" data-restore>重新上架</button>')
             : '<button type="button" class="btn btn-danger btn-sm" data-retire>下架</button>'}
         </div>
       </div>`;
@@ -373,13 +393,17 @@
     function renderProducts() {
       prodList.innerHTML = products.length
         ? products.map(productRowHtml).join('')
-        : '<div class="hint">還沒有商品。相本、無框畫請按「從平台加入」；加修、急件等服務請按「新增服務」。</div>';
+        : customEnabled
+          ? '<div class="hint">還沒有商品。相本、無框畫請按「從平台加入」；加修、急件等服務請按「新增服務」。</div>'
+          : '<div class="hint">還沒有商品。請按「從平台加入」挑選要賣的商品。</div>';
     }
 
     async function loadProducts() {
       const r = await api('/api/admin/products');
       if (!r.ok) { prodList.innerHTML = `<div class="err">讀取商品失敗：${O.esc(O.errorText(r.data, r.status))}</div>`; return; }
       products = r.data.products || [];
+      customEnabled = r.data.custom_products_enabled === true;
+      syncCustomButton();
       renderProducts();
     }
     loadProducts();
@@ -689,14 +713,13 @@
       await loadProducts();
     }
 
-    prodAddBtn.addEventListener('click', () => openForm(null));
     prodList.addEventListener('click', async e => {
       const row = e.target.closest('.prod-row');
       if (!row) return;
       const p = products.find(x => x.id === row.dataset.productId);
       if (!p) return;
       say(true, '');
-      if (e.target.closest('[data-edit]')) { if (p.platform_product_id) openAdoptedForm(p); else openForm(p); return; }
+      if (e.target.closest('[data-edit]')) { if (p.platform_product_id) openAdoptedForm(p); else if (customEnabled) openForm(p); return; }
       const retire = e.target.closest('[data-retire]');
       const restore = e.target.closest('[data-restore]');
       if (!retire && !restore) return;

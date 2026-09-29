@@ -7291,6 +7291,9 @@ await suite('設定 — 沒有 studio_token 時跳轉回 home.html',
 function ordersFake(opts = {}) {
   const st = {
     products: opts.products || [],
+    // CUSTOM_PRODUCTS: the Worker's switch for the photographer's own
+    // products, off unless exactly "on" — so off here unless asked for
+    customProducts: opts.customProducts === true,
     platform: opts.platform || [],   // platform catalogue: {id, kind, name, …, options: [{id, label, vendor_cost, platform_price, active, sort}]}
     imageSeq: 0,
     operatorToken: opts.operatorToken || 'op',
@@ -7558,8 +7561,11 @@ function ordersFake(opts = {}) {
       return { status: 201, body: { product: viewProduct(p) } };
     }
     // ── the photographer's products ──
-    if (path === '/api/admin/products' && method === 'GET') return { body: { products: st.products.map(viewProduct) } };
+    if (path === '/api/admin/products' && method === 'GET') return { body: { products: st.products.map(viewProduct), custom_products_enabled: st.customProducts } };
+    // with the switch off a custom product can be retired, never made, edited or restored
+    const customOff = { status: 403, body: { error: '目前只能從平台加入商品', code: 'custom_products_disabled' } };
     if (path === '/api/admin/products' && method === 'POST') {
+      if (!st.customProducts) return customOff;
       const f = checkFields(body, false, ['album', 'print', 'service']);
       if (f.bad) return bad(f.bad);
       if (f.set.kind !== 'service') return bad('platform_only');
@@ -7600,6 +7606,7 @@ function ordersFake(opts = {}) {
         if ('sort' in f.set) p.sort = f.set.sort;
         return { body: { product: viewProduct(p) } };
       }
+      if (!st.customProducts) return customOff;
       const f = checkFields(body, true, ['album', 'print', 'service']);
       if (f.bad) return bad(f.bad);
       if (f.set.kind !== undefined && f.set.kind !== 'service') return bad('platform_only');
@@ -7624,6 +7631,7 @@ function ordersFake(opts = {}) {
     if ((m = /^\/api\/admin\/products\/([^/]+)\/(retire|restore)$/.exec(path)) && method === 'POST') {
       const p = st.products.find(x => x.id === m[1]);
       if (!p) return { status: 404, body: { error: 'Not found' } };
+      if (m[2] === 'restore' && !p.platform_product_id && !st.customProducts) return customOff;
       p.active = m[2] === 'restore' ? 1 : 0;
       return { body: { ok: true, active: p.active } };
     }
@@ -7782,7 +7790,7 @@ const disp = (page, sel) => page.$eval(sel, e => getComputedStyle(e).display);
 const RED = 'rgb(192, 57, 43)';
 {
   const m = dashSettingsMock();
-  const o = ordersFake({ platform: platFx(), products: [clone(PROD_ALBUM), clone(PROD_PRINT), clone(PROD_SERVICE_OFF)] });
+  const o = ordersFake({ customProducts: true, platform: platFx(), products: [clone(PROD_ALBUM), clone(PROD_PRINT), clone(PROD_SERVICE_OFF)] });
   await suite('設定 — 商品清單：平台商品有圖與平台價、自訂服務有成本，下架的灰掉並可重新上架，金額為 NT$',
     `${base}/settings.html`,
     async page => {
@@ -7837,7 +7845,7 @@ const RED = 'rgb(192, 57, 43)';
 
 {
   const m = dashSettingsMock();
-  const o = ordersFake({ products: [] });
+  const o = ordersFake({ customProducts: true, products: [] });
   await suite('設定 — 新增服務：自訂商品只有服務（沒有類型選單、不問張數），驗證、規格列增減，送出的內容正確',
     `${base}/settings.html`,
     async page => {
@@ -7918,7 +7926,7 @@ const RED = 'rgb(192, 57, 43)';
   const svc = { ...clone(PROD_SERVICE_OFF), active: 1, options: [
     { id: 'opt-a', label: '加修 1 張', price: 500, cost: 100, active: 1, sort: 0 }, { id: 'opt-b', label: '加修 5 張', price: 2000, cost: 0, active: 1, sort: 1 },
     { id: 'opt-old', label: '停賣', price: 1, cost: 0, active: 0, sort: 2 }] };
-  const o = ordersFake({ products: [svc] });
+  const o = ordersFake({ customProducts: true, products: [svc] });
   await suite('設定 — 編輯自訂服務：規格帶入（含 id），改價／刪／加後 PUT 的內容正確（不送 kind）',
     `${base}/settings.html`,
     async page => {
@@ -7957,12 +7965,125 @@ const RED = 'rgb(192, 57, 43)';
     { before: async p => { await m.attach(p); await o.attach(p); }, initScript: SEED_TOKEN });
 }
 
+// ── settings: CUSTOM_PRODUCTS off (the default) / on ────────────────────────
+{
+  const m = dashSettingsMock();
+  const svcOn = { ...clone(PROD_SERVICE_OFF), id: 'prod-svc-on', name: '外拍加時', active: 1, options: [{ id: 'opt-on', label: '', price: 800, cost: 0, active: 1, sort: 0 }] };
+  const o = ordersFake({ platform: platFx(), products: [clone(PROD_ALBUM), svcOn, clone(PROD_SERVICE_OFF)] });
+  await suite('設定 — 自訂商品關閉（預設）：沒有「新增服務」按鈕（不在 DOM），舊的自訂服務只剩下架',
+    `${base}/settings.html`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('.prod-row', { timeout: 5000 });
+      ok('the list was read and the fake said custom products are off', o.st.calls.some(c => c.method === 'GET' && c.path === '/api/admin/products') && o.st.customProducts === false);
+      ok('從平台加入 is there and shown (computed display)', (await page.$('#plat-add-btn')) !== null && (await disp(page, '#plat-add-btn')) !== 'none');
+      ok('新增服務 is not in the DOM at all', (await page.$('#prod-add-btn')) === null);
+      const buttonTexts = await page.$$eval('button', els => els.map(e => e.textContent));
+      ok('no button anywhere reads 新增服務', !buttonTexts.some(t => t.includes('新增服務')), JSON.stringify(buttonTexts));
+      const rows = await page.$$eval('.prod-row', els => els.map(e => ({ id: e.dataset.productId, buttons: [...e.querySelectorAll('button')].map(b => b.textContent) })));
+      ok('all three products are still listed', rows.map(r => r.id).join() === 'prod-album,prod-svc-on,prod-svc', JSON.stringify(rows));
+      ok('the adopted product keeps 編輯 and 下架', JSON.stringify(rows[0].buttons) === JSON.stringify(['編輯', '下架']), JSON.stringify(rows[0]));
+      ok('an active custom service offers 下架 only', JSON.stringify(rows[1].buttons) === JSON.stringify(['下架']), JSON.stringify(rows[1]));
+      ok('a retired custom service offers nothing (no 重新上架, no 編輯)', rows[2].buttons.length === 0, JSON.stringify(rows[2]));
+      ok('the retired one is still greyed and tagged 已下架',
+        Number(await page.$eval('[data-product-id="prod-svc"]', e => getComputedStyle(e).opacity)) < 1 && (await T(page, '[data-product-id="prod-svc"]')).includes('已下架'));
+
+      await page.click('[data-product-id="prod-svc-on"] [data-retire]');
+      await page.waitForFunction(() => document.querySelector('[data-product-id="prod-svc-on"]')?.dataset.active === '0', null, { timeout: 3000 });
+      ok('下架 on a custom service posts /retire and greys it',
+        o.st.calls.some(c => c.method === 'POST' && c.path === '/api/admin/products/prod-svc-on/retire') &&
+        Number(await page.$eval('[data-product-id="prod-svc-on"]', e => getComputedStyle(e).opacity)) < 1);
+      ok('…and it now offers nothing either', (await page.$$('[data-product-id="prod-svc-on"] button')).length === 0);
+
+      await page.click('#plat-add-btn');
+      await page.waitForSelector('#plat-form');
+      await page.click('#plat-close');
+      await page.waitForFunction(() => !document.getElementById('plat-form'), null, { timeout: 3000 });
+      ok('opening and closing 從平台加入 does not bring 新增服務 back', (await page.$('#prod-add-btn')) === null && (await disp(page, '#plat-add-btn')) !== 'none');
+
+      ok('custom_products_disabled reads 「目前只能從平台加入商品」',
+        (await page.evaluate(() => window.Orders.errorText({ error: 'x', code: 'custom_products_disabled' }, 403))) === '目前只能從平台加入商品');
+      const direct = await page.evaluate(async () => {
+        const call = async (method, path, body) => {
+          const r = await fetch(`https://imagepicker.hotichen.workers.dev${path}`, { method, headers: { 'Authorization': 'Bearer adm', 'Content-Type': 'application/json' }, body: body && JSON.stringify(body) });
+          return [r.status, (await r.json()).code];
+        };
+        return [
+          await call('POST', '/api/admin/products', { kind: 'service', name: 'x', options: [{ label: '', price: 1 }] }),
+          await call('PUT', '/api/admin/products/prod-svc', { name: 'x' }),
+          await call('POST', '/api/admin/products/prod-svc/restore'),
+        ];
+      });
+      ok('the fake answers 403 custom_products_disabled for create, edit and restore, like the Worker',
+        JSON.stringify(direct) === JSON.stringify([[403, 'custom_products_disabled'], [403, 'custom_products_disabled'], [403, 'custom_products_disabled']]), JSON.stringify(direct));
+      return out;
+    },
+    { before: async p => { await m.attach(p); await o.attach(p); }, initScript: SEED_TOKEN });
+}
+
+{
+  const m = dashSettingsMock();
+  const o = ordersFake({ products: [] });
+  await suite('設定 — 自訂商品關閉（預設）：空清單只指向「從平台加入」',
+    `${base}/settings.html`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('#prod-list .hint', { timeout: 5000 });
+      await page.waitForFunction(() => !document.querySelector('#prod-list').textContent.includes('載入中'), null, { timeout: 3000 });
+      const text = await T(page, '#prod-list');
+      ok('the empty hint points to 從平台加入', text.includes('從平台加入'), text);
+      ok('…and never mentions 新增服務', !text.includes('新增服務'), text);
+      ok('新增服務 is not in the DOM', (await page.$('#prod-add-btn')) === null);
+      return out;
+    },
+    { before: async p => { await m.attach(p); await o.attach(p); }, initScript: SEED_TOKEN });
+}
+
+{
+  const m = dashSettingsMock();
+  const o = ordersFake({ customProducts: true, products: [clone(PROD_SERVICE_OFF)] });
+  await suite('設定 — 自訂商品開啟：「新增服務」在「從平台加入」旁邊，自訂服務可編輯與重新上架',
+    `${base}/settings.html`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('.prod-row', { timeout: 5000 });
+      await page.waitForSelector('#prod-add-btn', { timeout: 3000 });
+      ok('新增服務 is shown (computed display) and reads ＋ 新增服務',
+        (await disp(page, '#prod-add-btn')) !== 'none' && (await T(page, '#prod-add-btn')).includes('新增服務'));
+      ok('it sits right after 從平台加入, in the same row',
+        await page.$eval('#prod-add-btn', e => e.previousElementSibling?.id === 'plat-add-btn' && e.parentElement === document.getElementById('plat-add-btn').parentElement));
+      ok('there is exactly one', (await page.$$('#prod-add-btn')).length === 1);
+      const buttons = await page.$$eval('[data-product-id="prod-svc"] button', els => els.map(e => e.textContent));
+      ok('a retired custom service offers 編輯 and 重新上架', JSON.stringify(buttons) === JSON.stringify(['編輯', '重新上架']), JSON.stringify(buttons));
+      await page.click('#prod-add-btn');
+      await page.waitForSelector('#prod-form');
+      ok('it opens the 新增服務 form', (await T(page, '#prod-form h3')) === '新增服務');
+      ok('and hides itself while the form is open', (await disp(page, '#prod-add-btn')) === 'none');
+      await page.click('#pf-cancel');
+      ok('取消 brings it back', (await disp(page, '#prod-add-btn')) !== 'none' && (await page.$$('#prod-add-btn')).length === 1);
+
+      // the switch goes off while the page is open: the next read takes 新增服務 out of the DOM
+      await page.click('[data-product-id="prod-svc"] [data-restore]');
+      await page.waitForFunction(() => document.querySelector('[data-product-id="prod-svc"]')?.dataset.active === '1', null, { timeout: 3000 });
+      o.st.customProducts = false;
+      await page.click('[data-product-id="prod-svc"] [data-retire]');
+      await page.waitForFunction(() => document.querySelector('[data-product-id="prod-svc"]')?.dataset.active === '0', null, { timeout: 3000 });
+      ok('after a re-read with the switch off, 新增服務 is gone from the DOM', (await page.$('#prod-add-btn')) === null && (await disp(page, '#plat-add-btn')) !== 'none');
+      ok('…and the retired custom service offers nothing', (await page.$$('[data-product-id="prod-svc"] button')).length === 0);
+      return out;
+    },
+    { before: async p => { await m.attach(p); await o.attach(p); }, initScript: SEED_TOKEN });
+}
+
 // ── settings: 從平台加入 ────────────────────────────────────────────────────
 {
   const m = dashSettingsMock();
   const retiredPlat = { id: 'plat-frame', kind: 'print', name: '已停產相框', description: '', photo_count: null, active: 0, sort: 5, has_image: false, image_type: null, image_updated_at: null,
     options: [{ id: 'popt-frame', label: '', vendor_cost: 100, platform_price: 100, active: 1, sort: 0 }] };
-  const o = ordersFake({ platform: [...platFx(), retiredPlat], products: [clone(PROD_PRINT)] });
+  const o = ordersFake({ customProducts: true, platform: [...platFx(), retiredPlat], products: [clone(PROD_PRINT)] });
   await suite('設定 — 從平台加入：只列上架的平台商品（圖、說明、規格與平台價），已加入的顯示「已加入」並開編輯，勾規格填售價（≥ 平台價）後送出',
     `${base}/settings.html`,
     async page => {

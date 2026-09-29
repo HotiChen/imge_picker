@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fakeDB } from './fakes.mjs';
 import {
-  SECRET, MINE, setup, call, pick, createProject, claimed, save, one, rows, seedToken, days,
+  SECRET, MINE, CUSTOM_ON, setup, call, pick, createProject, claimed, save, one, rows, seedToken, days,
   collectingCtx,
 } from './pick-helpers.mjs';
 
@@ -86,7 +86,7 @@ function seedOther(env) {
 // ─── products ────────────────────────────────────────────────────────────────
 
 test('products: create with options, list them back without the image blob', async () => {
-  const env = setup();
+  const env = setup(CUSTOM_ON);
   // a service: albums and prints are adopted from the platform now (A2)
   const res = await api(env, 'POST', '/api/admin/products', {
     kind: 'service', name: '  精修加購  ', description: '20 張', photo_count: 20, guest_visible: true,
@@ -114,7 +114,7 @@ test('products: create with options, list them back without the image blob', asy
 });
 
 test('products: photo_count only sticks to albums', async () => {
-  const env = setup();
+  const env = setup(CUSTOM_ON);
   // an adopted album carries the platform's count, a print none
   const p = await newProduct(env, { kind: 'print', photo_count: 5 });
   assert.equal(p.photo_count, null);
@@ -129,7 +129,7 @@ test('products: photo_count only sticks to albums', async () => {
 });
 
 test('products: validation is 400 with a code, and nothing is written', async () => {
-  const env = setup();
+  const env = setup(CUSTOM_ON);
   const existing = await newProduct(env);
   const good = { kind: 'service', name: 'x', options: [{ label: '', price: 1 }] };
   const cases = [
@@ -180,7 +180,7 @@ test('products: validation is 400 with a code, and nothing is written', async ()
 });
 
 test('products: PUT changes the fields present; options are replaced as a set, missing ones retired', async () => {
-  const env = setup();
+  const env = setup(CUSTOM_ON);
   const p = await newProduct(env, {
     kind: 'service', description: 'keep me', options: [{ label: 'S', price: 100, cost: 10 }, { label: 'M', price: 200, cost: 20 }],
   });
@@ -214,7 +214,7 @@ test('products: PUT changes the fields present; options are replaced as a set, m
 });
 
 test('products: PUT refuses an option id of another product, unknown ids and bad fields, writing nothing', async () => {
-  const env = setup();
+  const env = setup(CUSTOM_ON);
   seedOther(env);
   const p = await newProduct(env, { kind: 'service' });
   const q = await newProduct(env, { kind: 'service', name: '另一個' });
@@ -262,7 +262,7 @@ test('products: retire and restore; another photographer\'s product is 404 and n
 // ─── orders: create ──────────────────────────────────────────────────────────
 
 test('orders: price, cost, name and kind come from the catalogue; unit_price is the one override', async () => {
-  const env = setup();
+  const env = setup(CUSTOM_ON);
   const { project } = await createProject(env);
   const print = await newProduct(env);
   const service = await newProduct(env, { kind: 'service', name: '急件', options: [{ label: '', price: 500, cost: 0 }] });
@@ -294,7 +294,7 @@ test('orders: price, cost, name and kind come from the catalogue; unit_price is 
 });
 
 test('orders: the line snapshot survives catalogue edits and retirement', async () => {
-  const env = setup();
+  const env = setup(CUSTOM_ON);
   const { project } = await createProject(env);
   // a service, so the photographer can edit it (an adopted product's name and
   // cost are the platform's: platform-catalogue.test.mjs)
@@ -315,7 +315,7 @@ test('orders: the line snapshot survives catalogue edits and retirement', async 
 });
 
 test('orders: a retired option or product cannot go on a new line', async () => {
-  const env = setup();
+  const env = setup(CUSTOM_ON);
   const { project } = await createProject(env);
   const p = await newProduct(env, { kind: 'service', options: [{ label: 'S', price: 100 }, { label: 'M', price: 200 }] });
   const [s, m] = p.options;
@@ -341,7 +341,7 @@ test('orders: a retired option or product cannot go on a new line', async () => 
 });
 
 test('orders: line and order validation is 400 with a code, and nothing is written', async () => {
-  const env = setup();
+  const env = setup(CUSTOM_ON);
   seedOther(env);
   const { project } = await createProject(env);
   const print = await newProduct(env);

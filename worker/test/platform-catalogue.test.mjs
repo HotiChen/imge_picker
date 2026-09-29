@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import worker from '../worker.js';
 import { fakeDB, req, ctx } from './fakes.mjs';
-import { SECRET, MINE, setup, call, createProject, claimed, one, rows, seedToken, days } from './pick-helpers.mjs';
+import { SECRET, MINE, CUSTOM_ON, setup, call, createProject, claimed, one, rows, seedToken, days } from './pick-helpers.mjs';
 
 const OP = 'operator-secret';
 const A = `${MINE}a.jpg`;
@@ -317,7 +317,7 @@ test('GET /api/admin/platform-products: active products and options, platform pr
 // ─── custom products are services only ───────────────────────────────────────
 
 test('a photographer cannot create or turn a custom product into an album or print: 400 platform_only', async () => {
-  const env = envOp();
+  const env = envOp(CUSTOM_ON);
   const before = snapshot(env);
   for (const kind of ['album', 'print']) {
     await bad(await admin(env, 'POST', '/api/admin/products', { kind, name: 'x', options: [{ label: '', price: 1 }] }), 400, 'platform_only', kind);
@@ -543,7 +543,7 @@ test('the operator raises the platform price: flagged, and new lines below it ar
 });
 
 test('a kept adopted line cannot be repriced under its own cost', async () => {
-  const env = envOp();
+  const env = envOp(CUSTOM_ON);
   const pp = await platformProduct(env);
   const mine = await adopt(env, pp, [{ platform_option_id: pp.options[0].id, price: 1500 }]);
   const { project } = await createProject(env);
@@ -688,7 +688,7 @@ test('a hand-edited adopted option that names another platform product\'s option
 // ─── snapshots ───────────────────────────────────────────────────────────────
 
 test('a line snapshots the platform price as its cost, the vendor cost and the platform option; operator edits never change it', async () => {
-  const env = envOp();
+  const env = envOp(CUSTOM_ON);
   const pp = await platformProduct(env);
   const mine = await adopt(env, pp, [{ platform_option_id: pp.options[0].id, price: 3000 }]);
   const { project } = await createProject(env);
@@ -780,7 +780,7 @@ function taipeiMonthStart(back = 0) {
 }
 
 test('operator stats: per platform product, paid orders by Taipei month, across photographers; cancelled and unpaid excluded', async () => {
-  const env = envOp();
+  const env = envOp(CUSTOM_ON);
   const book = await platformProduct(env, { kind: 'album', name: '相本書', options: [{ label: '', vendor_cost: 300, platform_price: 1000 }] });
   const print = await platformProduct(env, { name: '無框畫', options: [{ label: '', vendor_cost: 200, platform_price: 500 }] });
   const unsold = await platformProduct(env, { name: '沒賣', options: [{ label: '', vendor_cost: 1, platform_price: 1 }] });
