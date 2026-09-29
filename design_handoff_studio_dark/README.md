@@ -1,3 +1,5 @@
+> 注意：本文「目標技術棧」中的 Google Drive API 已過時（現為 Cloudflare Worker + R2 + D1）。此暗色設計已部分被明亮版入口取代（commit 527b6ad）。
+
 # Handoff · 選圖工作室 Studio Dark Redesign
 
 完整 UI/UX 重新設計交接包 · 給工程師（或 Claude Code / Cursor）實作參照

@@ -211,3 +211,123 @@ CREATE TABLE IF NOT EXISTS studio_settings (
   logo_updated_at     TEXT,
   updated_at          TEXT
 );
+
+-- ─── Products and orders (docs/products-orders.md) ─────────────────────────
+-- New tables, so a deployed database gets them from one hand-run file:
+-- worker/migrations/2026-09-29-products-orders.sql. Money is integer NT$, tax
+-- included. photographer_id is always the Worker's constant, never a body's.
+
+-- The catalogue. Never deleted, only retired (active = 0): order lines point
+-- at it. The image columns are for the Phase B guest shop (D1, not the
+-- `imagepicker` bucket, whose lifecycle deletes after 180 days); no route
+-- reads or writes them yet.
+CREATE TABLE IF NOT EXISTS products (
+  id              TEXT PRIMARY KEY,
+  photographer_id TEXT NOT NULL,
+  kind            TEXT NOT NULL CHECK (kind IN ('print','album','service')),
+  name            TEXT NOT NULL,          -- ≤ 60
+  description     TEXT NOT NULL DEFAULT '',-- ≤ 500, shown to guests in B
+  photo_count     INTEGER,                -- album: expected photos, NULL = any (advisory)
+  guest_visible   INTEGER NOT NULL DEFAULT 0,  -- Phase B shop
+  active          INTEGER NOT NULL DEFAULT 1,
+  sort            INTEGER NOT NULL DEFAULT 0,
+  image           BLOB,
+  image_type      TEXT,
+  image_updated_at TEXT,
+  created_at      TEXT NOT NULL,
+  updated_at      TEXT NOT NULL,
+  platform_product_id TEXT               -- adopted from platform_products; NULL = the photographer's own (service)
+);
+CREATE INDEX IF NOT EXISTS idx_products_owner ON products(photographer_id, active, sort);
+
+-- Price and cost live on the option; a product without choices has one, with
+-- label ''. Retired like products, never deleted.
+CREATE TABLE IF NOT EXISTS product_options (
+  id          TEXT PRIMARY KEY,
+  product_id  TEXT NOT NULL,
+  label       TEXT NOT NULL,              -- '16×20 無框', '' when single
+  price       INTEGER NOT NULL CHECK (price >= 0),
+  cost        INTEGER NOT NULL DEFAULT 0 CHECK (cost >= 0),
+  active      INTEGER NOT NULL DEFAULT 1,
+  sort        INTEGER NOT NULL DEFAULT 0,
+  platform_option_id TEXT        -- adopted: the platform option it sells; price >= its platform_price
+);
+CREATE INDEX IF NOT EXISTS idx_options_product ON product_options(product_id, sort);
+
+-- One order per sale. Totals are computed on read (Σ unit_price × qty −
+-- discount), never stored. Payment is one amount per order, no deposits
+-- table. source 'system' is the automatic extra-pick order; any admin edit
+-- flips it to 'admin' and from then on the Worker leaves it alone.
+CREATE TABLE IF NOT EXISTS orders (
+  id              TEXT PRIMARY KEY,
+  photographer_id TEXT NOT NULL,
+  project_id      TEXT NOT NULL,
+  source          TEXT NOT NULL CHECK (source IN ('admin','guest','system')),
+  status          TEXT NOT NULL DEFAULT 'confirmed'
+                  CHECK (status IN ('requested','confirmed','fulfilled','cancelled')),
+  picker_id       TEXT,                   -- guest orders: who asked
+  discount        INTEGER NOT NULL DEFAULT 0 CHECK (discount >= 0),
+  paid_amount     INTEGER NOT NULL DEFAULT 0 CHECK (paid_amount >= 0),
+  paid_at         TEXT,
+  paid_method     TEXT CHECK (paid_method IN ('cash','transfer','other')),
+  note            TEXT NOT NULL DEFAULT '',   -- photographer only, ≤ 500
+  guest_note      TEXT NOT NULL DEFAULT '',   -- from the guest, ≤ 500
+  created_at      TEXT NOT NULL,
+  updated_at      TEXT NOT NULL,
+  confirmed_at    TEXT,
+  fulfilled_at    TEXT,
+  cancelled_at    TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_orders_project ON orders(project_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_orders_owner_paid ON orders(photographer_id, paid_at);
+
+-- Every line snapshots name, option, price and cost when it is added, so a
+-- catalogue edit never changes an existing order.
+CREATE TABLE IF NOT EXISTS order_items (
+  id            TEXT PRIMARY KEY,
+  order_id      TEXT NOT NULL,
+  kind          TEXT NOT NULL CHECK (kind IN ('print','album','service','extra_pick')),
+  product_id    TEXT,                     -- NULL for extra_pick
+  option_id     TEXT,
+  name          TEXT NOT NULL,            -- snapshot
+  option_label  TEXT NOT NULL DEFAULT '', -- snapshot
+  unit_price    INTEGER NOT NULL CHECK (unit_price >= 0),  -- snapshot, editable by admin
+  unit_cost     INTEGER NOT NULL DEFAULT 0 CHECK (unit_cost >= 0),
+  qty           INTEGER NOT NULL CHECK (qty BETWEEN 1 AND 999),
+  photo_keys    TEXT NOT NULL DEFAULT '[]',  -- JSON; print: ≤ 1 per unit, album: the set
+  platform_option_id TEXT,                -- snapshot: the platform option sold (NULL = not the platform's)
+  vendor_cost   INTEGER NOT NULL DEFAULT 0 CHECK (vendor_cost >= 0)  -- snapshot, operator only: never in an /api/admin response
+);
+CREATE INDEX IF NOT EXISTS idx_items_order ON order_items(order_id);
+
+-- The platform catalogue (A2): printable products the operator lists, with
+-- what the lab charges (vendor_cost, operator only) and what a photographer
+-- pays (platform_price). A photographer adopts one into `products`
+-- (platform_product_id) and sells chosen options at a price >= platform_price.
+-- Never deleted, only retired. Same hand-run file as the tables above.
+CREATE TABLE IF NOT EXISTS platform_products (
+  id               TEXT PRIMARY KEY,
+  kind             TEXT NOT NULL CHECK (kind IN ('print','album')),
+  name             TEXT NOT NULL,          -- ≤ 60
+  description      TEXT NOT NULL DEFAULT '',-- ≤ 500
+  photo_count      INTEGER,                -- album: expected photos, NULL = any (advisory)
+  active           INTEGER NOT NULL DEFAULT 1,
+  sort             INTEGER NOT NULL DEFAULT 0,
+  image            BLOB,                   -- ≤ 200 KB, PNG/JPEG/WebP; served publicly
+  image_type       TEXT,
+  image_updated_at TEXT,
+  created_at       TEXT NOT NULL,
+  updated_at       TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_platform_products_sort ON platform_products(active, sort);
+
+CREATE TABLE IF NOT EXISTS platform_product_options (
+  id                  TEXT PRIMARY KEY,
+  platform_product_id TEXT NOT NULL,
+  label               TEXT NOT NULL,
+  vendor_cost         INTEGER NOT NULL CHECK (vendor_cost >= 0),     -- operator only
+  platform_price      INTEGER NOT NULL CHECK (platform_price >= 0),  -- the photographer's cost
+  active              INTEGER NOT NULL DEFAULT 1,
+  sort                INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_platform_options_product ON platform_product_options(platform_product_id, sort);

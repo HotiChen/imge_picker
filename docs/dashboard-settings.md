@@ -1,6 +1,6 @@
 # Dashboard, delivered state and studio settings — backend
 
-Roadmap items 1 and 3 (`docs/backlog.md`), Worker side. Guest picking itself
+The back-office dashboard / delivered state and studio settings (both done; see the product roadmap in `docs/backlog.md`), Worker side. Guest picking itself
 is in `docs/guest-picking.md`.
 
 ## Migration

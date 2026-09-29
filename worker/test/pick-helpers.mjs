@@ -25,6 +25,10 @@ export const OBJECTS = {
 
 export const days = n => new Date(Date.now() + n * 86400000).toISOString();
 
+// CUSTOM_PRODUCTS is off unless the env says "on"; a test that makes the
+// photographer's own (non-platform) products passes this to setup().
+export const CUSTOM_ON = { CUSTOM_PRODUCTS: 'on' };
+
 export function setup(extra = {}) {
   return { imagepicker: fakeBucket(OBJECTS), DB: fakeDB(), PHOTOGRAPHER_TOKEN: SECRET, ...extra };
 }

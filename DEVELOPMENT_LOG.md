@@ -1,3 +1,5 @@
+> 歷史紀錄（Google Drive 時代，2026-01～02）。目前架構見 README；之後的變更看 git log。
+
 # R2 Photo Picker Pro - 開發誌 (Development Log)
 
 本文檔記錄了系統從基礎版本進化至 Pro 等級的所有重大更新與技術決策。

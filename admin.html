@@ -167,6 +167,41 @@
   #project-detail-panel summary::before { content: '▸ '; }
   #project-detail-panel details[open] summary::before { content: '▾ '; }
   #project-detail-panel summary a.pd-link { margin-left: 8px; }
+  /* Orders (docs/products-orders.md) — project detail 訂單 */
+  [hidden] { display: none !important; }
+  .ord-card { border: 1px solid var(--rule); border-radius: 6px; background: var(--surface); padding: 12px 14px; margin-bottom: 10px; font-size: 13px; }
+  .ord-card.cancelled { opacity: .55; }
+  .ord-head { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+  .ord-head .ord-time { color: var(--ink-55); font-size: 12px; margin-left: auto; }
+  .ord-table { width: 100%; border-collapse: collapse; background: transparent; }
+  .ord-table th { padding: 4px 6px; font-size: 10px; }
+  .ord-table td { padding: 5px 6px; border-top: 1px solid var(--rule); vertical-align: top; }
+  .ord-table .num { text-align: right; white-space: nowrap; }
+  .ord-keys { color: var(--ink-55); font-size: 11px; font-family: 'IBM Plex Mono', monospace; word-break: break-all; }
+  .ord-totals { margin-top: 8px; text-align: right; line-height: 1.7; }
+  .ord-totals .owed { color: var(--danger); font-weight: 600; }
+  .ord-totals .muted { color: var(--ink-55); font-size: 12px; }
+  .ord-note { color: var(--ink-55); font-size: 12px; margin-top: 6px; }
+  .ord-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
+  .ord-err { color: var(--danger); font-size: 12px; min-height: 0; margin-top: 6px; }
+  .ord-err:empty { display: none; }
+  .ord-warn { border: 1px solid rgba(229,164,72,.5); background: rgba(229,164,72,.12); color: var(--accent); border-radius: 6px; padding: 8px 12px; margin-top: 8px; font-size: 13px; }
+  .ord-extra { border: 1px dashed var(--border); border-radius: 6px; padding: 8px 12px; margin-bottom: 10px; font-size: 12px; color: var(--ink-55); }
+  .ord-form { border: 1px solid var(--border); border-radius: 6px; background: var(--card); padding: 12px 14px; margin: 10px 0; display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end; }
+  .ord-form label { display: block; font-size: 11px; color: var(--ink-55); margin-bottom: 4px; }
+  .ord-form .field { padding: 6px 8px; font-size: 13px; width: 130px; }
+  .ord-editor { border: 1px solid var(--border); border-radius: 6px; background: var(--card); padding: 12px 14px; margin: 10px 0; }
+  .ord-line-edit { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end; padding: 8px 0; border-top: 1px solid var(--rule); }
+  .ord-line-edit:first-of-type { border-top: none; }
+  .ord-line-edit .ord-line-name { flex: 1 1 200px; min-width: 0; }
+  .ord-line-edit label { display: block; font-size: 11px; color: var(--ink-55); margin-bottom: 4px; }
+  .ord-line-edit .field { padding: 6px 8px; font-size: 13px; width: 96px; }
+  .ord-photos { display: flex; flex-direction: column; gap: 3px; margin-top: 6px; font-size: 11px; font-family: 'IBM Plex Mono', monospace; max-height: 160px; overflow-y: auto; }
+  .ord-photos label { display: flex; align-items: center; gap: 6px; margin: 0; font-size: 11px; color: var(--ink-90); }
+  .ord-editor-add { display: flex; gap: 8px; align-items: center; margin: 10px 0; flex-wrap: wrap; }
+  .ord-editor-add select.field { width: auto; max-width: 100%; padding: 6px 8px; font-size: 13px; }
+  .ord-editor-foot { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end; margin-top: 8px; }
+  .ord-editor-foot .field { padding: 6px 8px; font-size: 13px; }
 </style>
 </head>
 <body>
@@ -285,9 +320,10 @@
   </div>
 </div>
 
-<script src="js/shoot-types.js?v=20260928j"></script>
-<script src="js/build-version.js?v=20260928j"></script>
-<script src="js/side-nav.js?v=20260928j"></script>
+<script src="js/shoot-types.js?v=20260929c"></script>
+<script src="js/build-version.js?v=20260929c"></script>
+<script src="js/side-nav.js?v=20260929c"></script>
+<script src="js/orders-common.js?v=20260929c"></script>
 <script>
 (function() {
   const WORKER_URL = 'https://imagepicker.hotichen.workers.dev';
@@ -883,6 +919,9 @@
           </tr>`).join('') : '<tr><td colspan="5" class="empty">尚無選取</td></tr>'}</tbody></table></div>
       </details>
 
+      <h4>訂單</h4>
+      <div id="pd-orders"><div class="empty">載入中…</div></div>
+
       <h4>送出紀錄（新到舊）</h4>
       <div id="pd-submissions">${submissions.length ? submissions.map((s, i) => {
         const prev = submissions[i + 1];
@@ -1025,6 +1064,7 @@
       }
     });
     document.getElementById('pd-download-btn').addEventListener('click', () => downloadSelectedKeys(project, selected));
+    initOrders(project, selected.map(x => x.photo_key));
   }
 
   async function projectAction(action) {
@@ -1046,6 +1086,342 @@
       if (errEl) errEl.textContent = '無法連線到 Worker';
     }
   }
+
+  // ── 訂單 (docs/products-orders.md) ────────────────────────────────────────
+  const O = window.Orders;
+  const ordersApi = O.client({ workerUrl: WORKER_URL, getToken, onUnauthorized: () => doLogout() });
+  // state of the section on screen: the orders as last read, the project's
+  // picked photo keys (what a print/album line may attach), the catalogue
+  // (read when an editor opens) and which form is open.
+  let oc = null;
+
+  function todayTaipei() {
+    // en-CA formats as YYYY-MM-DD; the studio's dates are Taipei dates
+    return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Taipei', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+  }
+  function dateTaipei(iso) {
+    const d = iso ? new Date(iso) : null;
+    if (!d || isNaN(d.getTime())) return todayTaipei();
+    return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Taipei', year: 'numeric', month: '2-digit', day: '2-digit' }).format(d);
+  }
+
+  async function initOrders(project, picks) {
+    oc = { projectId: project.id, picks, orders: [], extra: null, catalogue: null, editing: null, paying: null, draft: null, msg: {} };
+    const box = document.getElementById('pd-orders');
+    if (!box) return;
+    const mine = oc;
+    const r = await ordersApi(`/api/admin/projects/${encodeURIComponent(project.id)}/orders`);
+    if (oc !== mine) return; // another project was opened meanwhile
+    if (!r.ok) { box.innerHTML = `<div class="empty">讀取訂單失敗：${escHtml(O.errorText(r.data, r.status))}</div>`; return; }
+    oc.orders = r.data.orders || [];
+    oc.extra = r.data.extra_pick || null;
+    renderOrders();
+  }
+
+  async function reloadOrders() {
+    const mine = oc;
+    const r = await ordersApi(`/api/admin/projects/${encodeURIComponent(mine.projectId)}/orders`);
+    if (oc !== mine || !r.ok) return;
+    mine.orders = r.data.orders || [];
+    mine.extra = r.data.extra_pick || null;
+    mine.editing = null; mine.paying = null; mine.draft = null;
+    renderOrders();
+  }
+
+  function extraPickHtml(x) {
+    if (!x) return '';
+    const applies = x.count != null && x.pick_limit != null && x.extra_price != null;
+    if (!applies && !x.order_id) return '';
+    const info = applies
+      ? `加挑：最近一次送出 ${escHtml(x.count)} 張，上限 ${escHtml(x.pick_limit)}，多挑 ${escHtml(x.extra)} 張 × ${O.money(x.extra_price)} = ${O.money(x.fee)}`
+      : '加挑：已有加挑訂單';
+    const warn = x.matches === false
+      ? `<div class="ord-warn" id="pd-extra-warn">加挑張數已變更（原 ${escHtml(x.order_extra == null ? 0 : x.order_extra)} → 現 ${escHtml(x.extra)}），請確認</div>` : '';
+    return `<div class="ord-extra" id="pd-extra-pick">${info}${warn}</div>`;
+  }
+
+  function orderCardHtml(o) {
+    const pay = O.paymentState(o);
+    const moves = O.STATUS_MOVES[o.status] || [];
+    const items = o.items || [];
+    const lines = items.map(i => `<tr data-item-id="${escHtml(i.id)}">
+        <td>${escHtml(O.lineName(i))} <span class="badge badge-pending">${escHtml(O.KIND_LABEL[i.kind] || i.kind)}</span>
+          ${(i.photo_keys || []).length ? `<details><summary class="ord-keys">照片 ${i.photo_keys.length} 張</summary><div class="ord-keys">${i.photo_keys.map(escHtml).join('<br>')}</div></details>` : ''}</td>
+        <td class="num">${O.money(i.unit_price)}</td><td class="num">× ${escHtml(i.qty)}</td><td class="num">${O.money(i.unit_price * i.qty)}</td>
+      </tr>`).join('');
+    const canPay = o.status !== 'cancelled';
+    const canEdit = o.status !== 'cancelled';
+    const payForm = oc.paying === o.id ? `<div class="ord-form" data-pay-form>
+        <div><label>收款金額（累計）</label><input class="field pay-amount" type="number" min="0" step="1" value="${escHtml(o.total)}"></div>
+        <div><label>方式</label><select class="field pay-method">${Object.keys(O.METHOD_LABEL).map(k =>
+          `<option value="${k}"${(o.paid_method || 'transfer') === k ? ' selected' : ''}>${escHtml(O.METHOD_LABEL[k])}</option>`).join('')}</select></div>
+        <div><label>日期</label><input class="field pay-date" type="date" value="${escHtml(o.paid_at ? dateTaipei(o.paid_at) : todayTaipei())}"></div>
+        <button type="button" class="btn btn-accent" data-pay-save>確認收款</button>
+        <button type="button" class="btn btn-ghost" data-pay-cancel>取消</button>
+      </div>` : '';
+    return `<div class="ord-card ${escHtml(o.status)}" data-order-id="${escHtml(o.id)}" data-status="${escHtml(o.status)}" data-source="${escHtml(o.source)}">
+      <div class="ord-head">
+        <span class="badge ${o.status === 'confirmed' || o.status === 'fulfilled' ? 'badge-approved' : 'badge-pending'} ord-status">${escHtml(O.STATUS_LABEL[o.status] || o.status)}</span>
+        ${o.status === 'cancelled' && !o.paid_amount ? '' : `<span class="badge ${pay === 'paid' || pay === 'free' ? 'badge-approved' : 'badge-pending'} ord-pay" data-pay="${pay}">${escHtml(O.PAYMENT_LABEL[pay])}</span>`}
+        <span class="folder-none">${escHtml(O.SOURCE_LABEL[o.source] || o.source)}</span>
+        <span class="ord-time">${escHtml(fmtTime(o.created_at))}</span>
+      </div>
+      <table class="ord-table"><thead><tr><th>品項</th><th class="num">單價</th><th class="num">數量</th><th class="num">小計</th></tr></thead><tbody>${lines}</tbody></table>
+      <div class="ord-totals">
+        <div>小計 ${O.money(o.subtotal)}${o.discount ? ` · 折扣 −${O.money(o.discount)}` : ''}</div>
+        <div><strong>合計 <span class="ord-total">${O.money(o.total)}</span></strong></div>
+        <div>已收 <span class="ord-paid">${O.money(o.paid_amount)}</span>${o.paid_amount ? `（${escHtml(O.METHOD_LABEL[o.paid_method] || '')}${o.paid_at ? ' · ' + escHtml(dateTaipei(o.paid_at)) : ''}）` : ''}
+          · 未收 <span class="ord-owed${o.outstanding > 0 ? ' owed' : ''}">${O.money(o.outstanding)}</span></div>
+        <div class="muted">成本 ${O.money(o.cost)} · 毛利 ${O.money(o.total - o.cost)}</div>
+      </div>
+      ${o.note ? `<div class="ord-note">備註：${escHtml(o.note)}</div>` : ''}
+      ${o.guest_note ? `<div class="ord-note">客人留言：${escHtml(o.guest_note)}</div>` : ''}
+      ${payForm}
+      <div class="ord-actions">
+        ${moves.map(([to, label]) => `<button type="button" class="btn ${to === 'cancelled' ? 'btn-danger' : 'btn-accent'}" data-status-to="${to}">${escHtml(label)}</button>`).join('')}
+        ${canEdit ? '<button type="button" class="btn btn-ghost" data-order-edit>編輯</button>' : ''}
+        ${canPay && oc.paying !== o.id ? '<button type="button" class="btn btn-ghost" data-pay-open>記錄收款</button>' : ''}
+        ${o.paid_amount > 0 ? '<button type="button" class="btn btn-ghost" data-pay-clear>清除收款</button>' : ''}
+      </div>
+      <div class="ord-err" data-order-err>${escHtml(oc.msg[o.id] || '')}</div>
+    </div>`;
+  }
+
+  function renderOrders() {
+    const box = document.getElementById('pd-orders');
+    if (!box || !oc) return;
+    const editingNew = oc.editing === 'new';
+    const editingOrder = oc.editing && oc.editing !== 'new' ? oc.orders.find(o => o.id === oc.editing) : null;
+    box.innerHTML = `
+      ${extraPickHtml(oc.extra)}
+      <div id="pd-order-list">${oc.orders.length
+        ? oc.orders.map(o => (editingOrder && editingOrder.id === o.id) ? editorHtml(o) : orderCardHtml(o)).join('')
+        : '<div class="folder-none" id="pd-orders-empty">尚無訂單</div>'}</div>
+      ${editingNew ? editorHtml(null) : ''}
+      ${oc.editing ? '' : '<button type="button" id="pd-order-add-btn" class="btn btn-outline" style="margin-top:6px;">＋ 新增訂單</button>'}
+      <div class="ord-err" id="pd-order-err">${escHtml(oc.msg._ || '')}</div>`;
+  }
+
+  // ── editor (new order, or the lines/discount/note of an existing one) ──
+  function draftFrom(o) {
+    return {
+      lines: o ? o.items.map(i => ({
+        id: i.id, kind: i.kind, name: O.lineName(i), qty: String(i.qty), price: String(i.unit_price), catPrice: i.unit_price,
+        keys: (i.photo_keys || []).slice(),
+      })) : [],
+      discount: o ? String(o.discount) : '',
+      note: o ? o.note || '' : '',
+    };
+  }
+
+  function editorHtml(o) {
+    const d = oc.draft;
+    const cat = oc.catalogue;
+    const lineHtml = d.lines.map((l, idx) => {
+      const photoable = l.kind === 'print' || l.kind === 'album';
+      const cand = [...new Set([...oc.picks, ...l.keys])];
+      return `<div class="ord-line-edit" data-idx="${idx}">
+        <div class="ord-line-name">${escHtml(l.name)} <span class="badge badge-pending">${escHtml(O.KIND_LABEL[l.kind] || l.kind)}</span>
+          ${photoable ? `<details><summary class="ord-keys" data-photo-summary>照片（${l.keys.length} 張）</summary>
+            <div class="ord-photos">${cand.length ? cand.map(k => `<label><input type="checkbox" class="ord-photo" value="${escHtml(k)}"${l.keys.includes(k) ? ' checked' : ''}>${escHtml(k)}</label>`).join('')
+              : '<span class="folder-none">專案尚無選取的照片</span>'}</div></details>` : ''}
+        </div>
+        <div><label>數量</label><input class="field ord-qty" type="number" min="1" max="999" step="1" value="${escHtml(l.qty)}"></div>
+        <div><label>單價 NT$</label><input class="field ord-price" type="number" min="0" step="1" placeholder="${escHtml(l.catPrice)}" value="${escHtml(l.price)}"></div>
+        <button type="button" class="btn btn-ghost" data-line-del>移除</button>
+      </div>`;
+    }).join('');
+    const options = cat ? cat.flatMap(p => p.options.map(op => ({ p, op }))) : [];
+    return `<div class="ord-editor" id="pd-order-editor" data-mode="${o ? 'edit' : 'new'}"${o ? ` data-order-id="${escHtml(o.id)}"` : ''}>
+      <strong>${o ? '編輯訂單' : '新增訂單'}</strong>
+      <div id="pd-editor-lines">${lineHtml || '<div class="folder-none">尚未加入品項</div>'}</div>
+      <div class="ord-editor-add">
+        ${cat === null ? '<span class="folder-none">載入商品中…</span>'
+          : options.length ? `<select class="field" id="pd-add-option">${options.map(({ p, op }) =>
+              `<option value="${escHtml(op.id)}">${escHtml(p.name)}${op.label ? ' · ' + escHtml(op.label) : ''} — ${O.money(op.price)}（${escHtml(O.KIND_LABEL[p.kind] || p.kind)}）</option>`).join('')}</select>
+            <button type="button" class="btn btn-outline" id="pd-add-line">＋ 加入品項</button>`
+          : '<span class="folder-none">尚無可販售的商品，請先到 <a class="pd-link" href="settings.html">設定</a> 新增商品</span>'}
+      </div>
+      <div class="ord-editor-foot">
+        <div><label>折扣 NT$</label><input class="field" id="pd-ed-discount" type="number" min="0" step="1" value="${escHtml(d.discount)}" placeholder="0"></div>
+        <div style="flex:1;min-width:200px;"><label>備註（只有你看得到）</label><input class="field" id="pd-ed-note" type="text" maxlength="500" value="${escHtml(d.note)}" style="width:100%;"></div>
+        <button type="button" class="btn btn-accent" id="pd-editor-save">儲存訂單</button>
+        <button type="button" class="btn btn-ghost" id="pd-editor-cancel">取消</button>
+      </div>
+      <div class="ord-err" id="pd-editor-err"></div>
+    </div>`;
+  }
+
+  // read the editor's inputs back into oc.draft, before a re-render
+  function syncDraft() {
+    const ed = document.getElementById('pd-order-editor');
+    if (!ed || !oc.draft) return;
+    ed.querySelectorAll('.ord-line-edit').forEach(row => {
+      const l = oc.draft.lines[Number(row.dataset.idx)];
+      if (!l) return;
+      l.qty = row.querySelector('.ord-qty').value;
+      l.price = row.querySelector('.ord-price').value;
+      if (row.querySelector('.ord-photo, .ord-photos')) {
+        // the checkboxes are the truth for the candidates they list; keys not
+        // listed (none) cannot exist, every kept key is a candidate
+        l.keys = [...row.querySelectorAll('.ord-photo')].filter(c => c.checked).map(c => c.value);
+      }
+    });
+    oc.draft.discount = document.getElementById('pd-ed-discount').value;
+    oc.draft.note = document.getElementById('pd-ed-note').value;
+  }
+
+  async function ensureCatalogue() {
+    if (oc.catalogue) return;
+    const mine = oc;
+    const r = await ordersApi('/api/admin/products');
+    if (oc !== mine) return;
+    if (!r.ok) { mine.catalogue = []; mine.msg._ = O.errorText(r.data, r.status); return; }
+    mine.catalogue = (r.data.products || []).filter(p => p.active)
+      .map(p => ({ ...p, options: (p.options || []).filter(op => op.active) })).filter(p => p.options.length);
+  }
+
+  async function openEditor(orderId) {
+    syncDraft();
+    oc.msg = {};
+    oc.paying = null;
+    const o = orderId === 'new' ? null : oc.orders.find(x => x.id === orderId);
+    oc.editing = orderId;
+    oc.draft = draftFrom(o);
+    oc.catalogue = null;
+    renderOrders();
+    const mine = oc;
+    await ensureCatalogue();
+    if (oc !== mine || oc.editing !== orderId) return;
+    syncDraft();
+    renderOrders();
+  }
+
+  function editorError(text) {
+    const el = document.getElementById('pd-editor-err');
+    if (el) el.textContent = text;
+  }
+
+  async function saveEditor() {
+    syncDraft();
+    const d = oc.draft;
+    const editingId = oc.editing;
+    if (!d.lines.length) { editorError(O.errorText({ code: 'invalid_lines' })); return; }
+    const lines = [];
+    for (const l of d.lines) {
+      if (!/^\d+$/.test(String(l.qty).trim()) || Number(l.qty) < 1 || Number(l.qty) > 999) { editorError(O.errorText({ code: 'invalid_qty' })); return; }
+      const price = String(l.price).trim();
+      if (price !== '' && !/^\d+$/.test(price)) { editorError(O.errorText({ code: 'invalid_unit_price' })); return; }
+      const line = { qty: Number(l.qty), photo_keys: l.keys };
+      if (l.id) line.id = l.id; else line.option_id = l.option_id;
+      if (price !== '') line.unit_price = Number(price);
+      lines.push(line);
+    }
+    const discRaw = String(d.discount).trim();
+    if (discRaw !== '' && !/^\d+$/.test(discRaw)) { editorError(O.errorText({ code: 'invalid_discount' })); return; }
+    const body = { lines, discount: discRaw === '' ? 0 : Number(discRaw), note: d.note.trim() };
+    const btn = document.getElementById('pd-editor-save');
+    if (btn) btn.disabled = true;
+    const r = editingId === 'new'
+      ? await ordersApi(`/api/admin/projects/${encodeURIComponent(oc.projectId)}/orders`, 'POST', body)
+      : await ordersApi(`/api/admin/orders/${encodeURIComponent(editingId)}`, 'PUT', body);
+    if (!r.ok) {
+      if (btn) btn.disabled = false;
+      editorError(O.errorText(r.data, r.status));
+      if (r.data && r.data.code === 'conflict') {
+        // what is on screen is stale: re-read, and say why the edit is gone
+        const text = O.errorText(r.data, r.status);
+        await reloadOrders();
+        oc.msg._ = text;
+        renderOrders();
+      }
+      return;
+    }
+    await reloadOrders();
+  }
+
+  // a write on an existing order: on failure the sentence goes under that
+  // order (a conflict also re-reads, so what is on screen is what is stored)
+  async function orderCall(orderId, path, method, body) {
+    const r = await ordersApi(path, method, body);
+    if (!r.ok) {
+      const keepPay = oc.paying;
+      await reloadOrders();
+      if (keepPay && oc.orders.some(o => o.id === keepPay)) oc.paying = keepPay; // let the amount be corrected
+      oc.msg[orderId] = O.errorText(r.data, r.status);
+      renderOrders();
+      return false;
+    }
+    await reloadOrders();
+    return true;
+  }
+
+  document.addEventListener('click', async e => {
+    if (!oc || !e.target.closest('#pd-orders')) return;
+    const t = e.target;
+    if (t.closest('#pd-order-add-btn')) { openEditor('new'); return; }
+    if (t.closest('#pd-editor-cancel')) { oc.editing = null; oc.draft = null; renderOrders(); return; }
+    if (t.closest('#pd-editor-save')) { await saveEditor(); return; }
+    if (t.closest('#pd-add-line')) {
+      syncDraft();
+      const id = document.getElementById('pd-add-option').value;
+      const hit = oc.catalogue.flatMap(p => p.options.map(op => ({ p, op }))).find(x => x.op.id === id);
+      if (hit) oc.draft.lines.push({
+        option_id: hit.op.id, kind: hit.p.kind, name: hit.op.label ? `${hit.p.name} · ${hit.op.label}` : hit.p.name,
+        qty: '1', price: '', catPrice: hit.op.price, keys: [],
+      });
+      renderOrders();
+      return;
+    }
+    const del = t.closest('[data-line-del]');
+    if (del) {
+      syncDraft();
+      oc.draft.lines.splice(Number(del.closest('.ord-line-edit').dataset.idx), 1);
+      renderOrders();
+      return;
+    }
+    const card = t.closest('.ord-card');
+    if (!card) return;
+    const id = card.dataset.orderId;
+    const order = oc.orders.find(o => o.id === id);
+    if (!order) return;
+    oc.msg = {};
+    if (t.closest('[data-order-edit]')) { openEditor(id); return; }
+    if (t.closest('[data-pay-open]')) { oc.paying = id; renderOrders(); return; }
+    if (t.closest('[data-pay-cancel]')) { oc.paying = null; renderOrders(); return; }
+    if (t.closest('[data-pay-save]')) {
+      const amountRaw = card.querySelector('.pay-amount').value.trim();
+      if (!/^\d+$/.test(amountRaw)) { oc.msg[id] = O.errorText({ code: 'invalid_paid_amount' }); renderOrders(); return; }
+      const amount = Number(amountRaw);
+      const body = { paid_amount: amount };
+      if (amount > 0) {
+        body.paid_method = card.querySelector('.pay-method').value;
+        const date = card.querySelector('.pay-date').value;
+        if (date) body.paid_at = date;
+      }
+      await orderCall(id, `/api/admin/orders/${encodeURIComponent(id)}/payment`, 'POST', body);
+      return;
+    }
+    if (t.closest('[data-pay-clear]')) {
+      if (!confirm('確定清除這筆訂單的收款紀錄？')) return;
+      await orderCall(id, `/api/admin/orders/${encodeURIComponent(id)}/payment`, 'POST', { paid_amount: 0 });
+      return;
+    }
+    const mv = t.closest('[data-status-to]');
+    if (mv) {
+      const to = mv.dataset.statusTo;
+      if (to === 'cancelled' && !confirm('確定取消這筆訂單？取消後就不能再修改金額或收款。')) return;
+      await orderCall(id, `/api/admin/orders/${encodeURIComponent(id)}/status`, 'POST', { status: to });
+    }
+  });
+
+  // the 照片（N 張） summary follows the ticks
+  document.addEventListener('change', e => {
+    const c = e.target.closest && e.target.closest('.ord-photo');
+    if (!c) return;
+    const row = c.closest('.ord-line-edit');
+    row.querySelector('[data-photo-summary]').textContent = `照片（${row.querySelectorAll('.ord-photo:checked').length} 張）`;
+  });
 
   function downloadSelectedKeys(project, selected) {
     const keys = selected.map(s => s.photo_key);

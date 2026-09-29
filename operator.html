@@ -1,0 +1,482 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="robots" content="noindex,nofollow">
+<title>Operator — 平台商品</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@600;900&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #fff8ee; --surface: #ffffff; --card: #fff3df; --accent: #f5a13b; --accent-dim: #ffd9a8;
+    --mint: #d6f0e3; --peach: #ffd9a8; --ink-90: #231b12; --ink-70: #5b4f42; --ink-55: #7a6d5d;
+    --rule: #efe6d8; --border: #efe6d8; --danger: #c0392b; --success: #1f6b4f;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--ink-90); font-family: 'IBM Plex Sans', sans-serif; font-size: 14px; min-height: 100vh; }
+  [hidden] { display: none !important; }
+  header { background: var(--surface); border-bottom: 1px solid var(--rule); padding: 0 24px; display: flex; align-items: center; gap: 16px; height: 52px; }
+  header .brand { color: var(--accent); font-family: 'IBM Plex Mono', monospace; font-size: 13px; letter-spacing: 0.15em; }
+  header .subtitle { color: var(--ink-55); font-size: 12px; }
+  header .spacer { flex: 1; }
+  .btn-logout { background: transparent; border: 1px solid var(--border); color: var(--ink-55); padding: 5px 12px; border-radius: 999px; cursor: pointer; font-size: 12px; font-family: inherit; }
+  .btn-logout:hover { border-color: var(--danger); color: var(--danger); }
+  main { max-width: 860px; margin: 0 auto; padding: 24px; }
+  h2 { font-family: 'Noto Serif TC', serif; font-size: 17px; font-weight: 600; margin-bottom: 14px; }
+  .panel { border-radius: 14px; background: var(--surface); margin-bottom: 24px; box-shadow: 0 2px 10px rgba(90,60,20,.06); }
+  .panel-body { padding: 18px 20px; }
+  .field-group { margin-bottom: 16px; }
+  .field-group label { display: block; font-size: 12px; color: var(--ink-55); margin-bottom: 6px; }
+  .field { background: var(--bg); border: 1px solid var(--rule); color: var(--ink-90); padding: 9px 12px; border-radius: 8px; font-size: 14px; font-family: inherit; outline: none; width: 100%; }
+  .field:focus { border-color: var(--accent); }
+  .field-row { display: flex; gap: 14px; flex-wrap: wrap; }
+  .field-row .field-group { flex: 1; min-width: 180px; }
+  .hint { font-size: 11px; color: var(--ink-55); margin-top: 5px; }
+  .err { color: var(--danger); font-size: 12px; min-height: 16px; margin-top: 8px; }
+  .ok-msg { color: var(--success); font-size: 12px; min-height: 16px; margin-top: 8px; }
+  .btn { padding: 9px 18px; border-radius: 999px; border: none; cursor: pointer; font-size: 13px; font-weight: 600; font-family: inherit; }
+  .btn-accent { background: var(--accent); color: var(--ink-90); }
+  .btn-accent:disabled { opacity: .5; cursor: not-allowed; }
+  .btn-danger { background: var(--peach); color: var(--danger); }
+  .btn-outline { background: transparent; color: var(--ink-70); border: 1px solid var(--border); }
+  .btn-outline:hover { border-color: var(--accent); color: var(--accent); }
+  .btn-sm { padding: 5px 12px; font-size: 12px; }
+  .pill { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 11px; background: var(--mint); color: var(--success); font-family: 'IBM Plex Mono', monospace; }
+  .pill-off { background: var(--rule); color: var(--ink-55); }
+  .chip-warn { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 11px; background: #fde4e0; color: var(--danger); font-weight: 600; }
+  .prod-row { display: flex; gap: 12px; padding: 12px 0; border-top: 1px solid var(--rule); align-items: flex-start; }
+  .prod-row:first-child { border-top: none; }
+  .prod-row.retired { opacity: .55; }
+  .prod-main { min-width: 0; flex: 1; }
+  .prod-name { font-size: 14px; margin-right: 6px; }
+  .prod-opts { list-style: none; margin-top: 6px; font-size: 12px; color: var(--ink-70); }
+  .prod-opts li { padding: 2px 0; }
+  .prod-opts li.off { opacity: .55; }
+  .prod-actions { display: flex; gap: 6px; align-items: flex-start; flex-shrink: 0; }
+  .thumb { width: 64px; height: 64px; border-radius: 8px; object-fit: cover; flex: none; background: var(--card); }
+  .thumb.none { display: flex; align-items: center; justify-content: center; font-size: 11px; color: var(--ink-55); border: 1px dashed var(--rule); }
+  .prod-form { border: 1px solid var(--rule); border-radius: 12px; background: var(--card); padding: 16px; margin-top: 14px; }
+  .prod-form h3 { font-size: 14px; margin-bottom: 12px; }
+  .opt-head, .opt-row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; flex-wrap: wrap; }
+  .opt-head { font-size: 11px; color: var(--ink-55); margin-bottom: 4px; }
+  .opt-label { flex: 1; min-width: 140px; } .opt-vendor, .opt-plat { width: 110px; flex: none; }
+  .opt-head .opt-label { flex: 1; } .opt-head .opt-vendor, .opt-head .opt-plat { width: 110px; flex: none; }
+  .opt-del { flex: none; width: 34px; height: 34px; padding: 0; }
+  .opt-warn { min-width: 118px; }
+  .form-actions { display: flex; gap: 8px; margin-top: 12px; }
+  .img-row { display: flex; align-items: center; gap: 16px; margin: 6px 0 14px; }
+  .img-box { width: 96px; height: 96px; border: 1px dashed var(--rule); border-radius: 10px; display: flex; align-items: center; justify-content: center; overflow: hidden; background: var(--surface); flex-shrink: 0; }
+  .img-box img { max-width: 100%; max-height: 100%; }
+  .img-box .none { font-size: 11px; color: var(--ink-55); text-align: center; padding: 4px; }
+  .img-actions { display: flex; flex-direction: column; gap: 8px; }
+  .img-actions input[type="file"] { font-size: 12px; color: var(--ink-70); }
+  table.tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .tbl th { text-align: right; font-size: 11px; color: var(--ink-55); font-weight: 500; padding: 6px 8px; border-bottom: 1px solid var(--rule); }
+  .tbl td { text-align: right; padding: 8px; border-bottom: 1px solid var(--rule); font-variant-numeric: tabular-nums; }
+  .tbl th:first-child, .tbl td:first-child { text-align: left; }
+  .tbl tr.retired { opacity: .55; }
+  .neg { color: var(--danger); font-weight: 600; }
+  .month-cards { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
+  .month-card { flex: 1; min-width: 120px; background: var(--card); border-radius: 10px; padding: 10px 14px; }
+  .month-card .k { font-size: 11px; color: var(--ink-55); }
+  .month-card .v { font-size: 18px; font-family: 'IBM Plex Mono', monospace; margin-top: 2px; }
+  .login-box { max-width: 380px; margin: 80px auto; }
+  @media (max-width: 640px) { main { padding: 16px; } .prod-row { flex-wrap: wrap; } }
+</style>
+</head>
+<body>
+
+<header>
+  <span class="brand">OPERATOR</span>
+  <span class="subtitle">平台商品</span>
+  <span id="buildVersion"></span>
+  <span class="spacer"></span>
+  <button class="btn-logout" id="op-logout" type="button" hidden>登出</button>
+</header>
+
+<main>
+  <section id="op-login" class="login-box">
+    <div class="panel"><div class="panel-body">
+      <h2>營運登入</h2>
+      <div class="field-group">
+        <label for="op-token">營運權杖（OPERATOR_TOKEN）</label>
+        <input id="op-token" class="field" type="password" autocomplete="off" placeholder="貼上營運權杖">
+        <div class="hint">和攝影師的密碼不同，只存在這個瀏覽器。</div>
+      </div>
+      <button id="op-login-btn" class="btn btn-accent" type="button">登入</button>
+      <div id="op-login-err" class="err"></div>
+    </div></div>
+  </section>
+
+  <div id="op-app" hidden>
+    <h2>平台商品</h2>
+    <div class="panel">
+      <div class="panel-body">
+        <div id="op-list"><div class="hint">載入中…</div></div>
+        <button id="op-add-btn" class="btn btn-outline" type="button" style="margin-top:12px;">＋ 新增平台商品</button>
+        <div id="op-form-box"></div>
+        <div id="op-err" class="err"></div>
+        <div id="op-ok" class="ok-msg"></div>
+      </div>
+    </div>
+
+    <h2>銷售</h2>
+    <div class="panel">
+      <div class="panel-body">
+        <div id="op-stats"><div class="hint">載入中…</div></div>
+        <div class="hint">依收款日（paid_at）計算，已取消的訂單不算；營收為平台價，成本為廠商成本，均取訂單品項當時的快照。</div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<script src="js/build-version.js?v=20260929c"></script>
+<script src="js/orders-common.js?v=20260929c"></script>
+<script>
+(function () {
+  const WORKER_URL = 'https://imagepicker.hotichen.workers.dev';
+  // The operator's own key. Never the photographer's (sessionStorage
+  // 'studio_token'): one credential must not open both sides, and this page
+  // neither reads nor writes that one.
+  const TOKEN_KEY = 'imhoti_operator_token';
+  const IMG_MAX_BYTES = 204800; // 200 KB — mirrors the Worker
+  const O = window.Orders;
+
+  let token = '';
+  try { token = localStorage.getItem(TOKEN_KEY) || ''; } catch (e) { /* memory only */ }
+  function saveToken(t) { token = t; try { if (t) localStorage.setItem(TOKEN_KEY, t); else localStorage.removeItem(TOKEN_KEY); } catch (e) { /* memory only */ } }
+
+  const $ = id => document.getElementById(id);
+  const loginBox = $('op-login'), appBox = $('op-app'), logoutBtn = $('op-logout');
+  const loginErr = $('op-login-err');
+  const listBox = $('op-list'), formBox = $('op-form-box'), addBtn = $('op-add-btn');
+  const errEl = $('op-err'), okEl = $('op-ok'), statsBox = $('op-stats');
+  let products = [];
+
+  function showLogin(msg) {
+    appBox.hidden = true; logoutBtn.hidden = true; loginBox.hidden = false;
+    loginErr.textContent = msg || '';
+    $('op-token').value = '';
+  }
+  function showApp() { loginBox.hidden = true; appBox.hidden = false; logoutBtn.hidden = false; }
+  function signOut(msg) { saveToken(''); products = []; formBox.innerHTML = ''; showLogin(msg); }
+
+  const api = O.client({
+    workerUrl: WORKER_URL, getToken: () => token,
+    onUnauthorized: () => signOut('營運權杖不正確或已失效，請重新登入'),
+  });
+
+  function say(ok, text) {
+    errEl.textContent = ok ? '' : text;
+    okEl.textContent = ok ? text : '';
+    if (ok && text) setTimeout(() => { okEl.textContent = ''; }, 2500);
+  }
+
+  // ── sign in ────────────────────────────────────────────────────────────────
+  async function enter(candidate) {
+    saveToken(candidate);
+    const r = await api('/api/operator/products');
+    if (r.status === 401) return;               // onUnauthorized already signed out
+    // not a wrong token (that is the 401 above): a network or server problem
+    // must not throw away a stored token, so it stays and the person retries
+    if (!r.ok) { showLogin(O.errorText(r.data, r.status)); return; }
+    products = r.data.products || [];
+    showApp();
+    renderList();
+    loadStats();                                // not awaited: the list shows now, sales fill their own box
+  }
+  $('op-login-btn').addEventListener('click', async () => {
+    const t = $('op-token').value.trim();
+    if (!t) { loginErr.textContent = '請輸入營運權杖'; return; }
+    loginErr.textContent = '';
+    $('op-login-btn').disabled = true;
+    await enter(t);
+    $('op-login-btn').disabled = false;
+  });
+  $('op-token').addEventListener('keydown', e => { if (e.key === 'Enter') $('op-login-btn').click(); });
+  logoutBtn.addEventListener('click', () => signOut(''));
+
+  // ── the catalogue ──────────────────────────────────────────────────────────
+  const imgUrl = p => O.platformImageUrl(WORKER_URL, p.id, p.image_updated_at);
+  const underCost = o => Number(o.platform_price) < Number(o.vendor_cost);
+
+  function rowHtml(p) {
+    const retired = !p.active;
+    const opts = (p.options || []).map(o => {
+      const label = o.label ? O.esc(o.label) : '（單一規格）';
+      const warn = o.active && underCost(o) ? ' <span class="chip-warn" data-warn="below-cost">平台價低於廠商成本</span>' : '';
+      return `<li data-option-id="${O.esc(o.id)}"${o.active ? '' : ' class="off"'}>${label} · 廠商成本 ${O.money(o.vendor_cost)} · 平台價 ${O.money(o.platform_price)}${o.active ? '' : ' <span class="pill pill-off">已下架規格</span>'}${warn}</li>`;
+    }).join('');
+    return `<div class="prod-row${retired ? ' retired' : ''}" data-product-id="${O.esc(p.id)}" data-active="${retired ? '0' : '1'}">
+      ${p.has_image ? `<img class="thumb" alt="" src="${O.esc(imgUrl(p))}">` : '<div class="thumb none">無圖</div>'}
+      <div class="prod-main">
+        <strong class="prod-name">${O.esc(p.name)}</strong>
+        <span class="pill" data-kind="${O.esc(p.kind)}">${O.esc(O.KIND_LABEL[p.kind] || p.kind)}</span>
+        ${retired ? '<span class="pill pill-off">已下架</span>' : ''}
+        ${p.kind === 'album' && p.photo_count ? `<span class="hint">指定 ${O.esc(p.photo_count)} 張</span>` : ''}
+        ${p.description ? `<div class="hint">${O.esc(p.description)}</div>` : ''}
+        <ul class="prod-opts">${opts}</ul>
+      </div>
+      <div class="prod-actions">
+        <button type="button" class="btn btn-outline btn-sm" data-edit>編輯</button>
+        ${retired
+          ? '<button type="button" class="btn btn-outline btn-sm" data-restore>重新上架</button>'
+          : '<button type="button" class="btn btn-danger btn-sm" data-retire>下架</button>'}
+      </div>
+    </div>`;
+  }
+
+  // active first (the Worker sorts that way; kept here so a local change
+  // cannot reorder them wrongly), retired ones greyed at the bottom
+  function renderList() {
+    const sorted = products.slice().sort((a, b) => (b.active ? 1 : 0) - (a.active ? 1 : 0));
+    listBox.innerHTML = sorted.length ? sorted.map(rowHtml).join('') : '<div class="hint">還沒有平台商品。按「新增平台商品」開始。</div>';
+  }
+
+  async function loadProducts() {
+    const r = await api('/api/operator/products');
+    if (!r.ok) { if (r.status !== 401) listBox.innerHTML = `<div class="err">讀取失敗：${O.esc(O.errorText(r.data, r.status))}</div>`; return false; }
+    products = r.data.products || [];
+    renderList();
+    return true;
+  }
+
+  // ── add / edit ─────────────────────────────────────────────────────────────
+  function optRowHtml(o) {
+    o = o || {};
+    return `<div class="opt-row" data-option-id="${O.esc(o.id || '')}">
+      <input class="field opt-label" type="text" maxlength="60" placeholder="例如：8×8 吋（單一規格可留空）" value="${O.esc(o.label || '')}">
+      <input class="field opt-vendor" type="number" min="0" step="1" placeholder="廠商成本" value="${o.vendor_cost != null ? O.esc(o.vendor_cost) : ''}">
+      <input class="field opt-plat" type="number" min="0" step="1" placeholder="平台價" value="${o.platform_price != null ? O.esc(o.platform_price) : ''}">
+      <span class="opt-warn"></span>
+      <button type="button" class="btn btn-outline opt-del" title="移除規格">×</button>
+    </div>`;
+  }
+  function syncWarn(row) {
+    const v = row.querySelector('.opt-vendor').value.trim(), p = row.querySelector('.opt-plat').value.trim();
+    const bad = /^\d+$/.test(v) && /^\d+$/.test(p) && Number(p) < Number(v);
+    row.querySelector('.opt-warn').innerHTML = bad ? '<span class="chip-warn" data-warn="below-cost">平台價低於廠商成本</span>' : '';
+  }
+
+  function imageSectionHtml(p) {
+    if (!p) return '<div class="hint" style="margin:6px 0 14px;">圖片：先儲存商品，再回來編輯上傳（PNG / JPEG / WebP，200 KB 以內）。</div>';
+    return `<div class="img-row">
+      <div class="img-box" id="opf-preview">${p.has_image ? `<img alt="商品圖片" src="${O.esc(imgUrl(p))}">` : '<span class="none">尚未上傳</span>'}</div>
+      <div class="img-actions">
+        <input id="opf-file" type="file" accept="image/png,image/jpeg,image/webp">
+        <div class="hint">PNG / JPEG / WebP，200 KB 以內。攝影師與客人都會看到這張圖。</div>
+        <button id="opf-img-remove" class="btn btn-danger btn-sm" type="button" style="width:fit-content;"${p.has_image ? '' : ' hidden'}>移除圖片</button>
+        <div id="opf-img-err" class="err"></div>
+        <div id="opf-img-ok" class="ok-msg"></div>
+      </div>
+    </div>`;
+  }
+
+  function openForm(product, note) {
+    const editing = !!product;
+    const p = product || { kind: 'album', name: '', description: '', photo_count: null, options: [] };
+    const opts = editing ? (p.options || []).filter(o => o.active) : [];
+    addBtn.hidden = true;
+    formBox.innerHTML = `<div class="prod-form" id="op-form" data-mode="${editing ? 'edit' : 'new'}">
+      <h3>${editing ? '編輯平台商品' : '新增平台商品'}</h3>
+      <div class="field-row">
+        <div class="field-group">
+          <label for="opf-kind">類型</label>
+          <select id="opf-kind" class="field">
+            <option value="album">相本</option>
+            <option value="print">輸出品</option>
+          </select>
+        </div>
+        <div class="field-group">
+          <label for="opf-name">名稱</label>
+          <input id="opf-name" class="field" type="text" maxlength="60" placeholder="例如：相本書" value="${O.esc(p.name)}">
+        </div>
+      </div>
+      <div class="field-group">
+        <label for="opf-desc">說明（選填，攝影師會看到）</label>
+        <input id="opf-desc" class="field" type="text" maxlength="500" value="${O.esc(p.description || '')}">
+      </div>
+      <div class="field-group" id="opf-count-group">
+        <label for="opf-count">相本指定張數（選填，留空 = 不限）</label>
+        <input id="opf-count" class="field" type="number" min="1" step="1" value="${p.photo_count != null ? O.esc(p.photo_count) : ''}">
+      </div>
+      ${imageSectionHtml(product)}
+      <div class="opt-head"><span class="opt-label">規格</span><span class="opt-vendor">廠商成本 NT$</span><span class="opt-plat">平台價 NT$</span><span class="opt-warn"></span><span class="opt-del"></span></div>
+      <div id="opf-options">${(opts.length ? opts : [{}]).map(optRowHtml).join('')}</div>
+      <button type="button" id="opf-add-option" class="btn btn-outline btn-sm">＋ 新增規格</button>
+      <div class="hint">平台價是攝影師的成本（也是他們售價的下限）。平台價低於廠商成本可以存，但會標警告。</div>
+      <div id="opf-err" class="err">${O.esc(note || '')}</div>
+      <div class="form-actions">
+        <button type="button" id="opf-save" class="btn btn-accent">儲存</button>
+        <button type="button" id="opf-cancel" class="btn btn-outline">取消</button>
+      </div>
+    </div>`;
+    const kindSel = $('opf-kind');
+    kindSel.value = p.kind;
+    const countGroup = $('opf-count-group');
+    const syncKind = () => { countGroup.hidden = kindSel.value !== 'album'; };
+    syncKind();
+    kindSel.addEventListener('change', syncKind);
+    const optsBox = $('opf-options');
+    const formErr = $('opf-err');
+    optsBox.querySelectorAll('.opt-row').forEach(syncWarn);
+    optsBox.addEventListener('input', e => { const row = e.target.closest('.opt-row'); if (row) syncWarn(row); });
+    $('opf-add-option').addEventListener('click', () => optsBox.insertAdjacentHTML('beforeend', optRowHtml()));
+    optsBox.addEventListener('click', e => {
+      const del = e.target.closest('.opt-del');
+      if (!del) return;
+      if (optsBox.querySelectorAll('.opt-row').length <= 1) { formErr.textContent = O.errorText({ code: 'invalid_options' }); return; }
+      del.closest('.opt-row').remove();
+      formErr.textContent = '';
+    });
+    $('opf-cancel').addEventListener('click', closeForm);
+    $('opf-save').addEventListener('click', () => saveForm(product));
+    if (editing) wireImage(product);
+    $('opf-name').focus();
+  }
+  function closeForm() { formBox.innerHTML = ''; addBtn.hidden = false; }
+
+  const isInt = s => /^\d+$/.test(s);
+
+  async function saveForm(product) {
+    const formErr = $('opf-err');
+    formErr.textContent = '';
+    const kind = $('opf-kind').value;
+    const name = $('opf-name').value.trim();
+    if (!name) { formErr.textContent = O.errorText({ code: 'invalid_name' }); return; }
+    const countRaw = $('opf-count').value.trim();
+    if (kind === 'album' && countRaw !== '' && (!isInt(countRaw) || Number(countRaw) < 1)) {
+      formErr.textContent = O.errorText({ code: 'invalid_photo_count' }); return;
+    }
+    const options = [];
+    for (const row of document.querySelectorAll('#opf-options .opt-row')) {
+      const v = row.querySelector('.opt-vendor').value.trim();
+      const pl = row.querySelector('.opt-plat').value.trim();
+      if (!isInt(v)) { formErr.textContent = O.errorText({ code: 'invalid_vendor_cost' }); return; }
+      if (!isInt(pl)) { formErr.textContent = O.errorText({ code: 'invalid_platform_price' }); return; }
+      const o = { label: row.querySelector('.opt-label').value.trim(), vendor_cost: Number(v), platform_price: Number(pl) };
+      if (row.dataset.optionId) o.id = row.dataset.optionId;
+      options.push(o);
+    }
+    if (!options.length) { formErr.textContent = O.errorText({ code: 'invalid_options' }); return; }
+    const body = {
+      kind, name, description: $('opf-desc').value.trim(),
+      photo_count: kind === 'album' && countRaw !== '' ? Number(countRaw) : null,
+      options,
+    };
+    const btn = $('opf-save');
+    btn.disabled = true;
+    const r = product
+      ? await api(`/api/operator/products/${encodeURIComponent(product.id)}`, 'PUT', body)
+      : await api('/api/operator/products', 'POST', body);
+    btn.disabled = false;
+    if (!r.ok) { if (r.status !== 401) formErr.textContent = O.errorText(r.data, r.status); return; }
+    await loadProducts();
+    if (!product && r.data.product) {
+      // stay on the new product so its picture can be added
+      openForm(products.find(x => x.id === r.data.product.id) || r.data.product);
+      say(true, '已建立，可以上傳圖片');
+      return;
+    }
+    closeForm();
+    say(true, '已儲存');
+  }
+
+  // ── image upload / remove ──────────────────────────────────────────────────
+  function renderPreview(p) {
+    const box = $('opf-preview');
+    if (!box) return;
+    box.innerHTML = p.has_image ? `<img alt="商品圖片" src="${O.esc(imgUrl(p))}">` : '<span class="none">尚未上傳</span>';
+    $('opf-img-remove').hidden = !p.has_image;
+  }
+  function wireImage(product) {
+    const fileInput = $('opf-file'), rm = $('opf-img-remove'), imgErr = $('opf-img-err'), imgOk = $('opf-img-ok');
+    const current = () => products.find(x => x.id === product.id) || product;
+    const flash = () => { setTimeout(() => { imgOk.textContent = ''; }, 2500); };
+    fileInput.addEventListener('change', async () => {
+      imgErr.textContent = ''; imgOk.textContent = '';
+      const file = fileInput.files && fileInput.files[0];
+      if (!file) return;
+      if (file.size > IMG_MAX_BYTES) { imgErr.textContent = O.errorText({ code: 'too_large' }); fileInput.value = ''; return; }
+      if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type)) { imgErr.textContent = O.errorText({ code: 'unsupported_type' }); fileInput.value = ''; return; }
+      let r;
+      try {
+        const res = await fetch(`${WORKER_URL}/api/operator/products/${encodeURIComponent(product.id)}/image`, {
+          method: 'PUT', headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': file.type }, body: file,
+        });
+        r = { ok: res.ok, status: res.status, data: await res.json().catch(() => ({})) };
+        if (res.status === 401) { signOut('營運權杖不正確或已失效，請重新登入'); return; }
+      } catch (e) { r = { ok: false, status: 0, data: { error: '無法連線到 Worker' } }; }
+      fileInput.value = '';
+      if (!r.ok) { imgErr.textContent = O.errorText(r.data, r.status); return; }
+      const p = current();
+      p.has_image = true; p.image_updated_at = r.data.image_updated_at; p.image_type = r.data.image_type;
+      renderPreview(p); renderList();
+      imgOk.textContent = '已更新圖片'; flash();
+    });
+    rm.addEventListener('click', async () => {
+      imgErr.textContent = ''; imgOk.textContent = '';
+      rm.disabled = true;
+      const r = await api(`/api/operator/products/${encodeURIComponent(product.id)}/image`, 'DELETE');
+      rm.disabled = false;
+      if (!r.ok) { if (r.status !== 401) imgErr.textContent = O.errorText(r.data, r.status); return; }
+      const p = current();
+      p.has_image = false; p.image_updated_at = null; p.image_type = null;
+      renderPreview(p); renderList();
+      imgOk.textContent = '已移除圖片'; flash();
+    });
+  }
+
+  addBtn.addEventListener('click', () => { say(true, ''); openForm(null); });
+  listBox.addEventListener('click', async e => {
+    const row = e.target.closest('.prod-row');
+    if (!row) return;
+    const p = products.find(x => x.id === row.dataset.productId);
+    if (!p) return;
+    say(true, '');
+    if (e.target.closest('[data-edit]')) { openForm(p); return; }
+    const retire = e.target.closest('[data-retire]');
+    const restore = e.target.closest('[data-restore]');
+    if (!retire && !restore) return;
+    const r = await api(`/api/operator/products/${encodeURIComponent(p.id)}/${retire ? 'retire' : 'restore'}`, 'POST');
+    if (!r.ok) { if (r.status !== 401) say(false, O.errorText(r.data, r.status)); return; }
+    await loadProducts();
+  });
+
+  // ── sales ──────────────────────────────────────────────────────────────────
+  // a loss reads −NT$100 (O.money alone would give NT$-100)
+  const signed = n => (n < 0 ? `−${O.money(-n)}` : O.money(n));
+  const marginCell = n => `<td${n < 0 ? ' class="neg"' : ''}>${signed(n)}</td>`;
+  async function loadStats() {
+    const r = await api('/api/operator/stats');
+    if (!r.ok) { if (r.status !== 401) statsBox.innerHTML = `<div class="err">讀取銷售失敗：${O.esc(O.errorText(r.data, r.status))}</div>`; return; }
+    const m = r.data.this_month || { qty: 0, revenue: 0, vendor_cost: 0, margin: 0 };
+    const rows = (r.data.products || []).map(p => `<tr data-platform-product-id="${O.esc(p.platform_product_id)}"${p.active ? '' : ' class="retired"'}>
+        <td>${O.esc(p.name)}${p.active ? '' : ' <span class="pill pill-off">已下架</span>'}</td>
+        <td data-col="month-qty">${O.esc(p.this_month.qty)}</td>
+        ${marginCell(p.this_month.margin).replace('<td', '<td data-col="month-margin"')}
+        <td data-col="qty">${O.esc(p.qty)}</td>
+        <td data-col="revenue">${O.money(p.revenue)}</td>
+        <td data-col="cost">${O.money(p.vendor_cost)}</td>
+        ${marginCell(p.margin).replace('<td', '<td data-col="margin"')}
+      </tr>`).join('');
+    statsBox.innerHTML = `
+      <div class="month-cards" id="op-month">
+        <div class="month-card"><div class="k">本月數量</div><div class="v" data-k="qty">${O.esc(m.qty)}</div></div>
+        <div class="month-card"><div class="k">本月平台營收</div><div class="v" data-k="revenue">${O.money(m.revenue)}</div></div>
+        <div class="month-card"><div class="k">本月廠商成本</div><div class="v" data-k="cost">${O.money(m.vendor_cost)}</div></div>
+        <div class="month-card"><div class="k">本月毛利</div><div class="v${m.margin < 0 ? ' neg' : ''}" data-k="margin">${signed(m.margin)}</div></div>
+      </div>
+      ${rows
+        ? `<table class="tbl" id="op-stats-table"><thead><tr><th>商品</th><th>本月數量</th><th>本月毛利</th><th>近 12 個月數量</th><th>平台營收</th><th>廠商成本</th><th>毛利</th></tr></thead><tbody>${rows}</tbody></table>`
+        : '<div class="hint">還沒有平台商品。</div>'}`;
+  }
+
+  // a stored token: check it before showing anything
+  if (token) enter(token); else showLogin('');
+})();
+</script>
+</body>
+</html>

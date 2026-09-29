@@ -74,6 +74,40 @@
   .logo-preview-box .none { font-size: 11px; color: var(--ink-55); text-align: center; padding: 4px; }
   .logo-actions { display: flex; flex-direction: column; gap: 8px; }
   .logo-actions input[type="file"] { font-size: 12px; color: var(--ink-70); }
+  [hidden] { display: none !important; }
+  .btn-sm { padding: 5px 12px; font-size: 12px; }
+  .pill { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 11px; background: var(--mint); color: var(--success); font-family: 'IBM Plex Mono', monospace; }
+  .pill-off { background: var(--rule); color: var(--ink-55); }
+  .prod-row { display: flex; justify-content: space-between; gap: 12px; padding: 12px 0; border-top: 1px solid var(--rule); }
+  .prod-row:first-child { border-top: none; }
+  .prod-row.retired { opacity: .55; }
+  .prod-main { min-width: 0; }
+  .prod-name { font-size: 14px; margin-right: 6px; }
+  .prod-opts { list-style: none; margin-top: 6px; font-size: 12px; color: var(--ink-70); }
+  .prod-opts li { padding: 1px 0; }
+  .prod-actions { display: flex; gap: 6px; align-items: flex-start; flex-shrink: 0; }
+  .prod-form { border: 1px solid var(--rule); border-radius: 12px; background: var(--card); padding: 16px; margin-top: 14px; }
+  .prod-form h3 { font-size: 14px; margin-bottom: 12px; }
+  .opt-head, .opt-row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+  .opt-head { font-size: 11px; color: var(--ink-55); margin-bottom: 4px; }
+  .opt-head span, .opt-row .field { min-width: 0; }
+  .opt-label { flex: 1; } .opt-price, .opt-cost { width: 96px; flex: none; }
+  .opt-head .opt-label { flex: 1; } .opt-head .opt-price, .opt-head .opt-cost { width: 96px; flex: none; }
+  .opt-del { flex: none; width: 34px; height: 34px; padding: 0; }
+  .form-actions { display: flex; gap: 8px; margin-top: 12px; }
+  .prod-row, .plat-card { align-items: flex-start; }
+  .prod-row .prod-main, .plat-card .prod-main { flex: 1; }
+  .prod-thumb { width: 64px; height: 64px; border-radius: 8px; object-fit: cover; flex: none; background: var(--card); }
+  .prod-thumb.none { display: flex; align-items: center; justify-content: center; font-size: 11px; color: var(--ink-55); border: 1px dashed var(--rule); }
+  .plat-card { display: flex; gap: 12px; padding: 12px 0; border-top: 1px solid var(--rule); }
+  .plat-card:first-of-type { border-top: none; }
+  .pill-plat { background: var(--accent-dim); color: var(--ink-90); }
+  .prod-row.platform-gone { opacity: .6; }
+  .opt-off { opacity: .55; }
+  .warn-below { color: var(--danger); font-weight: 600; }
+  .pick-row { display: flex; gap: 10px; align-items: center; margin: 6px 0; flex-wrap: wrap; }
+  .pick-tick { display: flex; gap: 6px; align-items: center; min-width: 120px; margin: 0; font-size: 13px; color: var(--ink-90); }
+  .pick-price { width: 110px; flex: none; }
 </style>
 </head>
 <body>
@@ -133,11 +167,25 @@
         <div id="logo-ok" class="ok-msg"></div>
       </div>
     </div>
+    <h2>商品</h2>
+    <div class="panel">
+      <div class="panel-body">
+        <div id="prod-list"><div class="hint">載入中…</div></div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;">
+          <button id="plat-add-btn" class="btn btn-accent" type="button">從平台加入</button>
+        </div>
+        <div id="plat-box"></div>
+        <div id="prod-form-box"></div>
+        <div id="prod-err" class="err"></div>
+        <div id="prod-ok" class="ok-msg"></div>
+      </div>
+    </div>
   </main>
 </div>
 
-<script src="js/build-version.js?v=20260928j"></script>
-<script src="js/side-nav.js?v=20260928j"></script>
+<script src="js/build-version.js?v=20260929c"></script>
+<script src="js/side-nav.js?v=20260929c"></script>
+<script src="js/orders-common.js?v=20260929c"></script>
 <script>
 (function () {
   const WORKER_URL = 'https://imagepicker.hotichen.workers.dev';
@@ -249,6 +297,435 @@
       } finally {
         saveBtn.disabled = false;
       }
+    });
+
+    // ── 商品 (docs/products-orders.md) ──────────────────────────────────────
+    // Two kinds of product: 自訂 (service only — 加修, 急件) that the photographer
+    // fully owns, and 平台商品 adopted from the operator's catalogue, whose name,
+    // description, image and 平台價 are the platform's; only the option set and
+    // 售價 (never below 平台價) are the photographer's. 自訂 products are off
+    // unless the Worker says custom_products_enabled (CUSTOM_PRODUCTS = "on"):
+    // until then 新增服務 is not in the page at all, and an old custom product
+    // can only be taken off sale (下架).
+    const O = window.Orders;
+    const api = O.client({ workerUrl: WORKER_URL, getToken: () => token, onUnauthorized: SideNav.logoutToHome });
+    const prodList = document.getElementById('prod-list');
+    const prodFormBox = document.getElementById('prod-form-box');
+    const platBox = document.getElementById('plat-box');
+    const prodErr = document.getElementById('prod-err');
+    const prodOk = document.getElementById('prod-ok');
+    const platAddBtn = document.getElementById('plat-add-btn');
+    let prodAddBtn = null;       // 新增服務, only in the DOM while custom products are on
+    let customEnabled = false;   // fail closed until the Worker says otherwise
+    let products = [];
+    let catalogue = null;   // GET /api/admin/platform-products, loaded on first use
+
+    const isInt = s => /^\d+$/.test(s);
+    function activeOptions(p) { return (p.options || []).filter(o => o.active); }
+    function setAddButtons(hidden) { if (prodAddBtn) prodAddBtn.hidden = hidden; platAddBtn.hidden = hidden; }
+    function syncCustomButton() {
+      if (customEnabled && !prodAddBtn) {
+        prodAddBtn = document.createElement('button');
+        prodAddBtn.id = 'prod-add-btn';
+        prodAddBtn.className = 'btn btn-outline';
+        prodAddBtn.type = 'button';
+        prodAddBtn.textContent = '＋ 新增服務';
+        prodAddBtn.hidden = platAddBtn.hidden;
+        prodAddBtn.addEventListener('click', () => openForm(null));
+        platAddBtn.after(prodAddBtn);
+      } else if (!customEnabled && prodAddBtn) {
+        prodAddBtn.remove();
+        prodAddBtn = null;
+      }
+    }
+    function say(ok, text) {
+      prodErr.textContent = ok ? '' : text;
+      prodOk.textContent = ok ? text : '';
+      if (ok) setTimeout(() => { prodOk.textContent = ''; }, 2500);
+    }
+
+    // An adopted option is unusable for new lines once the platform retired it
+    // (or the whole product): the read gives the product's and the option's flag.
+    function platformGone(p) { return !!p.platform_product_id && !p.platform_active; }
+    function optionGone(p, o) { return !!p.platform_product_id && (platformGone(p) || !o.platform_active); }
+
+    function productRowHtml(p) {
+      const adopted = !!p.platform_product_id;
+      const gone = platformGone(p);
+      const opts = activeOptions(p).map(o => {
+        const label = o.label ? O.esc(o.label) : '（單一規格）';
+        if (!adopted) return `<li data-option-id="${O.esc(o.id)}">${label} · 售價 ${O.money(o.price)} · 成本 ${O.money(o.cost)}</li>`;
+        const off = optionGone(p, o);
+        const below = !off && o.below_platform_price;
+        return `<li data-option-id="${O.esc(o.id)}"${off ? ' data-unavailable="1" class="opt-off"' : ''}${below ? ' data-below="1"' : ''}>${label} · 平台價 ${O.money(o.platform_price != null ? o.platform_price : o.cost)} · 售價 ${O.money(o.price)}${
+          off ? ' <span class="pill pill-off">平台已下架</span>' : ''}${
+          below ? ' <span class="warn-below">平台價已調整，售價低於平台價，請更新</span>' : ''}</li>`;
+      }).join('');
+      const retired = !p.active;
+      // a custom product with custom products off: 下架 only
+      const locked = !adopted && !customEnabled;
+      const thumb = adopted
+        ? (p.has_image
+          ? `<img class="prod-thumb" alt="" src="${O.esc(O.platformImageUrl(WORKER_URL, p.platform_product_id, p.image_updated_at))}">`
+          : '<div class="prod-thumb none">無圖</div>')
+        : '';
+      return `<div class="prod-row${retired ? ' retired' : ''}${gone ? ' platform-gone' : ''}" data-product-id="${O.esc(p.id)}" data-active="${retired ? '0' : '1'}" data-adopted="${adopted ? '1' : '0'}">
+        ${thumb}
+        <div class="prod-main">
+          <strong class="prod-name">${O.esc(p.name)}</strong>
+          <span class="pill" data-kind="${O.esc(p.kind)}">${O.esc(O.KIND_LABEL[p.kind] || p.kind)}</span>
+          ${adopted ? '<span class="pill pill-plat">平台商品</span>' : ''}
+          ${retired ? '<span class="pill pill-off">已下架</span>' : ''}
+          ${gone ? '<span class="pill pill-off">平台已下架</span>' : ''}
+          ${p.kind === 'album' && p.photo_count ? `<span class="hint">指定 ${O.esc(p.photo_count)} 張</span>` : ''}
+          ${p.description ? `<div class="hint">${O.esc(p.description)}</div>` : ''}
+          <ul class="prod-opts">${opts}</ul>
+        </div>
+        <div class="prod-actions">
+          ${locked ? '' : '<button type="button" class="btn btn-outline btn-sm" data-edit>編輯</button>'}
+          ${retired
+            ? (locked ? '' : '<button type="button" class="btn btn-outline btn-sm" data-restore>重新上架</button>')
+            : '<button type="button" class="btn btn-danger btn-sm" data-retire>下架</button>'}
+        </div>
+      </div>`;
+    }
+
+    function renderProducts() {
+      prodList.innerHTML = products.length
+        ? products.map(productRowHtml).join('')
+        : customEnabled
+          ? '<div class="hint">還沒有商品。相本、無框畫請按「從平台加入」；加修、急件等服務請按「新增服務」。</div>'
+          : '<div class="hint">還沒有商品。請按「從平台加入」挑選要賣的商品。</div>';
+    }
+
+    async function loadProducts() {
+      const r = await api('/api/admin/products');
+      if (!r.ok) { prodList.innerHTML = `<div class="err">讀取商品失敗：${O.esc(O.errorText(r.data, r.status))}</div>`; return; }
+      products = r.data.products || [];
+      customEnabled = r.data.custom_products_enabled === true;
+      syncCustomButton();
+      renderProducts();
+    }
+    loadProducts();
+
+    async function loadCatalogue() {
+      const r = await api('/api/admin/platform-products');
+      if (!r.ok) return O.errorText(r.data, r.status);
+      catalogue = r.data.products || [];
+      return '';
+    }
+
+    // ── the option picker shared by 從平台加入 and editing an adopted product ──
+    // rows: [{platform_option_id, label, platform_price, checked, price, gone}]
+    function pickRowHtml(r) {
+      return `<div class="pick-row${r.gone ? ' opt-off' : ''}" data-platform-option-id="${O.esc(r.platform_option_id)}" data-floor="${O.esc(r.platform_price)}" data-label="${O.esc(r.label)}">
+        <label class="pick-tick"><input type="checkbox" class="pick-check"${r.checked ? ' checked' : ''}${r.gone ? ' disabled' : ''}> <span>${r.label ? O.esc(r.label) : '（單一規格）'}</span></label>
+        <span class="hint pick-floor">平台價 ${O.money(r.platform_price)}</span>
+        ${r.gone
+          ? '<span class="pill pill-off">平台已下架</span>'
+          : `<input class="field pick-price" type="number" min="${O.esc(r.platform_price)}" step="1" aria-label="售價" placeholder="售價" value="${O.esc(r.price)}"${r.checked ? '' : ' disabled'}>`}
+      </div>`;
+    }
+
+    function wirePicker(box) {
+      box.addEventListener('change', e => {
+        const cb = e.target.closest('.pick-check');
+        if (!cb) return;
+        const price = cb.closest('.pick-row').querySelector('.pick-price');
+        if (price) price.disabled = !cb.checked;
+      });
+    }
+
+    // {options: [{platform_option_id, price}]} from the ticked rows, or {error}.
+    // 售價 is held to 平台價 here as well as by the Worker.
+    function readPicker(box) {
+      const options = [];
+      for (const row of box.querySelectorAll('.pick-row')) {
+        const cb = row.querySelector('.pick-check');
+        if (!cb || !cb.checked) continue;
+        const raw = row.querySelector('.pick-price').value.trim();
+        if (!isInt(raw)) return { error: O.errorText({ code: 'invalid_price' }) };
+        const price = Number(raw);
+        const floor = Number(row.dataset.floor);
+        if (price < floor) {
+          const name = row.dataset.label || '單一規格';
+          return { error: `${O.errorText({ code: 'below_platform_price' })}（${name}：平台價 ${O.money(floor)}）` };
+        }
+        options.push({ platform_option_id: row.dataset.platformOptionId, price });
+      }
+      if (!options.length) return { error: '請至少勾選一個規格' };
+      return { options };
+    }
+
+    // ── 從平台加入 ───────────────────────────────────────────────────────────
+    function platCardHtml(c) {
+      const mine = c.adopted_product_id ? products.find(p => p.id === c.adopted_product_id) : null;
+      const thumb = c.has_image
+        ? `<img class="prod-thumb" alt="" src="${O.esc(O.platformImageUrl(WORKER_URL, c.id, c.image_updated_at))}">`
+        : '<div class="prod-thumb none">無圖</div>';
+      const head = `<strong class="prod-name">${O.esc(c.name)}</strong>
+          <span class="pill" data-kind="${O.esc(c.kind)}">${O.esc(O.KIND_LABEL[c.kind] || c.kind)}</span>
+          ${c.kind === 'album' && c.photo_count ? `<span class="hint">指定 ${O.esc(c.photo_count)} 張</span>` : ''}
+          ${c.description ? `<div class="hint">${O.esc(c.description)}</div>` : ''}`;
+      if (c.adopted_product_id) {
+        return `<div class="plat-card" data-platform-id="${O.esc(c.id)}" data-adopted="1">
+          ${thumb}
+          <div class="prod-main">${head}
+            <div class="hint">${(c.options || []).map(o => `${o.label ? O.esc(o.label) : '（單一規格）'} 平台價 ${O.money(o.platform_price)}`).join('、')}</div>
+            <div style="margin-top:6px;"><span class="pill">已加入</span>${mine && !mine.active ? ' <span class="hint">（已下架，可在清單重新上架）</span>' : ''}</div>
+          </div>
+          <div class="prod-actions"><button type="button" class="btn btn-outline btn-sm" data-plat-edit>編輯</button></div>
+        </div>`;
+      }
+      const rows = (c.options || []).map(o => pickRowHtml({
+        platform_option_id: o.id, label: o.label, platform_price: o.platform_price, checked: false, price: o.platform_price,
+      })).join('');
+      return `<div class="plat-card" data-platform-id="${O.esc(c.id)}" data-adopted="0">
+        ${thumb}
+        <div class="prod-main">${head}
+          <div class="pick-rows">${rows}</div>
+          <div class="err plat-err"></div>
+          <button type="button" class="btn btn-accent btn-sm" data-plat-add>加入</button>
+        </div>
+      </div>`;
+    }
+
+    function renderPlatBox() {
+      platBox.innerHTML = `<div class="prod-form" id="plat-form">
+        <h3>從平台加入</h3>
+        <div class="hint" style="margin-bottom:10px;">勾選要賣的規格並填售價；售價不能低於平台價（平台價就是你的成本）。名稱、說明與圖片由平台提供。</div>
+        ${catalogue.length ? catalogue.map(platCardHtml).join('') : '<div class="hint">平台目前沒有可加入的商品。</div>'}
+        <div class="form-actions"><button type="button" id="plat-close" class="btn btn-outline">關閉</button></div>
+      </div>`;
+      platBox.querySelectorAll('.plat-card[data-adopted="0"]').forEach(wirePicker);
+    }
+
+    function closePlat() { platBox.innerHTML = ''; setAddButtons(false); }
+
+    async function openPlat() {
+      say(true, '');
+      prodFormBox.innerHTML = '';
+      setAddButtons(true);
+      platBox.innerHTML = '<div class="hint">載入平台商品中…</div>';
+      const err = await loadCatalogue();
+      if (err) { platBox.innerHTML = ''; setAddButtons(false); say(false, `讀取平台商品失敗：${err}`); return; }
+      renderPlatBox();
+    }
+
+    platAddBtn.addEventListener('click', openPlat);
+    platBox.addEventListener('click', async e => {
+      if (e.target.closest('#plat-close')) { closePlat(); return; }
+      const card = e.target.closest('.plat-card');
+      if (!card) return;
+      if (e.target.closest('[data-plat-edit]')) {
+        const c = catalogue.find(x => x.id === card.dataset.platformId);
+        let mine = c && products.find(p => p.id === c.adopted_product_id);
+        if (!mine) { await loadProducts(); mine = c && products.find(p => p.id === c.adopted_product_id); }
+        if (!mine) { say(false, '找不到已加入的商品，請重新整理'); return; }
+        closePlat();
+        openAdoptedForm(mine);
+        return;
+      }
+      const add = e.target.closest('[data-plat-add]');
+      if (!add) return;
+      const errEl = card.querySelector('.plat-err');
+      errEl.textContent = '';
+      const picked = readPicker(card);
+      if (picked.error) { errEl.textContent = picked.error; return; }
+      add.disabled = true;
+      const r = await api('/api/admin/products/from-platform', 'POST', { platform_product_id: card.dataset.platformId, options: picked.options });
+      add.disabled = false;
+      if (!r.ok) {
+        errEl.textContent = O.errorText(r.data, r.status);
+        if (r.status === 409 || r.data.code === 'unknown_platform_product' || r.data.code === 'retired_option') {
+          // the card is out of date: re-read so it flips to 已加入 / disappears
+          await Promise.all([loadProducts(), loadCatalogue()]);
+          const keep = errEl.textContent;
+          renderPlatBox();
+          const again = platBox.querySelector(`.plat-card[data-platform-id="${CSS.escape(card.dataset.platformId)}"]`);
+          if (again) { const el = again.querySelector('.plat-err'); if (el) el.textContent = keep; else again.querySelector('.prod-main').insertAdjacentHTML('beforeend', `<div class="err plat-err">${O.esc(keep)}</div>`); }
+        }
+        return;
+      }
+      closePlat();
+      say(true, '已加入平台商品');
+      await loadProducts();
+    });
+
+    // ── an adopted product: only the option set and 售價 ────────────────────
+    async function openAdoptedForm(p) {
+      say(true, '');
+      platBox.innerHTML = '';
+      setAddButtons(true);
+      prodFormBox.innerHTML = '<div class="prod-form"><div class="hint">載入平台商品中…</div></div>';
+      const err = await loadCatalogue();
+      if (err) { prodFormBox.innerHTML = ''; setAddButtons(false); say(false, `讀取平台商品失敗：${err}`); return; }
+      const c = catalogue.find(x => x.id === p.platform_product_id) || null;
+      const mine = new Map(activeOptions(p).map(o => [o.platform_option_id, o]));
+      const rows = [];
+      if (c) {
+        for (const po of c.options) {
+          const have = mine.get(po.id);
+          rows.push({ platform_option_id: po.id, label: po.label, platform_price: po.platform_price, checked: !!have, price: have ? have.price : po.platform_price });
+        }
+      }
+      // adopted options the platform no longer offers: shown, cannot be kept
+      const offered = new Set(rows.map(r => r.platform_option_id));
+      for (const o of activeOptions(p)) {
+        if (!offered.has(o.platform_option_id)) {
+          rows.push({ platform_option_id: o.platform_option_id, label: o.label, platform_price: o.platform_price != null ? o.platform_price : o.cost, checked: false, price: o.price, gone: true });
+        }
+      }
+      const goneAll = !c;
+      prodFormBox.innerHTML = `<div class="prod-form" id="prod-form" data-mode="edit" data-adopted="1">
+        <h3>編輯商品</h3>
+        <div class="prod-name" style="margin-bottom:4px;">${O.esc(p.name)} <span class="pill" data-kind="${O.esc(p.kind)}">${O.esc(O.KIND_LABEL[p.kind] || p.kind)}</span></div>
+        <div class="hint" style="margin-bottom:12px;">名稱、說明、張數與圖片由平台管理，這裡只能調整規格與售價。${goneAll ? '平台已下架這個商品，暫時無法修改規格。' : ''}</div>
+        <div id="pf-options" class="pick-rows">${rows.map(pickRowHtml).join('')}</div>
+        <div id="pf-err" class="err"></div>
+        <div class="form-actions">
+          <button type="button" id="pf-save" class="btn btn-accent"${goneAll ? ' disabled' : ''}>儲存商品</button>
+          <button type="button" id="pf-cancel" class="btn btn-outline">取消</button>
+        </div>
+      </div>`;
+      const box = document.getElementById('pf-options');
+      wirePicker(box);
+      document.getElementById('pf-cancel').addEventListener('click', closeForm);
+      document.getElementById('pf-save').addEventListener('click', async () => {
+        const formErr = document.getElementById('pf-err');
+        formErr.textContent = '';
+        const picked = readPicker(box);
+        if (picked.error) { formErr.textContent = picked.error; return; }
+        const btn = document.getElementById('pf-save');
+        btn.disabled = true;
+        const r = await api(`/api/admin/products/${encodeURIComponent(p.id)}`, 'PUT', { options: picked.options });
+        btn.disabled = false;
+        if (!r.ok) { formErr.textContent = O.errorText(r.data, r.status); return; }
+        closeForm();
+        say(true, '已儲存商品');
+        await loadProducts();
+      });
+      prodFormBox.scrollIntoView && prodFormBox.scrollIntoView({ block: 'nearest' });
+    }
+
+    // ── 新增服務 / editing a custom (service) product ────────────────────────
+    function optionRowHtml(o) {
+      o = o || {};
+      return `<div class="opt-row" data-option-id="${O.esc(o.id || '')}">
+        <input class="field opt-label" type="text" maxlength="60" placeholder="例如：加修 1 張（單一規格可留空）" value="${O.esc(o.label || '')}">
+        <input class="field opt-price" type="number" min="0" step="1" placeholder="售價" value="${o.price != null ? O.esc(o.price) : ''}">
+        <input class="field opt-cost" type="number" min="0" step="1" placeholder="成本" value="${o.cost != null ? O.esc(o.cost) : ''}">
+        <button type="button" class="btn btn-outline opt-del" title="移除規格">×</button>
+      </div>`;
+    }
+
+    function openForm(product) {
+      say(true, '');
+      platBox.innerHTML = '';
+      const editing = !!product;
+      const p = product || { kind: 'service', name: '', description: '', photo_count: null, options: [] };
+      const opts = editing ? activeOptions(p) : [];
+      // custom products are services; an old custom album (before the platform
+      // catalogue) keeps its photo count field so it can still be edited
+      const showCount = p.kind === 'album';
+      prodFormBox.innerHTML = `<div class="prod-form" id="prod-form" data-mode="${editing ? 'edit' : 'new'}" data-kind="${O.esc(p.kind)}">
+        <h3>${editing ? '編輯商品' : '新增服務'}</h3>
+        <div class="hint" style="margin-bottom:12px;">自訂商品只能是服務（加修、急件、外拍加時…）。相本、輸出品請用「從平台加入」。</div>
+        <div class="field-group">
+          <label for="pf-name">名稱</label>
+          <input id="pf-name" class="field" type="text" maxlength="60" placeholder="例如：急件加修" value="${O.esc(p.name)}">
+        </div>
+        <div class="field-group">
+          <label for="pf-desc">說明（選填）</label>
+          <input id="pf-desc" class="field" type="text" maxlength="500" value="${O.esc(p.description || '')}">
+        </div>
+        ${showCount ? `<div class="field-group" id="pf-count-group">
+          <label for="pf-count">相本指定張數（選填，留空 = 不限）</label>
+          <input id="pf-count" class="field" type="number" min="1" step="1" value="${p.photo_count != null ? O.esc(p.photo_count) : ''}">
+        </div>` : ''}
+        <div class="opt-head"><span class="opt-label">規格</span><span class="opt-price">售價 NT$</span><span class="opt-cost">成本 NT$</span><span class="opt-del"></span></div>
+        <div id="pf-options">${(opts.length ? opts : [{}]).map(optionRowHtml).join('')}</div>
+        <button type="button" id="pf-add-option" class="btn btn-outline btn-sm">＋ 新增規格</button>
+        <div id="pf-err" class="err"></div>
+        <div class="form-actions">
+          <button type="button" id="pf-save" class="btn btn-accent">儲存商品</button>
+          <button type="button" id="pf-cancel" class="btn btn-outline">取消</button>
+        </div>
+      </div>`;
+      const optsBox = document.getElementById('pf-options');
+      const formErr = document.getElementById('pf-err');
+      document.getElementById('pf-add-option').addEventListener('click', () => {
+        optsBox.insertAdjacentHTML('beforeend', optionRowHtml());
+      });
+      optsBox.addEventListener('click', e => {
+        const del = e.target.closest('.opt-del');
+        if (!del) return;
+        if (optsBox.querySelectorAll('.opt-row').length <= 1) { formErr.textContent = O.errorText({ code: 'invalid_options' }); return; }
+        del.closest('.opt-row').remove();
+        formErr.textContent = '';
+      });
+      document.getElementById('pf-cancel').addEventListener('click', closeForm);
+      document.getElementById('pf-save').addEventListener('click', () => saveForm(product));
+      setAddButtons(true);
+      document.getElementById('pf-name').focus();
+    }
+
+    function closeForm() { prodFormBox.innerHTML = ''; setAddButtons(false); }
+
+    async function saveForm(product) {
+      const formErr = document.getElementById('pf-err');
+      formErr.textContent = '';
+      const kind = product ? product.kind : 'service';
+      const name = document.getElementById('pf-name').value.trim();
+      if (!name) { formErr.textContent = O.errorText({ code: 'invalid_name' }); return; }
+      const countEl = document.getElementById('pf-count');
+      const countRaw = countEl ? countEl.value.trim() : '';
+      if (kind === 'album' && countRaw !== '' && (!isInt(countRaw) || Number(countRaw) < 1)) {
+        formErr.textContent = O.errorText({ code: 'invalid_photo_count' }); return;
+      }
+      const rows = [...document.querySelectorAll('#pf-options .opt-row')];
+      const options = [];
+      for (const row of rows) {
+        const priceRaw = row.querySelector('.opt-price').value.trim();
+        const costRaw = row.querySelector('.opt-cost').value.trim();
+        if (!isInt(priceRaw)) { formErr.textContent = O.errorText({ code: 'invalid_price' }); return; }
+        if (costRaw !== '' && !isInt(costRaw)) { formErr.textContent = O.errorText({ code: 'invalid_cost' }); return; }
+        const o = { label: row.querySelector('.opt-label').value.trim(), price: Number(priceRaw), cost: costRaw === '' ? 0 : Number(costRaw) };
+        if (row.dataset.optionId) o.id = row.dataset.optionId;
+        options.push(o);
+      }
+      if (!options.length) { formErr.textContent = O.errorText({ code: 'invalid_options' }); return; }
+      const body = {
+        name, description: document.getElementById('pf-desc').value.trim(),
+        photo_count: kind === 'album' && countRaw !== '' ? Number(countRaw) : null,
+        options,
+      };
+      if (!product) body.kind = kind;
+      const saveBtn = document.getElementById('pf-save');
+      saveBtn.disabled = true;
+      const r = product
+        ? await api(`/api/admin/products/${encodeURIComponent(product.id)}`, 'PUT', body)
+        : await api('/api/admin/products', 'POST', body);
+      saveBtn.disabled = false;
+      if (!r.ok) { formErr.textContent = O.errorText(r.data, r.status); return; }
+      closeForm();
+      say(true, '已儲存商品');
+      await loadProducts();
+    }
+
+    prodList.addEventListener('click', async e => {
+      const row = e.target.closest('.prod-row');
+      if (!row) return;
+      const p = products.find(x => x.id === row.dataset.productId);
+      if (!p) return;
+      say(true, '');
+      if (e.target.closest('[data-edit]')) { if (p.platform_product_id) openAdoptedForm(p); else if (customEnabled) openForm(p); return; }
+      const retire = e.target.closest('[data-retire]');
+      const restore = e.target.closest('[data-restore]');
+      if (!retire && !restore) return;
+      const r = await api(`/api/admin/products/${encodeURIComponent(p.id)}/${retire ? 'retire' : 'restore'}`, 'POST');
+      if (!r.ok) { say(false, O.errorText(r.data, r.status)); return; }
+      await loadProducts();
     });
 
     fileInput.addEventListener('change', async function () {

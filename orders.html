@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Studio Orders — 訂單</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@600;900&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  /* Bright design, approved by Tim (design-canvas spec: /tmp/claude-0/light-design.html) —
+     cream ground, white cards, dark ink text, warm accent, soft pastel pills. */
+  :root {
+    --bg: #fff8ee;
+    --surface: #ffffff;
+    --card: #fff3df;
+    --accent: #f5a13b;
+    --accent-dim: #ffd9a8;
+    --mint: #d6f0e3;
+    --peach: #ffd9a8;
+    --ink-90: #231b12;
+    --ink-70: #5b4f42;
+    --ink-55: #7a6d5d;
+    --rule: #efe6d8;
+    --border: #efe6d8;
+    --danger: #c0392b;
+    --success: #1f6b4f;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--ink-90); font-family: 'IBM Plex Sans', sans-serif; font-size: 14px; min-height: 100vh; }
+
+  header { background: var(--surface); border-bottom: 1px solid var(--rule); padding: 0 24px; display: flex; align-items: center; gap: 16px; height: 52px; }
+  header .brand { color: var(--accent); font-family: 'IBM Plex Mono', monospace; font-size: 13px; letter-spacing: 0.15em; }
+  header .subtitle { color: var(--ink-55); font-size: 12px; }
+  header .spacer { flex: 1; }
+  .btn-logout { background: transparent; border: 1px solid var(--border); color: var(--ink-55); padding: 5px 12px; border-radius: 999px; cursor: pointer; font-size: 12px; font-family: inherit; }
+  .btn-logout:hover { border-color: var(--danger); color: var(--danger); }
+
+  .app-shell { display: flex; align-items: stretch; min-height: calc(100vh - 52px); }
+  .side-nav { width: 190px; flex-shrink: 0; background: var(--surface); border-right: 1px solid var(--rule); padding: 20px 14px; }
+  .side-nav-brand { color: var(--ink-55); font-size: 10px; letter-spacing: 0.2em; padding: 0 10px 12px; border-bottom: 1px solid var(--rule); margin-bottom: 10px; }
+  .side-nav-list { display: flex; flex-direction: column; gap: 2px; }
+  .side-nav-item { display: block; text-align: left; background: none; border: none; color: var(--ink-70); text-decoration: none; padding: 9px 10px; border-radius: 999px; font-size: 13px; font-family: inherit; cursor: pointer; }
+  .side-nav-item:hover { background: var(--card); color: var(--ink-90); }
+  .side-nav-item.active { background: var(--accent-dim); color: var(--ink-90); font-weight: 600; }
+  .side-nav-logout { margin-top: 14px; border-top: 1px solid var(--rule); padding-top: 14px; color: var(--ink-55); }
+  .side-nav-logout:hover { color: var(--danger); background: none; }
+
+  main { flex: 1; min-width: 0; padding: 24px; max-width: 1000px; }
+  h2 { font-family: 'Noto Serif TC', serif; font-size: 17px; font-weight: 600; margin-bottom: 14px; }
+  .panel { border-radius: 14px; background: var(--surface); margin-bottom: 24px; box-shadow: 0 2px 10px rgba(90,60,20,.06); }
+  .panel-body { padding: 8px 20px; }
+  [hidden] { display: none !important; }
+
+  .filters { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
+  .chip { padding: 6px 14px; border-radius: 999px; border: 1px solid var(--border); background: var(--surface); color: var(--ink-70); cursor: pointer; font-size: 13px; font-family: inherit; }
+  .chip:hover { border-color: var(--accent); }
+  .chip.active { background: var(--accent-dim); border-color: var(--accent-dim); color: var(--ink-90); font-weight: 600; }
+
+  .summary { font-size: 12px; color: var(--ink-55); margin-bottom: 10px; }
+  .ord-row { display: flex; justify-content: space-between; align-items: flex-start; gap: 14px; padding: 14px 0; border-top: 1px solid var(--rule); }
+  .ord-row:first-child { border-top: none; }
+  .ord-row.cancelled { opacity: .55; }
+  .ord-main { min-width: 0; }
+  .ord-proj { color: var(--ink-90); font-weight: 600; text-decoration: none; margin-right: 6px; }
+  .ord-proj:hover { color: var(--accent); }
+  .ord-lines { font-size: 12px; color: var(--ink-70); margin-top: 6px; }
+  .ord-side { text-align: right; flex-shrink: 0; font-size: 13px; }
+  .ord-side .owed { color: var(--danger); font-weight: 600; }
+  .ord-side a { color: var(--accent); text-decoration: none; font-size: 12px; }
+  .ord-side a:hover { text-decoration: underline; }
+  .badge { display: inline-block; padding: 3px 10px; border-radius: 999px; font-size: 11px; font-family: 'IBM Plex Mono', monospace; margin-right: 4px; }
+  .badge-status { background: var(--mint); color: var(--success); }
+  .badge-status.requested { background: var(--peach); color: var(--ink-90); }
+  .badge-status.cancelled { background: var(--rule); color: var(--ink-55); }
+  .badge-pay-unpaid { background: var(--peach); color: var(--ink-90); }
+  .badge-pay-partial { background: var(--peach); color: var(--ink-90); }
+  .badge-pay-paid { background: var(--mint); color: var(--success); }
+  .badge-pay-free { background: var(--rule); color: var(--ink-55); }
+  .empty { text-align: center; padding: 28px 0; color: var(--ink-55); font-size: 13px; }
+  .err { color: var(--danger); font-size: 12px; min-height: 16px; margin-top: 8px; }
+</style>
+</head>
+<body>
+
+<header>
+  <span class="brand">STUDIO</span>
+  <span class="subtitle">訂單</span>
+  <span id="buildVersion"></span>
+  <span class="spacer"></span>
+  <button class="btn-logout" id="logout-btn">登出</button>
+</header>
+
+<div class="app-shell">
+  <aside id="sideNav" class="side-nav"></aside>
+  <main>
+    <h2>訂單</h2>
+    <div class="filters" id="filters"></div>
+    <div class="summary" id="summary"></div>
+    <div class="panel">
+      <div class="panel-body">
+        <div id="order-list"><div class="empty">載入中…</div></div>
+      </div>
+    </div>
+    <div id="orders-err" class="err"></div>
+  </main>
+</div>
+
+<script src="js/build-version.js?v=20260929c"></script>
+<script src="js/side-nav.js?v=20260929c"></script>
+<script src="js/orders-common.js?v=20260929c"></script>
+<script>
+(function () {
+  const WORKER_URL = 'https://imagepicker.hotichen.workers.dev';
+  const token = SideNav.requireToken();
+  if (!token) return; // requireToken() already redirected
+  SideNav.render(document.getElementById('sideNav'), 'orders', SideNav.logoutToHome);
+  document.getElementById('logout-btn').addEventListener('click', SideNav.logoutToHome);
+
+  const O = window.Orders;
+  const api = O.client({ workerUrl: WORKER_URL, getToken: () => token, onUnauthorized: SideNav.logoutToHome });
+
+  // key -> [label, query string of GET /api/admin/orders]
+  const FILTERS = [
+    ['all', '全部', ''],
+    ['unpaid', '未付款', '?unpaid=1'],
+    ['requested', '待確認', '?status=requested'],
+    ['confirmed', '已確認', '?status=confirmed'],
+    ['fulfilled', '已完成', '?status=fulfilled'],
+    ['cancelled', '已取消', '?status=cancelled'],
+  ];
+  const listEl = document.getElementById('order-list');
+  const errEl = document.getElementById('orders-err');
+  const summaryEl = document.getElementById('summary');
+  const filtersEl = document.getElementById('filters');
+  let current = 'all';
+  let seq = 0; // a slow answer for an old filter must not overwrite a newer one
+
+  function renderFilters() {
+    filtersEl.innerHTML = FILTERS.map(([key, label]) =>
+      `<button type="button" class="chip${key === current ? ' active' : ''}" data-filter="${key}">${O.esc(label)}</button>`).join('');
+  }
+
+  function rowHtml(o) {
+    const pay = O.paymentState(o);
+    const lines = (o.items || []).map(i => `${O.esc(O.lineName(i))} × ${O.esc(i.qty)}`).join('、');
+    const href = `admin.html#project=${encodeURIComponent(o.project_id)}`;
+    return `<div class="ord-row ${O.esc(o.status)}" data-order-id="${O.esc(o.id)}" data-status="${O.esc(o.status)}">
+      <div class="ord-main">
+        <a class="ord-proj" href="${href}">${O.esc(o.project_title || '（未命名）')}</a>
+        <span class="badge badge-status ${O.esc(o.status)}">${O.esc(O.STATUS_LABEL[o.status] || o.status)}</span>
+        ${o.status === 'cancelled' && !o.paid_amount ? '' : `<span class="badge badge-pay-${pay}">${O.esc(O.PAYMENT_LABEL[pay])}</span>`}
+        <div class="ord-lines">${lines || '（沒有品項）'}</div>
+      </div>
+      <div class="ord-side">
+        <div>合計 <span class="ord-total">${O.money(o.total)}</span></div>
+        <div>未收 <span class="ord-owed${o.outstanding > 0 ? ' owed' : ''}">${O.money(o.outstanding)}</span></div>
+        <a href="${href}">查看專案 →</a>
+      </div>
+    </div>`;
+  }
+
+  async function load() {
+    const mine = ++seq;
+    errEl.textContent = '';
+    listEl.innerHTML = '<div class="empty">載入中…</div>';
+    summaryEl.textContent = '';
+    const query = FILTERS.find(f => f[0] === current)[2];
+    const r = await api('/api/admin/orders' + query);
+    if (mine !== seq) return;
+    if (!r.ok) {
+      listEl.innerHTML = '<div class="empty">讀取失敗</div>';
+      errEl.textContent = O.errorText(r.data, r.status);
+      return;
+    }
+    const orders = r.data.orders || [];
+    listEl.innerHTML = orders.length ? orders.map(rowHtml).join('') : '<div class="empty">沒有符合的訂單</div>';
+    const owed = orders.reduce((n, o) => n + (Number(o.outstanding) || 0), 0);
+    summaryEl.textContent = orders.length ? `${orders.length} 筆 · 未收合計 ${O.money(owed)}` : '';
+  }
+
+  filtersEl.addEventListener('click', e => {
+    const b = e.target.closest('[data-filter]');
+    if (!b) return;
+    current = b.dataset.filter;
+    renderFilters();
+    load();
+  });
+
+  // dashboard's 未付款訂單 links here with ?filter=unpaid
+  const wanted = new URLSearchParams(location.search).get('filter');
+  if (FILTERS.some(f => f[0] === wanted)) current = wanted;
+  renderFilters();
+  load();
+})();
+</script>
+</body>
+</html>

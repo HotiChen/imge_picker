@@ -9,6 +9,7 @@
   const ITEMS = [
     { key: 'dashboard', label: '儀表板', href: 'dashboard.html' },
     { key: 'projects', label: '選片專案', href: 'admin.html#projects' },
+    { key: 'orders', label: '訂單', href: 'orders.html' },
     { key: 'clients', label: '客戶', href: 'admin.html' },
     { key: 'pick', label: '選圖', href: 'index.html' },
     { key: 'upload', label: '上傳', href: 'upload.html' },

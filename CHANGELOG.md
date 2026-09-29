@@ -1,3 +1,5 @@
+> 歷史紀錄（Google Drive 時代，2026-01～02）。目前架構見 README；之後的變更看 git log。
+
 # Drive Photo Picker - 變更日誌
 
 ## [版本還原] 2026-01-02 23:59
