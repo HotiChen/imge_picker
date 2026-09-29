@@ -349,9 +349,13 @@ own prints with their own lab would pay the platform nothing.
   PNG/JPEG/WebP by magic bytes (same rules as the logo). Served publicly at
   `GET /api/platform/products/:id/image` (nosniff, CSP `default-src 'none'`,
   ETag) — product photos are not secret and the guest shop (B) needs them.
-- **Future platform fee.** Tim plans to tell photographers a 15% fee will
-  apply later; none is charged now. Order lines keep `platform_option_id`,
-  so any fee can be computed per line once its basis is decided.
+- **Future platform fee (basis decided 2026-09-29, not charged yet):**
+  15% of the photographer's **margin** on platform lines — (price −
+  platform price) × qty, after the order's discount — never of the sale
+  price. Nothing is charged now; lines keep `platform_option_id` and the
+  platform price (`unit_cost`) so the fee can be computed once it starts.
+  If the platform price is ever set above vendor cost, the platform earns
+  that spread as well — say so when telling photographers.
 
 ### Schema
 
@@ -401,3 +405,52 @@ CREATE TABLE IF NOT EXISTS platform_product_options (
   平台價 as the floor), adopted products show the platform image and a
   warning when a price has fallen below the platform price; 「新增服務」 for
   custom (service only).
+
+### Worker decisions (A2 build)
+
+- **Operator token** only as `Authorization: Bearer` (never `?t=` or
+  `X-Share-Token`); unknown `/api/operator/*` is 404 after the token check.
+  `OPERATOR_TOKEN` should be ≥ 32 random characters (e.g.
+  `openssl rand -hex 32`), never the photographer's.
+- **Before merging**, Tim runs `PRAGMA table_info(products)` in the D1
+  Console: it must return nothing (no table from an earlier draft), then the
+  migration.
+- **Operator catalogue:** kinds `print|album`; each option needs both
+  `vendor_cost` and `platform_price` (`invalid_vendor_cost`,
+  `invalid_platform_price`), same limits as A. A platform price under the
+  vendor cost is not refused (Tim may subsidise).
+- **Custom products** are `service` only: `kind` album/print on POST or PUT
+  → 400 `platform_only`.
+- **Adopt** (`from-platform`): `guest_visible` and `sort` may be set too.
+  Codes: `unknown_platform_product`, `retired_option` (retired product or
+  option), `invalid_options` (not this product's, repeated, none),
+  `invalid_price`, `below_platform_price`; 409 `already_adopted` with the
+  existing `product_id` (retired ones count; checked again inside the insert,
+  so a race lands one).
+- **Adopted PUT:** `options: [{platform_option_id, price}]` (an option already
+  adopted is the same row, repriced; left out = retired), `guest_visible`,
+  `sort`. `kind|name|description|photo_count` → 400 `platform_managed`.
+  `active` is retire/restore, as for every product. Keeping a platform option
+  the operator retired → `retired_option`.
+- **Reads of an adopted product** show the platform's live kind, name,
+  description, photo_count, image and option labels; each option's `cost` is
+  the current platform price, plus `platform_price`, `platform_active` and
+  `below_platform_price`.
+- **The floor** applies to the catalogue price and to an admin `unit_price`
+  override alike; a kept platform line may not be repriced under its own
+  snapshotted `unit_cost`. The order discount is not held to it (it only cuts
+  the photographer's margin; the line cost stays the platform price).
+- **A kept platform line** keeps its snapshot for the units already sold.
+  Fewer units, photo edits and a reprice at or above its own `unit_cost` are
+  always allowed, retired or not. **More units** need the platform product
+  and option still active (else `retired_option`) and today's platform price
+  ≤ the line's `unit_cost` (else `below_platform_price`, "add a new line"),
+  so a line keeps one cost.
+- **Operator stats:** `{per_month: [{month, qty, revenue, vendor_cost,
+  margin}] × 12, this_month, products: [{platform_product_id, name, kind,
+  active, qty, revenue, vendor_cost, margin, this_month}]}` — every platform
+  product, all photographers, lines' snapshots (revenue = `unit_cost`), by
+  `paid_at` (any payment) in Taipei months, cancelled excluded.
+- **Images:** 413 `too_large`, 415 `unsupported_type`, 404 unknown product.
+  The public route serves a retired product's image too (old orders show it);
+  non-GET is 405, anything else under `/api/platform/` 404.

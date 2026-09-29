@@ -235,7 +235,8 @@ CREATE TABLE IF NOT EXISTS products (
   image_type      TEXT,
   image_updated_at TEXT,
   created_at      TEXT NOT NULL,
-  updated_at      TEXT NOT NULL
+  updated_at      TEXT NOT NULL,
+  platform_product_id TEXT               -- adopted from platform_products; NULL = the photographer's own (service)
 );
 CREATE INDEX IF NOT EXISTS idx_products_owner ON products(photographer_id, active, sort);
 
@@ -248,7 +249,8 @@ CREATE TABLE IF NOT EXISTS product_options (
   price       INTEGER NOT NULL CHECK (price >= 0),
   cost        INTEGER NOT NULL DEFAULT 0 CHECK (cost >= 0),
   active      INTEGER NOT NULL DEFAULT 1,
-  sort        INTEGER NOT NULL DEFAULT 0
+  sort        INTEGER NOT NULL DEFAULT 0,
+  platform_option_id TEXT        -- adopted: the platform option it sells; price >= its platform_price
 );
 CREATE INDEX IF NOT EXISTS idx_options_product ON product_options(product_id, sort);
 
@@ -292,6 +294,40 @@ CREATE TABLE IF NOT EXISTS order_items (
   unit_price    INTEGER NOT NULL CHECK (unit_price >= 0),  -- snapshot, editable by admin
   unit_cost     INTEGER NOT NULL DEFAULT 0 CHECK (unit_cost >= 0),
   qty           INTEGER NOT NULL CHECK (qty BETWEEN 1 AND 999),
-  photo_keys    TEXT NOT NULL DEFAULT '[]'  -- JSON; print: ≤ 1 per unit, album: the set
+  photo_keys    TEXT NOT NULL DEFAULT '[]',  -- JSON; print: ≤ 1 per unit, album: the set
+  platform_option_id TEXT,                -- snapshot: the platform option sold (NULL = not the platform's)
+  vendor_cost   INTEGER NOT NULL DEFAULT 0 CHECK (vendor_cost >= 0)  -- snapshot, operator only: never in an /api/admin response
 );
 CREATE INDEX IF NOT EXISTS idx_items_order ON order_items(order_id);
+
+-- The platform catalogue (A2): printable products the operator lists, with
+-- what the lab charges (vendor_cost, operator only) and what a photographer
+-- pays (platform_price). A photographer adopts one into `products`
+-- (platform_product_id) and sells chosen options at a price >= platform_price.
+-- Never deleted, only retired. Same hand-run file as the tables above.
+CREATE TABLE IF NOT EXISTS platform_products (
+  id               TEXT PRIMARY KEY,
+  kind             TEXT NOT NULL CHECK (kind IN ('print','album')),
+  name             TEXT NOT NULL,          -- ≤ 60
+  description      TEXT NOT NULL DEFAULT '',-- ≤ 500
+  photo_count      INTEGER,                -- album: expected photos, NULL = any (advisory)
+  active           INTEGER NOT NULL DEFAULT 1,
+  sort             INTEGER NOT NULL DEFAULT 0,
+  image            BLOB,                   -- ≤ 200 KB, PNG/JPEG/WebP; served publicly
+  image_type       TEXT,
+  image_updated_at TEXT,
+  created_at       TEXT NOT NULL,
+  updated_at       TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_platform_products_sort ON platform_products(active, sort);
+
+CREATE TABLE IF NOT EXISTS platform_product_options (
+  id                  TEXT PRIMARY KEY,
+  platform_product_id TEXT NOT NULL,
+  label               TEXT NOT NULL,
+  vendor_cost         INTEGER NOT NULL CHECK (vendor_cost >= 0),     -- operator only
+  platform_price      INTEGER NOT NULL CHECK (platform_price >= 0),  -- the photographer's cost
+  active              INTEGER NOT NULL DEFAULT 1,
+  sort                INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_platform_options_product ON platform_product_options(platform_product_id, sort);

@@ -87,6 +87,28 @@ function isAdminToken(request, env) {
   return token === env.PHOTOGRAPHER_TOKEN;
 }
 
+// ─── Operator auth (docs/products-orders.md, platform catalogue) ────────────
+// The platform operator (Tim) until accounts exist: OPERATOR_TOKEN, a bearer
+// header only (never ?t= or X-Share-Token). Fails CLOSED when unset, and when
+// it equals PHOTOGRAPHER_TOKEN — one secret must never open both sides, or a
+// photographer would see vendor costs. The compare walks the whole string so
+// its time does not say how much of a guess was right.
+function sameSecret(a, b) {
+  if (typeof a !== 'string' || typeof b !== 'string') return false;
+  let diff = a.length ^ b.length;
+  for (let i = 0; i < b.length; i++) diff |= (a.charCodeAt(i % (a.length || 1)) || 0) ^ b.charCodeAt(i);
+  return diff === 0;
+}
+
+function isOperatorToken(request, env) {
+  const secret = env.OPERATOR_TOKEN;
+  if (typeof secret !== 'string' || !secret) return false;
+  if (secret === env.PHOTOGRAPHER_TOKEN) return false;
+  const auth = request.headers.get('Authorization') || '';
+  const token = auth.replace(/^Bearer\s+/i, '').trim();
+  return sameSecret(token, secret);
+}
+
 // ─── Client share tokens ─────────────────────────────────────────────────────
 // Clients get an album link over LINE. Two things follow. LINE's crawler
 // pre-fetches the URL to build the preview card before anyone taps it, so a
@@ -446,6 +468,43 @@ async function readBodyCapped(request, max) {
   return out;
 }
 
+// An uploaded image (the logo, a platform product's photo): the raw body,
+// ≤ LOGO_MAX_BYTES (413), PNG / JPEG / WebP by its own magic bytes (415) —
+// the client's Content-Type is never read. Returns {bytes, type} or
+// {refused: Response}. `what` names it in the message.
+async function imageUpload(request, what) {
+  const bytes = await readBodyCapped(request, LOGO_MAX_BYTES);
+  if (!bytes) return { refused: jsonOk({ error: `${what}不可超過 ${LOGO_MAX_BYTES / 1024} KB`, code: 'too_large', max: LOGO_MAX_BYTES }, 413) };
+  const type = sniffImageType(bytes);
+  if (!type) return { refused: jsonOk({ error: `${what}只接受 PNG、JPEG 或 WebP`, code: 'unsupported_type' }, 415) };
+  return { bytes, type };
+}
+
+// A stored image served publicly: as the type its bytes are (re-sniffed, so a
+// hand-edited row cannot turn it into something a browser would run), never
+// sniffed by the browser, under a CSP that lets it run nothing even if opened
+// directly, with `stamp` (its updated_at) as the ETag. 404 when there is none.
+function imageResponse(request, blob, stamp) {
+  // D1 hands a BLOB back as an array of byte values
+  const bytes = blob ? new Uint8Array(blob) : null;
+  const type = bytes && sniffImageType(bytes);
+  if (!type) return jsonErr('Not found', 404);
+  const headers = {
+    ...corsHeaders,
+    'Content-Type': type,
+    'X-Content-Type-Options': 'nosniff',
+    'Content-Security-Policy': "default-src 'none'",
+    'Cache-Control': 'public, max-age=300',
+  };
+  const tag = String(stamp || '');
+  if (/^[0-9A-Za-z:.+-]+$/.test(tag)) {
+    headers.ETag = `"${tag}"`;
+    const inm = (request.headers.get('If-None-Match') || '').split(',').map(v => v.trim().replace(/^W\//, ''));
+    if (inm.includes(headers.ETag)) return new Response(null, { status: 304, headers });
+  }
+  return new Response(bytes, { status: 200, headers });
+}
+
 // A booking link the guest page puts in an href: https only, no whitespace or
 // control characters, no user:pass@ (reads as one host, goes to another).
 // Returns the URL as the parser re-serialised it, or null.
@@ -512,6 +571,8 @@ function statsMonths(now) {
 // snapshotted onto it; the body only names an option. The one exception is an
 // explicit admin unit_price. Totals are computed on read, never stored.
 const PRODUCT_KINDS = ['print', 'album', 'service'];
+// what the platform lists; a photographer's own products are services only
+const PLATFORM_KINDS = ['print', 'album'];
 const PRODUCT_NAME_MAX = 60;
 const PRODUCT_DESCRIPTION_MAX = 500;
 const OPTION_LABEL_MAX = 60;
@@ -546,7 +607,7 @@ const isMoney = v => Number.isSafeInteger(v) && v >= 0 && v <= MONEY_MAX;
 const hasField = (body, k) => Object.prototype.hasOwnProperty.call(body, k);
 const isPlainObject = v => !!v && typeof v === 'object' && !Array.isArray(v);
 // 400 {error, code}, the settings route's shape
-const orderBad = code => jsonOk({ error: `${code.replace(/_/g, ' ')}`, code }, 400);
+const orderBad = (code, error) => jsonOk({ error: error ?? `${code.replace(/_/g, ' ')}`, code }, 400);
 
 // Each order's computed money, for a query over `orders o`. One definition,
 // shared by the order reads, the list's unpaid filter and the stats, so the
@@ -563,10 +624,10 @@ const ORDER_SCOPE_SQL = 'FROM orders o JOIN projects p ON p.id = o.project_id AN
 // The product columns a body may set, validated. `partial` is PUT, where a
 // field left out keeps its value; POST needs kind and name. Returns {set} or
 // {bad: code}. photographer_id, active and the image are never read here.
-function productFields(body, partial) {
+function productFields(body, partial, kinds = PRODUCT_KINDS, guestVisible = true) {
   const set = {};
   if (!partial || hasField(body, 'kind')) {
-    if (!PRODUCT_KINDS.includes(body.kind)) return { bad: 'invalid_kind' };
+    if (!kinds.includes(body.kind)) return { bad: 'invalid_kind' };
     set.kind = body.kind;
   }
   if (!partial || hasField(body, 'name')) {
@@ -584,7 +645,7 @@ function productFields(body, partial) {
     if (v !== null && !(Number.isSafeInteger(v) && v >= 1 && v <= ORDER_LINE_PHOTOS_MAX)) return { bad: 'invalid_photo_count' };
     set.photo_count = v;
   }
-  if (hasField(body, 'guest_visible')) {
+  if (guestVisible && hasField(body, 'guest_visible')) {
     const v = body.guest_visible;
     if (![true, false, 0, 1].includes(v)) return { bad: 'invalid_guest_visible' };
     set.guest_visible = v ? 1 : 0;
@@ -596,11 +657,17 @@ function productFields(body, partial) {
   return { set };
 }
 
+// The money on an option: [field, code, default]. A photographer's own
+// (service) option has a price and a cost; a platform option a vendor cost
+// and a platform price, both required.
+const CUSTOM_MONEY = [['price', 'invalid_price'], ['cost', 'invalid_cost', 0]];
+const PLATFORM_MONEY = [['vendor_cost', 'invalid_vendor_cost'], ['platform_price', 'invalid_platform_price']];
+
 // A product's options as a set: 1..PRODUCT_OPTIONS_MAX of {id?, label,
-// price, cost}. An id must be one of `existingIds` (this product's own; none
+// ...money}. An id must be one of `existingIds` (this product's own; none
 // on create), once. The array order is the sort order. Returns {options} or
 // {bad: code}.
-function productOptions(value, existingIds) {
+function productOptions(value, existingIds, money = CUSTOM_MONEY) {
   if (!Array.isArray(value) || !value.length || value.length > PRODUCT_OPTIONS_MAX) return { bad: 'invalid_options' };
   const seen = new Set();
   const options = [];
@@ -612,33 +679,132 @@ function productOptions(value, existingIds) {
     }
     const label = o.label === undefined || o.label === null ? '' : o.label;
     if (typeof label !== 'string' || charCount(label.trim()) > OPTION_LABEL_MAX || PICK_KEY_CONTROL.test(label.trim())) return { bad: 'invalid_label' };
-    if (!isMoney(o.price)) return { bad: 'invalid_price' };
-    const cost = o.cost === undefined ? 0 : o.cost;
-    if (!isMoney(cost)) return { bad: 'invalid_cost' };
-    options.push({ id: o.id, label: label.trim(), price: o.price, cost, sort: i });
+    const option = { id: o.id, label: label.trim(), sort: i };
+    for (const [field, code, dflt] of money) {
+      const v = o[field] === undefined && dflt !== undefined ? dflt : o[field];
+      if (!isMoney(v)) return { bad: code };
+      option[field] = v;
+    }
+    options.push(option);
   }
   return { options };
 }
 
+// An adopted product's options as a set: 1..PRODUCT_OPTIONS_MAX of
+// {platform_option_id, price}, each an option of the adopted platform product
+// (`platformOptions`: its options by id, `active` already false when the
+// product is retired), once, active, and priced at or above its platform
+// price. Label and cost are the platform's. Returns {options} or {bad: code}.
+function adoptedOptions(value, platformOptions) {
+  if (!Array.isArray(value) || !value.length || value.length > PRODUCT_OPTIONS_MAX) return { bad: 'invalid_options' };
+  const seen = new Set();
+  const options = [];
+  for (const [i, o] of value.entries()) {
+    if (!isPlainObject(o)) return { bad: 'invalid_options' };
+    const po = typeof o.platform_option_id === 'string' ? platformOptions.get(o.platform_option_id) : null;
+    if (!po || seen.has(po.id)) return { bad: 'invalid_options' };
+    seen.add(po.id);
+    if (!isMoney(o.price)) return { bad: 'invalid_price' };
+    if (!po.active) return { bad: 'retired_option' };
+    if (o.price < po.platform_price) return { bad: 'below_platform_price' };
+    options.push({ platform_option_id: po.id, label: po.label, price: o.price, cost: po.platform_price, sort: i });
+  }
+  return { options };
+}
+
+// A platform product's options by id, for adoptedOptions: active only while
+// the platform product is too.
+async function platformOptionMap(env, platformProductId) {
+  const { results } = await env.DB.prepare(
+    `SELECT po.id, po.label, po.platform_price, po.active AND pp.active AS active
+       FROM platform_product_options po JOIN platform_products pp ON pp.id = po.platform_product_id
+      WHERE po.platform_product_id = ?`
+  ).bind(platformProductId).all();
+  return new Map(results.map(r => [r.id, r]));
+}
+
+// The statements that write a catalogue product's fields (`set`, column names
+// from productFields' fixed list) and, when `opts` is given, its whole active
+// option set: an option with an id is updated (and restored), one without is
+// inserted, every other one is retired, never deleted — order lines point at
+// them. `t` names the tables and option columns, all fixed strings.
+const CUSTOM_TABLES = { products: 'products', options: 'product_options', fk: 'product_id', owned: true, cols: ['label', 'price', 'cost'] };
+const ADOPTED_TABLES = { ...CUSTOM_TABLES, cols: ['label', 'price', 'cost', 'platform_option_id'] };
+const PLATFORM_TABLES = { products: 'platform_products', options: 'platform_product_options', fk: 'platform_product_id', owned: false, cols: ['label', 'vendor_cost', 'platform_price'] };
+function catalogueWrites(env, t, id, set, opts, now) {
+  const cols = [...Object.keys(set), 'updated_at'];
+  const owner = t.owned ? [DEFAULT_PHOTOGRAPHER_ID] : [];
+  const statements = [env.DB.prepare(
+    `UPDATE ${t.products} SET ${cols.map(c => `${c} = ?`).join(', ')} WHERE id = ?${t.owned ? ' AND photographer_id = ?' : ''}`
+  ).bind(...Object.values(set), now, id, ...owner)];
+  if (!opts) return statements;
+  statements.push(env.DB.prepare(`UPDATE ${t.options} SET active = 0 WHERE ${t.fk} = ?`).bind(id));
+  for (const o of opts) {
+    const values = t.cols.map(c => o[c]);
+    statements.push(o.id
+      ? env.DB.prepare(`UPDATE ${t.options} SET ${t.cols.map(c => `${c} = ?`).join(', ')}, sort = ?, active = 1 WHERE id = ? AND ${t.fk} = ?`)
+        .bind(...values, o.sort, o.id, id)
+      : env.DB.prepare(`INSERT INTO ${t.options} (id, ${t.fk}, ${t.cols.join(', ')}, sort) VALUES (?, ?, ${t.cols.map(() => '?').join(', ')}, ?)`)
+        .bind(crypto.randomUUID(), id, ...values, o.sort));
+  }
+  return statements;
+}
+
 // This photographer's products with their options, retired ones included and
-// flagged; `id` narrows it to one. Never the image bytes.
+// flagged; `id` narrows it to one. Never the image bytes. An adopted product
+// reads the platform's live kind, name, description, photo_count, image and
+// option labels, and its options' cost is the current platform price, flagged
+// when the photographer's price has fallen below it. Never the vendor cost.
 async function readProducts(env, id = null) {
   const one = id === null ? '' : ' AND p.id = ?2';
   const binds = id === null ? [DEFAULT_PHOTOGRAPHER_ID] : [DEFAULT_PHOTOGRAPHER_ID, id];
+  const own = (col, expr = `p.${col}`) => `CASE WHEN pp.id IS NULL THEN ${expr} ELSE ${expr.replace('p.', 'pp.')} END AS ${col}`;
   const { results: products } = await env.DB.prepare(
-    `SELECT p.id, p.kind, p.name, p.description, p.photo_count, p.guest_visible, p.active, p.sort,
-            p.image IS NOT NULL AS has_image, p.image_type, p.image_updated_at, p.created_at, p.updated_at
-       FROM products p WHERE p.photographer_id = ?1${one} ORDER BY p.active DESC, p.sort, p.created_at, p.rowid`
+    `SELECT p.id, ${own('kind')}, ${own('name')}, ${own('description')}, ${own('photo_count')},
+            p.guest_visible, p.active, p.sort,
+            ${own('has_image', 'p.image IS NOT NULL')}, ${own('image_type')}, ${own('image_updated_at')},
+            p.created_at, p.updated_at, p.platform_product_id, pp.active AS platform_active
+       FROM products p LEFT JOIN platform_products pp ON pp.id = p.platform_product_id
+      WHERE p.photographer_id = ?1${one} ORDER BY p.active DESC, p.sort, p.created_at, p.rowid`
   ).bind(...binds).all();
   const { results: options } = await env.DB.prepare(
-    `SELECT o.id, o.product_id, o.label, o.price, o.cost, o.active, o.sort
+    `SELECT o.id, o.product_id, COALESCE(po.label, o.label) AS label, o.price,
+            COALESCE(po.platform_price, o.cost) AS cost, o.active, o.sort,
+            o.platform_option_id, po.platform_price, po.active AS platform_active
        FROM product_options o JOIN products p ON p.id = o.product_id
+       LEFT JOIN platform_product_options po ON po.id = o.platform_option_id
       WHERE p.photographer_id = ?1${one} ORDER BY o.sort, o.rowid`
   ).bind(...binds).all();
   return products.map(p => ({
     ...p,
     has_image: !!p.has_image,
-    options: options.filter(o => o.product_id === p.id).map(({ product_id, ...o }) => o),
+    options: options.filter(o => o.product_id === p.id).map(({ product_id, ...o }) => ({
+      ...o,
+      below_platform_price: o.platform_price !== null && o.price < o.platform_price,
+    })),
+  }));
+}
+
+// The platform catalogue as the operator sees it: every product, retired ones
+// included, with every option and its vendor cost. `id` narrows it to one.
+// Never the image bytes. Operator routes only.
+async function readPlatformProducts(env, id = null) {
+  const one = id === null ? '' : ' WHERE pp.id = ?';
+  const binds = id === null ? [] : [id];
+  const { results: products } = await env.DB.prepare(
+    `SELECT pp.id, pp.kind, pp.name, pp.description, pp.photo_count, pp.active, pp.sort,
+            pp.image IS NOT NULL AS has_image, pp.image_type, pp.image_updated_at, pp.created_at, pp.updated_at
+       FROM platform_products pp${one} ORDER BY pp.active DESC, pp.sort, pp.created_at, pp.rowid`
+  ).bind(...binds).all();
+  const { results: options } = await env.DB.prepare(
+    `SELECT po.id, po.platform_product_id, po.label, po.vendor_cost, po.platform_price, po.active, po.sort
+       FROM platform_product_options po JOIN platform_products pp ON pp.id = po.platform_product_id${one}
+      ORDER BY po.sort, po.rowid`
+  ).bind(...binds).all();
+  return products.map(p => ({
+    ...p,
+    has_image: !!p.has_image,
+    options: options.filter(o => o.platform_product_id === p.id).map(({ platform_product_id, ...o }) => o),
   }));
 }
 
@@ -652,7 +818,11 @@ async function readOrders(env, where, binds, limit = 500) {
   ).bind(DEFAULT_PHOTOGRAPHER_ID, ...binds).all();
   if (!orders.length) return [];
   const { results: items } = await env.DB.prepare(
-    `SELECT i.* FROM order_items i WHERE i.order_id IN (SELECT o.id ${ORDER_SCOPE_SQL} AND ${where}
+    // named columns, never i.*: vendor_cost is the operator's and must not
+    // reach an admin response
+    `SELECT i.id, i.order_id, i.kind, i.product_id, i.option_id, i.name, i.option_label, i.unit_price, i.unit_cost,
+            i.qty, i.photo_keys, i.platform_option_id
+       FROM order_items i WHERE i.order_id IN (SELECT o.id ${ORDER_SCOPE_SQL} AND ${where}
        ORDER BY o.created_at DESC, o.rowid DESC LIMIT ${limit}) ORDER BY i.rowid`
   ).bind(DEFAULT_PHOTOGRAPHER_ID, ...binds).all();
   return orders.map(o => ({
@@ -708,25 +878,62 @@ async function orderLines(env, project, input, existing) {
   const catalogue = new Map();
   if (wanted.length) {
     const { results } = await env.DB.prepare(
-      `SELECT o.id, o.label, o.price, o.cost, o.active AS option_active, p.id AS product_id, p.kind, p.name, p.active AS product_active
+      // an adopted option reads the platform's live name, label, price and
+      // vendor cost; a platform row that is missing reads as retired
+      `SELECT o.id, COALESCE(po.label, o.label) AS label, o.price, o.cost, o.active AS option_active,
+              p.id AS product_id, COALESCE(pp.kind, p.kind) AS kind, COALESCE(pp.name, p.name) AS name, p.active AS product_active,
+              o.platform_option_id, po.platform_price, po.vendor_cost, po.active AND pp.active AS platform_active
          FROM product_options o JOIN products p ON p.id = o.product_id
+         LEFT JOIN platform_product_options po ON po.id = o.platform_option_id
+         LEFT JOIN platform_products pp ON pp.id = p.platform_product_id AND pp.id = po.platform_product_id
         WHERE p.photographer_id = ? AND o.id IN (${wanted.map(() => '?').join(', ')})`
     ).bind(DEFAULT_PHOTOGRAPHER_ID, ...wanted).all();
     for (const r of results) catalogue.set(r.id, r);
+  }
+  // A kept platform line's snapshot covers the units already sold, not new
+  // ones: a line that grows needs its platform option live, one read for all
+  // of them.
+  const grown = [...new Set(lines.filter(x => x.old && x.old.platform_option_id && x.qty > x.old.qty).map(x => x.old.platform_option_id))];
+  const live = new Map();
+  if (grown.length) {
+    const { results } = await env.DB.prepare(
+      `SELECT po.id, po.platform_price, po.active AND pp.active AS active
+         FROM platform_product_options po JOIN platform_products pp ON pp.id = po.platform_product_id
+        WHERE po.id IN (${grown.map(() => '?').join(', ')})`
+    ).bind(...grown).all();
+    for (const r of results) live.set(r.id, r);
   }
   const out = [];
   for (const { l, old, qty, keys } of lines) {
     let row;
     if (old) {
       row = { ...old, qty, unit_price: l.unit_price ?? old.unit_price };
+      // a platform line is never repriced under what it costs the studio
+      if (old.platform_option_id && l.unit_price != null && row.unit_price < old.unit_cost) return { bad: 'below_platform_price' };
+      // more units: the platform must still sell it, at no more than this
+      // line's cost (one cost per line; after a raise, a new line)
+      if (old.platform_option_id && qty > old.qty) {
+        const p = live.get(old.platform_option_id);
+        if (!p || !p.active) return { bad: 'retired_option' };
+        if (p.platform_price > old.unit_cost) return { bad: 'below_platform_price', error: '平台價已調高，多的數量請另加新的一行' };
+      }
     } else {
       const c = catalogue.get(l.option_id);
       if (!c) return { bad: 'unknown_option' };
       if (!c.option_active || !c.product_active) return { bad: 'retired_option' };
+      const platform = c.platform_option_id !== null;
+      if (platform && !c.platform_active) return { bad: 'retired_option' };
       row = {
         id: crypto.randomUUID(), kind: c.kind, product_id: c.product_id, option_id: c.id,
-        name: c.name, option_label: c.label, unit_price: l.unit_price ?? c.price, unit_cost: c.cost, qty,
+        name: c.name, option_label: c.label, unit_price: l.unit_price ?? c.price, qty,
+        // an adopted option costs the platform price of today, and snapshots
+        // the vendor's cost and which platform option it was
+        unit_cost: platform ? c.platform_price : c.cost,
+        vendor_cost: platform ? c.vendor_cost : 0,
+        platform_option_id: platform ? c.platform_option_id : null,
       };
+      // the platform price is a floor, the admin's override included
+      if (platform && row.unit_price < c.platform_price) return { bad: 'below_platform_price' };
     }
     // service and extra-pick lines carry no photos; a print is one photo per
     // unit at most (none yet is fine); an album's photo_count is advisory
@@ -1671,6 +1878,169 @@ export default {
       return jsonOk({ ok: true, delivered_at: row.delivered_at }, 200, ADMIN_ONLY_HEADERS);
     }
 
+    // ─── The platform catalogue: operator routes ───────────────────────────
+    // /api/operator/products[/:id[/retire|/restore|/image]] and
+    // /api/operator/stats. The operator token first (401: no photographer,
+    // link or session token opens any of it), then the method (405), then the
+    // id (404). Anything else under /api/operator/ is 404 here, so nothing
+    // falls through to the upload route. The operator's catalogue carries
+    // vendor_cost; nothing here is reachable with the photographer's token.
+    if (pathParts[0] === 'api' && pathParts[1] === 'operator') {
+      if (!isOperatorToken(request, env)) return jsonErr('Unauthorized', 401);
+      const [, , area, id, action] = pathParts;
+      let route = null;
+      if (pathParts.length > 5) route = null;
+      else if (area === 'products') {
+        route = !id ? 'products' : !action ? 'product' : ['retire', 'restore'].includes(action) ? 'product-active'
+          : action === 'image' ? 'product-image' : null;
+      } else if (area === 'stats') route = !id ? 'stats' : null;
+      const methods = {
+        products: ['GET', 'POST'], product: ['PUT'], 'product-active': ['POST'], 'product-image': ['PUT', 'DELETE'], stats: ['GET'],
+      }[route];
+      if (!methods) return jsonErr('Not found', 404);
+      if (!methods.includes(request.method)) return jsonErr('Method not allowed', 405);
+      if (!env.DB) return jsonErr('DB not configured', 500);
+      const now = new Date().toISOString();
+      const done = (data, status = 200) => jsonOk(data, status, ADMIN_ONLY_HEADERS);
+
+      // GET /api/operator/stats — what the platform sold: per platform
+      // product and per Taipei month (the dashboard's twelve), counted when
+      // the order is paid (paid_at, any payment), cancelled excluded, every
+      // photographer. Revenue is the platform price and cost the vendor's,
+      // both as snapshotted on the line.
+      if (route === 'stats') {
+        const { months, since } = statsMonths(Date.now());
+        const { results: sold } = await env.DB.prepare(
+          `SELECT po.platform_product_id AS id, strftime('%Y-%m', o.paid_at, '+8 hours') AS month,
+                  SUM(i.qty) AS qty, SUM(i.unit_cost * i.qty) AS revenue, SUM(i.vendor_cost * i.qty) AS vendor_cost
+             FROM orders o JOIN order_items i ON i.order_id = o.id
+             JOIN platform_product_options po ON po.id = i.platform_option_id
+            WHERE o.status != 'cancelled' AND o.paid_amount > 0 AND o.paid_at >= ?
+            GROUP BY po.platform_product_id, month`
+        ).bind(since).all();
+        const { results: catalogue } = await env.DB.prepare(
+          'SELECT id, name, kind, active FROM platform_products ORDER BY active DESC, sort, created_at, rowid'
+        ).all();
+        const thisMonth = months[months.length - 1];
+        const zero = () => ({ qty: 0, revenue: 0, vendor_cost: 0, margin: 0 });
+        const add = (into, r) => {
+          into.qty += r.qty; into.revenue += r.revenue; into.vendor_cost += r.vendor_cost;
+          into.margin = into.revenue - into.vendor_cost;
+        };
+        const perMonth = new Map(months.map(month => [month, { month, ...zero() }]));
+        const products = new Map(catalogue.map(p => [p.id, {
+          platform_product_id: p.id, name: p.name, kind: p.kind, active: p.active, ...zero(), this_month: zero(),
+        }]));
+        for (const r of sold) {
+          // a payment dated ahead into next month is outside the window
+          if (!perMonth.has(r.month)) continue;
+          add(perMonth.get(r.month), r);
+          const p = products.get(r.id);
+          if (!p) continue;
+          add(p, r);
+          if (r.month === thisMonth) add(p.this_month, r);
+        }
+        return done({
+          per_month: [...perMonth.values()],
+          this_month: perMonth.get(thisMonth),
+          products: [...products.values()],
+        });
+      }
+
+      // PUT /api/operator/products/:id/image — raw bytes, the logo's rules;
+      // DELETE removes it. Served publicly at /api/platform/products/:id/image.
+      if (route === 'product-image') {
+        const exists = await env.DB.prepare('SELECT id FROM platform_products WHERE id = ?').bind(id).first();
+        if (!exists) return jsonErr('Not found', 404);
+        if (request.method === 'DELETE') {
+          await env.DB.prepare('UPDATE platform_products SET image = NULL, image_type = NULL, image_updated_at = NULL, updated_at = ? WHERE id = ?')
+            .bind(now, id).run();
+          return done({ ok: true, has_image: false });
+        }
+        const upload = await imageUpload(request, '商品圖片');
+        if (upload.refused) return upload.refused;
+        await env.DB.prepare('UPDATE platform_products SET image = ?, image_type = ?, image_updated_at = ?, updated_at = ? WHERE id = ?')
+          .bind(upload.bytes.buffer, upload.type, now, now, id).run();
+        return done({ ok: true, has_image: true, image_type: upload.type, image_updated_at: now, size: upload.bytes.byteLength });
+      }
+
+      // POST /api/operator/products/:id/retire | /restore — off (or back on)
+      // the list photographers adopt from and sell. Existing lines keep
+      // their snapshot.
+      if (route === 'product-active') {
+        const active = action === 'restore' ? 1 : 0;
+        const result = await env.DB.prepare('UPDATE platform_products SET active = ?, updated_at = ? WHERE id = ?')
+          .bind(active, now, id).run();
+        if (!result.meta?.changes) return jsonErr('Not found', 404);
+        return done({ ok: true, active });
+      }
+
+      if (route === 'products' && request.method === 'GET') {
+        return done({ products: await readPlatformProducts(env) });
+      }
+
+      let body;
+      try { body = await request.json(); } catch { body = null; }
+      if (!isPlainObject(body)) return jsonErr('Invalid body');
+
+      // POST /api/operator/products — {kind: print|album, name,
+      // description?, photo_count?, sort?, options: [{label, vendor_cost,
+      // platform_price}]}, ≥ 1 option.
+      if (route === 'products') {
+        const fields = productFields(body, false, PLATFORM_KINDS, false);
+        if (fields.bad) return orderBad(fields.bad);
+        const opts = productOptions(body.options, new Set(), PLATFORM_MONEY);
+        if (opts.bad) return orderBad(opts.bad);
+        const p = { description: '', photo_count: null, sort: 0, ...fields.set };
+        if (p.kind !== 'album') p.photo_count = null;
+        const productId = crypto.randomUUID();
+        await env.DB.batch([
+          env.DB.prepare(
+            'INSERT INTO platform_products (id, kind, name, description, photo_count, sort, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+          ).bind(productId, p.kind, p.name, p.description, p.photo_count, p.sort, now, now),
+          ...opts.options.map(o => env.DB.prepare(
+            'INSERT INTO platform_product_options (id, platform_product_id, label, vendor_cost, platform_price, sort) VALUES (?, ?, ?, ?, ?, ?)'
+          ).bind(crypto.randomUUID(), productId, o.label, o.vendor_cost, o.platform_price, o.sort)),
+        ]);
+        const [product] = await readPlatformProducts(env, productId);
+        return done({ product }, 201);
+      }
+
+      // PUT /api/operator/products/:id — the fields present change; options
+      // as a set, the photographer's rules. A price change reaches new lines
+      // only; a retired option stops new lines of every adopter.
+      const current = await env.DB.prepare('SELECT id, kind FROM platform_products WHERE id = ?').bind(id).first();
+      if (!current) return jsonErr('Not found', 404);
+      const fields = productFields(body, true, PLATFORM_KINDS, false);
+      if (fields.bad) return orderBad(fields.bad);
+      let opts = null;
+      if (hasField(body, 'options')) {
+        const { results } = await env.DB.prepare('SELECT id FROM platform_product_options WHERE platform_product_id = ?').bind(id).all();
+        const checked = productOptions(body.options, new Set(results.map(r => r.id)), PLATFORM_MONEY);
+        if (checked.bad) return orderBad(checked.bad);
+        opts = checked.options;
+      }
+      if ((fields.set.kind ?? current.kind) !== 'album') fields.set.photo_count = null;
+      await env.DB.batch(catalogueWrites(env, PLATFORM_TABLES, id, fields.set, opts, now));
+      const [product] = await readPlatformProducts(env, id);
+      return done({ product });
+    }
+
+    // GET /api/platform/products/:id/image — public: product photos are not
+    // secret and the guest shop needs them. The logo's serving rules. Any
+    // other path under /api/platform/ is 404, any other method 405.
+    if (pathParts[0] === 'api' && pathParts[1] === 'platform') {
+      if (pathParts.length !== 5 || pathParts[2] !== 'products' || pathParts[4] !== 'image') return jsonErr('Not found', 404);
+      if (request.method !== 'GET') return jsonErr('Method not allowed', 405);
+      if (!env.DB) return jsonErr('Not found', 404);
+      let row = null;
+      try {
+        row = await env.DB.prepare('SELECT image, image_updated_at FROM platform_products WHERE id = ? AND image IS NOT NULL')
+          .bind(pathParts[3]).first();
+      } catch { row = null; }
+      return imageResponse(request, row ? row.image : null, row ? row.image_updated_at : null);
+    }
+
     // ─── Products and orders (docs/products-orders.md) ─────────────────────
     // /api/admin/products[/:id[/retire|/restore]], /api/admin/orders[/:id
     // [/payment|/status]] and /api/admin/projects/:id/orders. The admin token
@@ -1680,17 +2050,22 @@ export default {
     // Anything else under these paths is 404 here, so a PUT can never fall
     // through to the upload route and land in the bucket.
     if (pathParts[0] === 'api' && pathParts[1] === 'admin' &&
-        (pathParts[2] === 'products' || pathParts[2] === 'orders' || (pathParts[2] === 'projects' && pathParts[3] && pathParts[4] === 'orders'))) {
+        (pathParts[2] === 'products' || pathParts[2] === 'orders' || pathParts[2] === 'platform-products' ||
+         (pathParts[2] === 'projects' && pathParts[3] && pathParts[4] === 'orders'))) {
       if (!isAdminToken(request, env)) return jsonErr('Unauthorized', 401);
       const [, , area, id, action] = pathParts;
       // null for any deeper or unknown path: 404 below
       let route = null;
       if (pathParts.length > 5) route = null;
-      else if (area === 'products') route = !id ? 'products' : !action ? 'product' : ['retire', 'restore'].includes(action) ? 'product-active' : null;
+      else if (area === 'products') {
+        route = !id ? 'products' : id === 'from-platform' && !action ? 'adopt' : !action ? 'product'
+          : ['retire', 'restore'].includes(action) ? 'product-active' : null;
+      } else if (area === 'platform-products') route = !id ? 'platform-products' : null;
       else if (area === 'projects') route = 'project-orders';
       else route = !id ? 'orders' : !action ? 'order' : ['payment', 'status'].includes(action) ? `order-${action}` : null;
       const methods = {
         products: ['GET', 'POST'], product: ['PUT'], 'product-active': ['POST'], 'project-orders': ['GET', 'POST'],
+        adopt: ['POST'], 'platform-products': ['GET'],
         orders: ['GET'], order: ['PUT'], 'order-payment': ['POST'], 'order-status': ['POST'],
       }[route];
       if (!methods) return jsonErr('Not found', 404);
@@ -1707,9 +2082,10 @@ export default {
       // An order line as an INSERT that only lands while `gate` (SQL, with
       // its binds) holds.
       const insertItem = (orderId, l, gate, gateBinds) => env.DB.prepare(
-        'INSERT INTO order_items (id, order_id, kind, product_id, option_id, name, option_label, unit_price, unit_cost, qty, photo_keys) ' +
-        `SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE ${gate}`
-      ).bind(l.id, orderId, l.kind, l.product_id, l.option_id, l.name, l.option_label, l.unit_price, l.unit_cost, l.qty, l.photo_keys, ...gateBinds);
+        'INSERT INTO order_items (id, order_id, kind, product_id, option_id, name, option_label, unit_price, unit_cost, qty, photo_keys, platform_option_id, vendor_cost) ' +
+        `SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE ${gate}`
+      ).bind(l.id, orderId, l.kind, l.product_id, l.option_id, l.name, l.option_label, l.unit_price, l.unit_cost, l.qty, l.photo_keys,
+        l.platform_option_id, l.vendor_cost, ...gateBinds);
       // an admin edit takes a system order over; a guest's stays the guest's
       const takeOver = "source = CASE WHEN source = 'system' THEN 'admin' ELSE source END";
 
@@ -1719,11 +2095,81 @@ export default {
         return done({ products: await readProducts(env) });
       }
 
+      // GET /api/admin/platform-products — what the platform offers: active
+      // products with their active options and platform price (never the
+      // vendor cost), and which one this photographer already adopted.
+      if (route === 'platform-products') {
+        const { results: offered } = await env.DB.prepare(
+          `SELECT pp.id, pp.kind, pp.name, pp.description, pp.photo_count, pp.sort,
+                  pp.image IS NOT NULL AS has_image, pp.image_updated_at,
+                  (SELECT p.id FROM products p WHERE p.photographer_id = ? AND p.platform_product_id = pp.id
+                    ORDER BY p.rowid LIMIT 1) AS adopted_product_id
+             FROM platform_products pp WHERE pp.active = 1 ORDER BY pp.sort, pp.created_at, pp.rowid`
+        ).bind(DEFAULT_PHOTOGRAPHER_ID).all();
+        const { results: options } = await env.DB.prepare(
+          `SELECT po.id, po.platform_product_id, po.label, po.platform_price, po.sort
+             FROM platform_product_options po JOIN platform_products pp ON pp.id = po.platform_product_id
+            WHERE pp.active = 1 AND po.active = 1 ORDER BY po.sort, po.rowid`
+        ).all();
+        const products = offered.map(p => ({
+          ...p,
+          has_image: !!p.has_image,
+          options: options.filter(o => o.platform_product_id === p.id).map(({ platform_product_id, ...o }) => o),
+        })).filter(p => p.options.length);
+        return done({ products });
+      }
+
+      // POST /api/admin/products/from-platform — {platform_product_id,
+      // options: [{platform_option_id, price}], guest_visible?, sort?}: adopt
+      // a platform product, some of its options, each at a price no lower
+      // than its platform price. Name, kind, description, photo_count and
+      // image stay the platform's. One per platform product (409).
+      if (route === 'adopt') {
+        const ppId = body.platform_product_id;
+        const pp = typeof ppId === 'string'
+          ? await env.DB.prepare('SELECT id, kind, name, description, photo_count, active FROM platform_products WHERE id = ?').bind(ppId).first()
+          : null;
+        if (!pp) return orderBad('unknown_platform_product');
+        if (!pp.active) return orderBad('retired_option');
+        const own = {};
+        for (const k of ['guest_visible', 'sort']) if (hasField(body, k)) own[k] = body[k];
+        const fields = productFields(own, true);
+        if (fields.bad) return orderBad(fields.bad);
+        const opts = adoptedOptions(body.options, await platformOptionMap(env, pp.id));
+        if (opts.bad) return orderBad(opts.bad);
+        const adopted = () => env.DB.prepare('SELECT id FROM products WHERE photographer_id = ? AND platform_product_id = ? ORDER BY rowid LIMIT 1')
+          .bind(DEFAULT_PHOTOGRAPHER_ID, pp.id).first();
+        const already = row => done({ error: '已加入這個平台商品', code: 'already_adopted', product_id: row ? row.id : null }, 409);
+        const existing = await adopted();
+        if (existing) return already(existing);
+        const p = { guest_visible: 0, sort: 0, ...fields.set };
+        const productId = crypto.randomUUID();
+        // the insert re-checks, so two adopts racing land one product; the
+        // options only land with it
+        const results = await env.DB.batch([
+          env.DB.prepare(
+            'INSERT INTO products (id, photographer_id, kind, name, description, photo_count, guest_visible, sort, platform_product_id, created_at, updated_at) ' +
+            'SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM products WHERE photographer_id = ? AND platform_product_id = ?)'
+          ).bind(productId, DEFAULT_PHOTOGRAPHER_ID, pp.kind, pp.name, pp.description, pp.kind === 'album' ? pp.photo_count : null,
+            p.guest_visible, p.sort, pp.id, now, now, DEFAULT_PHOTOGRAPHER_ID, pp.id),
+          ...opts.options.map(o => env.DB.prepare(
+            'INSERT INTO product_options (id, product_id, label, price, cost, sort, platform_option_id) ' +
+            'SELECT ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM products WHERE id = ?)'
+          ).bind(crypto.randomUUID(), productId, o.label, o.price, o.cost, o.sort, o.platform_option_id, productId)),
+        ]);
+        if (!results[0].meta?.changes) return already(await adopted());
+        const [product] = await readProducts(env, productId);
+        return done({ product }, 201);
+      }
+
       // POST /api/admin/products — {kind, name, description?, photo_count?,
       // guest_visible?, sort?, options: [{label, price, cost?}]}, ≥ 1 option.
+      // The photographer's own products are services; albums and prints come
+      // from the platform (400 platform_only).
       if (route === 'products') {
         const fields = productFields(body, false);
         if (fields.bad) return orderBad(fields.bad);
+        if (fields.set.kind !== 'service') return orderBad('platform_only');
         const opts = productOptions(body.options, new Set());
         if (opts.bad) return orderBad(opts.bad);
         const p = { description: '', photo_count: null, guest_visible: 0, sort: 0, ...fields.set };
@@ -1746,34 +2192,41 @@ export default {
       // when present, is the whole active set: an id keeps (and updates, and
       // if retired restores) that option, no id adds one, and every option
       // left out is retired — never deleted, order lines may point at it.
+      // An adopted product takes only {options: [{platform_option_id,
+      // price}], guest_visible, sort}; the platform's own fields are 400
+      // platform_managed. active is never read here: retire / restore.
       if (route === 'product') {
-        const current = await env.DB.prepare('SELECT id, kind FROM products WHERE id = ? AND photographer_id = ?')
+        const current = await env.DB.prepare('SELECT id, kind, platform_product_id FROM products WHERE id = ? AND photographer_id = ?')
           .bind(id, DEFAULT_PHOTOGRAPHER_ID).first();
         if (!current) return jsonErr('Not found', 404);
-        const fields = productFields(body, true);
-        if (fields.bad) return orderBad(fields.bad);
-        let opts = null;
-        if (hasField(body, 'options')) {
-          const { results } = await env.DB.prepare('SELECT id FROM product_options WHERE product_id = ?').bind(id).all();
-          const checked = productOptions(body.options, new Set(results.map(r => r.id)));
-          if (checked.bad) return orderBad(checked.bad);
-          opts = checked.options;
-        }
-        if ((fields.set.kind ?? current.kind) !== 'album') fields.set.photo_count = null;
-        // column names come from productFields' fixed list, never the body
-        const cols = [...Object.keys(fields.set), 'updated_at'];
-        const statements = [env.DB.prepare(
-          `UPDATE products SET ${cols.map(c => `${c} = ?`).join(', ')} WHERE id = ? AND photographer_id = ?`
-        ).bind(...Object.values(fields.set), now, id, DEFAULT_PHOTOGRAPHER_ID)];
-        if (opts) {
-          statements.push(env.DB.prepare('UPDATE product_options SET active = 0 WHERE product_id = ?').bind(id));
-          for (const o of opts) {
-            statements.push(o.id
-              ? env.DB.prepare('UPDATE product_options SET label = ?, price = ?, cost = ?, sort = ?, active = 1 WHERE id = ? AND product_id = ?')
-                .bind(o.label, o.price, o.cost, o.sort, o.id, id)
-              : env.DB.prepare('INSERT INTO product_options (id, product_id, label, price, cost, sort) VALUES (?, ?, ?, ?, ?, ?)')
-                .bind(crypto.randomUUID(), id, o.label, o.price, o.cost, o.sort));
+        let statements;
+        if (current.platform_product_id) {
+          if (['kind', 'name', 'description', 'photo_count'].some(k => hasField(body, k))) return orderBad('platform_managed');
+          const fields = productFields(body, true);
+          if (fields.bad) return orderBad(fields.bad);
+          let opts = null;
+          if (hasField(body, 'options')) {
+            const checked = adoptedOptions(body.options, await platformOptionMap(env, current.platform_product_id));
+            if (checked.bad) return orderBad(checked.bad);
+            // an option already adopted is the same row, repriced
+            const { results } = await env.DB.prepare('SELECT id, platform_option_id FROM product_options WHERE product_id = ?').bind(id).all();
+            const byPlatform = new Map(results.map(r => [r.platform_option_id, r.id]));
+            opts = checked.options.map(o => ({ ...o, id: byPlatform.get(o.platform_option_id) }));
           }
+          statements = catalogueWrites(env, ADOPTED_TABLES, id, fields.set, opts, now);
+        } else {
+          const fields = productFields(body, true);
+          if (fields.bad) return orderBad(fields.bad);
+          if (fields.set.kind !== undefined && fields.set.kind !== 'service') return orderBad('platform_only');
+          let opts = null;
+          if (hasField(body, 'options')) {
+            const { results } = await env.DB.prepare('SELECT id FROM product_options WHERE product_id = ?').bind(id).all();
+            const checked = productOptions(body.options, new Set(results.map(r => r.id)));
+            if (checked.bad) return orderBad(checked.bad);
+            opts = checked.options;
+          }
+          if ((fields.set.kind ?? current.kind) !== 'album') fields.set.photo_count = null;
+          statements = catalogueWrites(env, CUSTOM_TABLES, id, fields.set, opts, now);
         }
         await env.DB.batch(statements);
         const [product] = await readProducts(env, id);
@@ -1833,7 +2286,7 @@ export default {
         // photo_keys?, unit_price?}], discount?, note?}. Confirmed at once;
         // archived projects too (a late sale is still a sale).
         const checked = await orderLines(env, project, body.lines, null);
-        if (checked.bad) return orderBad(checked.bad);
+        if (checked.bad) return orderBad(checked.bad, checked.error);
         const discount = body.discount ?? 0;
         const discountBad = orderDiscount(discount, linesSubtotal(checked.lines));
         if (discountBad) return orderBad(discountBad);
@@ -1874,7 +2327,7 @@ export default {
           const project = await env.DB.prepare('SELECT folders FROM projects WHERE id = ? AND photographer_id = ?')
             .bind(order.project_id, DEFAULT_PHOTOGRAPHER_ID).first();
           const checked = await orderLines(env, project, body.lines, new Map(order.items.map(i => [i.id, i])));
-          if (checked.bad) return orderBad(checked.bad);
+          if (checked.bad) return orderBad(checked.bad, checked.error);
           lines = checked.lines;
         }
         const discount = hasField(body, 'discount') ? body.discount : order.discount;
@@ -2096,10 +2549,9 @@ export default {
         ).bind(now, DEFAULT_PHOTOGRAPHER_ID).run();
         return jsonOk({ ok: true, has_logo: false }, 200, ADMIN_ONLY_HEADERS);
       }
-      const bytes = await readBodyCapped(request, LOGO_MAX_BYTES);
-      if (!bytes) return jsonOk({ error: `Logo 不可超過 ${LOGO_MAX_BYTES / 1024} KB`, code: 'too_large', max: LOGO_MAX_BYTES }, 413);
-      const type = sniffImageType(bytes);
-      if (!type) return jsonOk({ error: 'Logo 只接受 PNG、JPEG 或 WebP', code: 'unsupported_type' }, 415);
+      const upload = await imageUpload(request, 'Logo ');
+      if (upload.refused) return upload.refused;
+      const { bytes, type } = upload;
       await env.DB.prepare(
         'INSERT INTO studio_settings (photographer_id, logo, logo_type, logo_updated_at, updated_at) VALUES (?, ?, ?, ?, ?) ' +
         'ON CONFLICT(photographer_id) DO UPDATE SET logo = excluded.logo, logo_type = excluded.logo_type, ' +
@@ -2121,24 +2573,7 @@ export default {
           'SELECT logo, logo_updated_at FROM studio_settings WHERE photographer_id = ? AND logo IS NOT NULL'
         ).bind(DEFAULT_PHOTOGRAPHER_ID).first();
       } catch { row = null; }
-      // D1 hands a BLOB back as an array of byte values
-      const bytes = row ? new Uint8Array(row.logo) : null;
-      const type = bytes && sniffImageType(bytes);
-      if (!type) return jsonErr('Not found', 404);
-      const headers = {
-        ...corsHeaders,
-        'Content-Type': type,
-        'X-Content-Type-Options': 'nosniff',
-        'Content-Security-Policy': "default-src 'none'",
-        'Cache-Control': 'public, max-age=300',
-      };
-      const stamp = String(row.logo_updated_at || '');
-      if (/^[0-9A-Za-z:.+-]+$/.test(stamp)) {
-        headers.ETag = `"${stamp}"`;
-        const inm = (request.headers.get('If-None-Match') || '').split(',').map(s => s.trim().replace(/^W\//, ''));
-        if (inm.includes(headers.ETag)) return new Response(null, { status: 304, headers });
-      }
-      return new Response(bytes, { status: 200, headers });
+      return imageResponse(request, row ? row.logo : null, row ? row.logo_updated_at : null);
     }
 
     // GET /api/shares/minted — the studio and client-session tokens that are

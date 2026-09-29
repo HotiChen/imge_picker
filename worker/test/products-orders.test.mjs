@@ -18,10 +18,28 @@ const D = `${MINE}sub/d.jpg`;
 const api = (env, method, path, body, token = SECRET) => call(env, path, { method, token, body });
 const json = async res => res.json();
 
+// A product to sell. A service is the photographer's own; an album or print
+// can only be adopted from the platform catalogue (A2), so one is seeded there
+// with the option's `cost` as its platform price, and adopted at `price`:
+// the line's cost is the platform price, as it was the catalogue cost before.
 async function newProduct(env, body = {}) {
-  const res = await api(env, 'POST', '/api/admin/products', {
-    kind: 'print', name: '無框畫', options: [{ label: '16×20', price: 3000, cost: 1200 }], ...body,
+  const b = { kind: 'print', name: '無框畫', options: [{ label: '16×20', price: 3000, cost: 1200 }], ...body };
+  if (b.kind === 'service') {
+    const res = await api(env, 'POST', '/api/admin/products', b);
+    if (res.status !== 201) throw new Error(`newProduct: ${res.status} ${await res.text()}`);
+    return (await res.json()).product;
+  }
+  const at = days(0);
+  const pp = `pp${++seq}`;
+  env.DB._db.prepare('INSERT INTO platform_products (id, kind, name, description, photo_count, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+    .run(pp, b.kind, b.name, b.description ?? '', b.kind === 'album' ? b.photo_count ?? null : null, at, at);
+  const options = b.options.map((o, i) => {
+    const id = `${pp}o${i}`;
+    env.DB._db.prepare('INSERT INTO platform_product_options (id, platform_product_id, label, vendor_cost, platform_price, sort) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(id, pp, o.label ?? '', o.cost ?? 0, o.cost ?? 0, i);
+    return { platform_option_id: id, price: o.price };
   });
+  const res = await api(env, 'POST', '/api/admin/products/from-platform', { platform_product_id: pp, options });
   if (res.status !== 201) throw new Error(`newProduct: ${res.status} ${await res.text()}`);
   return (await res.json()).product;
 }
@@ -69,24 +87,25 @@ function seedOther(env) {
 
 test('products: create with options, list them back without the image blob', async () => {
   const env = setup();
+  // a service: albums and prints are adopted from the platform now (A2)
   const res = await api(env, 'POST', '/api/admin/products', {
-    kind: 'album', name: '  相本書  ', description: '20 頁', photo_count: 20, guest_visible: true,
-    options: [{ label: '20×20', price: 8000, cost: 3000 }, { label: '30×30', price: 12000 }],
+    kind: 'service', name: '  精修加購  ', description: '20 張', photo_count: 20, guest_visible: true,
+    options: [{ label: '20 張', price: 8000, cost: 3000 }, { label: '30 張', price: 12000 }],
     photographer_id: 'other', id: 'mine', active: 0,
   });
   assert.equal(res.status, 201);
   assert.equal(res.headers.get('Cache-Control'), 'private, no-store');
   const { product } = await res.json();
-  assert.equal(product.name, '相本書');
-  assert.equal(product.kind, 'album');
-  assert.equal(product.photo_count, 20);
+  assert.equal(product.name, '精修加購');
+  assert.equal(product.kind, 'service');
+  assert.equal(product.photo_count, null, 'photo_count is an album\'s only');
   assert.equal(product.guest_visible, 1);
   assert.equal(product.active, 1, 'active is not taken from the body');
   assert.notEqual(product.id, 'mine');
   assert.equal(product.has_image, false);
   assert.ok(!('image' in product));
   assert.deepEqual(product.options.map(o => [o.label, o.price, o.cost, o.active, o.sort]),
-    [['20×20', 8000, 3000, 1, 0], ['30×30', 12000, 0, 1, 1]]);
+    [['20 張', 8000, 3000, 1, 0], ['30 張', 12000, 0, 1, 1]]);
   assert.equal(one(env, 'SELECT photographer_id FROM products').photographer_id, 'default');
   const list = await api(env, 'GET', '/api/admin/products');
   assert.equal(list.status, 200);
@@ -96,18 +115,23 @@ test('products: create with options, list them back without the image blob', asy
 
 test('products: photo_count only sticks to albums', async () => {
   const env = setup();
+  // an adopted album carries the platform's count, a print none
   const p = await newProduct(env, { kind: 'print', photo_count: 5 });
   assert.equal(p.photo_count, null);
   const a = await newProduct(env, { kind: 'album', photo_count: 5 });
   assert.equal(a.photo_count, 5);
-  const res = await api(env, 'PUT', `/api/admin/products/${a.id}`, { kind: 'service' });
+  // the photographer's own products are services: never a count
+  const s = await newProduct(env, { kind: 'service', photo_count: 5 });
+  assert.equal(s.photo_count, null);
+  const res = await api(env, 'PUT', `/api/admin/products/${s.id}`, { photo_count: 5 });
   assert.equal((await res.json()).product.photo_count, null);
+  assert.equal(one(env, 'SELECT photo_count FROM products WHERE id = ?', s.id).photo_count, null);
 });
 
 test('products: validation is 400 with a code, and nothing is written', async () => {
   const env = setup();
   const existing = await newProduct(env);
-  const good = { kind: 'print', name: 'x', options: [{ label: '', price: 1 }] };
+  const good = { kind: 'service', name: 'x', options: [{ label: '', price: 1 }] };
   const cases = [
     [{ ...good, kind: 'extra_pick' }, 'invalid_kind'],
     [{ ...good, kind: undefined }, 'invalid_kind'],
@@ -149,7 +173,7 @@ test('products: validation is 400 with a code, and nothing is written', async ()
   assert.equal(snapshot(env), before);
   // the boundaries are accepted
   const edge = await newProduct(env, {
-    name: 'x'.repeat(60), description: 'y'.repeat(500),
+    kind: 'service', name: 'x'.repeat(60), description: 'y'.repeat(500),
     options: Array.from({ length: 20 }, (_, i) => ({ label: 'z'.repeat(60), price: i ? 10_000_000 : 0, cost: 0 })),
   });
   assert.equal(edge.options.length, 20);
@@ -158,7 +182,7 @@ test('products: validation is 400 with a code, and nothing is written', async ()
 test('products: PUT changes the fields present; options are replaced as a set, missing ones retired', async () => {
   const env = setup();
   const p = await newProduct(env, {
-    description: 'keep me', options: [{ label: 'S', price: 100, cost: 10 }, { label: 'M', price: 200, cost: 20 }],
+    kind: 'service', description: 'keep me', options: [{ label: 'S', price: 100, cost: 10 }, { label: 'M', price: 200, cost: 20 }],
   });
   const [s, m] = p.options;
   const res = await api(env, 'PUT', `/api/admin/products/${p.id}`, {
@@ -170,7 +194,7 @@ test('products: PUT changes the fields present; options are replaced as a set, m
   const { product } = await res.json();
   assert.equal(product.name, '畫布');
   assert.equal(product.description, 'keep me');
-  assert.equal(product.kind, 'print');
+  assert.equal(product.kind, 'service');
   assert.equal(product.active, 1);
   const byId = Object.fromEntries(product.options.map(o => [o.id, o]));
   assert.deepEqual([byId[m.id].label, byId[m.id].price, byId[m.id].cost, byId[m.id].active, byId[m.id].sort], ['M2', 250, 25, 1, 0]);
@@ -192,8 +216,8 @@ test('products: PUT changes the fields present; options are replaced as a set, m
 test('products: PUT refuses an option id of another product, unknown ids and bad fields, writing nothing', async () => {
   const env = setup();
   seedOther(env);
-  const p = await newProduct(env);
-  const q = await newProduct(env, { name: '另一個' });
+  const p = await newProduct(env, { kind: 'service' });
+  const q = await newProduct(env, { kind: 'service', name: '另一個' });
   const before = snapshot(env);
   for (const [body, code] of [
     [{ options: [{ id: q.options[0].id, label: '', price: 1 }] }, 'invalid_options'],
@@ -272,7 +296,9 @@ test('orders: price, cost, name and kind come from the catalogue; unit_price is 
 test('orders: the line snapshot survives catalogue edits and retirement', async () => {
   const env = setup();
   const { project } = await createProject(env);
-  const p = await newProduct(env);
+  // a service, so the photographer can edit it (an adopted product's name and
+  // cost are the platform's: platform-catalogue.test.mjs)
+  const p = await newProduct(env, { kind: 'service' });
   const order = await newOrder(env, project.id, { lines: [{ option_id: p.options[0].id, qty: 1 }] });
   await api(env, 'PUT', `/api/admin/products/${p.id}`, { name: '改名', options: [{ id: p.options[0].id, label: '改', price: 1, cost: 1 }] });
   await api(env, 'POST', `/api/admin/products/${p.id}/retire`);
@@ -291,7 +317,7 @@ test('orders: the line snapshot survives catalogue edits and retirement', async 
 test('orders: a retired option or product cannot go on a new line', async () => {
   const env = setup();
   const { project } = await createProject(env);
-  const p = await newProduct(env, { options: [{ label: 'S', price: 100 }, { label: 'M', price: 200 }] });
+  const p = await newProduct(env, { kind: 'service', options: [{ label: 'S', price: 100 }, { label: 'M', price: 200 }] });
   const [s, m] = p.options;
   await api(env, 'PUT', `/api/admin/products/${p.id}`, { options: [{ id: m.id, label: 'M', price: 200 }] });
   const order = await newOrder(env, project.id, { lines: [{ option_id: m.id, qty: 1 }] });
@@ -477,7 +503,9 @@ test('orders: PUT validation is 400 and writes nothing', async () => {
   const env = setup();
   const { project } = await createProject(env);
   const other = await createProject(env);
-  const p = await newProduct(env);
+  // platform price 50, so the 100 override below stays above the floor and
+  // the case still reaches the discount check
+  const p = await newProduct(env, { options: [{ label: '16×20', price: 3000, cost: 50 }] });
   const q = await newProduct(env, { name: '另', options: [{ label: '', price: 100 }] });
   const order = await newOrder(env, project.id, { lines: [{ option_id: p.options[0].id, qty: 1 }] });
   const elsewhere = await newOrder(env, other.project.id, { lines: [{ option_id: p.options[0].id, qty: 1 }] });
