@@ -2426,8 +2426,8 @@ const revokeCalls = m => m.seen.filter(r =>
 
 {
   const m = adminMock();
-  await suite('revoke all — the control is on the admin page, reads the live tokens, and warns before firing',
-    `${base}/admin.html`,
+  await suite('revoke all — the control is on the settings page, reads the live tokens, and warns before firing',
+    `${base}/settings.html`,
     async page => {
       const out = [];
       const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
@@ -2472,7 +2472,7 @@ const revokeCalls = m => m.seen.filter(r =>
   // cannot be read off the summary that is already on the page
   const m = adminMock({ revoked: 7 });
   await suite('revoke all — confirming it kills the minted tokens and says how many',
-    `${base}/admin.html`,
+    `${base}/settings.html`,
     async page => {
       const out = [];
       const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
@@ -2491,6 +2491,166 @@ const revokeCalls = m => m.seen.filter(r =>
       ok('the count the Worker returned is reported back, not the one already on screen',
         result.includes('7'), result);
       ok('and the photographer is told it is done', /已撤銷|已登出/.test(result), result);
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN });
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// admin.html is two screens chosen by the hash (#projects | #project=<id> |
+// #clients; anything else = projects). 登入中的裝置 lives on settings.html.
+// ═══════════════════════════════════════════════════════════════════════════
+
+const VIEW_STATE = () => {
+  const disp = sel => { const e = document.querySelector(sel); return e ? getComputedStyle(e).display : 'ABSENT'; };
+  return {
+    projects: disp('#view-projects'), clients: disp('#view-clients'),
+    create: disp('#project-create-panel'), table: disp('#clients-table'),
+    sub: document.querySelector('header .subtitle')?.textContent.trim(),
+    title: document.title,
+    active: [...document.querySelectorAll('.side-nav-item.active')].map(e => e.textContent.trim()),
+    clientsHref: document.querySelector('.side-nav-item[data-nav="clients"]')?.getAttribute('href'),
+    // The rendered box, not just the style: a display:none ancestor has no size.
+    createBox: !!document.querySelector('#project-create-panel')?.getClientRects().length,
+    tableBox: !!document.querySelector('#clients-table')?.getClientRects().length,
+  };
+};
+
+for (const [hash, want] of [
+  ['', 'projects'], ['#projects', 'projects'], ['#nonsense', 'projects'], ['#clients', 'clients'],
+]) {
+  const m = adminMock();
+  await suite(`admin 分頁 — ${hash || '(no hash)'} shows only the ${want} block, with its own subtitle/title/menu highlight`,
+    `${base}/admin.html${hash}`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('.side-nav-item.active', { timeout: 5000 });
+      const v = await page.evaluate(VIEW_STATE);
+      const label = want === 'projects' ? '選片專案' : '客戶';
+      const other = want === 'projects' ? 'clients' : 'projects';
+      ok(`the ${want} section is displayed`, v[want] === 'block', JSON.stringify(v));
+      ok(`the ${other} section is display:none (computed)`, v[other] === 'none', JSON.stringify(v));
+      if (want === 'projects') {
+        ok('the create form has a rendered box', v.createBox, JSON.stringify(v));
+        ok('the clients table has no box', !v.tableBox, JSON.stringify(v));
+      } else {
+        ok('the clients table has a rendered box', v.tableBox, JSON.stringify(v));
+        ok('the project form has no box', !v.createBox, JSON.stringify(v));
+      }
+      ok('subtitle', v.sub === label, v.sub);
+      ok('<title>', v.title.includes(label) && !v.title.includes('客戶管理'), v.title);
+      ok('exactly the matching menu item is highlighted', JSON.stringify(v.active) === JSON.stringify([label]), JSON.stringify(v.active));
+      ok('the side menu 客戶 link is admin.html#clients', v.clientsHref === 'admin.html#clients', v.clientsHref);
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN });
+}
+
+{
+  const m = adminMock();
+  await suite('admin 分頁 — hashchange switches views without a reload, and data loads only when shown',
+    `${base}/admin.html#projects`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('.side-nav-item.active', { timeout: 5000 });
+      await page.waitForTimeout(300);
+      await page.evaluate(() => { window.__noReload = true; });
+      ok('the clients list was NOT fetched while it was hidden',
+        !m.seen.some(r => r.path === '/api/admin/clients' && r.method === 'GET' && r.auth === 'Bearer adm'),
+        JSON.stringify(m.seen.map(r => r.path)));
+      await page.click('.side-nav-item[data-nav="clients"]');
+      await page.waitForFunction(() => document.querySelector('header .subtitle')?.textContent.trim() === '客戶', null, { timeout: 3000 });
+      let v = await page.evaluate(VIEW_STATE);
+      ok('clicking 客戶 in the menu shows clients only', v.clients === 'block' && v.projects === 'none', JSON.stringify(v));
+      ok('and highlights 客戶 only', JSON.stringify(v.active) === '["客戶"]', JSON.stringify(v.active));
+      ok('and retitles', v.title.includes('客戶') && !v.title.includes('選片專案'), v.title);
+      ok('without reloading the page', await page.evaluate(() => window.__noReload === true));
+      ok('the clients list is fetched once shown', m.seen.some(r => r.path === '/api/admin/clients' && r.auth === 'Bearer adm'));
+      await page.click('.side-nav-item[data-nav="projects"]');
+      await page.waitForFunction(() => document.querySelector('header .subtitle')?.textContent.trim() === '選片專案', null, { timeout: 3000 });
+      v = await page.evaluate(VIEW_STATE);
+      ok('clicking 選片專案 comes back to projects only', v.projects === 'block' && v.clients === 'none' && JSON.stringify(v.active) === '["選片專案"]', JSON.stringify(v));
+      await page.evaluate(() => { location.hash = '#clients'; });
+      await page.waitForFunction(() => document.querySelector('header .subtitle')?.textContent.trim() === '客戶', null, { timeout: 3000 });
+      ok('a plain location.hash change switches too', (await page.evaluate(VIEW_STATE)).clients === 'block');
+      ok('still the same document', await page.evaluate(() => window.__noReload === true));
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN });
+}
+
+{
+  const m = adminMock();
+  await suite('admin 分頁 — #project=<id> opens that detail inside the projects view, 選片專案 highlighted',
+    `${base}/admin.html#project=proj-9`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('.side-nav-item.active', { timeout: 5000 });
+      await page.waitForTimeout(500);
+      const v = await page.evaluate(VIEW_STATE);
+      ok('projects view shown, clients hidden', v.projects === 'block' && v.clients === 'none', JSON.stringify(v));
+      ok('選片專案 is the highlighted item', JSON.stringify(v.active) === '["選片專案"]', JSON.stringify(v.active));
+      ok('subtitle 選片專案', v.sub === '選片專案', v.sub);
+      ok('that project was requested', m.seen.some(r => r.path === '/api/admin/projects/proj-9'), JSON.stringify(m.seen.map(r => r.path)));
+      const detail = await page.evaluate(() => {
+        const p = document.getElementById('project-detail-panel');
+        return { disp: getComputedStyle(p).display, inProjects: !!p.closest('#view-projects') };
+      });
+      ok('the detail panel is displayed, inside the projects section', detail.disp === 'block' && detail.inProjects, JSON.stringify(detail));
+      await page.click('.side-nav-item[data-nav="projects"]');
+      await page.waitForFunction(() => getComputedStyle(document.getElementById('project-detail-panel')).display === 'none', null, { timeout: 3000 });
+      ok('clicking 選片專案 in the menu closes the detail back to the list', true);
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN });
+}
+
+{
+  const m = adminMock();
+  await suite('登入中的裝置 — is gone from admin.html (both views)',
+    `${base}/admin.html`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('.side-nav-item.active', { timeout: 5000 });
+      await page.waitForTimeout(300);
+      for (const h of ['#projects', '#clients']) {
+        await page.evaluate(x => { location.hash = x; }, h);
+        await page.waitForTimeout(150);
+        const r = await page.evaluate(() => ({
+          btn: !!document.getElementById('revoke-all-btn'), panel: !!document.getElementById('minted-panel'),
+          text: document.body.textContent.includes('登入中的裝置'),
+        }));
+        ok(`${h}: no revoke button / panel / heading`, !r.btn && !r.panel && !r.text, JSON.stringify(r));
+      }
+      ok('and admin.html never asked for the minted list', !m.seen.some(r => r.path.startsWith('/api/shares/minted')), JSON.stringify(m.seen.map(r => r.path)));
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN });
+}
+
+{
+  const m = adminMock();
+  await suite('登入中的裝置 — settings.html shows it as its own section, visible',
+    `${base}/settings.html`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('#revoke-all-btn', { timeout: 5000 });
+      await page.waitForTimeout(300);
+      const r = await page.evaluate(() => ({
+        disp: getComputedStyle(document.getElementById('revoke-all-btn')).display,
+        box: document.getElementById('revoke-all-btn').getClientRects().length,
+        heading: [...document.querySelectorAll('main h2')].map(h => h.textContent.trim()),
+        inPanel: !!document.getElementById('revoke-all-btn').closest('#minted-panel'),
+        summary: document.getElementById('minted-summary').textContent,
+      }));
+      ok('button visible', r.disp !== 'none' && r.box > 0, JSON.stringify(r));
+      ok('own section heading 登入中的裝置', r.heading.includes('登入中的裝置') && r.inPanel, JSON.stringify(r.heading));
+      ok('summary loaded from the Worker', /攝影師 2/.test(r.summary) && /客戶 1/.test(r.summary), r.summary);
       return out;
     },
     { before: m.attach, initScript: ADMIN });
@@ -2819,7 +2979,7 @@ await suite('multi-folder — subfolders: a client’s photo-less folder opens i
       folder_path: '["oops', folders: null },
   ] });
   await suite('admin — folders are picked from the bucket, not typed',
-    `${base}/admin.html`,
+    `${base}/admin.html#clients`,
     async page => {
       await page.waitForFunction(() => document.querySelectorAll('#clients-tbody tr').length >= 2,
         null, { timeout: 6000 }).catch(() => {});
@@ -3055,7 +3215,7 @@ const SHOOT_CLIENTS = [
 {
   const m = adminMock({ clients: SHOOT_CLIENTS });
   await suite('admin — the shoot date and type are on the row, and an empty one says 未填',
-    `${base}/admin.html`,
+    `${base}/admin.html#clients`,
     async page => {
       const out = [];
       const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
@@ -3157,7 +3317,7 @@ const lastPut = m => {
 {
   const m = adminMock({ clients: SHOOT_CLIENTS });
   await suite('admin — the photographer can correct both fields',
-    `${base}/admin.html`,
+    `${base}/admin.html#clients`,
     async page => {
       const out = [];
       const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
@@ -3231,7 +3391,7 @@ const lastPut = m => {
     },
   });
   await suite('admin — the folder picker puts the shoot date’s folders first',
-    `${base}/admin.html`,
+    `${base}/admin.html#clients`,
     async page => {
       const out = [];
       const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
@@ -6958,7 +7118,7 @@ await suite('儀表板 — 沒有 studio_token 時，還沒發出任何請求就
 
       const navHrefs = await page.$$eval('.side-nav-item[href]', els => els.map(e => e.getAttribute('href')));
       ok('side menu has every destination, 訂單 after 選片專案',
-        JSON.stringify(navHrefs) === JSON.stringify(['dashboard.html', 'admin.html#projects', 'orders.html', 'admin.html', 'index.html', 'upload.html', 'book_editor/', 'settings.html']),
+        JSON.stringify(navHrefs) === JSON.stringify(['dashboard.html', 'admin.html#projects', 'orders.html', 'admin.html#clients', 'index.html', 'upload.html', 'book_editor/', 'settings.html']),
         JSON.stringify(navHrefs));
       const active = await page.$eval('.side-nav-item.active', e => e.textContent);
       ok('儀表板 is marked active on this page', active === '儀表板', active);

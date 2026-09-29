@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Studio Admin — 客戶管理</title>
+<title>Studio Admin — 選片專案</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -31,6 +31,10 @@
   
   /* Admin layout */
   #admin-view { display: none; }
+  /* One screen at a time (hash-routed, see applyView) — display:none on the
+     section itself so a hidden view leaves the layout entirely. */
+  .view-section { display: none; }
+  .view-section.active { display: block; }
   header { background: var(--surface); border-bottom: 1px solid var(--rule); padding: 0 24px; display: flex; align-items: center; gap: 16px; height: 52px; }
   header .brand { color: var(--accent); font-family: 'IBM Plex Mono', monospace; font-size: 13px; letter-spacing: 0.15em; }
   header .subtitle { color: var(--ink-55); font-size: 12px; }
@@ -221,7 +225,7 @@
 <div id="admin-view">
   <header>
     <span class="brand">STUDIO ADMIN</span>
-    <span class="subtitle">客戶管理</span>
+    <span class="subtitle" id="page-subtitle">選片專案</span>
     <span id="buildVersion"></span>
     <span class="spacer"></span>
     <span class="refresh-info" id="refresh-info"></span>
@@ -230,29 +234,8 @@
   <div class="app-shell">
   <aside id="sideNav" class="side-nav"></aside>
   <main>
-    <h2>登入中的裝置</h2>
-    <div id="minted-panel" class="panel">
-      <div class="panel-body">
-        <div id="minted-summary" class="panel-stat">讀取中…</div>
-        <p class="panel-note">
-          攝影師登入後，每個分頁會換一張十二小時的唯讀權杖；客戶登入後換的是一小時、只開自己資料夾的那張。
-          改密碼不會讓這些權杖失效，只有這裡的按鈕會。
-        </p>
-        <p class="panel-note">
-          <strong>已經寄給客戶的相本分享連結不會被這個動作關掉</strong>，按下去只會踢掉攝影師與客戶目前的登入權杖，
-          他們下次開頁面重新登入即可。
-        </p>
-        <p class="panel-note">
-          <strong>密碼外洩的話，要先改密碼再按這裡。</strong>
-          這個按鈕不會換掉攝影師密碼本身（<code>wrangler secret put PHOTOGRAPHER_TOKEN</code>），
-          還握著舊密碼的人只要重新整理頁面，就會再換到一張新的權杖。
-        </p>
-        <button id="revoke-all-btn" class="btn btn-danger">登出所有裝置</button>
-        <span id="revoke-result" class="panel-result"></span>
-      </div>
-    </div>
-
-    <h2 id="projects">選片專案（Guest Picking）</h2>
+    <section id="view-projects" class="view-section">
+    <h2>選片專案（Guest Picking）</h2>
     <div id="project-create-panel" class="panel">
       <div class="panel-body">
         <div class="pick-admin-field">
@@ -295,6 +278,9 @@
       <div class="panel-body" id="project-detail-body"></div>
     </div>
 
+    </section>
+
+    <section id="view-clients" class="view-section">
     <h2>客戶列表</h2>
     <div class="table-wrap">
       <table id="clients-table">
@@ -316,14 +302,15 @@
         </tbody>
       </table>
     </div>
+    </section>
   </main>
   </div>
 </div>
 
-<script src="js/shoot-types.js?v=20260929c"></script>
-<script src="js/build-version.js?v=20260929c"></script>
-<script src="js/side-nav.js?v=20260929c"></script>
-<script src="js/orders-common.js?v=20260929c"></script>
+<script src="js/shoot-types.js?v=20260929d"></script>
+<script src="js/build-version.js?v=20260929d"></script>
+<script src="js/side-nav.js?v=20260929d"></script>
+<script src="js/orders-common.js?v=20260929d"></script>
 <script>
 (function() {
   const WORKER_URL = 'https://imagepicker.hotichen.workers.dev';
@@ -359,15 +346,58 @@
   function showAdmin() {
     loginView.style.display = 'none';
     adminView.style.display = 'block';
-    if (typeof SideNav !== 'undefined') SideNav.render(document.getElementById('sideNav'), 'clients', doLogout);
-    loadClients();
-    loadMinted();
-    loadProjectDefaults();
+    loaded.projects = false;
+    loaded.clients = false;
     startAutoRefresh();
-    renderProjectFolders();
-    loadProjectList();
-    restoreProjectFromHash();
+    applyView();
   }
+
+  // ── Views (hash-routed) ───────────────────────────────────────────────────
+  // admin.html is two screens: 選片專案 (#projects, #project=<id>, and the
+  // default for no/unknown hash) and 客戶 (#clients). Only one section is
+  // shown; its data loads the first time it is shown.
+  const VIEWS = {
+    projects: { title: '選片專案', navKey: 'projects' },
+    clients: { title: '客戶', navKey: 'clients' },
+  };
+  const loaded = { projects: false, clients: false };
+  let currentView = 'projects';
+
+  function viewFromHash() {
+    return location.hash === '#clients' ? 'clients' : 'projects';
+  }
+
+  function applyView() {
+    currentView = viewFromHash();
+    const v = VIEWS[currentView];
+    Object.keys(VIEWS).forEach(k => {
+      const sec = document.getElementById('view-' + k);
+      if (sec) sec.classList.toggle('active', k === currentView);
+    });
+    document.getElementById('page-subtitle').textContent = v.title;
+    document.title = 'Studio Admin — ' + v.title;
+    if (typeof SideNav !== 'undefined') SideNav.render(document.getElementById('sideNav'), v.navKey, doLogout);
+    updateRefreshInfo();
+    if (currentView === 'clients') {
+      if (!loaded.clients) { loaded.clients = true; loadClients(); }
+    } else {
+      if (!loaded.projects) {
+        loaded.projects = true;
+        loadProjectDefaults();
+        renderProjectFolders();
+        loadProjectList();
+      }
+      if (/^#project=(.+)$/.test(location.hash)) {
+        restoreProjectFromHash();
+      } else {
+        // Menu click on 選片專案 while a detail is open → back to the list.
+        const panel = document.getElementById('project-detail-panel');
+        if (panel) panel.style.display = 'none';
+        currentProjectId = null;
+      }
+    }
+  }
+  window.addEventListener('hashchange', () => { if (getToken() && adminView.style.display === 'block') applyView(); });
 
   // Prefills 精修張數上限 / 加選單價 in the project-create form from the
   // studio's saved defaults (settings.html) — a convenience only, so any
@@ -397,54 +427,6 @@
     if (m) openProjectDetail(decodeURIComponent(m[1]));
   }
 
-  // ── Minted tokens ─────────────────────────────────────────────────────────
-  // A studio or session token is a credential that outlives a password change:
-  // rotating PHOTOGRAPHER_TOKEN does not reach one that has already been
-  // minted, and nothing else on this page can even name one. This is the
-  // control for "I think my password leaked".
-  async function loadMinted() {
-    const el = document.getElementById('minted-summary');
-    if (!el) return;
-    try {
-      const r = await fetch(`${WORKER_URL}/api/shares/minted`, {
-        headers: { 'Authorization': `Bearer ${getToken()}` }
-      });
-      if (!r.ok) { el.textContent = `讀取失敗（${r.status}）`; return; }
-      const rows = await r.json();
-      const list = Array.isArray(rows) ? rows : [];
-      const studio = list.filter(x => x.kind === 'studio').length;
-      const client = list.filter(x => x.kind === 'session').length;
-      el.textContent = `目前有 ${list.length} 張登入權杖還活著（攝影師 ${studio}、客戶 ${client}）`;
-    } catch (e) {
-      el.textContent = '讀取失敗，無法連線到 Worker';
-    }
-  }
-
-  document.getElementById('revoke-all-btn').addEventListener('click', async function () {
-    // Spelled out rather than a bare "are you sure": the expensive mistake
-    // here would be believing this kills the album links already sent out.
-    if (!confirm('確定要登出所有裝置嗎？\n\n攝影師與客戶目前的登入權杖都會立刻失效，下次開頁面需要重新登入。\n已經寄出的相本分享連結不受影響，仍然可以開啟。\n\n若是密碼外洩，請先換掉攝影師密碼再執行，否則還握著舊密碼的人可以立刻再換一張。')) return;
-    const result = document.getElementById('revoke-result');
-    this.disabled = true;
-    const label = this.textContent;
-    this.textContent = '處理中…';
-    try {
-      const r = await fetch(`${WORKER_URL}/api/shares/minted/revoke-all`, {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${getToken()}` }
-      });
-      const data = await r.json().catch(() => ({}));
-      if (!r.ok) { result.textContent = `失敗（${r.status}）`; return; }
-      result.textContent = `已撤銷 ${data.revoked ?? 0} 張權杖`;
-      await loadMinted();
-    } catch (e) {
-      result.textContent = '失敗，無法連線到 Worker';
-    } finally {
-      this.disabled = false;
-      this.textContent = label;
-    }
-  });
-
   document.getElementById('admin-login-btn').addEventListener('click', tryAdminLogin);
   document.getElementById('admin-token-input').addEventListener('keydown', e => { if (e.key === 'Enter') tryAdminLogin(); });
   function doLogout() {
@@ -464,7 +446,7 @@
       refreshCountdown--;
       updateRefreshInfo();
       if (refreshCountdown <= 0) {
-        loadClients();
+        if (currentView === 'clients') loadClients();
         refreshCountdown = 30;
       }
     }, 1000);
@@ -472,7 +454,7 @@
 
   function updateRefreshInfo() {
     const el = document.getElementById('refresh-info');
-    if (el) el.textContent = `${refreshCountdown}s 後自動更新`;
+    if (el) el.textContent = currentView === 'clients' ? `${refreshCountdown}s 後自動更新` : '';
   }
 
   // ── Load clients ──────────────────────────────────────────────────────────
