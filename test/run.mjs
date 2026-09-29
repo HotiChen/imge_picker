@@ -2502,7 +2502,7 @@ const revokeCalls = m => m.seen.filter(r =>
 {
   console.log('\n# asset versions — every local asset on a page moves together');
   const PAGES = ['index.html', 'upload.html', 'tutorial.html', 'admin.html', 'client-login.html',
-                 'home.html', 'dashboard.html', 'settings.html', 'orders.html',
+                 'home.html', 'dashboard.html', 'settings.html', 'orders.html', 'operator.html',
                  'book_editor/index.html', 'book_editor/view.html', 'r2_designer/index.html'];
   const lines = [];
   const seenVersions = new Set();
@@ -7291,6 +7291,9 @@ await suite('設定 — 沒有 studio_token 時跳轉回 home.html',
 function ordersFake(opts = {}) {
   const st = {
     products: opts.products || [],
+    platform: opts.platform || [],   // platform catalogue: {id, kind, name, …, options: [{id, label, vendor_cost, platform_price, active, sort}]}
+    imageSeq: 0,
+    operatorToken: opts.operatorToken || 'op',
     orders: opts.orders || [],
     titles: opts.titles || {},
     extra: opts.extra || { count: null, pick_limit: null, extra_price: null, extra: 0, fee: 0, order_id: null, order_extra: null, matches: true },
@@ -7307,7 +7310,7 @@ function ordersFake(opts = {}) {
     const outstanding = ['confirmed', 'fulfilled'].includes(o.status) ? Math.max(0, total - o.paid_amount) : 0;
     return { subtotal, total, cost, outstanding };
   };
-  const view = o => ({ ...o, project_title: st.titles[o.project_id] ?? '', ...money(o), items: o.items.map(i => ({ ...i, photo_keys: [...i.photo_keys] })) });
+  const view = o => ({ ...o, project_title: st.titles[o.project_id] ?? '', ...money(o), items: o.items.map(({ vendor_cost, ...i }) => ({ ...i, photo_keys: [...i.photo_keys] })) });
   st.addOrder = (o = {}) => {
     const order = {
       id: o.id || id('ord'), photographer_id: 'default', project_id: o.project_id || 'proj-1', source: o.source || 'admin',
@@ -7318,52 +7321,305 @@ function ordersFake(opts = {}) {
       items: (o.items || []).map(i => ({
         id: i.id || id('item'), order_id: '', kind: i.kind || 'album', product_id: i.product_id ?? 'prod-x', option_id: i.option_id ?? 'opt-x',
         name: i.name, option_label: i.option_label || '', unit_price: i.unit_price, unit_cost: i.unit_cost || 0, qty: i.qty || 1,
-        photo_keys: i.photo_keys || [],
+        photo_keys: i.photo_keys || [], platform_option_id: i.platform_option_id ?? null, vendor_cost: i.vendor_cost || 0,
       })),
     };
     order.items.forEach(i => { i.order_id = order.id; });
     st.orders.push(order);
     return order;
   };
+  const taipeiMonth = iso => new Date(Date.parse(iso) + 8 * 3600 * 1000).toISOString().slice(0, 7);
+  // GET /api/operator/stats — the Worker's shape: 12 Taipei months, by paid_at,
+  // cancelled excluded, revenue = unit_cost, vendor_cost from the line snapshot
+  function operatorStats() {
+    const [y, mo] = taipeiMonth(NOW).split('-').map(Number);
+    const months = [];
+    for (let i = 11; i >= 0; i--) { const d = new Date(Date.UTC(y, mo - 1 - i, 1)); months.push(`${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`); }
+    const zero = () => ({ qty: 0, revenue: 0, vendor_cost: 0, margin: 0 });
+    const add = (into, r) => { into.qty += r.qty; into.revenue += r.revenue; into.vendor_cost += r.vendor_cost; into.margin = into.revenue - into.vendor_cost; };
+    const perMonth = new Map(months.map(month => [month, { month, ...zero() }]));
+    const prods = new Map(st.platform.map(pp => [pp.id, { platform_product_id: pp.id, name: pp.name, kind: pp.kind, active: pp.active, ...zero(), this_month: zero() }]));
+    const thisMonth = months[months.length - 1];
+    for (const o of st.orders) {
+      if (o.status === 'cancelled' || !(o.paid_amount > 0) || !o.paid_at) continue;
+      const month = taipeiMonth(o.paid_at);
+      if (!perMonth.has(month)) continue;
+      for (const i of o.items) {
+        if (!i.platform_option_id) continue;
+        const pp = st.platform.find(x => x.options.some(op => op.id === i.platform_option_id));
+        if (!pp) continue;
+        const r = { qty: i.qty, revenue: i.unit_cost * i.qty, vendor_cost: i.vendor_cost * i.qty };
+        add(perMonth.get(month), r);
+        const p = prods.get(pp.id);
+        add(p, r);
+        if (month === thisMonth) add(p.this_month, r);
+      }
+    }
+    return { per_month: [...perMonth.values()], this_month: perMonth.get(thisMonth), products: [...prods.values()] };
+  }
+
+  // ── the platform catalogue (A2), mirroring worker.js: readProducts,
+  // readPlatformProducts, adoptedOptions, productOptions(PLATFORM_MONEY) ───
+  const MONEY_MAX = 10_000_000;
+  const isMoney = v => Number.isSafeInteger(v) && v >= 0 && v <= MONEY_MAX;
+  const platformOf = ppId => st.platform.find(x => x.id === ppId) || null;
+  // an adopted product as the photographer reads it: the platform's live kind,
+  // name, description, photo_count, image and option labels; cost is the
+  // current platform price; never the vendor cost
+  const viewProduct = p => {
+    const pp = p.platform_product_id ? platformOf(p.platform_product_id) : null;
+    const adopted = !!p.platform_product_id;
+    const v = { ...p, platform_active: adopted ? (pp ? pp.active : 0) : null };
+    if (pp) Object.assign(v, { kind: pp.kind, name: pp.name, description: pp.description, photo_count: pp.photo_count,
+      has_image: pp.has_image, image_type: pp.image_type, image_updated_at: pp.image_updated_at });
+    v.options = p.options.map(o => {
+      if (!o.platform_option_id) return { ...o };
+      const po = pp ? pp.options.find(x => x.id === o.platform_option_id) : null;
+      return { ...o, label: po ? po.label : o.label, cost: po ? po.platform_price : o.cost,
+        platform_price: po ? po.platform_price : null, platform_active: po ? po.active : null,
+        below_platform_price: !!po && o.price < po.platform_price };
+    });
+    return v;
+  };
+  const platView = pp => ({ id: pp.id, kind: pp.kind, name: pp.name, description: pp.description, photo_count: pp.photo_count,
+    active: pp.active, sort: pp.sort, has_image: pp.has_image, image_type: pp.image_type, image_updated_at: pp.image_updated_at,
+    created_at: NOW, updated_at: NOW, options: pp.options.map(o => ({ ...o })) });
+  // the photographer's option, as an order line reads it
   const optionOf = optionId => {
-    for (const p of st.products) for (const op of p.options) if (op.id === optionId) return { p, op };
+    for (const raw of st.products) for (const op of viewProduct(raw).options) if (op.id === optionId) return { p: viewProduct(raw), op };
     return null;
+  };
+  // an option is usable for a new line unless it, its product or (adopted) the platform's is retired
+  const optionUsable = ({ p, op }) => !!op.active && !!p.active && (!op.platform_option_id || (!!p.platform_active && !!op.platform_active));
+  const vendorCostOf = op => {
+    const pp = op.platform_option_id ? st.platform.find(x => x.options.some(o => o.id === op.platform_option_id)) : null;
+    return pp ? pp.options.find(o => o.id === op.platform_option_id).vendor_cost : 0;
   };
   const bad = (code, status = 400) => ({ status, body: { error: code.replace(/_/g, ' '), code } });
 
-  function handle(method, path, params, body) {
+  // productOptions(): {id?, label, ...money}; returns {options} | {bad}
+  function checkOptions(value, existingIds, money) {
+    if (!Array.isArray(value) || !value.length || value.length > 20) return { bad: 'invalid_options' };
+    const seen = new Set(), options = [];
+    for (const [i, o] of value.entries()) {
+      if (!o || typeof o !== 'object' || Array.isArray(o)) return { bad: 'invalid_options' };
+      if (o.id !== undefined) {
+        if (typeof o.id !== 'string' || !existingIds.has(o.id) || seen.has(o.id)) return { bad: 'invalid_options' };
+        seen.add(o.id);
+      }
+      const label = o.label == null ? '' : o.label;
+      if (typeof label !== 'string' || [...label.trim()].length > 60) return { bad: 'invalid_label' };
+      const option = { id: o.id, label: label.trim(), sort: i };
+      for (const [field, code, dflt] of money) {
+        const v = o[field] === undefined && dflt !== undefined ? dflt : o[field];
+        if (!isMoney(v)) return { bad: code };
+        option[field] = v;
+      }
+      options.push(option);
+    }
+    return { options };
+  }
+  const CUSTOM_MONEY = [['price', 'invalid_price'], ['cost', 'invalid_cost', 0]];
+  const PLATFORM_MONEY = [['vendor_cost', 'invalid_vendor_cost'], ['platform_price', 'invalid_platform_price']];
+  // productFields(): kind/name/description/photo_count/sort of a body
+  function checkFields(body, partial, kinds) {
+    const set = {};
+    if (!partial || 'kind' in body) { if (!kinds.includes(body.kind)) return { bad: 'invalid_kind' }; set.kind = body.kind; }
+    if (!partial || 'name' in body) {
+      const v = typeof body.name === 'string' ? body.name.trim() : '';
+      if (!v || [...v].length > 60) return { bad: 'invalid_name' };
+      set.name = v;
+    }
+    if ('description' in body) {
+      const v = body.description === null ? '' : body.description;
+      if (typeof v !== 'string' || [...v.trim()].length > 500) return { bad: 'invalid_description' };
+      set.description = v.trim();
+    }
+    if ('photo_count' in body) {
+      const v = body.photo_count;
+      if (v !== null && !(Number.isSafeInteger(v) && v >= 1 && v <= 500)) return { bad: 'invalid_photo_count' };
+      set.photo_count = v;
+    }
+    if ('sort' in body) { if (!(Number.isSafeInteger(body.sort) && body.sort >= 0)) return { bad: 'invalid_sort' }; set.sort = body.sort; }
+    return { set };
+  }
+  // adoptedOptions(): [{platform_option_id, price}] against one platform product
+  function checkAdopted(value, pp) {
+    if (!Array.isArray(value) || !value.length || value.length > 20) return { bad: 'invalid_options' };
+    const seen = new Set(), options = [];
+    for (const [i, o] of value.entries()) {
+      if (!o || typeof o !== 'object' || Array.isArray(o)) return { bad: 'invalid_options' };
+      const po = typeof o.platform_option_id === 'string' ? pp.options.find(x => x.id === o.platform_option_id) : null;
+      if (!po || seen.has(po.id)) return { bad: 'invalid_options' };
+      seen.add(po.id);
+      if (!isMoney(o.price)) return { bad: 'invalid_price' };
+      if (!(po.active && pp.active)) return { bad: 'retired_option' };
+      if (o.price < po.platform_price) return { bad: 'below_platform_price' };
+      options.push({ platform_option_id: po.id, label: po.label, price: o.price, cost: po.platform_price, sort: i });
+    }
+    return { options };
+  }
+  // sniffImageType(): PNG / JPEG / WebP by magic bytes
+  function sniff(b) {
+    if (!b || b.length < 12) return null;
+    if (b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47) return 'image/png';
+    if (b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return 'image/jpeg';
+    if (b.slice(0, 4).toString() === 'RIFF' && b.slice(8, 12).toString() === 'WEBP') return 'image/webp';
+    return null;
+  }
+
+  function handle(method, path, params, body, bytes) {
     if (st.inject) { const hit = st.inject(method, path, body); if (hit) return hit; }
     let m;
-    if (path === '/api/admin/products' && method === 'GET') return { body: { products: st.products } };
-    if (path === '/api/admin/products' && method === 'POST') {
-      if (!['album', 'print', 'service'].includes(body.kind)) return bad('invalid_kind');
-      if (!body.name || !String(body.name).trim()) return bad('invalid_name');
-      if (!Array.isArray(body.options) || !body.options.length) return bad('invalid_options');
-      if (body.options.some(o => !Number.isSafeInteger(o.price) || o.price < 0)) return bad('invalid_price');
-      const p = {
-        id: id('prod'), kind: body.kind, name: body.name.trim(), description: body.description || '',
-        photo_count: body.kind === 'album' ? (body.photo_count ?? null) : null, guest_visible: 0, active: 1, sort: 0,
-        has_image: false, image_type: null, image_updated_at: null, created_at: NOW, updated_at: NOW,
-        options: body.options.map((o, i) => ({ id: id('opt'), label: o.label || '', price: o.price, cost: o.cost ?? 0, active: 1, sort: i })),
-      };
+    // ── the public platform image ──
+    if ((m = /^\/api\/platform\/products\/([^/]+)\/image$/.exec(path))) {
+      if (method !== 'GET') return { status: 405, body: { error: 'Method not allowed' } };
+      const pp = platformOf(decodeURIComponent(m[1]));
+      if (!pp || !pp.has_image) return { status: 404, body: { error: 'Not found' } };
+      return { raw: PIXEL, type: 'image/png' };
+    }
+    // ── the operator's catalogue ──
+    if (path === '/api/operator/products' && method === 'GET') return { body: { products: st.platform.map(platView) } };
+    if (path === '/api/operator/products' && method === 'POST') {
+      const f = checkFields(body, false, ['print', 'album']);
+      if (f.bad) return bad(f.bad);
+      const opts = checkOptions(body.options, new Set(), PLATFORM_MONEY);
+      if (opts.bad) return bad(opts.bad);
+      const pp = { id: id('plat'), description: '', photo_count: null, sort: 0, ...f.set, active: 1, has_image: false, image_type: null, image_updated_at: null,
+        options: opts.options.map(o => ({ id: id('popt'), label: o.label, vendor_cost: o.vendor_cost, platform_price: o.platform_price, active: 1, sort: o.sort })) };
+      if (pp.kind !== 'album') pp.photo_count = null;
+      st.platform.push(pp);
+      return { status: 201, body: { product: platView(pp) } };
+    }
+    if ((m = /^\/api\/operator\/products\/([^/]+)$/.exec(path)) && method === 'PUT') {
+      const pp = platformOf(m[1]);
+      if (!pp) return { status: 404, body: { error: 'Not found' } };
+      const f = checkFields(body, true, ['print', 'album']);
+      if (f.bad) return bad(f.bad);
+      let opts = null;
+      if ('options' in body) {
+        const c = checkOptions(body.options, new Set(pp.options.map(o => o.id)), PLATFORM_MONEY);
+        if (c.bad) return bad(c.bad);
+        opts = c.options;
+      }
+      Object.assign(pp, f.set);
+      if (pp.kind !== 'album') pp.photo_count = null;
+      if (opts) {
+        const keep = new Set(opts.filter(o => o.id).map(o => o.id));
+        pp.options.forEach(o => { if (!keep.has(o.id)) o.active = 0; });
+        opts.forEach(o => {
+          if (o.id) Object.assign(pp.options.find(x => x.id === o.id), { label: o.label, vendor_cost: o.vendor_cost, platform_price: o.platform_price, sort: o.sort, active: 1 });
+          else pp.options.push({ id: id('popt'), label: o.label, vendor_cost: o.vendor_cost, platform_price: o.platform_price, active: 1, sort: o.sort });
+        });
+        pp.options.sort((a, b) => a.sort - b.sort);
+      }
+      return { body: { product: platView(pp) } };
+    }
+    if ((m = /^\/api\/operator\/products\/([^/]+)\/(retire|restore)$/.exec(path)) && method === 'POST') {
+      const pp = platformOf(m[1]);
+      if (!pp) return { status: 404, body: { error: 'Not found' } };
+      pp.active = m[2] === 'restore' ? 1 : 0;
+      return { body: { ok: true, active: pp.active } };
+    }
+    if ((m = /^\/api\/operator\/products\/([^/]+)\/image$/.exec(path)) && (method === 'PUT' || method === 'DELETE')) {
+      const pp = platformOf(m[1]);
+      if (!pp) return { status: 404, body: { error: 'Not found' } };
+      if (method === 'DELETE') { Object.assign(pp, { has_image: false, image_type: null, image_updated_at: null }); return { body: { ok: true, has_image: false } }; }
+      if (bytes.length > 204800) return { status: 413, body: { error: '商品圖片不可超過 200 KB', code: 'too_large', max: 204800 } };
+      const type = sniff(bytes);
+      if (!type) return { status: 415, body: { error: '商品圖片只接受 PNG、JPEG 或 WebP', code: 'unsupported_type' } };
+      const stamp = new Date(Date.parse(NOW) + (++st.imageSeq) * 1000).toISOString();
+      Object.assign(pp, { has_image: true, image_type: type, image_updated_at: stamp });
+      return { body: { ok: true, has_image: true, image_type: type, image_updated_at: stamp, size: bytes.length } };
+    }
+    if (path === '/api/operator/stats' && method === 'GET') return { body: operatorStats() };
+    // ── the photographer's view of the platform ──
+    if (path === '/api/admin/platform-products' && method === 'GET') {
+      const products = st.platform.filter(pp => pp.active).map(pp => {
+        const mine = st.products.find(p => p.platform_product_id === pp.id);
+        return { id: pp.id, kind: pp.kind, name: pp.name, description: pp.description, photo_count: pp.photo_count, sort: pp.sort,
+          has_image: pp.has_image, image_updated_at: pp.image_updated_at, adopted_product_id: mine ? mine.id : null,
+          options: pp.options.filter(o => o.active).map(o => ({ id: o.id, label: o.label, platform_price: o.platform_price, sort: o.sort })) };
+      }).filter(p => p.options.length);
+      return { body: { products } };
+    }
+    if (path === '/api/admin/products/from-platform' && method === 'POST') {
+      const pp = typeof body.platform_product_id === 'string' ? platformOf(body.platform_product_id) : null;
+      if (!pp) return bad('unknown_platform_product');
+      if (!pp.active) return bad('retired_option');
+      const opts = checkAdopted(body.options, pp);
+      if (opts.bad) return bad(opts.bad);
+      const existing = st.products.find(p => p.platform_product_id === pp.id);
+      if (existing) return { status: 409, body: { error: '已加入這個平台商品', code: 'already_adopted', product_id: existing.id } };
+      const p = { id: id('prod'), kind: pp.kind, name: pp.name, description: pp.description, photo_count: pp.photo_count, guest_visible: 0, active: 1, sort: 0,
+        has_image: false, image_type: null, image_updated_at: null, created_at: NOW, updated_at: NOW, platform_product_id: pp.id,
+        options: opts.options.map(o => ({ id: id('opt'), label: o.label, price: o.price, cost: o.cost, active: 1, sort: o.sort, platform_option_id: o.platform_option_id })) };
       st.products.push(p);
-      return { status: 201, body: { product: p } };
+      return { status: 201, body: { product: viewProduct(p) } };
+    }
+    // ── the photographer's products ──
+    if (path === '/api/admin/products' && method === 'GET') return { body: { products: st.products.map(viewProduct) } };
+    if (path === '/api/admin/products' && method === 'POST') {
+      const f = checkFields(body, false, ['album', 'print', 'service']);
+      if (f.bad) return bad(f.bad);
+      if (f.set.kind !== 'service') return bad('platform_only');
+      const opts = checkOptions(body.options, new Set(), CUSTOM_MONEY);
+      if (opts.bad) return bad(opts.bad);
+      const p = {
+        id: id('prod'), description: '', photo_count: null, guest_visible: 0, sort: 0, ...f.set, active: 1,
+        has_image: false, image_type: null, image_updated_at: null, created_at: NOW, updated_at: NOW, platform_product_id: null,
+        options: opts.options.map(o => ({ id: id('opt'), label: o.label, price: o.price, cost: o.cost, active: 1, sort: o.sort })),
+      };
+      p.photo_count = null;
+      st.products.push(p);
+      return { status: 201, body: { product: viewProduct(p) } };
     }
     if ((m = /^\/api\/admin\/products\/([^/]+)$/.exec(path)) && method === 'PUT') {
       const p = st.products.find(x => x.id === m[1]);
       if (!p) return { status: 404, body: { error: 'Not found' } };
-      if (!body.name || !String(body.name).trim()) return bad('invalid_name');
-      if (!Array.isArray(body.options) || !body.options.length) return bad('invalid_options');
-      p.name = body.name.trim();
-      if ('description' in body) p.description = body.description;
-      if ('photo_count' in body) p.photo_count = p.kind === 'album' ? body.photo_count : null;
-      const keep = new Set(body.options.filter(o => o.id).map(o => o.id));
-      p.options.forEach(o => { if (!keep.has(o.id)) o.active = 0; });
-      body.options.forEach((o, i) => {
-        if (o.id) Object.assign(p.options.find(x => x.id === o.id), { label: o.label, price: o.price, cost: o.cost, sort: i, active: 1 });
-        else p.options.push({ id: id('opt'), label: o.label, price: o.price, cost: o.cost, active: 1, sort: i });
-      });
-      return { body: { product: p } };
+      if (p.platform_product_id) {
+        if (['kind', 'name', 'description', 'photo_count'].some(k => k in body)) return bad('platform_managed');
+        const f = checkFields(body, true, []);
+        if (f.bad) return bad(f.bad);
+        let opts = null;
+        if ('options' in body) {
+          const pp = platformOf(p.platform_product_id) || { active: 0, options: [] };
+          const c = checkAdopted(body.options, pp);
+          if (c.bad) return bad(c.bad);
+          opts = c.options;
+        }
+        if (opts) {
+          const keep = new Set(opts.map(o => o.platform_option_id));
+          p.options.forEach(o => { if (!keep.has(o.platform_option_id)) o.active = 0; });
+          opts.forEach(o => {
+            const row = p.options.find(x => x.platform_option_id === o.platform_option_id);
+            if (row) Object.assign(row, { price: o.price, cost: o.cost, label: o.label, sort: o.sort, active: 1 });
+            else p.options.push({ id: id('opt'), label: o.label, price: o.price, cost: o.cost, active: 1, sort: o.sort, platform_option_id: o.platform_option_id });
+          });
+        }
+        if ('sort' in f.set) p.sort = f.set.sort;
+        return { body: { product: viewProduct(p) } };
+      }
+      const f = checkFields(body, true, ['album', 'print', 'service']);
+      if (f.bad) return bad(f.bad);
+      if (f.set.kind !== undefined && f.set.kind !== 'service') return bad('platform_only');
+      let opts = null;
+      if ('options' in body) {
+        const c = checkOptions(body.options, new Set(p.options.map(o => o.id)), CUSTOM_MONEY);
+        if (c.bad) return bad(c.bad);
+        opts = c.options;
+      }
+      Object.assign(p, f.set);
+      if (p.kind !== 'album') p.photo_count = null;
+      if (opts) {
+        const keep = new Set(opts.filter(o => o.id).map(o => o.id));
+        p.options.forEach(o => { if (!keep.has(o.id)) o.active = 0; });
+        opts.forEach(o => {
+          if (o.id) Object.assign(p.options.find(x => x.id === o.id), { label: o.label, price: o.price, cost: o.cost, sort: o.sort, active: 1 });
+          else p.options.push({ id: id('opt'), label: o.label, price: o.price, cost: o.cost, active: 1, sort: o.sort });
+        });
+      }
+      return { body: { product: viewProduct(p) } };
     }
     if ((m = /^\/api\/admin\/products\/([^/]+)\/(retire|restore)$/.exec(path)) && method === 'POST') {
       const p = st.products.find(x => x.id === m[1]);
@@ -7387,10 +7643,14 @@ function ordersFake(opts = {}) {
         for (const l of body.lines) {
           const hit = optionOf(l.option_id);
           if (!hit) return bad('unknown_option');
-          if (!hit.op.active || !hit.p.active) return bad('retired_option');
+          if (!optionUsable(hit)) return bad('retired_option');
           if (!(Number.isSafeInteger(l.qty) && l.qty >= 1 && l.qty <= 999)) return bad('invalid_qty');
-          items.push({ kind: hit.p.kind, product_id: hit.p.id, option_id: hit.op.id, name: hit.p.name, option_label: hit.op.label,
-            unit_price: l.unit_price ?? hit.op.price, unit_cost: hit.op.cost, qty: l.qty, photo_keys: l.photo_keys || [] });
+          const line = { kind: hit.p.kind, product_id: hit.p.id, option_id: hit.op.id, name: hit.p.name, option_label: hit.op.label,
+            unit_price: l.unit_price ?? hit.op.price, unit_cost: hit.op.cost, qty: l.qty, photo_keys: l.photo_keys || [],
+            platform_option_id: hit.op.platform_option_id ?? null, vendor_cost: vendorCostOf(hit.op) };
+          // the platform price is a floor, an explicit unit_price included
+          if (line.platform_option_id && line.unit_price < hit.op.platform_price) return bad('below_platform_price');
+          items.push(line);
         }
         const sub = items.reduce((n, i) => n + i.unit_price * i.qty, 0);
         if ((body.discount ?? 0) > sub) return bad('discount_exceeds_subtotal');
@@ -7406,13 +7666,19 @@ function ordersFake(opts = {}) {
       for (const l of body.lines ?? o.items.map(i => ({ id: i.id }))) {
         const old = l.id ? o.items.find(i => i.id === l.id) : null;
         if (l.id && !old) return bad('unknown_line');
-        if (old) items.push({ ...old, qty: l.qty ?? old.qty, unit_price: l.unit_price ?? old.unit_price, photo_keys: l.photo_keys ?? old.photo_keys });
-        else {
+        if (old) {
+          // a kept platform line is never repriced under its own snapshotted cost
+          if (old.platform_option_id && l.unit_price != null && l.unit_price < old.unit_cost) return bad('below_platform_price');
+          items.push({ ...old, qty: l.qty ?? old.qty, unit_price: l.unit_price ?? old.unit_price, photo_keys: l.photo_keys ?? old.photo_keys });
+        } else {
           const hit = optionOf(l.option_id);
           if (!hit) return bad('unknown_option');
-          if (!hit.op.active || !hit.p.active) return bad('retired_option');
-          items.push({ id: id('item'), order_id: o.id, kind: hit.p.kind, product_id: hit.p.id, option_id: hit.op.id, name: hit.p.name,
-            option_label: hit.op.label, unit_price: l.unit_price ?? hit.op.price, unit_cost: hit.op.cost, qty: l.qty, photo_keys: l.photo_keys || [] });
+          if (!optionUsable(hit)) return bad('retired_option');
+          const line = { id: id('item'), order_id: o.id, kind: hit.p.kind, product_id: hit.p.id, option_id: hit.op.id, name: hit.p.name,
+            option_label: hit.op.label, unit_price: l.unit_price ?? hit.op.price, unit_cost: hit.op.cost, qty: l.qty, photo_keys: l.photo_keys || [],
+            platform_option_id: hit.op.platform_option_id ?? null, vendor_cost: vendorCostOf(hit.op) };
+          if (line.platform_option_id && line.unit_price < hit.op.platform_price) return bad('below_platform_price');
+          items.push(line);
         }
       }
       const discount = 'discount' in body ? body.discount : o.discount;
@@ -7457,33 +7723,52 @@ function ordersFake(opts = {}) {
       const u = new URL(req.url());
       const method = req.method();
       const p = u.pathname;
-      const mine = /^\/api\/admin\/(products|orders)(\/|$)/.test(p) || /^\/api\/admin\/projects\/[^/]+\/orders$/.test(p);
+      const isPublic = /^\/api\/platform\//.test(p);
+      const isOperator = /^\/api\/operator\//.test(p);
+      const mine = isPublic || isOperator || /^\/api\/admin\/(products|orders|platform-products)(\/|$)/.test(p) || /^\/api\/admin\/projects\/[^/]+\/orders$/.test(p);
       if (!mine) return route.fallback();
       let body = null;
-      try { body = JSON.parse(req.postData() || 'null'); } catch (e) { /* none */ }
+      try { body = JSON.parse(req.postData() || 'null'); } catch (e) { /* none, or raw bytes */ }
+      const bytes = req.postDataBuffer() || Buffer.alloc(0);
       const h = await req.allHeaders();
-      st.calls.push({ method, path: p, search: u.search, body, auth: h['authorization'] || null });
-      if ((h['authorization'] || null) !== 'Bearer adm')
+      st.calls.push({ method, path: p, search: u.search, body, auth: h['authorization'] || null, size: bytes.length, type: h['content-type'] || null });
+      // the two sides never open each other's routes: the operator token is
+      // refused on /api/admin and the photographer's on /api/operator
+      if (!isPublic && (h['authorization'] || null) !== (isOperator ? `Bearer ${st.operatorToken}` : 'Bearer adm'))
         return route.fulfill({ status: 401, contentType: 'application/json', body: JSON.stringify({ error: 'Unauthorized' }) });
-      const res = handle(method, p, u.searchParams, body || {}) || { status: 404, body: { error: 'Not found' } };
+      const res = handle(method, p, u.searchParams, body || {}, bytes) || { status: 404, body: { error: 'Not found' } };
+      if (res.raw) return route.fulfill({ status: res.status || 200, contentType: res.type, body: res.raw });
       route.fulfill({ status: res.status || 200, contentType: 'application/json', body: JSON.stringify(res.body) });
     });
   };
   return { st, attach };
 }
 
-const PROD_ALBUM = { id: 'prod-album', kind: 'album', name: '相本書', description: '20 頁精裝', photo_count: 20, guest_visible: 0, active: 1, sort: 0,
-  has_image: false, image_type: null, image_updated_at: null, created_at: '', updated_at: '',
+// The platform's own catalogue (what the operator lists) and the photographer's
+// adopted products from it. An adopted option's label / cost are read from the
+// platform live, so the copies stored on the adopted rows are only placeholders.
+const PLAT_ALBUM = { id: 'plat-album', kind: 'album', name: '相本書', description: '20 頁精裝', photo_count: 20, active: 1, sort: 0,
+  has_image: true, image_type: 'image/png', image_updated_at: '2026-09-01T00:00:00.000Z',
   options: [
-    { id: 'opt-album-s', label: '8×8 吋', price: 3800, cost: 1500, active: 1, sort: 0 },
-    { id: 'opt-album-l', label: '12×12 吋', price: 5800, cost: 2400, active: 1, sort: 1 },
-    { id: 'opt-album-old', label: '舊規格', price: 100, cost: 50, active: 0, sort: 2 },
+    { id: 'popt-album-s', label: '8×8 吋', vendor_cost: 1400, platform_price: 1500, active: 1, sort: 0 },
+    { id: 'popt-album-l', label: '12×12 吋', vendor_cost: 2300, platform_price: 2400, active: 1, sort: 1 },
+    { id: 'popt-album-old', label: '舊規格', vendor_cost: 40, platform_price: 50, active: 0, sort: 2 },
+  ] };
+const PLAT_PRINT = { id: 'plat-print', kind: 'print', name: '無框畫', description: '', photo_count: null, active: 1, sort: 1,
+  has_image: false, image_type: null, image_updated_at: null,
+  options: [{ id: 'popt-print', label: '', vendor_cost: 450, platform_price: 500, active: 1, sort: 0 }] };
+const PROD_ALBUM = { id: 'prod-album', kind: 'album', name: '相本書', description: '20 頁精裝', photo_count: 20, guest_visible: 0, active: 1, sort: 0,
+  has_image: false, image_type: null, image_updated_at: null, created_at: '', updated_at: '', platform_product_id: 'plat-album',
+  options: [
+    { id: 'opt-album-s', label: '8×8 吋', price: 3800, cost: 1500, active: 1, sort: 0, platform_option_id: 'popt-album-s' },
+    { id: 'opt-album-l', label: '12×12 吋', price: 5800, cost: 2400, active: 1, sort: 1, platform_option_id: 'popt-album-l' },
+    { id: 'opt-album-old', label: '舊規格', price: 100, cost: 50, active: 0, sort: 2, platform_option_id: 'popt-album-old' },
   ] };
 const PROD_PRINT = { id: 'prod-print', kind: 'print', name: '無框畫', description: '', photo_count: null, guest_visible: 0, active: 1, sort: 1,
-  has_image: false, image_type: null, image_updated_at: null, created_at: '', updated_at: '',
-  options: [{ id: 'opt-print', label: '', price: 1200, cost: 500, active: 1, sort: 0 }] };
+  has_image: false, image_type: null, image_updated_at: null, created_at: '', updated_at: '', platform_product_id: 'plat-print',
+  options: [{ id: 'opt-print', label: '', price: 1200, cost: 500, active: 1, sort: 0, platform_option_id: 'popt-print' }] };
 const PROD_SERVICE_OFF = { id: 'prod-svc', kind: 'service', name: '急件加修', description: '', photo_count: null, guest_visible: 0, active: 0, sort: 2,
-  has_image: false, image_type: null, image_updated_at: null, created_at: '', updated_at: '',
+  has_image: false, image_type: null, image_updated_at: null, created_at: '', updated_at: '', platform_product_id: null,
   options: [{ id: 'opt-svc', label: '', price: 500, cost: 0, active: 1, sort: 0 }] };
 const clone = x => JSON.parse(JSON.stringify(x));
 const waitText = (page, sel, pred, timeout = 4000) =>
@@ -7491,32 +7776,47 @@ const waitText = (page, sel, pred, timeout = 4000) =>
     [sel, pred.toString()], { timeout });
 
 // ── settings: 商品 ──────────────────────────────────────────────────────────
+const platFx = () => [clone(PLAT_ALBUM), clone(PLAT_PRINT)];
+const T = (page, sel) => page.textContent(sel);
+const disp = (page, sel) => page.$eval(sel, e => getComputedStyle(e).display);
+const RED = 'rgb(192, 57, 43)';
 {
   const m = dashSettingsMock();
-  const o = ordersFake({ products: [clone(PROD_ALBUM), clone(PROD_PRINT), clone(PROD_SERVICE_OFF)] });
-  await suite('設定 — 商品清單：相本／輸出品／服務用友善名稱，下架的灰掉並可重新上架，金額為 NT$',
+  const o = ordersFake({ platform: platFx(), products: [clone(PROD_ALBUM), clone(PROD_PRINT), clone(PROD_SERVICE_OFF)] });
+  await suite('設定 — 商品清單：平台商品有圖與平台價、自訂服務有成本，下架的灰掉並可重新上架，金額為 NT$',
     `${base}/settings.html`,
     async page => {
       const out = [];
       const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
       await page.waitForSelector('.prod-row', { timeout: 5000 });
       const rows = await page.$$eval('.prod-row', els => els.map(e => ({
-        id: e.dataset.productId, retired: e.classList.contains('retired'), opacity: getComputedStyle(e).opacity,
+        id: e.dataset.productId, retired: e.classList.contains('retired'), opacity: getComputedStyle(e).opacity, adopted: e.dataset.adopted,
         kind: e.querySelector('.pill[data-kind]').textContent, text: e.textContent.replace(/\s+/g, ' '),
         buttons: [...e.querySelectorAll('button')].map(b => b.textContent),
+        img: e.querySelector('img.prod-thumb') ? e.querySelector('img.prod-thumb').getAttribute('src') : null,
+        placeholder: !!e.querySelector('div.prod-thumb.none'),
       })));
       ok('three products listed, active first', rows.map(r => r.id).join() === 'prod-album,prod-print,prod-svc', JSON.stringify(rows.map(r => r.id)));
       ok('kinds shown as 相本 / 輸出品 / 服務, not album/print/service',
         rows.map(r => r.kind).join() === '相本,輸出品,服務', JSON.stringify(rows.map(r => r.kind)));
-      ok('an album shows its options with 售價 and 成本 as NT$1,234-style money',
-        rows[0].text.includes('8×8 吋 · 售價 NT$3,800 · 成本 NT$1,500') && rows[0].text.includes('12×12 吋 · 售價 NT$5,800 · 成本 NT$2,400'), rows[0].text);
+      ok('an adopted album shows 平台價 and 售價 per option as NT$1,234-style money, no 成本 column',
+        rows[0].text.includes('8×8 吋 · 平台價 NT$1,500 · 售價 NT$3,800') && rows[0].text.includes('12×12 吋 · 平台價 NT$2,400 · 售價 NT$5,800') && !rows[0].text.includes('成本'), rows[0].text);
+      ok('it is tagged 平台商品; a custom service is not', rows[0].text.includes('平台商品') && !rows[2].text.includes('平台商品'), rows[2].text);
       ok('a retired option of an active product is not listed', !rows[0].text.includes('舊規格'));
-      ok('an option with no label reads （單一規格）', rows[1].text.includes('（單一規格） · 售價 NT$1,200'), rows[1].text);
+      ok('an option with no label reads （單一規格）', rows[1].text.includes('（單一規格） · 平台價 NT$500 · 售價 NT$1,200'), rows[1].text);
       ok('the album says how many photos it is set for', rows[0].text.includes('指定 20 張'));
+      ok('a custom service still shows 售價 and 成本', rows[2].text.includes('售價 NT$500 · 成本 NT$0'), rows[2].text);
+      ok('the adopted album shows the platform image from the public route (no token in the URL)',
+        rows[0].img && rows[0].img.includes('/api/platform/products/plat-album/image') && !rows[0].img.includes('adm') && !rows[0].img.includes('t='), String(rows[0].img));
+      await page.waitForFunction(() => { const i = document.querySelector('[data-product-id="prod-album"] img.prod-thumb'); return i && i.complete && i.naturalWidth > 0; }, null, { timeout: 4000 });
+      ok('…and it actually loaded', true);
+      ok('an adopted product with no platform image shows a 無圖 placeholder, not a broken img', rows[1].img === null && rows[1].placeholder);
+      ok('a custom product has no thumbnail slot at all', rows[2].img === null && !rows[2].placeholder);
       ok('active rows are full strength and offer 下架 (not 重新上架)',
         !rows[0].retired && rows[0].opacity === '1' && rows[0].buttons.includes('下架') && !rows[0].buttons.includes('重新上架'), JSON.stringify(rows[0]));
       ok('the retired row is greyed (computed opacity < 1), tagged 已下架 and offers 重新上架 (not 下架)',
         rows[2].retired && Number(rows[2].opacity) < 1 && rows[2].text.includes('已下架') && rows[2].buttons.includes('重新上架') && !rows[2].buttons.includes('下架'), JSON.stringify(rows[2]));
+      ok('no warning anywhere while every 售價 is at or above 平台價', (await page.$$('.warn-below')).length === 0 && (await page.$$('[data-below]')).length === 0);
       ok('the catalogue was read with the admin token', o.st.calls[0]?.auth === 'Bearer adm');
 
       await page.click('[data-product-id="prod-svc"] [data-restore]');
@@ -7538,73 +7838,76 @@ const waitText = (page, sel, pred, timeout = 4000) =>
 {
   const m = dashSettingsMock();
   const o = ordersFake({ products: [] });
-  await suite('設定 — 新增商品：驗證、規格列增減（至少一列）、只有相本才問張數，送出的內容正確',
+  await suite('設定 — 新增服務：自訂商品只有服務（沒有類型選單、不問張數），驗證、規格列增減，送出的內容正確',
     `${base}/settings.html`,
     async page => {
       const out = [];
       const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
       await page.waitForSelector('#prod-list .hint', { timeout: 5000 });
-      ok('an empty catalogue says so', (await page.textContent('#prod-list')).includes('還沒有商品'));
+      ok('an empty catalogue points to both ways in', (await T(page, '#prod-list')).includes('從平台加入') && (await T(page, '#prod-list')).includes('新增服務'));
+      ok('the add button now reads 新增服務', (await T(page, '#prod-add-btn')).includes('新增服務'));
       ok('no form until asked', (await page.$('#prod-form')) === null);
       await page.click('#prod-add-btn');
       await page.waitForSelector('#prod-form');
-      const disp = sel => page.$eval(sel, e => getComputedStyle(e).display);
-      ok('an album asks for a photo count (computed display, not just the attribute)', (await disp('#pf-count-group')) !== 'none');
-      await page.selectOption('#pf-kind', 'print');
-      ok('a print does not', (await disp('#pf-count-group')) === 'none');
-      await page.selectOption('#pf-kind', 'service');
-      ok('nor does a service', (await disp('#pf-count-group')) === 'none');
-      await page.selectOption('#pf-kind', 'album');
-      ok('back to an album it is asked again', (await disp('#pf-count-group')) !== 'none');
-      ok('the add button hides while the form is open', (await disp('#prod-add-btn')) === 'none');
+      ok('the form is 新增服務', (await T(page, '#prod-form h3')) === '新增服務' && (await page.getAttribute('#prod-form', 'data-kind')) === 'service');
+      ok('there is no kind select and no album/print choice anywhere in the form',
+        (await page.$('#pf-kind')) === null && (await page.$$('#prod-form select')).length === 0 && !(await T(page, '#prod-form')).includes('相本書') && !(await T(page, '#prod-form')).includes('無框畫、放大'));
+      ok('and no photo-count field (removed from the DOM, not just hidden)', (await page.$('#pf-count-group')) === null && (await page.$('#pf-count')) === null);
+      ok('the add buttons hide while the form is open (computed display)', (await disp(page, '#prod-add-btn')) === 'none' && (await disp(page, '#plat-add-btn')) === 'none');
 
       await page.click('#pf-save');
-      ok('no name → a Chinese error and nothing sent', (await page.textContent('#pf-err')).includes('商品名稱必填') && !o.st.calls.some(c => c.method === 'POST'));
-      await page.fill('#pf-name', '相本書');
+      ok('no name → a Chinese error and nothing sent', (await T(page, '#pf-err')).includes('商品名稱必填') && !o.st.calls.some(c => c.method === 'POST'));
+      await page.fill('#pf-name', '急件加修');
       await page.click('#pf-save');
-      ok('a blank price is refused client-side', (await page.textContent('#pf-err')).includes('售價需為 0 以上的整數') && !o.st.calls.some(c => c.method === 'POST'));
-
+      ok('a blank price is refused client-side', (await T(page, '#pf-err')).includes('售價需為 0 以上的整數') && !o.st.calls.some(c => c.method === 'POST'));
       await page.click('#pf-options .opt-del');
       ok('removing the only option row is refused, the row stays',
-        (await page.$$('#pf-options .opt-row')).length === 1 && (await page.textContent('#pf-err')).includes('至少保留一個規格'));
+        (await page.$$('#pf-options .opt-row')).length === 1 && (await T(page, '#pf-err')).includes('至少保留一個規格'));
 
-      await page.fill('#pf-desc', '20 頁精裝');
-      await page.fill('#pf-count', '20');
-      await page.fill('#pf-options .opt-row:nth-child(1) .opt-label', '8×8 吋');
-      await page.fill('#pf-options .opt-row:nth-child(1) .opt-price', '3800');
-      await page.fill('#pf-options .opt-row:nth-child(1) .opt-cost', '1500');
+      await page.fill('#pf-desc', '三天內交件');
+      await page.fill('#pf-options .opt-row:nth-child(1) .opt-label', '加修 1 張');
+      await page.fill('#pf-options .opt-row:nth-child(1) .opt-price', '500');
+      await page.fill('#pf-options .opt-row:nth-child(1) .opt-cost', '100');
       await page.click('#pf-add-option');
       ok('新增規格 adds a row', (await page.$$('#pf-options .opt-row')).length === 2);
-      await page.fill('#pf-options .opt-row:nth-child(2) .opt-label', '12×12 吋');
-      await page.fill('#pf-options .opt-row:nth-child(2) .opt-price', '5800');
-      // cost left blank → 0
+      await page.fill('#pf-options .opt-row:nth-child(2) .opt-label', '加修 5 張');
+      await page.fill('#pf-options .opt-row:nth-child(2) .opt-price', '2000');
       await page.click('#pf-add-option');
       await page.click('#pf-options .opt-row:nth-child(3) .opt-del');
       ok('a row can be removed while others remain', (await page.$$('#pf-options .opt-row')).length === 2);
       await page.click('#pf-save');
       await page.waitForFunction(() => !document.getElementById('prod-form'), null, { timeout: 3000 });
       const post = o.st.calls.find(c => c.method === 'POST' && c.path === '/api/admin/products');
-      ok('POST carries kind, name, description, photo_count and the options (blank cost = 0)',
+      ok('POST carries kind service, name, description, photo_count null and the options (blank cost = 0)',
         JSON.stringify(post?.body) === JSON.stringify({
-          name: '相本書', description: '20 頁精裝', photo_count: 20,
-          options: [{ label: '8×8 吋', price: 3800, cost: 1500 }, { label: '12×12 吋', price: 5800, cost: 0 }], kind: 'album',
+          name: '急件加修', description: '三天內交件', photo_count: null,
+          options: [{ label: '加修 1 張', price: 500, cost: 100 }, { label: '加修 5 張', price: 2000, cost: 0 }], kind: 'service',
         }), JSON.stringify(post?.body));
-      ok('the form is gone from the DOM and 新增商品 is back', (await page.$('#prod-form')) === null && (await disp('#prod-add-btn')) !== 'none');
+      ok('the form is gone from the DOM and the add buttons are back', (await page.$('#prod-form')) === null && (await disp(page, '#prod-add-btn')) !== 'none' && (await disp(page, '#plat-add-btn')) !== 'none');
       await page.waitForSelector('.prod-row');
-      ok('the new product is listed with its money', (await page.textContent('.prod-row')).includes('12×12 吋 · 售價 NT$5,800 · 成本 NT$0'));
-      ok('and 已儲存商品 is shown', (await page.textContent('#prod-ok')).includes('已儲存商品'));
+      ok('the new service is listed with its money and tagged 服務', (await T(page, '.prod-row')).includes('加修 5 張 · 售價 NT$2,000 · 成本 NT$0') && (await T(page, '.prod-row .pill[data-kind]')) === '服務');
+      ok('and 已儲存商品 is shown', (await T(page, '#prod-ok')).includes('已儲存商品'));
 
-      // the Worker's own refusal is shown in Chinese, and the form stays
+      // the Worker's own refusals are shown in Chinese, and the form stays
       o.st.inject = (method, path) => (method === 'POST' && path === '/api/admin/products') ? { status: 400, body: { error: 'invalid price', code: 'invalid_price' } } : null;
       await page.click('#prod-add-btn');
-      await page.fill('#pf-name', '無框畫');
-      await page.selectOption('#pf-kind', 'print');
+      await page.fill('#pf-name', '外拍加時');
       await page.fill('#pf-options .opt-row .opt-price', '1200');
       await page.click('#pf-save');
       await waitText(page, '#pf-err', t => t.includes('售價需為'));
       ok('a server error code becomes a Chinese sentence and the form stays open', (await page.$('#prod-form')) !== null);
-      const post2 = o.st.calls.filter(c => c.method === 'POST' && c.path === '/api/admin/products').pop();
-      ok('a print sends photo_count null', post2.body.photo_count === null && post2.body.kind === 'print', JSON.stringify(post2.body));
+      o.st.inject = (method, path) => (method === 'POST' && path === '/api/admin/products') ? { status: 400, body: { error: 'platform only', code: 'platform_only' } } : null;
+      await page.click('#pf-save');
+      await waitText(page, '#pf-err', t => t.includes('從平台加入'));
+      ok('platform_only (should the Worker ever refuse) → 「相本與輸出品要從「從平台加入」新增…」', (await T(page, '#pf-err')).includes('自訂商品只能是服務'));
+      o.st.inject = null;
+      // the real fake refuses an album from the custom route, so the fake mirrors the Worker
+      const direct = await page.evaluate(async () => {
+        const r = await fetch('https://imagepicker.hotichen.workers.dev/api/admin/products', { method: 'POST', headers: { 'Authorization': 'Bearer adm', 'Content-Type': 'application/json' },
+          body: JSON.stringify({ kind: 'album', name: 'x', options: [{ label: '', price: 1 }] }) });
+        return { status: r.status, body: await r.json() };
+      });
+      ok('the fake answers 400 platform_only for a custom album, like the Worker', direct.status === 400 && direct.body.code === 'platform_only', JSON.stringify(direct));
       return out;
     },
     { before: async p => { await m.attach(p); await o.attach(p); }, initScript: SEED_TOKEN });
@@ -7612,42 +7915,39 @@ const waitText = (page, sel, pred, timeout = 4000) =>
 
 {
   const m = dashSettingsMock();
-  const o = ordersFake({ products: [clone(PROD_ALBUM)] });
-  await suite('設定 — 編輯商品：類型鎖定、規格帶入（含 id），改價／刪／加後 PUT 的內容正確',
+  const svc = { ...clone(PROD_SERVICE_OFF), active: 1, options: [
+    { id: 'opt-a', label: '加修 1 張', price: 500, cost: 100, active: 1, sort: 0 }, { id: 'opt-b', label: '加修 5 張', price: 2000, cost: 0, active: 1, sort: 1 },
+    { id: 'opt-old', label: '停賣', price: 1, cost: 0, active: 0, sort: 2 }] };
+  const o = ordersFake({ products: [svc] });
+  await suite('設定 — 編輯自訂服務：規格帶入（含 id），改價／刪／加後 PUT 的內容正確（不送 kind）',
     `${base}/settings.html`,
     async page => {
       const out = [];
       const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
       await page.waitForSelector('.prod-row', { timeout: 5000 });
-      await page.click('[data-product-id="prod-album"] [data-edit]');
+      await page.click('[data-product-id="prod-svc"] [data-edit]');
       await page.waitForSelector('#prod-form');
-      ok('title says 編輯商品 and the kind cannot be changed', (await page.textContent('#prod-form h3')) === '編輯商品' && await page.$eval('#pf-kind', e => e.disabled));
+      ok('title says 編輯商品, still no kind select', (await T(page, '#prod-form h3')) === '編輯商品' && (await page.$('#pf-kind')) === null && (await page.getAttribute('#prod-form', 'data-mode')) === 'edit');
       const rows = await page.$$eval('#pf-options .opt-row', els => els.map(e => ({ id: e.dataset.optionId, label: e.querySelector('.opt-label').value, price: e.querySelector('.opt-price').value, cost: e.querySelector('.opt-cost').value })));
       ok('only the active options are prefilled, each keeping its id',
         JSON.stringify(rows) === JSON.stringify([
-          { id: 'opt-album-s', label: '8×8 吋', price: '3800', cost: '1500' },
-          { id: 'opt-album-l', label: '12×12 吋', price: '5800', cost: '2400' }]), JSON.stringify(rows));
-      ok('name, description and photo count are prefilled',
-        (await page.inputValue('#pf-name')) === '相本書' && (await page.inputValue('#pf-desc')) === '20 頁精裝' && (await page.inputValue('#pf-count')) === '20');
-
-      await page.fill('#pf-options .opt-row:nth-child(1) .opt-price', '4000');
+          { id: 'opt-a', label: '加修 1 張', price: '500', cost: '100' }, { id: 'opt-b', label: '加修 5 張', price: '2000', cost: '0' }]), JSON.stringify(rows));
+      await page.fill('#pf-options .opt-row:nth-child(1) .opt-price', '600');
       await page.click('#pf-options .opt-row:nth-child(2) .opt-del');
       await page.click('#pf-add-option');
-      await page.fill('#pf-options .opt-row:nth-child(2) .opt-label', '10×10 吋');
-      await page.fill('#pf-options .opt-row:nth-child(2) .opt-price', '4900');
-      await page.fill('#pf-count', '');
+      await page.fill('#pf-options .opt-row:nth-child(2) .opt-label', '加修 3 張');
+      await page.fill('#pf-options .opt-row:nth-child(2) .opt-price', '1400');
       await page.click('#pf-save');
       await page.waitForFunction(() => !document.getElementById('prod-form'), null, { timeout: 3000 });
       const put = o.st.calls.find(c => c.method === 'PUT');
-      ok('PUT goes to the product, without kind; the kept option carries its id, the new one none, the removed one is absent; blank count = null',
-        put?.path === '/api/admin/products/prod-album' && JSON.stringify(put.body) === JSON.stringify({
-          name: '相本書', description: '20 頁精裝', photo_count: null,
-          options: [{ label: '8×8 吋', price: 4000, cost: 1500, id: 'opt-album-s' }, { label: '10×10 吋', price: 4900, cost: 0 }],
+      ok('PUT goes to the product, without kind; the kept option carries its id, the new one none, the removed one is absent',
+        put?.path === '/api/admin/products/prod-svc' && JSON.stringify(put.body) === JSON.stringify({
+          name: '急件加修', description: '', photo_count: null,
+          options: [{ label: '加修 1 張', price: 600, cost: 100, id: 'opt-a' }, { label: '加修 3 張', price: 1400, cost: 0 }],
         }), JSON.stringify(put));
-      await page.waitForFunction(() => document.querySelector('.prod-row')?.textContent.includes('NT$4,900'), null, { timeout: 3000 });
-      const text = await page.textContent('.prod-row');
-      ok('the list shows the new set and no longer the dropped option', text.includes('NT$4,000') && text.includes('10×10 吋') && !text.includes('12×12 吋'), text);
-
+      await page.waitForFunction(() => document.querySelector('.prod-row')?.textContent.includes('NT$1,400'), null, { timeout: 3000 });
+      const text = await T(page, '.prod-row');
+      ok('the list shows the new set and no longer the dropped option', text.includes('NT$600') && text.includes('加修 3 張') && !text.includes('加修 5 張'), text);
       await page.click('[data-edit]');
       await page.waitForSelector('#prod-form');
       await page.click('#pf-cancel');
@@ -7655,6 +7955,750 @@ const waitText = (page, sel, pred, timeout = 4000) =>
       return out;
     },
     { before: async p => { await m.attach(p); await o.attach(p); }, initScript: SEED_TOKEN });
+}
+
+// ── settings: 從平台加入 ────────────────────────────────────────────────────
+{
+  const m = dashSettingsMock();
+  const retiredPlat = { id: 'plat-frame', kind: 'print', name: '已停產相框', description: '', photo_count: null, active: 0, sort: 5, has_image: false, image_type: null, image_updated_at: null,
+    options: [{ id: 'popt-frame', label: '', vendor_cost: 100, platform_price: 100, active: 1, sort: 0 }] };
+  const o = ordersFake({ platform: [...platFx(), retiredPlat], products: [clone(PROD_PRINT)] });
+  await suite('設定 — 從平台加入：只列上架的平台商品（圖、說明、規格與平台價），已加入的顯示「已加入」並開編輯，勾規格填售價（≥ 平台價）後送出',
+    `${base}/settings.html`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('.prod-row', { timeout: 5000 });
+      ok('nothing of the platform list is shown until asked', (await page.$('#plat-form')) === null);
+      await page.click('#plat-add-btn');
+      await page.waitForSelector('#plat-form .plat-card');
+      const cards = await page.$$eval('.plat-card', els => els.map(e => ({ id: e.dataset.platformId, adopted: e.dataset.adopted, text: e.textContent.replace(/\s+/g, ' '),
+        img: e.querySelector('img.prod-thumb')?.getAttribute('src') || null, ticks: e.querySelectorAll('.pick-check').length })));
+      ok('only the two active platform products are listed (not the retired 已停產相框)', cards.map(c => c.id).join() === 'plat-album,plat-print', JSON.stringify(cards.map(c => c.id)));
+      ok('the album card has its image (public route), description, photo count and both active sizes with 平台價 — not the retired 舊規格',
+        cards[0].img?.includes('/api/platform/products/plat-album/image') && cards[0].text.includes('20 頁精裝') && cards[0].text.includes('指定 20 張') &&
+        cards[0].text.includes('8×8 吋') && cards[0].text.includes('平台價 NT$1,500') && cards[0].text.includes('12×12 吋') && cards[0].text.includes('平台價 NT$2,400') && !cards[0].text.includes('舊規格'), cards[0].text);
+      ok('the vendor cost is nowhere on the page', !(await T(page, 'body')).includes('1,400') && !(await T(page, 'body')).includes('2,300'));
+      ok('the album is not adopted yet: two tick boxes, unticked', cards[0].adopted === '0' && cards[0].ticks === 2);
+      ok('the already-adopted 無框畫 says 已加入, has no picker and no 加入 button, but an 編輯 button',
+        cards[1].adopted === '1' && cards[1].text.includes('已加入') && cards[1].ticks === 0 &&
+        (await page.$('[data-platform-id="plat-print"] [data-plat-add]')) === null && (await page.$('[data-platform-id="plat-print"] [data-plat-edit]')) !== null, cards[1].text);
+      ok('the add buttons are hidden while the panel is open', (await disp(page, '#prod-add-btn')) === 'none' && (await disp(page, '#plat-add-btn')) === 'none');
+
+      const sel = (opt, part) => `[data-platform-id="plat-album"] [data-platform-option-id="${opt}"] .${part}`;
+      ok('售價 is prefilled with 平台價 but disabled until the size is ticked',
+        (await page.inputValue(sel('popt-album-s', 'pick-price'))) === '1500' && await page.$eval(sel('popt-album-s', 'pick-price'), e => e.disabled));
+      await page.click('[data-platform-id="plat-album"] [data-plat-add]');
+      ok('nothing ticked → 「請至少勾選一個規格」 and no request', (await T(page, '[data-platform-id="plat-album"] .plat-err')).includes('請至少勾選一個規格') && !o.st.calls.some(c => c.path === '/api/admin/products/from-platform'));
+      await page.check(sel('popt-album-s', 'pick-check'));
+      ok('ticking enables the price', !(await page.$eval(sel('popt-album-s', 'pick-price'), e => e.disabled)));
+      await page.fill(sel('popt-album-s', 'pick-price'), '1499');
+      await page.click('[data-platform-id="plat-album"] [data-plat-add]');
+      const floorMsg = await T(page, '[data-platform-id="plat-album"] .plat-err');
+      ok('售價 1,499 under 平台價 1,500 is refused client-side with the floor named, nothing sent',
+        floorMsg.includes('售價不能低於平台價') && floorMsg.includes('NT$1,500') && floorMsg.includes('8×8 吋') && !o.st.calls.some(c => c.path === '/api/admin/products/from-platform'), floorMsg);
+      await page.fill(sel('popt-album-s', 'pick-price'), '1500.5');
+      await page.click('[data-platform-id="plat-album"] [data-plat-add]');
+      ok('a non-integer price is refused', (await T(page, '[data-platform-id="plat-album"] .plat-err')).includes('售價需為 0 以上的整數') && !o.st.calls.some(c => c.path === '/api/admin/products/from-platform'), await T(page, '[data-platform-id="plat-album"] .plat-err'));
+      await page.fill(sel('popt-album-s', 'pick-price'), '1500');
+      await page.click('[data-platform-id="plat-album"] [data-plat-add]');
+      await page.waitForFunction(() => !document.getElementById('plat-form'), null, { timeout: 3000 });
+      ok('a price exactly at 平台價 is accepted (the floor is inclusive)', true);
+      const post = o.st.calls.find(c => c.path === '/api/admin/products/from-platform');
+      ok('POST carries the platform product and only the ticked option with its price',
+        post?.method === 'POST' && JSON.stringify(post.body) === JSON.stringify({ platform_product_id: 'plat-album', options: [{ platform_option_id: 'popt-album-s', price: 1500 }] }), JSON.stringify(post));
+      await page.waitForSelector('[data-adopted="1"][data-product-id]:not([data-product-id="prod-print"])');
+      const added = await page.$$eval('.prod-row', els => els.map(e => e.textContent.replace(/\s+/g, ' ')));
+      ok('the new adopted album is listed with 平台價 and 售價, and 已加入平台商品 is shown',
+        added.some(t => t.includes('相本書') && t.includes('8×8 吋 · 平台價 NT$1,500 · 售價 NT$1,500')) && (await T(page, '#prod-ok')).includes('已加入平台商品'), JSON.stringify(added));
+      ok('the panel is gone and the add buttons are back', (await page.$('#plat-form')) === null && (await disp(page, '#plat-add-btn')) !== 'none');
+
+      // reopen: the album is now 已加入, 編輯 opens that product's edit form
+      await page.click('#plat-add-btn');
+      await page.waitForSelector('#plat-form .plat-card');
+      ok('the album card now reads 已加入 too', (await page.getAttribute('[data-platform-id="plat-album"]', 'data-adopted')) === '1' && (await T(page, '[data-platform-id="plat-album"]')).includes('已加入'));
+      await page.click('[data-platform-id="plat-album"] [data-plat-edit]');
+      await page.waitForSelector('#prod-form[data-adopted="1"]');
+      ok('編輯 closes the panel and opens the adopted product’s edit form', (await page.$('#plat-form')) === null && (await T(page, '#prod-form')).includes('相本書'));
+      await page.click('#pf-cancel');
+      return out;
+    },
+    { before: async p => { await m.attach(p); await o.attach(p); }, initScript: SEED_TOKEN });
+}
+
+{
+  const m = dashSettingsMock();
+  const o = ordersFake({ platform: platFx(), products: [] });
+  await suite('設定 — 從平台加入：Worker 的拒絕（below_platform_price、already_adopted 競態、retired）顯示中文，卡片跟著更新',
+    `${base}/settings.html`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('#prod-list .hint', { timeout: 5000 });
+      await page.click('#plat-add-btn');
+      await page.waitForSelector('.plat-card');
+      const opt = 'popt-print';
+      const card = '[data-platform-id="plat-print"]';
+      await page.check(`${card} [data-platform-option-id="${opt}"] .pick-check`);
+      // the operator raised the platform price after the page loaded: the page still says 500, the Worker says 700
+      o.st.platform.find(p => p.id === 'plat-print').options[0].platform_price = 700;
+      await page.click(`${card} [data-plat-add]`);
+      await waitText(page, `${card} .plat-err`, t => t.includes('售價不能低於平台價'));
+      ok('below_platform_price from the Worker → 「售價不能低於平台價」 and the panel stays', (await page.$('#plat-form')) !== null);
+      ok('nothing was created', o.st.products.length === 0);
+      // an adopt racing another tab: 409 already_adopted → message, and the card flips to 已加入
+      o.st.platform.find(p => p.id === 'plat-print').options[0].platform_price = 500;
+      o.st.products.push({ ...clone(PROD_PRINT), id: 'prod-raced' });
+      await page.click(`${card} [data-plat-add]`);
+      await waitText(page, `${card} .plat-err`, t => t.includes('已經加入過'));
+      ok('409 already_adopted → 「已經加入過這個平台商品了」', true);
+      await page.waitForFunction(() => document.querySelector('[data-platform-id="plat-print"]')?.dataset.adopted === '1', null, { timeout: 3000 });
+      ok('…and after the re-read the card reads 已加入 with 編輯, and the list has the other tab’s product',
+        (await page.$(`${card} [data-plat-edit]`)) !== null && (await page.$('[data-product-id="prod-raced"]')) !== null);
+      // the platform retired the product meanwhile
+      await page.click('#plat-close');
+      ok('關閉 closes the panel', (await page.$('#plat-form')) === null);
+      o.st.inject = (method, path) => (method === 'POST' && path === '/api/admin/products/from-platform') ? { status: 400, body: { error: 'unknown platform product', code: 'unknown_platform_product' } } : null;
+      await page.click('#plat-add-btn');
+      await page.waitForSelector('[data-platform-id="plat-album"] .pick-check');
+      await page.check('[data-platform-id="plat-album"] [data-platform-option-id="popt-album-s"] .pick-check');
+      await page.click('[data-platform-id="plat-album"] [data-plat-add]');
+      await waitText(page, '[data-platform-id="plat-album"] .plat-err', t => t.includes('找不到這個平台商品'));
+      ok('unknown_platform_product → 「找不到這個平台商品，請重新整理」', true);
+      return out;
+    },
+    { before: async p => { await m.attach(p); await o.attach(p); }, initScript: SEED_TOKEN });
+}
+
+{
+  const m = dashSettingsMock();
+  const o = ordersFake({ platform: [], products: [] });
+  await suite('設定 — 從平台加入：平台沒有商品時說明，讀取失敗顯示錯誤而不是空白',
+    `${base}/settings.html`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('#prod-list .hint', { timeout: 5000 });
+      await page.click('#plat-add-btn');
+      await page.waitForSelector('#plat-form');
+      ok('an empty platform says so', (await T(page, '#plat-form')).includes('平台目前沒有可加入的商品'));
+      await page.click('#plat-close');
+      o.st.inject = (method, path) => path === '/api/admin/platform-products' ? { status: 500, body: { error: 'no such table' } } : null;
+      await page.click('#plat-add-btn');
+      await waitText(page, '#prod-err', t => t.includes('讀取平台商品失敗'));
+      ok('a failed read says 讀取平台商品失敗 and gives the buttons back', (await page.$('#plat-form')) === null && (await disp(page, '#plat-add-btn')) !== 'none');
+      return out;
+    },
+    { before: async p => { await m.attach(p); await o.attach(p); }, initScript: SEED_TOKEN });
+}
+
+// ── settings: adopted products — edit, warning, unavailable ─────────────────
+{
+  const m = dashSettingsMock();
+  const plat = platFx();
+  const o = ordersFake({ platform: plat, products: [clone(PROD_ALBUM)] });
+  // the operator raised 8×8 to NT$4,000 — the photographer still sells it at NT$3,800
+  o.st.platform[0].options[0].platform_price = 4000;
+  await suite('設定 — 平台價調整後：低於平台價的規格顯示紅字警告，其他規格不受影響',
+    `${base}/settings.html`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('.prod-row', { timeout: 5000 });
+      const lis = await page.$$eval('.prod-row li', els => els.map(e => ({ id: e.dataset.optionId, below: e.dataset.below || null, text: e.textContent.replace(/\s+/g, ' '),
+        warn: e.querySelector('.warn-below') ? { text: e.querySelector('.warn-below').textContent, color: getComputedStyle(e.querySelector('.warn-below')).color } : null })));
+      ok('the 8×8 option (售價 3,800 < 平台價 4,000) shows the red warning with the exact sentence',
+        lis[0].below === '1' && lis[0].warn?.text === '平台價已調整，售價低於平台價，請更新' && lis[0].warn.color === RED && lis[0].text.includes('平台價 NT$4,000 · 售價 NT$3,800'), JSON.stringify(lis[0]));
+      ok('the 12×12 option (售價 5,800 ≥ 平台價 2,400) has no warning', lis[1].below === null && lis[1].warn === null, JSON.stringify(lis[1]));
+
+      await page.click('[data-edit]');
+      await page.waitForSelector('#prod-form[data-adopted="1"]');
+      const optSel = id => `#pf-options [data-platform-option-id="${id}"]`;
+      await page.click('#pf-save');
+      await waitText(page, '#pf-err', t => t.includes('售價不能低於平台價'));
+      ok('saving with the price still under the raised 平台價 is refused client-side, naming NT$4,000',
+        (await T(page, '#pf-err')).includes('NT$4,000') && !o.st.calls.some(c => c.method === 'PUT'), await T(page, '#pf-err'));
+      await page.fill(`${optSel('popt-album-s')} .pick-price`, '4200');
+      await page.click('#pf-save');
+      await page.waitForFunction(() => !document.getElementById('prod-form'), null, { timeout: 3000 });
+      await page.waitForSelector('.prod-row li');
+      ok('after raising 售價 to NT$4,200 the warning is gone (positive: the row shows the new price)',
+        (await page.$$('.warn-below')).length === 0 && (await T(page, '.prod-row')).includes('售價 NT$4,200'), await T(page, '.prod-row'));
+      return out;
+    },
+    { before: async p => { await m.attach(p); await o.attach(p); }, initScript: SEED_TOKEN });
+}
+
+{
+  const m = dashSettingsMock();
+  const o = ordersFake({ platform: platFx(), products: [clone(PROD_ALBUM), clone(PROD_PRINT)] });
+  await suite('設定 — 編輯平台商品：只能改規格與售價（不能改名稱／類型／說明），PUT 只送 options，下架規格顯示不可用',
+    `${base}/settings.html`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('.prod-row', { timeout: 5000 });
+      await page.click('[data-product-id="prod-album"] [data-edit]');
+      await page.waitForSelector('#prod-form[data-adopted="1"]');
+      const box = '#pf-options';
+      ok('no editable name, description, kind or count — the platform’s',
+        (await page.$('#pf-name')) === null && (await page.$('#pf-desc')) === null && (await page.$('#pf-kind')) === null && (await page.$('#pf-count')) === null && (await T(page, '#prod-form')).includes('由平台管理'));
+      const rows = await page.$$eval(`${box} .pick-row`, els => els.map(e => ({ id: e.dataset.platformOptionId, checked: e.querySelector('.pick-check').checked,
+        price: e.querySelector('.pick-price')?.value ?? null, disabled: e.querySelector('.pick-price')?.disabled ?? null, text: e.textContent.replace(/\s+/g, ' ') })));
+      ok('both active platform sizes are rows, ticked, with the photographer’s 售價 (not 平台價); the retired 舊規格 is not offered',
+        rows.length === 2 && rows.every(r => r.checked) && rows[0].price === '3800' && rows[1].price === '5800' && !rows.some(r => r.id === 'popt-album-old'), JSON.stringify(rows));
+      ok('each row shows its 平台價 floor', rows[0].text.includes('平台價 NT$1,500') && rows[1].text.includes('平台價 NT$2,400'));
+      await page.uncheck(`${box} [data-platform-option-id="popt-album-l"] .pick-check`);
+      await page.fill(`${box} [data-platform-option-id="popt-album-s"] .pick-price`, '1000');
+      await page.click('#pf-save');
+      ok('售價 1,000 under 平台價 1,500 is refused, no PUT', (await T(page, '#pf-err')).includes('售價不能低於平台價') && !o.st.calls.some(c => c.method === 'PUT'));
+      await page.fill(`${box} [data-platform-option-id="popt-album-s"] .pick-price`, '4000');
+      await page.click('#pf-save');
+      await page.waitForFunction(() => !document.getElementById('prod-form'), null, { timeout: 3000 });
+      const put = o.st.calls.find(c => c.method === 'PUT');
+      ok('PUT sends only options: the kept size repriced, the unticked one left out (the Worker retires it) — no name/kind/description/photo_count',
+        put?.path === '/api/admin/products/prod-album' && JSON.stringify(put.body) === JSON.stringify({ options: [{ platform_option_id: 'popt-album-s', price: 4000 }] }), JSON.stringify(put));
+      await page.waitForFunction(() => document.querySelector('[data-product-id="prod-album"]')?.textContent.includes('NT$4,000'), null, { timeout: 3000 });
+      const text = await T(page, '[data-product-id="prod-album"]');
+      ok('the list shows the new price and no longer the dropped size', text.includes('售價 NT$4,000') && !text.includes('12×12 吋'), text);
+
+      // add the size back: unticked rows are offered again
+      await page.click('[data-product-id="prod-album"] [data-edit]');
+      await page.waitForSelector('#prod-form');
+      ok('the dropped size is offered again, unticked, price prefilled with 平台價',
+        !(await page.isChecked(`${box} [data-platform-option-id="popt-album-l"] .pick-check`)) && (await page.inputValue(`${box} [data-platform-option-id="popt-album-l"] .pick-price`)) === '2400');
+      await page.check(`${box} [data-platform-option-id="popt-album-l"] .pick-check`);
+      await page.click('#pf-save');
+      await page.waitForFunction(() => !document.getElementById('prod-form'), null, { timeout: 3000 });
+      const put2 = o.st.calls.filter(c => c.method === 'PUT').pop();
+      ok('PUT lists both in platform order, the re-added one at its 平台價',
+        JSON.stringify(put2.body) === JSON.stringify({ options: [{ platform_option_id: 'popt-album-s', price: 4000 }, { platform_option_id: 'popt-album-l', price: 2400 }] }), JSON.stringify(put2.body));
+
+      // unticking everything
+      await page.click('[data-product-id="prod-print"] [data-edit]');
+      await page.waitForSelector('#prod-form');
+      await page.uncheck(`${box} .pick-check`);
+      await page.click('#pf-save');
+      ok('nothing left ticked → 「請至少勾選一個規格」', (await T(page, '#pf-err')).includes('請至少勾選一個規格') && o.st.calls.filter(c => c.method === 'PUT').length === 2);
+      // the Worker's own refusals
+      await page.check(`${box} .pick-check`);
+      o.st.inject = (method, path) => method === 'PUT' ? { status: 400, body: { error: 'platform managed', code: 'platform_managed' } } : null;
+      await page.click('#pf-save');
+      await waitText(page, '#pf-err', t => t.includes('由平台管理'));
+      ok('platform_managed → 「名稱、類型、說明與張數由平台管理…」, the form stays', (await page.$('#prod-form')) !== null);
+      o.st.inject = (method, path) => method === 'PUT' ? { status: 400, body: { error: 'below platform price', code: 'below_platform_price' } } : null;
+      await page.click('#pf-save');
+      await waitText(page, '#pf-err', t => t.includes('售價不能低於平台價'));
+      ok('below_platform_price from the Worker → 「售價不能低於平台價」', true);
+      return out;
+    },
+    { before: async p => { await m.attach(p); await o.attach(p); }, initScript: SEED_TOKEN });
+}
+
+{
+  const m = dashSettingsMock();
+  const plat = platFx();
+  const o = ordersFake({ platform: plat, products: [clone(PROD_ALBUM), clone(PROD_PRINT)] });
+  // the platform retired the album's 12×12 size and the whole 無框畫 product
+  o.st.platform[0].options[1].active = 0;
+  o.st.platform[1].active = 0;
+  await suite('設定 — 平台下架的規格／商品：清單標「平台已下架」並變灰，編輯時不能勾選；整個商品下架則不能改規格',
+    `${base}/settings.html`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('.prod-row', { timeout: 5000 });
+      const li = await page.$$eval('[data-product-id="prod-album"] li', els => els.map(e => ({ id: e.dataset.optionId, off: e.dataset.unavailable || null, opacity: getComputedStyle(e).opacity, text: e.textContent.replace(/\s+/g, ' ') })));
+      ok('the retired 12×12 size reads 平台已下架 and is dimmed; the live 8×8 is not',
+        li[1].off === '1' && li[1].text.includes('平台已下架') && Number(li[1].opacity) < 1 && li[0].off === null && !li[0].text.includes('平台已下架') && li[0].opacity === '1', JSON.stringify(li));
+      ok('a retired size never shows the price warning', (await page.$$('[data-product-id="prod-album"] .warn-below')).length === 0);
+      const pr = await page.$eval('[data-product-id="prod-print"]', e => ({ text: e.textContent.replace(/\s+/g, ' '), opacity: getComputedStyle(e).opacity, active: e.dataset.active, cls: e.className }));
+      ok('the product the platform retired is tagged 平台已下架 and dimmed, though the photographer never retired it',
+        pr.text.includes('平台已下架') && Number(pr.opacity) < 1 && pr.active === '1', JSON.stringify(pr));
+      ok('its option is marked unavailable too', (await page.$('[data-product-id="prod-print"] li[data-unavailable="1"]')) !== null);
+
+      await page.click('[data-product-id="prod-album"] [data-edit]');
+      await page.waitForSelector('#prod-form');
+      const rows = await page.$$eval('#pf-options .pick-row', els => els.map(e => ({ id: e.dataset.platformOptionId, checked: e.querySelector('.pick-check').checked, disabled: e.querySelector('.pick-check').disabled,
+        price: !!e.querySelector('.pick-price'), text: e.textContent.replace(/\s+/g, ' ') })));
+      ok('the live size is a normal ticked row; the retired one is listed, unticked, disabled, with no price box',
+        rows.length === 2 && rows[0].checked && !rows[0].disabled && rows[0].price && rows[1].id === 'popt-album-l' && !rows[1].checked && rows[1].disabled && !rows[1].price && rows[1].text.includes('平台已下架'), JSON.stringify(rows));
+      await page.click('#pf-save');
+      await page.waitForFunction(() => !document.getElementById('prod-form'), null, { timeout: 3000 });
+      const put = o.st.calls.find(c => c.method === 'PUT');
+      ok('saving sends only the live size (the retired one is dropped, never sent — the Worker would answer retired_option)',
+        JSON.stringify(put.body) === JSON.stringify({ options: [{ platform_option_id: 'popt-album-s', price: 3800 }] }), JSON.stringify(put.body));
+
+      await page.click('[data-product-id="prod-print"] [data-edit]');
+      await page.waitForSelector('#prod-form');
+      ok('a product the platform retired: an explanation, every row disabled, 儲存 disabled',
+        (await T(page, '#prod-form')).includes('平台已下架這個商品') && await page.$eval('#pf-save', e => e.disabled) && await page.$eval('#pf-options .pick-check', e => e.disabled));
+      return out;
+    },
+    { before: async p => { await m.attach(p); await o.attach(p); }, initScript: SEED_TOKEN });
+}
+
+{
+  const m = dashSettingsMock();
+  const o = ordersFake({ platform: platFx(), products: [clone(PROD_ALBUM)] });
+  await suite('設定 — 不連到營運頁：側邊選單沒有 operator 連結，頁面只帶攝影師權杖，即使瀏覽器裡有營運權杖也不用',
+    `${base}/settings.html`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('.prod-row', { timeout: 5000 });
+      await page.click('#plat-add-btn');
+      await page.waitForSelector('.plat-card');
+      ok('the side menu has items (positive) but none points at operator.html',
+        (await page.$$('#sideNav .side-nav-item')).length >= 8 && (await page.$$('a[href*="operator"]')).length === 0);
+      ok('every request the page made carried the photographer’s token, none the operator’s',
+        o.st.calls.filter(c => !c.path.startsWith('/api/platform/')).length >= 2 && o.st.calls.filter(c => !c.path.startsWith('/api/platform/')).every(c => c.auth === 'Bearer adm') && !o.st.calls.some(c => c.path.startsWith('/api/operator')), JSON.stringify(o.st.calls.map(c => [c.path, c.auth])));
+      ok('the operator token is still in localStorage, untouched', (await page.evaluate(() => localStorage.getItem('imhoti_operator_token'))) === 'op');
+      return out;
+    },
+    { before: async p => { await m.attach(p); await o.attach(p); }, initScript: () => { sessionStorage.setItem('studio_token', 'adm'); localStorage.setItem('imhoti_operator_token', 'op'); } });
+}
+
+// ── operator.html — the operator's console (platform catalogue) ────────────
+const OP_KEY = 'imhoti_operator_token';
+// seeds the operator token once per tab (sessionStorage marks it), so a later
+// sign-out or reload is not undone by the init script running again
+const OP_SEED = () => { if (!sessionStorage.getItem('__seeded')) { localStorage.setItem('imhoti_operator_token', 'op'); sessionStorage.setItem('__seeded', '1'); } };
+const opFx = () => [clone(PLAT_ALBUM), clone(PLAT_PRINT)];
+const PNG_BYTES = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
+
+{
+  const o = ordersFake({ platform: opFx(), products: [] });
+  await suite('operator — 登入：營運權杖存在自己的 localStorage 鍵，不碰攝影師的 studio_token；錯的權杖（含攝影師的）進不去',
+    `${base}/operator.html`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('#op-login', { timeout: 5000 });
+      ok('signed out: the sign-in box is shown and the console is not (computed display)', (await disp(page, '#op-login')) !== 'none' && (await disp(page, '#op-app')) === 'none');
+      ok('and the logout button is not shown', (await disp(page, '#op-logout')) === 'none');
+      ok('no request was made before signing in', o.st.calls.length === 0, JSON.stringify(o.st.calls));
+      ok('the token field is a password field', (await page.getAttribute('#op-token', 'type')) === 'password');
+
+      await page.click('#op-login-btn');
+      ok('an empty token asks for one, no request', (await T(page, '#op-login-err')).includes('請輸入營運權杖') && o.st.calls.length === 0);
+
+      // the photographer's token is not the operator's: the Worker refuses it on /api/operator
+      await page.fill('#op-token', 'adm');
+      await page.click('#op-login-btn');
+      await waitText(page, '#op-login-err', t => t.includes('營運權杖不正確'));
+      ok('the photographer’s token is refused (401) with a Chinese message; still signed out',
+        (await disp(page, '#op-app')) === 'none' && (await disp(page, '#op-login')) !== 'none' && o.st.calls.at(-1).auth === 'Bearer adm' && o.st.calls.at(-1).path === '/api/operator/products');
+      ok('nothing was left in localStorage by the failed attempt', (await page.evaluate(k => localStorage.getItem(k), OP_KEY)) === null);
+
+      await page.fill('#op-token', 'op');
+      await page.click('#op-login-btn');
+      await page.waitForSelector('#op-list .prod-row', { timeout: 4000 });
+      ok('the operator token opens the console (computed display) and hides the sign-in', (await disp(page, '#op-app')) !== 'none' && (await disp(page, '#op-login')) === 'none' && (await disp(page, '#op-logout')) !== 'none');
+      ok('the operator token is stored under its own localStorage key', (await page.evaluate(k => localStorage.getItem(k), OP_KEY)) === 'op');
+      ok('it is not stored anywhere the photographer’s pages read: sessionStorage studio_token is untouched (null)', (await page.evaluate(() => sessionStorage.getItem('studio_token'))) === null);
+      ok('no key holds it besides its own', await page.evaluate(() => Object.keys(localStorage).concat(Object.keys(sessionStorage)).filter(k => (localStorage.getItem(k) === 'op' || sessionStorage.getItem(k) === 'op')).join()) === OP_KEY);
+      ok('every call the console made went to /api/operator (or the public image route) with Bearer op — never /api/admin',
+        o.st.calls.length >= 3 && o.st.calls.filter(c => c.auth === 'Bearer op').length >= 2 && !o.st.calls.some(c => c.path.startsWith('/api/admin')) &&
+        o.st.calls.filter(c => !c.path.startsWith('/api/platform/') && c.auth !== 'Bearer adm').every(c => c.auth === 'Bearer op'), JSON.stringify(o.st.calls.map(c => [c.path, c.auth])));
+      ok('the side menu is not on this page and it does not link to the photographer’s pages', (await page.$('#sideNav')) === null && (await page.$('a[href*="dashboard"]')) === null && (await page.$('a[href*="settings"]')) === null);
+
+      await page.reload();
+      await page.waitForSelector('#op-list .prod-row', { timeout: 4000 });
+      ok('a reload stays signed in from the stored token', (await disp(page, '#op-app')) !== 'none');
+      await page.click('#op-logout');
+      ok('登出 shows the sign-in again', (await disp(page, '#op-login')) !== 'none' && (await disp(page, '#op-app')) === 'none');
+      ok('and removes its own key only', (await page.evaluate(k => localStorage.getItem(k), OP_KEY)) === null);
+      await page.reload();
+      await page.waitForSelector('#op-login');
+      ok('after a reload it is still signed out', (await disp(page, '#op-login')) !== 'none' && (await disp(page, '#op-app')) === 'none');
+      return out;
+    },
+    { before: o.attach, });
+}
+
+{
+  const o = ordersFake({ platform: opFx(), products: [] });
+  await suite('operator — 攝影師已登入時（studio_token）仍要自己登入：不沿用攝影師的權杖',
+    `${base}/operator.html`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('#op-login', { timeout: 5000 });
+      await page.waitForTimeout(400);
+      ok('with a photographer session present, the console still asks for the operator token', (await disp(page, '#op-login')) !== 'none' && (await disp(page, '#op-app')) === 'none');
+      ok('and made no request with the photographer’s token', o.st.calls.length === 0, JSON.stringify(o.st.calls));
+      ok('the photographer’s token is still there, unchanged', (await page.evaluate(() => sessionStorage.getItem('studio_token'))) === 'adm');
+      return out;
+    },
+    { before: o.attach, initScript: SEED_TOKEN_ALWAYS });
+}
+
+{
+  const o = ordersFake({ platform: opFx(), products: [] });
+  await suite('operator — 已存的權杖失效（401）：清掉自己的鍵並回到登入畫面；網路錯誤不清權杖',
+    `${base}/operator.html`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('#op-login', { timeout: 5000 });
+      await waitText(page, '#op-login-err', t => t.includes('營運權杖不正確或已失效'));
+      ok('a stale stored token → sign-in with 「營運權杖不正確或已失效，請重新登入」', (await disp(page, '#op-app')) === 'none');
+      ok('and the stale key is removed', (await page.evaluate(k => localStorage.getItem(k), OP_KEY)) === null);
+      return out;
+    },
+    { before: o.attach, initScript: () => localStorage.setItem('imhoti_operator_token', 'old-token') });
+}
+
+{
+  const o = ordersFake({ platform: opFx(), products: [] });
+  o.st.inject = () => ({ status: 500, body: { error: 'DB not configured' } });
+  await suite('operator — 伺服器錯誤（500）：顯示錯誤但保留已存的權杖，不當成登入失敗',
+    `${base}/operator.html`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('#op-login', { timeout: 5000 });
+      await waitText(page, '#op-login-err', t => t.includes('DB not configured'));
+      ok('the Worker’s message is shown on the sign-in screen', (await disp(page, '#op-app')) === 'none');
+      ok('the stored token is kept', (await page.evaluate(k => localStorage.getItem(k), OP_KEY)) === 'op');
+      return out;
+    },
+    { before: o.attach, initScript: OP_SEED });
+}
+
+{
+  const retired = { id: 'plat-old', kind: 'print', name: '停產相框', description: '', photo_count: null, active: 0, sort: 0, has_image: false, image_type: null, image_updated_at: null,
+    options: [{ id: 'popt-old', label: '', vendor_cost: 100, platform_price: 150, active: 1, sort: 0 }] };
+  const o = ordersFake({ platform: [retired, ...opFx()], products: [] });
+  await suite('operator — 平台商品清單：上架的在前，下架的灰掉並可重新上架；成本／平台價／張數；金額為 NT$',
+    `${base}/operator.html`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('#op-list .prod-row', { timeout: 5000 });
+      const rows = await page.$$eval('#op-list .prod-row', els => els.map(e => ({ id: e.dataset.productId, active: e.dataset.active, opacity: getComputedStyle(e).opacity,
+        kind: e.querySelector('.pill[data-kind]').textContent, text: e.textContent.replace(/\s+/g, ' '), buttons: [...e.querySelectorAll('button')].map(b => b.textContent),
+        img: e.querySelector('img.thumb')?.getAttribute('src') || null, placeholder: !!e.querySelector('div.thumb.none') })));
+      ok('active products first even though the retired one came first in the data', rows.map(r => r.id).join() === 'plat-album,plat-print,plat-old', JSON.stringify(rows.map(r => r.id)));
+      ok('kinds are 相本 / 輸出品', rows[0].kind === '相本' && rows[1].kind === '輸出品' && rows[2].kind === '輸出品');
+      ok('an album shows each size with 廠商成本 and 平台價 in NT$, and how many photos',
+        rows[0].text.includes('8×8 吋 · 廠商成本 NT$1,400 · 平台價 NT$1,500') && rows[0].text.includes('12×12 吋 · 廠商成本 NT$2,300 · 平台價 NT$2,400') && rows[0].text.includes('指定 20 張'), rows[0].text);
+      ok('a retired size of an active product is listed but marked 已下架規格 and dimmed', rows[0].text.includes('舊規格') && rows[0].text.includes('已下架規格') &&
+        Number(await page.$eval('[data-product-id="plat-album"] li[data-option-id="popt-album-old"]', e => getComputedStyle(e).opacity)) < 1);
+      ok('a single size with no label reads （單一規格）', rows[1].text.includes('（單一規格） · 廠商成本 NT$450 · 平台價 NT$500'), rows[1].text);
+      ok('the album has its picture from the public route, the print a 無圖 placeholder',
+        rows[0].img?.includes('/api/platform/products/plat-album/image') && rows[1].img === null && rows[1].placeholder);
+      ok('active rows are full strength with 下架 (not 重新上架)', rows[0].opacity === '1' && rows[0].buttons.includes('下架') && !rows[0].buttons.includes('重新上架'), JSON.stringify(rows[0]));
+      ok('the retired row is greyed (computed opacity < 1), tagged 已下架, with 重新上架 (not 下架)',
+        Number(rows[2].opacity) < 1 && rows[2].active === '0' && rows[2].text.includes('已下架') && rows[2].buttons.includes('重新上架') && !rows[2].buttons.includes('下架'), JSON.stringify(rows[2]));
+
+      await page.click('[data-product-id="plat-old"] [data-restore]');
+      await page.waitForFunction(() => document.querySelector('[data-product-id="plat-old"]')?.dataset.active === '1', null, { timeout: 3000 });
+      ok('重新上架 posts /restore with the operator token and the row returns to full strength',
+        o.st.calls.some(c => c.method === 'POST' && c.path === '/api/operator/products/plat-old/restore' && c.auth === 'Bearer op') &&
+        (await page.$eval('[data-product-id="plat-old"]', e => getComputedStyle(e).opacity)) === '1');
+      ok('and it sorts among the active ones now (before nothing greyed)', (await page.$$eval('#op-list .prod-row', els => els.map(e => e.dataset.active).join())) === '1,1,1');
+      await page.click('[data-product-id="plat-print"] [data-retire]');
+      await page.waitForFunction(() => document.querySelector('[data-product-id="plat-print"]')?.dataset.active === '0', null, { timeout: 3000 });
+      ok('下架 posts /retire, greys the row and moves it below the active ones',
+        o.st.calls.some(c => c.method === 'POST' && c.path === '/api/operator/products/plat-print/retire') &&
+        Number(await page.$eval('[data-product-id="plat-print"]', e => getComputedStyle(e).opacity)) < 1 &&
+        (await page.$$eval('#op-list .prod-row', els => els.at(-1).dataset.productId)) === 'plat-print');
+      ok('retire/restore sent no body', o.st.calls.filter(c => /retire|restore/.test(c.path)).every(c => c.body === null));
+      return out;
+    },
+    { before: o.attach, initScript: OP_SEED });
+}
+
+{
+  const o = ordersFake({ platform: [], products: [] });
+  await suite('operator — 新增平台商品：只有相本／輸出品、相本才問張數、驗證、規格列增減，送出的內容正確，建立後可接著上傳圖片',
+    `${base}/operator.html`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('#op-list .hint', { timeout: 5000 });
+      ok('an empty catalogue says so', (await T(page, '#op-list')).includes('還沒有平台商品'));
+      await page.click('#op-add-btn');
+      await page.waitForSelector('#op-form');
+      ok('the kind choices are only 相本 and 輸出品 (no 服務 — that is the photographer’s own)',
+        JSON.stringify(await page.$$eval('#opf-kind option', els => els.map(e => e.textContent))) === JSON.stringify(['相本', '輸出品']));
+      ok('an album asks for a photo count (computed display)', (await disp(page, '#opf-count-group')) !== 'none');
+      await page.selectOption('#opf-kind', 'print');
+      ok('a print does not', (await disp(page, '#opf-count-group')) === 'none');
+      await page.selectOption('#opf-kind', 'album');
+      ok('image upload is not offered until the product exists (no file input; a hint instead)', (await page.$('#opf-file')) === null && (await T(page, '#op-form')).includes('先儲存商品'));
+      ok('the add button hides while the form is open', (await disp(page, '#op-add-btn')) === 'none');
+
+      await page.click('#opf-save');
+      ok('no name → 商品名稱必填, nothing sent', (await T(page, '#opf-err')).includes('商品名稱必填') && !o.st.calls.some(c => c.method === 'POST'));
+      await page.fill('#opf-name', '相本書');
+      await page.click('#opf-save');
+      ok('a blank 廠商成本 is refused client-side', (await T(page, '#opf-err')).includes('廠商成本需為 0 以上的整數') && !o.st.calls.some(c => c.method === 'POST'));
+      await page.fill('#opf-options .opt-row:nth-child(1) .opt-vendor', '1400');
+      await page.click('#opf-save');
+      ok('a blank 平台價 is refused client-side', (await T(page, '#opf-err')).includes('平台價需為 0 以上的整數') && !o.st.calls.some(c => c.method === 'POST'));
+      await page.click('#opf-options .opt-del');
+      ok('removing the only option row is refused', (await page.$$('#opf-options .opt-row')).length === 1 && (await T(page, '#opf-err')).includes('至少保留一個規格'));
+
+      await page.fill('#opf-desc', '20 頁精裝');
+      await page.fill('#opf-count', '20');
+      await page.fill('#opf-options .opt-row:nth-child(1) .opt-label', '8×8 吋');
+      await page.fill('#opf-options .opt-row:nth-child(1) .opt-plat', '1500');
+      await page.click('#opf-add-option');
+      await page.fill('#opf-options .opt-row:nth-child(2) .opt-label', '12×12 吋');
+      await page.fill('#opf-options .opt-row:nth-child(2) .opt-vendor', '2300');
+      await page.fill('#opf-options .opt-row:nth-child(2) .opt-plat', '2400');
+      await page.click('#opf-add-option');
+      await page.click('#opf-options .opt-row:nth-child(3) .opt-del');
+      ok('a row can be removed while others remain', (await page.$$('#opf-options .opt-row')).length === 2);
+      await page.click('#opf-save');
+      await page.waitForSelector('#op-form[data-mode="edit"]', { timeout: 3000 });
+      const post = o.st.calls.find(c => c.method === 'POST' && c.path === '/api/operator/products');
+      ok('POST carries kind, name, description, photo_count and options with vendor_cost and platform_price',
+        JSON.stringify(post?.body) === JSON.stringify({
+          kind: 'album', name: '相本書', description: '20 頁精裝', photo_count: 20,
+          options: [{ label: '8×8 吋', vendor_cost: 1400, platform_price: 1500 }, { label: '12×12 吋', vendor_cost: 2300, platform_price: 2400 }],
+        }), JSON.stringify(post?.body));
+      ok('after creating, the form stays open on the new product in edit mode, now with the image section', (await page.$('#opf-file')) !== null && (await T(page, '#op-ok')).includes('已建立'));
+      ok('and the product is listed with its money', (await T(page, '#op-list')).includes('12×12 吋 · 廠商成本 NT$2,300 · 平台價 NT$2,400'));
+      await page.click('#opf-cancel');
+      ok('取消 closes the form and brings the add button back', (await page.$('#op-form')) === null && (await disp(page, '#op-add-btn')) !== 'none');
+
+      // Worker refusals in Chinese
+      o.st.inject = (method, path) => (method === 'POST' && path === '/api/operator/products') ? { status: 400, body: { error: 'invalid vendor cost', code: 'invalid_vendor_cost' } } : null;
+      await page.click('#op-add-btn');
+      await page.selectOption('#opf-kind', 'print');
+      await page.fill('#opf-name', '無框畫');
+      await page.fill('#opf-options .opt-row .opt-vendor', '450');
+      await page.fill('#opf-options .opt-row .opt-plat', '500');
+      await page.click('#opf-save');
+      await waitText(page, '#opf-err', t => t.includes('廠商成本需為'));
+      ok('invalid_vendor_cost from the Worker → 「廠商成本需為 0 以上的整數」, the form stays', (await page.$('#op-form')) !== null);
+      const post2 = o.st.calls.filter(c => c.method === 'POST' && c.path === '/api/operator/products').pop();
+      ok('a print sends photo_count null', post2.body.photo_count === null && post2.body.kind === 'print', JSON.stringify(post2.body));
+      o.st.inject = (method, path) => (method === 'POST' && path === '/api/operator/products') ? { status: 400, body: { error: 'invalid platform price', code: 'invalid_platform_price' } } : null;
+      await page.click('#opf-save');
+      await waitText(page, '#opf-err', t => t.includes('平台價需為'));
+      ok('invalid_platform_price → 「平台價需為 0 以上的整數」', true);
+      return out;
+    },
+    { before: o.attach, initScript: OP_SEED });
+}
+
+{
+  const o = ordersFake({ platform: opFx(), products: [] });
+  await suite('operator — 編輯平台商品：帶入（含規格 id）、可改類型，改價／刪／加後 PUT 的內容正確',
+    `${base}/operator.html`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('#op-list .prod-row', { timeout: 5000 });
+      await page.click('[data-product-id="plat-album"] [data-edit]');
+      await page.waitForSelector('#op-form[data-mode="edit"]');
+      ok('title says 編輯平台商品', (await T(page, '#op-form h3')) === '編輯平台商品');
+      const rows = await page.$$eval('#opf-options .opt-row', els => els.map(e => ({ id: e.dataset.optionId, label: e.querySelector('.opt-label').value, v: e.querySelector('.opt-vendor').value, p: e.querySelector('.opt-plat').value })));
+      ok('only the active options are prefilled, each with its id and both prices',
+        JSON.stringify(rows) === JSON.stringify([{ id: 'popt-album-s', label: '8×8 吋', v: '1400', p: '1500' }, { id: 'popt-album-l', label: '12×12 吋', v: '2300', p: '2400' }]), JSON.stringify(rows));
+      ok('name, description and count are prefilled', (await page.inputValue('#opf-name')) === '相本書' && (await page.inputValue('#opf-desc')) === '20 頁精裝' && (await page.inputValue('#opf-count')) === '20' && (await page.inputValue('#opf-kind')) === 'album');
+      await page.fill('#opf-options .opt-row:nth-child(1) .opt-plat', '1600');
+      await page.click('#opf-options .opt-row:nth-child(2) .opt-del');
+      await page.click('#opf-add-option');
+      await page.fill('#opf-options .opt-row:nth-child(2) .opt-label', '10×10 吋');
+      await page.fill('#opf-options .opt-row:nth-child(2) .opt-vendor', '1800');
+      await page.fill('#opf-options .opt-row:nth-child(2) .opt-plat', '1900');
+      await page.fill('#opf-count', '');
+      await page.click('#opf-save');
+      await page.waitForFunction(() => !document.getElementById('op-form'), null, { timeout: 3000 });
+      const put = o.st.calls.find(c => c.method === 'PUT');
+      ok('PUT goes to the product; the kept option carries its id, the new one none, the dropped one is absent; blank count = null',
+        put?.path === '/api/operator/products/plat-album' && put.auth === 'Bearer op' && JSON.stringify(put.body) === JSON.stringify({
+          kind: 'album', name: '相本書', description: '20 頁精裝', photo_count: null,
+          options: [{ label: '8×8 吋', vendor_cost: 1400, platform_price: 1600, id: 'popt-album-s' }, { label: '10×10 吋', vendor_cost: 1800, platform_price: 1900 }],
+        }), JSON.stringify(put));
+      await page.waitForFunction(() => document.querySelector('[data-product-id="plat-album"]')?.textContent.includes('NT$1,900'), null, { timeout: 3000 });
+      const text = await T(page, '[data-product-id="plat-album"]');
+      ok('the list shows the new set; the dropped size appears only as 已下架規格', text.includes('平台價 NT$1,600') && text.includes('10×10 吋') && /12×12 吋[^·]*·[^·]*·[^·]*已下架規格/.test(text), text);
+      await page.click('[data-product-id="plat-album"] [data-edit]');
+      await page.waitForSelector('#op-form');
+      await page.selectOption('#opf-kind', 'print');
+      ok('switching the kind to 輸出品 hides the count', (await disp(page, '#opf-count-group')) === 'none');
+      await page.click('#opf-save');
+      await page.waitForFunction(() => !document.getElementById('op-form'), null, { timeout: 3000 });
+      const put2 = o.st.calls.filter(c => c.method === 'PUT').pop();
+      ok('a kind change is sent (the Worker allows it) with photo_count null', put2.body.kind === 'print' && put2.body.photo_count === null, JSON.stringify(put2.body));
+      return out;
+    },
+    { before: o.attach, initScript: OP_SEED });
+}
+
+// ── operator: 平台價低於廠商成本的警告 ─────────────────────────────────────
+{
+  const cheap = { id: 'plat-cheap', kind: 'print', name: '補貼款', description: '', photo_count: null, active: 1, sort: 0, has_image: false, image_type: null, image_updated_at: null,
+    options: [
+      { id: 'popt-under', label: '低於成本', vendor_cost: 600, platform_price: 500, active: 1, sort: 0 },
+      { id: 'popt-equal', label: '等於成本', vendor_cost: 500, platform_price: 500, active: 1, sort: 1 },
+      { id: 'popt-over', label: '高於成本', vendor_cost: 400, platform_price: 500, active: 1, sort: 2 },
+      { id: 'popt-retired', label: '停賣款', vendor_cost: 900, platform_price: 100, active: 0, sort: 3 }] };
+  const o = ordersFake({ platform: [cheap], products: [] });
+  await suite('operator — 平台價低於廠商成本：清單與表單都出現警告（只警告，仍可儲存）；等於、高於或未填完則沒有',
+    `${base}/operator.html`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('#op-list .prod-row', { timeout: 5000 });
+      const warned = await page.$$eval('#op-list li', els => els.map(e => ({ id: e.dataset.optionId, chip: e.querySelector('.chip-warn')?.textContent || null })));
+      ok('the option priced under its vendor cost carries 「平台價低於廠商成本」', warned.find(w => w.id === 'popt-under').chip === '平台價低於廠商成本', JSON.stringify(warned));
+      ok('equal and higher-than-cost options have no chip (positive: the first does)', warned.find(w => w.id === 'popt-equal').chip === null && warned.find(w => w.id === 'popt-over').chip === null);
+      ok('a retired option is not flagged even when under cost', warned.find(w => w.id === 'popt-retired').chip === null);
+      ok('the chip is visible red text (computed color)', (await page.$eval('#op-list .chip-warn', e => getComputedStyle(e).color)) === RED);
+
+      await page.click('[data-edit]');
+      await page.waitForSelector('#op-form');
+      const chips = async () => page.$$eval('#opf-options .opt-row', els => els.map(e => !!e.querySelector('.opt-warn .chip-warn')));
+      ok('in the form the same one row shows the chip on open (under: yes, equal: no, over: no)', JSON.stringify(await chips()) === JSON.stringify([true, false, false]), JSON.stringify(await chips()));
+      await page.fill('#opf-options .opt-row:nth-child(1) .opt-plat', '600');
+      ok('typing 平台價 up to the cost clears it live', JSON.stringify(await chips()) === JSON.stringify([false, false, false]));
+      await page.fill('#opf-options .opt-row:nth-child(3) .opt-plat', '399');
+      ok('typing 平台價 under the cost sets it live', JSON.stringify(await chips()) === JSON.stringify([false, false, true]));
+      await page.fill('#opf-options .opt-row:nth-child(3) .opt-plat', '');
+      ok('an unfinished (blank) price shows no chip', JSON.stringify(await chips()) === JSON.stringify([false, false, false]));
+      await page.click('#opf-add-option');
+      await page.fill('#opf-options .opt-row:nth-child(4) .opt-label', '新款');
+      await page.fill('#opf-options .opt-row:nth-child(4) .opt-vendor', '1000');
+      await page.fill('#opf-options .opt-row:nth-child(4) .opt-plat', '800');
+      ok('a new row gets the chip as soon as both numbers are in and price < cost', (await chips())[3] === true);
+      await page.fill('#opf-options .opt-row:nth-child(3) .opt-plat', '399');
+      await page.click('#opf-save');
+      await page.waitForFunction(() => !document.getElementById('op-form'), null, { timeout: 3000 });
+      const put = o.st.calls.find(c => c.method === 'PUT');
+      ok('saving with a price under cost is allowed — the PUT went out with both numbers (Tim may subsidise)',
+        put && put.body.options.find(x => x.label === '新款').platform_price === 800 && put.body.options.find(x => x.label === '新款').vendor_cost === 1000, JSON.stringify(put));
+      await page.waitForFunction(() => document.querySelectorAll('#op-list .chip-warn').length === 2, null, { timeout: 3000 });
+      ok('and the list now flags the two under-cost options (新款, 高→399)', true);
+      return out;
+    },
+    { before: o.attach, initScript: OP_SEED });
+}
+
+// ── operator: 圖片 ─────────────────────────────────────────────────────────
+{
+  const o = ordersFake({ platform: opFx(), products: [] });
+  await suite('operator — 商品圖片：上傳後預覽（從公開路由載入）、移除；大小／格式錯誤顯示中文（前端與 Worker 的 413／415）',
+    `${base}/operator.html`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('#op-list .prod-row', { timeout: 5000 });
+      await page.click('[data-product-id="plat-print"] [data-edit]');
+      await page.waitForSelector('#opf-file');
+      ok('a product with no picture shows 尚未上傳 and no 移除圖片 button (computed display)', (await T(page, '#opf-preview')).includes('尚未上傳') && (await page.$('#opf-preview img')) === null && (await disp(page, '#opf-img-remove')) === 'none');
+      const imgCalls = () => o.st.calls.filter(c => c.method === 'PUT' && /\/image$/.test(c.path));
+
+      // client-side guards: no request
+      await page.setInputFiles('#opf-file', { name: 'big.png', mimeType: 'image/png', buffer: Buffer.concat([PNG_BYTES, Buffer.alloc(204800)]) });
+      ok('a file over 200 KB is refused in Chinese before any request', (await T(page, '#opf-img-err')).includes('圖片超過 200 KB') && imgCalls().length === 0);
+      await page.setInputFiles('#opf-file', { name: 'a.gif', mimeType: 'image/gif', buffer: Buffer.from('GIF89a') });
+      ok('a GIF is refused in Chinese before any request', (await T(page, '#opf-img-err')).includes('不支援的檔案格式') && imgCalls().length === 0);
+
+      // the Worker sniffs the bytes, not the type: a text file claiming image/png → 415
+      await page.setInputFiles('#opf-file', { name: 'fake.png', mimeType: 'image/png', buffer: Buffer.from('this is not an image at all') });
+      await waitText(page, '#opf-img-err', t => t.includes('不支援的檔案格式'));
+      ok('a non-image body labelled image/png → the Worker’s 415 unsupported_type → 「不支援的檔案格式，僅限 PNG / JPEG / WebP」',
+        imgCalls().length === 1 && (await page.$('#opf-preview img')) === null);
+      // a Worker-side 413 (e.g. limit lowered)
+      o.st.inject = (method, path) => (method === 'PUT' && /\/image$/.test(path)) ? { status: 413, body: { error: '商品圖片不可超過 200 KB', code: 'too_large', max: 204800 } } : null;
+      await page.setInputFiles('#opf-file', { name: 'ok.png', mimeType: 'image/png', buffer: PNG_BYTES });
+      await waitText(page, '#opf-img-err', t => t.includes('圖片超過 200 KB'));
+      ok('the Worker’s 413 too_large → 「圖片超過 200 KB，請壓縮後再試」', imgCalls().length === 2);
+      o.st.inject = null;
+
+      await page.setInputFiles('#opf-file', { name: 'good.png', mimeType: 'image/png', buffer: PNG_BYTES });
+      await page.waitForSelector('#opf-preview img', { timeout: 3000 });
+      const call = imgCalls().at(-1);
+      ok('a real PNG is PUT raw to the operator image route with the operator token, its own type and size',
+        call.path === '/api/operator/products/plat-print/image' && call.auth === 'Bearer op' && call.type === 'image/png' && call.size === PNG_BYTES.length, JSON.stringify(call));
+      ok('the error message is cleared and 已更新圖片 shown', (await T(page, '#opf-img-err')) === '' && (await T(page, '#opf-img-ok')).includes('已更新圖片'));
+      const src = await page.$eval('#opf-preview img', e => e.getAttribute('src'));
+      ok('the preview comes from the public route, with a version stamp', src.includes('/api/platform/products/plat-print/image?v=') && !/[?&]t=/.test(src), src);
+      await page.waitForFunction(() => { const i = document.querySelector('#opf-preview img'); return i && i.complete && i.naturalWidth > 0; }, null, { timeout: 4000 });
+      ok('…and it actually loaded (the fake serves the stored image only once there is one)', true);
+      ok('移除圖片 is offered now (computed display)', (await disp(page, '#opf-img-remove')) !== 'none');
+      ok('the list row behind the form shows the thumbnail too', (await page.$('[data-product-id="plat-print"] img.thumb')) !== null && (await page.$('[data-product-id="plat-print"] div.thumb.none')) === null);
+      ok('the public image requests carry no token (no Authorization header, no t= in the URL)', o.st.calls.filter(c => c.path.startsWith('/api/platform/')).length > 0 && o.st.calls.filter(c => c.path.startsWith('/api/platform/')).every(c => c.auth === null && !/[?&]t=/.test(c.search)));
+
+      await page.click('#opf-img-remove');
+      await page.waitForFunction(() => !document.querySelector('#opf-preview img'), null, { timeout: 3000 });
+      ok('移除圖片 sends DELETE with the operator token', o.st.calls.some(c => c.method === 'DELETE' && c.path === '/api/operator/products/plat-print/image' && c.auth === 'Bearer op'));
+      ok('the preview goes back to 尚未上傳, the button hides, the row gets the 無圖 placeholder',
+        (await T(page, '#opf-preview')).includes('尚未上傳') && (await disp(page, '#opf-img-remove')) === 'none' && (await page.$('[data-product-id="plat-print"] div.thumb.none')) !== null && (await page.$('[data-product-id="plat-print"] img.thumb')) === null);
+      const gone = await page.evaluate(async () => (await fetch('https://imagepicker.hotichen.workers.dev/api/platform/products/plat-print/image')).status);
+      ok('and the public route answers 404 for it now', gone === 404, String(gone));
+
+      // an existing image (the album) is shown in its edit form
+      await page.click('#opf-cancel');
+      await page.click('[data-product-id="plat-album"] [data-edit]');
+      await page.waitForSelector('#opf-preview img');
+      ok('a product that already has a picture shows it and offers 移除圖片', (await disp(page, '#opf-img-remove')) !== 'none');
+      return out;
+    },
+    { before: o.attach, initScript: OP_SEED });
+}
+
+// ── operator: 銷售 ─────────────────────────────────────────────────────────
+{
+  const retired = { id: 'plat-old', kind: 'print', name: '停產相框', description: '', photo_count: null, active: 0, sort: 9, has_image: false, image_type: null, image_updated_at: null,
+    options: [{ id: 'popt-old', label: '', vendor_cost: 100, platform_price: 150, active: 1, sort: 0 }] };
+  const o = ordersFake({ platform: [...opFx(), retired], products: [] });
+  const line = (opt, price, cost, vendor, qty, name) => ({ name, kind: 'album', unit_price: price, unit_cost: cost, vendor_cost: vendor, qty, platform_option_id: opt });
+  // this month (2026-09, Taipei): 2 albums 8×8 at platform 1,500 / vendor 1,400 → 3,000 / 2,800; a subsidised print 500 / 600
+  o.st.addOrder({ id: 'o1', status: 'fulfilled', paid_amount: 8000, paid_method: 'cash', paid_at: '2026-09-20T04:00:00.000Z', items: [line('popt-album-s', 3800, 1500, 1400, 2, '相本書')] });
+  o.st.addOrder({ id: 'o2', status: 'confirmed', paid_amount: 1200, paid_method: 'cash', paid_at: '2026-09-05T04:00:00.000Z', items: [line('popt-print', 1200, 500, 600, 1, '無框畫')] });
+  // last month: 1 more album 8×8 (counts in the 12 months, not this month)
+  o.st.addOrder({ id: 'o3', status: 'fulfilled', paid_amount: 3800, paid_method: 'cash', paid_at: '2026-08-10T04:00:00.000Z', items: [line('popt-album-s', 3800, 1500, 1400, 1, '相本書')] });
+  // never counted: cancelled, unpaid, and a non-platform line
+  o.st.addOrder({ id: 'o4', status: 'cancelled', paid_amount: 5000, paid_method: 'cash', paid_at: '2026-09-06T04:00:00.000Z', items: [line('popt-album-l', 5800, 2400, 2300, 1, '相本書')] });
+  o.st.addOrder({ id: 'o5', status: 'confirmed', paid_amount: 0, items: [line('popt-album-l', 5800, 2400, 2300, 1, '相本書')] });
+  o.st.addOrder({ id: 'o6', status: 'confirmed', paid_amount: 500, paid_method: 'cash', paid_at: '2026-09-07T04:00:00.000Z', items: [{ name: '急件加修', kind: 'service', unit_price: 500, unit_cost: 0, qty: 1 }] });
+  await suite('operator — 銷售表：本月合計與每個平台商品的數量、平台營收、廠商成本、毛利（已收款、不含取消／未付／非平台品項）',
+    `${base}/operator.html`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('#op-stats-table', { timeout: 5000 });
+      const month = await page.$$eval('#op-month [data-k]', els => Object.fromEntries(els.map(e => [e.dataset.k, e.textContent])));
+      ok('本月 totals: 3 units, 平台營收 NT$3,500, 廠商成本 NT$3,400, 毛利 NT$100 (2×1,500 + 500 vs 2×1,400 + 600)',
+        month.qty === '3' && month.revenue === 'NT$3,500' && month.cost === 'NT$3,400' && month.margin === 'NT$100', JSON.stringify(month));
+      const rows = await page.$$eval('#op-stats-table tbody tr', els => els.map(e => ({ id: e.dataset.platformProductId, retired: e.classList.contains('retired'), opacity: getComputedStyle(e).opacity,
+        text: e.textContent.replace(/\s+/g, ' '), mq: e.querySelector('[data-col="month-qty"]').textContent, mm: e.querySelector('[data-col="month-margin"]').textContent,
+        q: e.querySelector('[data-col="qty"]').textContent, rev: e.querySelector('[data-col="revenue"]').textContent, cost: e.querySelector('[data-col="cost"]').textContent,
+        margin: e.querySelector('[data-col="margin"]').textContent, marginColor: getComputedStyle(e.querySelector('[data-col="margin"]')).color })));
+      ok('one row per platform product, including one with no sales and a retired one', rows.map(r => r.id).join() === 'plat-album,plat-print,plat-old', JSON.stringify(rows.map(r => r.id)));
+      const album = rows[0], print = rows[1], old = rows[2];
+      ok('album: 本月 2 units margin NT$200; 12 months 3 units, 平台營收 NT$4,500, 廠商成本 NT$4,200, 毛利 NT$300 (cancelled, unpaid and the service line are not in it)',
+        album.mq === '2' && album.mm === 'NT$200' && album.q === '3' && album.rev === 'NT$4,500' && album.cost === 'NT$4,200' && album.margin === 'NT$300', JSON.stringify(album));
+      ok('a subsidised sale (platform price 500 under vendor cost 600) shows a loss as −NT$100 in red; a profitable row is not red',
+        print.mq === '1' && print.q === '1' && print.rev === 'NT$500' && print.cost === 'NT$600' && print.margin === '−NT$100' && print.mm === '−NT$100' && print.marginColor === RED && album.marginColor !== RED, JSON.stringify(print));
+      ok('a product with no sales reads zeros, greyed and tagged 已下架', old.q === '0' && old.mq === '0' && old.rev === 'NT$0' && old.margin === 'NT$0' && Number(old.opacity) < 1 && old.text.includes('已下架'), JSON.stringify(old));
+      ok('the stats were read with the operator token', o.st.calls.some(c => c.path === '/api/operator/stats' && c.auth === 'Bearer op'));
+      return out;
+    },
+    { before: o.attach, initScript: OP_SEED });
+}
+
+{
+  const o = ordersFake({ platform: [], products: [] });
+  await suite('operator — 銷售：沒有平台商品時只有零的本月合計；讀取失敗顯示錯誤',
+    `${base}/operator.html`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('#op-month', { timeout: 5000 });
+      ok('the month cards read zeros and no table is drawn', (await T(page, '#op-month [data-k="revenue"]')) === 'NT$0' && (await page.$('#op-stats-table')) === null && (await T(page, '#op-stats')).includes('還沒有平台商品'));
+      return out;
+    },
+    { before: o.attach, initScript: OP_SEED });
 }
 
 // ── admin.html project detail: 訂單 ────────────────────────────────────────
@@ -7668,7 +8712,7 @@ const todayTaipeiNode = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia
 
 {
   const m = pickFakeWorker({ projectId: 'proj-1', title: '訂單專案' });
-  const o = ordersFake({ products: [clone(PROD_ALBUM), clone(PROD_PRINT)] });
+  const o = ordersFake({ platform: [clone(PLAT_ALBUM), clone(PLAT_PRINT)], products: [clone(PROD_ALBUM), clone(PROD_PRINT)] });
   o.st.addOrder({ id: 'ord-a', project_id: 'proj-1', status: 'confirmed', discount: 300, note: '週五取件',
     items: [{ name: '相本書', option_label: '8×8 吋', kind: 'album', unit_price: 1500, unit_cost: 600, qty: 2, photo_keys: ['20260819/IMG_1.jpg', '20260819/IMG_2.jpg'] },
             { name: '急件加修', kind: 'service', unit_price: 500, unit_cost: 0, qty: 1 }] });
@@ -7755,7 +8799,7 @@ const todayTaipeiNode = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia
 {
   const m = pickFakeWorker({ projectId: 'proj-z', title: '新增訂單專案' });
   ADMIN_PICKS(m);
-  const o = ordersFake({ products: [clone(PROD_ALBUM), clone(PROD_PRINT), clone(PROD_SERVICE_OFF)] });
+  const o = ordersFake({ platform: [clone(PLAT_ALBUM), clone(PLAT_PRINT)], products: [clone(PROD_ALBUM), clone(PROD_PRINT), clone(PROD_SERVICE_OFF)] });
   await suite('admin — 新增訂單：只列上架商品的上架規格、挑專案選中的照片、單價可覆寫，送出後列出',
     `${base}/admin.html#project=proj-z`,
     async page => {
@@ -7825,6 +8869,56 @@ const todayTaipeiNode = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia
 }
 
 {
+  const m = pickFakeWorker({ projectId: 'proj-f', title: '平台價下限' });
+  ADMIN_PICKS(m);
+  const o = ordersFake({ platform: platFx(), products: [clone(PROD_ALBUM), clone(PROD_PRINT)] });
+  await suite('admin — 訂單品項是平台商品：單價不能低於平台價（below_platform_price），平台下架的規格（retired_option）顯示中文',
+    `${base}/admin.html#project=proj-f`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('#pd-order-add-btn', { timeout: 5000 });
+      await page.click('#pd-order-add-btn');
+      await page.waitForSelector('#pd-add-option');
+      await page.selectOption('#pd-add-option', 'opt-album-s');
+      await page.click('#pd-add-line');
+      await page.fill('.ord-line-edit .ord-price', '1400');
+      await page.click('#pd-editor-save');
+      await waitText(page, '#pd-editor-err', t => t.includes('不能低於平台價'));
+      ok('a unit price under 平台價 (1,400 < 1,500) → 「售價不能低於平台價」 from the Worker, the editor stays, nothing created',
+        (await page.$('#pd-order-editor')) !== null && o.st.orders.length === 0, await T(page, '#pd-editor-err'));
+      await page.fill('.ord-line-edit .ord-price', '1500');
+      await page.click('#pd-editor-save');
+      await page.waitForSelector('#pd-order-list .ord-card', { timeout: 3000 });
+      ok('a price exactly at 平台價 is accepted and the line costs the platform price (成本 NT$1,500, 毛利 NT$0)',
+        (await T(page, '#pd-order-list .ord-card')).includes('成本 NT$1,500') && (await T(page, '#pd-order-list .ord-card')).includes('毛利 NT$0'), await T(page, '#pd-order-list .ord-card'));
+      const listed = await page.evaluate(async () => (await fetch('https://imagepicker.hotichen.workers.dev/api/admin/orders', { headers: { 'Authorization': 'Bearer adm' } })).text());
+      ok('the line snapshotted the platform option and cost (stored), and the photographer’s order read never carries vendor_cost',
+        o.st.orders[0].items[0].platform_option_id === 'popt-album-s' && o.st.orders[0].items[0].unit_cost === 1500 && o.st.orders[0].items[0].vendor_cost === 1400 &&
+        listed.includes('platform_option_id') && !listed.includes('vendor_cost'), listed.slice(0, 200));
+      // the platform retires the print between opening the picker and saving
+      await page.click('#pd-order-add-btn');
+      await page.waitForSelector('#pd-add-option');
+      await page.selectOption('#pd-add-option', 'opt-print');
+      await page.click('#pd-add-line');
+      o.st.platform.find(p => p.id === 'plat-print').active = 0;
+      await page.click('#pd-editor-save');
+      await waitText(page, '#pd-editor-err', t => t.includes('已下架'));
+      ok('a platform-retired option → 「這個商品規格已下架…」 and the editor stays', (await page.$('#pd-order-editor')) !== null && o.st.orders.length === 1);
+      await page.click('#pd-editor-cancel');
+      // editing the saved order: repricing a platform line under its cost is refused
+      await page.click('[data-order-edit]');
+      await page.waitForSelector('#pd-order-editor');
+      await page.fill('.ord-line-edit .ord-price', '1499');
+      await page.click('#pd-editor-save');
+      await waitText(page, '#pd-editor-err', t => t.includes('不能低於平台價'));
+      ok('editing a saved platform line under its own snapshotted cost → below_platform_price', o.st.orders[0].items[0].unit_price === 1500);
+      return out;
+    },
+    { before: async p => { await m.attach(p); await o.attach(p); }, initScript: ADMIN });
+}
+
+{
   const m = pickFakeWorker({ projectId: 'proj-n', title: '沒商品' });
   const o = ordersFake({ products: [clone(PROD_SERVICE_OFF)] });
   await suite('admin — 沒有上架商品時，新增訂單指引到設定，而不是給空選單',
@@ -7846,7 +8940,7 @@ const todayTaipeiNode = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia
 {
   const m = pickFakeWorker({ projectId: 'proj-e', title: '編輯訂單' });
   ADMIN_PICKS(m);
-  const o = ordersFake({ products: [clone(PROD_ALBUM), clone(PROD_PRINT)] });
+  const o = ordersFake({ platform: [clone(PLAT_ALBUM), clone(PLAT_PRINT)], products: [clone(PROD_ALBUM), clone(PROD_PRINT)] });
   o.st.addOrder({ id: 'ord-e1', project_id: 'proj-e', items: [
     { id: 'it-1', name: '相本書', option_label: '8×8 吋', kind: 'album', option_id: 'opt-album-s', unit_price: 3800, qty: 1, photo_keys: ['20260819/IMG_1.jpg'] },
     { id: 'it-2', name: '無框畫', kind: 'print', option_id: 'opt-print', unit_price: 1200, qty: 1 }] });

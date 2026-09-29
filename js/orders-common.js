@@ -48,6 +48,16 @@
     invalid_label: '規格名稱太長了（60 字以內）',
     invalid_price: '售價需為 0 以上的整數',
     invalid_cost: '成本需為 0 以上的整數',
+    // platform catalogue (A2)
+    platform_only: '相本與輸出品要從「從平台加入」新增，自訂商品只能是服務',
+    platform_managed: '名稱、類型、說明與張數由平台管理，無法修改',
+    below_platform_price: '售價不能低於平台價',
+    already_adopted: '已經加入過這個平台商品了',
+    unknown_platform_product: '找不到這個平台商品，請重新整理',
+    invalid_vendor_cost: '廠商成本需為 0 以上的整數',
+    invalid_platform_price: '平台價需為 0 以上的整數',
+    too_large: '圖片超過 200 KB，請壓縮後再試',
+    unsupported_type: '不支援的檔案格式，僅限 PNG / JPEG / WebP',
   };
 
   function esc(s) {
@@ -83,6 +93,12 @@
   }
   const PAYMENT_LABEL = { unpaid: '未付款', partial: '部分已付', paid: '已付清', free: '免收款' };
 
+  // A platform product's picture, served publicly (no token): `stamp` is its
+  // image_updated_at, so a replaced picture is not shown from cache.
+  function platformImageUrl(workerUrl, platformProductId, stamp) {
+    return `${workerUrl}/api/platform/products/${encodeURIComponent(platformProductId)}/image?v=${encodeURIComponent(stamp || '')}`;
+  }
+
   // "name 規格" — a line's display name.
   function lineName(i) {
     return i.option_label ? `${i.name} · ${i.option_label}` : i.name;
@@ -109,6 +125,6 @@
 
   window.Orders = {
     KIND_LABEL, STATUS_LABEL, METHOD_LABEL, SOURCE_LABEL, STATUS_MOVES, PAYMENT_LABEL,
-    esc, money, errorText, paymentState, lineName, client,
+    esc, money, errorText, paymentState, lineName, platformImageUrl, client,
   };
 })();
