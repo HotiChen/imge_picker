@@ -22,8 +22,10 @@ browser. This replaces the fake `submitJob()` in `js/app.js`.
 - One selection list per project.
 - Submit: relationship **required** (本人／伴侶／家人／朋友／其他), email
   **optional**. Email is contact info only, never an identity key.
-- Over the plan's limit: warn, do not block —
-  「方案 40 張精修，您已選 50 張，多 10 張，每張 NT$xxx 加挑費」.
+- Over the plan's limit (`pick_limit`): warn, do not block —
+  「方案 40 張精修，您已選 50 張，多 10 張，每張 NT$xxx 加挑費」. Over
+  `pick_limit + extra_max` the submit is refused (409 `pick_cap`, see "Plan
+  cap"); ♥ itself is never blocked by the plan.
 - **Phases** (`projects.phase`): `picking` → `submitted` → `retouching`,
   default `picking`.
   - The owner saves in `picking` and `submitted`. A save while `submitted`
@@ -97,14 +99,17 @@ browser. This replaces the fake `submitJob()` in `js/app.js`.
   would exceed either → **409** `{code: 'selection_cap', max: 500}` or
   `{code: 'row_cap', max: 1000}`, nothing written. A project already over a cap
   (constant lowered) can still re-rate, un-star and delete — just not grow.
-- **Plan cap** (`docs/project-plan.md`): on top of those, at most
-  `pick_limit + extra_max` ♥ photos when both are non-NULL (NULL in either =
-  no plan cap; every project from before `extra_max` is NULL). Same gate,
-  same "shrink or stay, not grow" rule, refused with **409**
-  `{error, code: 'pick_cap', max, limit, extra_max}`, nothing written.
-  Order when several fail: `row_cap`, then `pick_cap`/`selection_cap`
-  (the smaller limit: `pick_cap` when `pick_limit + extra_max ≤ 500`), then
-  `marks_cap`.
+- **Plan cap** (`docs/project-plan.md`) — checked at **submit**, never at
+  save: ♥ is limited only by the system caps above (guests heart 100+ and
+  narrow down; every save is a draft). A submit sending more than
+  `pick_limit + extra_max` ♥ photos (both non-NULL; NULL in either = no plan
+  cap; every project from before `extra_max` is NULL) is refused with **409**
+  `{error, code: 'pick_cap', count, max, over, limit, extra_max}`, nothing
+  written, inside the submit's own conditional writes (a save racing the
+  submit cannot slip past). A repeat submit over a plan lowered since is
+  refused too (⚠ Tim's decision pending, recommended default). Save-side
+  order when several fail: `row_cap`, then `marks_cap` (when the ♥ count
+  fits), then `selection_cap`.
 - **Notes are the owner's**: `/api/pick/state` returns `note` only to the
   current seat holder; everyone else gets `{photo_key, rating}` per selection.
   Admin sees notes.
@@ -257,8 +262,8 @@ ALTER TABLE share_tokens ADD COLUMN project_id TEXT;
 | `POST /api/admin/projects/:id/deliver` / `undeliver` | admin | stamp / clear `delivered_at` (deliver only from `retouching`, else 409 `not_retouching`) — see `docs/dashboard-settings.md` |
 | `GET /api/pick/state` | pick token (+ key) | owner name, am-I-owner, `project: {id, title, pick_limit, extra_price, extra_max, max_picks}` (`max_picks` = `pick_limit + extra_max`, `null` when either is NULL; owner and viewers alike), selections, `phase`, `studio: {name, booking_url, has_logo}`; owner also gets `modified_after_submit`, `submitted_at` (latest submission) and each selection as `{photo_key, rating, note, marks}` (`marks`: `[{x, y, note}]` or `null`); viewers get `{photo_key, rating}` only — no `note`, no `marks` key |
 | `POST /api/pick/claim` `{name}` | pick token | atomic claim → `picker_key` |
-| `PUT /api/pick/selections` `{upsert: [{photo_key, rating, note?, marks?}], delete: [photo_key]}` | token + key, owner only | batch upsert/delete → `{ok: true}`; 400 `invalid_photo_key` / `invalid_marks` / `Invalid JSON`; 403 not the owner or a key outside the link's folders; 409 `retouching` / `selection_cap` / `row_cap` / `pick_cap` (`{max, limit, extra_max}`) / `marks_cap`; 413 `too_large` (body > 2,000,000 bytes, or its items > 1,900,000 bytes as one value); 500 `marks_unavailable` (migration not run); raises the flag when `submitted`. `marks` rules: see "Retouch pins" |
-| `POST /api/pick/submit` `{relationship, email?}` | token + key, owner only | append `submissions` row with the photo-key and pin snapshots (none for a repeat of the latest keys **and** pins: 200 with the latest), phase → `submitted`, email with diff (throttled, see above); 409 `retouching` / `submission_cap` / `marks_cap` (pin snapshot over 446,400 bytes — only reachable by hand-edited rows); 413 `too_large` (body > 16 KB) |
+| `PUT /api/pick/selections` `{upsert: [{photo_key, rating, note?, marks?}], delete: [photo_key]}` | token + key, owner only | batch upsert/delete → `{ok: true}`; 400 `invalid_photo_key` / `invalid_marks` / `Invalid JSON`; 403 not the owner or a key outside the link's folders; 409 `retouching` / `selection_cap` / `row_cap` / `marks_cap` (never `pick_cap`: the plan is checked at submit); 413 `too_large` (body > 2,000,000 bytes, or its items > 1,900,000 bytes as one value); 500 `marks_unavailable` (migration not run); raises the flag when `submitted`. `marks` rules: see "Retouch pins" |
+| `POST /api/pick/submit` `{relationship, email?}` | token + key, owner only | append `submissions` row with the photo-key and pin snapshots (none for a repeat of the latest keys **and** pins: 200 with the latest), phase → `submitted`, email with diff (throttled, see above); 409 `retouching` / `pick_cap` (`{count, max, over, limit, extra_max}`: more ♥ than `pick_limit + extra_max`, repeats included; checked first among the caps) / `marks_cap` (pin snapshot over 446,400 bytes — only reachable by hand-edited rows) / `submission_cap`; nothing written on any of them; 413 `too_large` (body > 16 KB) |
 
 Admin routes check `isAdminToken` (the photographer token only; fails closed
 when unset). Pick, client, session and studio tokens are refused. Every
@@ -385,9 +390,14 @@ A save with no `marks` and no rating 0 item never names the column in SQL.
     pins-only change is a new row without an email. ≤ 300 pins per project
     (409 `marks_cap`, atomic); save body ≤ 2,000,000 bytes, submit body ≤
     16 KB, bound items ≤ 1,900,000 bytes (413 `too_large`).
-18. Plan cap (`worker/test/project-plan.test.mjs`): ≤ `pick_limit + extra_max`
-    ♥ photos, atomic, 409 `pick_cap`; NULL in either = uncapped; rating 0,
-    un-heart and delete always work; over-cap projects shrink or stay. PATCH
+18. Plan cap (`worker/test/project-plan.test.mjs`): saves are never limited by
+    the plan (120 ♥ on a 40 + 10 plan save); a submit with more than
+    `pick_limit + extra_max` ♥ photos is 409 `pick_cap` `{count, max, over,
+    limit, extra_max}` with nothing written (row, contact info, phase, flag,
+    email), atomic with the snapshot (a racing save or PATCH is seen);
+    exactly the cap goes through; rating-0 rows do not count; NULL in either
+    = uncapped; a repeat over a lowered plan is refused (Tim pending); order
+    `pick_cap` → `marks_cap` → `submission_cap`. PATCH
     takes only the four keys (400 `invalid_body`), is scoped to this
     photographer (404), refuses plan edits on archived projects (409
     `archived`) and never rewrites a submission.

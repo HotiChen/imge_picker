@@ -455,10 +455,11 @@ const STATS_MONTHS = 12;
 const STUDIO_INT_FIELDS = ['default_pick_limit', 'default_extra_price'];
 
 // ─── Project plan (docs/project-plan.md) ────────────────────────────────────
-// projects.extra_max: how many ♥ photos the guest may pick above pick_limit.
-// A save may leave at most pick_limit + extra_max of them (409 pick_cap);
-// NULL in either = no plan cap. A new project takes the body's value, else
-// studio_settings.default_extra_max, else EXTRA_MAX_DEFAULT.
+// projects.extra_max: how many ♥ photos the guest may send above pick_limit.
+// ♥ itself is never limited by the plan (a save is a draft; only the system
+// caps apply); a submit may send at most pick_limit + extra_max of them (409
+// pick_cap); NULL in either = no plan cap. A new project takes the body's
+// value, else studio_settings.default_extra_max, else EXTRA_MAX_DEFAULT.
 const EXTRA_MAX_MAX = 500;
 const EXTRA_MAX_DEFAULT = 10;
 const isExtraMax = v => Number.isSafeInteger(v) && v >= 0 && v <= EXTRA_MAX_MAX;
@@ -1258,6 +1259,19 @@ function pickRetouching() {
   return jsonOk({ error: '攝影師已開始修圖，無法再修改或送出', code: 'retouching' }, 409);
 }
 
+// 409 for a submit sending more ♥ photos than the plan allows
+// (pick_limit + extra_max, docs/project-plan.md). `over`: how many to un-heart.
+function pickCapRefused(count, limit, extraMax) {
+  const max = limit + extraMax;
+  const over = count - max;
+  return jsonOk({
+    error: extraMax > 0
+      ? `目前選了 ${count} 張，最多可送出 ${max} 張（方案 ${limit} + 加選 ${extraMax}）。請先取消 ${over} 張再送出`
+      : `目前選了 ${count} 張，此專案最多 ${max} 張，不可加選。請先取消 ${over} 張再送出`,
+    code: 'pick_cap', count, max, over, limit, extra_max: extraMax,
+  }, 409);
+}
+
 // A conditional write that changed nothing: the phase moved to retouching or
 // the seat moved since the checks before it — or, for a save, the seat and
 // phase still hold and it was the selection cap. Re-read to say which.
@@ -1299,7 +1313,8 @@ async function pickOwnerName(env, projectId) {
   return row ? row.name : null;
 }
 
-// Over the plan's limit is a warning the guest reads, never a block.
+// Over the plan's limit is a warning the guest reads, never a block (only
+// over pick_limit + extra_max does the submit refuse: pickCapRefused).
 function pickOverText(count, limit, price) {
   if (limit == null || count <= limit) return '';
   const over = count - limit;
@@ -3008,7 +3023,7 @@ export default {
         // finals ([] until delivered); the page lists each through ?list=.
         const scope = pickReadScope(s);
         return jsonOk({
-          // extra_max / max_picks: the plan's cap as the save enforces it
+          // extra_max / max_picks: the plan's cap as the submit enforces it
           // (null = none, also on a database without the column yet)
           project: {
             id: project.id, title: project.title, pick_limit: project.pick_limit, extra_price: project.extra_price,
@@ -3133,15 +3148,8 @@ export default {
           `(SELECT COUNT(*) FROM selections WHERE project_id = ?1 AND rating > 0 AND photo_key NOT IN (SELECT value FROM json_each(?3)) AND photo_key ${notRemoved}))`;
         const starsNow = '(SELECT COUNT(*) FROM selections WHERE project_id = ?1 AND rating > 0)';
         const starsFit = `${starsAfter} <= MAX(?5, ${starsNow})`;
-        // The plan's cap (docs/project-plan.md) the same way: at most
-        // pick_limit + extra_max ♥, or no more than now (a plan lowered below
-        // the picks may shrink or stay, not grow); NULL in either = none. It
-        // reads the project row it is evaluated against (the gate's FROM
-        // projects), so a PATCH landing mid-save is seen inside the write.
-        // Only on a database that has the column (resolveShareToken reads
-        // the project with SELECT *, so the key is there exactly then).
-        const withPlan = hasField(project, 'extra_max');
-        const planFit = `(pick_limit IS NULL OR extra_max IS NULL OR ${starsAfter} <= MAX(pick_limit + extra_max, ${starsNow}))`;
+        // (The plan's cap, pick_limit + extra_max, is not a save cap: guests
+        // heart freely and narrow down, and it is checked at submit.)
         const rowsFit =
           '(SELECT COUNT(*) FROM (SELECT photo_key FROM selections WHERE project_id = ?1 UNION SELECT value FROM json_each(?3)) ' +
           `WHERE photo_key ${notRemoved}) ` +
@@ -3158,7 +3166,7 @@ export default {
           `(SELECT COALESCE(SUM(${pinsOf}), 0) FROM selections WHERE project_id = ?1 AND marks IS NOT NULL AND photo_key NOT IN (${setsPins}) AND photo_key ${notRemoved})) ` +
           `<= MAX(${PICK_MARKS_TOTAL_MAX}, (SELECT COALESCE(SUM(${pinsOf}), 0) FROM selections WHERE project_id = ?1 AND marks IS NOT NULL))`;
         const openFor = withMarks => `id = ?1 AND owner_picker_id = ?2 AND phase IN ${PICK_OPEN_SQL} AND archived_at IS NULL AND ${starsFit} AND ${rowsFit}` +
-          (withPlan ? ` AND ${planFit}` : '') + (withMarks ? ` AND ${marksFit}` : '');
+          (withMarks ? ` AND ${marksFit}` : '');
         const itemsJson = JSON.stringify(items);
         // the one big bound value: D1 fails a value over 2 MB as an error, so
         // it is refused here, before anything is tried
@@ -3223,29 +3231,14 @@ export default {
           return pickRefused(env, project.id, '只有挑選人可以修改', {
             pickerId: picker.id,
             // only which message to show; the writes above already decided
-            // Which cap, in this order: row_cap; then pick_cap or
-            // selection_cap, whichever is the smaller limit when both fail
-            // (pick_cap when the plan allows ≤ PICK_MAX_SELECTIONS); then
-            // marks_cap. None failing now (the rows moved since): selection_cap.
+            // Which cap, in this order: row_cap; then marks_cap (when the
+            // stars fit); then selection_cap. None failing now (the rows moved
+            // since): selection_cap.
             refused: async () => {
-              const plan = withPlan ? `, ${planFit} AS plan_ok, pick_limit, extra_max` : '';
               const fit = await env.DB.prepare(
-                `SELECT ${rowsFit} AS rows_ok, ${starsFit} AS stars_ok${usedMarks ? `, ${marksFit} AS marks_ok` : ''}${plan}${withPlan ? ' FROM projects WHERE id = ?1' : ''}`
+                `SELECT ${rowsFit} AS rows_ok, ${starsFit} AS stars_ok${usedMarks ? `, ${marksFit} AS marks_ok` : ''}`
               ).bind(...gateArgs).first();
               if (!fit?.rows_ok) return jsonOk({ error: `最多只能保留 ${PICK_MAX_ROWS} 筆`, code: 'row_cap', max: PICK_MAX_ROWS }, 409);
-              // (a plan failure with stars_ok answers here, so marks_cap below
-              // is only reached when the plan fits)
-              if (withPlan && !fit.plan_ok) {
-                const max = fit.pick_limit + fit.extra_max;
-                if (fit.stars_ok || max <= PICK_MAX_SELECTIONS) {
-                  return jsonOk({
-                    error: fit.extra_max > 0
-                      ? `已達可挑上限：方案 ${fit.pick_limit} 張 + 加選 ${fit.extra_max} 張，最多 ${max} 張`
-                      : `已達可挑上限：方案 ${fit.pick_limit} 張，不可加選（最多 ${max} 張）`,
-                    code: 'pick_cap', max, limit: fit.pick_limit, extra_max: fit.extra_max,
-                  }, 409);
-                }
-              }
               if (usedMarks && fit.stars_ok && !fit.marks_ok) {
                 return jsonOk({ error: `標示總數已達上限（${PICK_MARKS_TOTAL_MAX} 個）`, code: 'marks_cap', max: PICK_MARKS_TOTAL_MAX }, 409);
               }
@@ -3302,10 +3295,23 @@ export default {
         // and the snapshot must fit PICK_MARKS_SNAPSHOT_MAX bytes; a save
         // cannot make one that does not, so only hand-edited rows are refused
         const marksFit = `COALESCE(length(CAST(${marksSnapshot} AS BLOB)), 0) <= ${PICK_MARKS_SNAPSHOT_MAX}`;
+        // The plan's cap (docs/project-plan.md): at most pick_limit +
+        // extra_max ♥ photos — the snapshot's own count — may be sent; NULL in
+        // either = none. ♥ itself is never capped by the plan (a save is a
+        // draft), so this is where it holds. It rides in `fits`, so it gates
+        // all three statements, a repeat included (a repeat over a plan
+        // lowered since is refused too: the plan is authoritative), and it
+        // reads the selections and the project row inside the transaction, so
+        // a save or a PATCH landing after the route's reads is seen. Only on a
+        // database that has the column (resolveShareToken reads the project
+        // with SELECT *, so the key is there exactly then).
+        const pickedCount = `(SELECT COUNT(*) FROM (${picked}))`;
+        const withPlan = hasField(project, 'extra_max');
+        const planFit = `(p.pick_limit IS NULL OR p.extra_max IS NULL OR ${pickedCount} <= p.pick_limit + p.extra_max)`;
         let usedMarks = false;
         const submitBatch = withMarks => {
           usedMarks = withMarks;
-          const fits = withMarks ? ` AND ${marksFit}` : '';
+          const fits = (withPlan ? ` AND ${planFit}` : '') + (withMarks ? ` AND ${marksFit}` : '');
           // both sides built the same way (json_group_array / _object over
           // keys in the same order), so equal means unchanged: a repeat is
           // the same photos AND the same pins
@@ -3315,7 +3321,7 @@ export default {
           return env.DB.batch([
             env.DB.prepare(
               `INSERT INTO submissions (id, project_id, picker_id, relationship, email, photo_keys, count, pick_limit, extra_price, created_at${withMarks ? ', marks' : ''}) ` +
-              `SELECT ?, p.id, ?, ?, ?, ${snapshot}, (SELECT COUNT(*) FROM (${picked})), ` +
+              `SELECT ?, p.id, ?, ?, ?, ${snapshot}, ${pickedCount}, ` +
               `p.pick_limit, p.extra_price, ?${withMarks ? `, ${marksSnapshot}` : ''} FROM projects p WHERE ${open} AND NOT (${repeat}) AND ${room}${fits}`
             ).bind(submissionId, picker.id, relationship, mail, submittedAt, project.id, picker.id),
             // the latest contact info stays on the picker
@@ -3331,7 +3337,15 @@ export default {
         if (!moved.meta?.changes) {
           return pickRefused(env, project.id, '只有挑選人可以送出', {
             pickerId: picker.id,
+            // Which cap, in this order: pick_cap (the one the guest can fix
+            // by un-hearting); then marks_cap; then submission_cap.
             refused: async () => {
+              if (withPlan) {
+                const plan = await env.DB.prepare(
+                  `SELECT ${planFit} AS ok, ${pickedCount} AS count, p.pick_limit, p.extra_max FROM projects p WHERE p.id = ?`
+                ).bind(project.id).first();
+                if (plan && !plan.ok) return pickCapRefused(plan.count, plan.pick_limit, plan.extra_max);
+              }
               const fit = usedMarks
                 ? await env.DB.prepare(`SELECT ${marksFit} AS ok FROM projects p WHERE p.id = ?`).bind(project.id).first()
                 : { ok: 1 };

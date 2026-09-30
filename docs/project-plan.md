@@ -22,23 +22,23 @@ the merge that needs them (`projects.extra_max`,
 `studio_settings.default_extra_max`; the promo and shipping columns come with
 their own stages).
 
-## Extra-pick cap (this round)
+## Extra-pick cap (checked at submit, since 2026-09-30)
 
-- The guest may hold at most **`pick_limit + extra_max`** ♥ photos.
+- The guest may **send** at most **`pick_limit + extra_max`** ♥ photos.
   `pick_limit` NULL → no plan cap (only the existing 500 system cap).
   `extra_max` NULL (every project created before this feature) → **no plan cap
   either** — existing projects behave exactly as today.
-- **Enforced by the Worker** inside the same conditional write that already
-  applies `selection_cap`/`row_cap` on `PUT /api/pick/selections`: refused with
-  409 `{error, code: 'pick_cap', max, limit, extra_max}` (nothing written; see
-  "Worker contract" below). Un-hearting
-  and deleting always work. A project already above its cap (lowered later) keeps
-  its picks; the guest just cannot add more.
+- **♥ is never limited by the plan (Tim).** Guests heart 100+ photos in a
+  first round and narrow down over days; every save is a draft, limited only
+  by the system caps (`selection_cap` 500, `row_cap` 1000, `marks_cap` 300).
+- **Enforced by the Worker at submit** (`POST /api/pick/submit`), inside the
+  submit's own conditional writes: over the cap → 409
+  `{error, code: 'pick_cap', count, max, over, limit, extra_max}`, nothing
+  written (see "Worker contract" below). The guest un-hearts and submits again.
 - `GET /api/pick/state` exposes `extra_max` and the resulting `max_picks` so the
-  page can say 「已選 42 / 40 張（最多可加選到 50）」 and, when the guest taps ♥
-  at the cap, show 「已達可挑上限：方案 40 張 + 加選 10 張」. `extra_max = 0`
-  reads 「不可加選」.
-- The over-plan warning at submit (already built) is unchanged.
+  page can say 「已選 42 / 40 張（最多可加選到 50）」 and, above `max_picks`,
+  tell the guest how many to remove before submitting.
+- The over-plan price warning at submit (already built) is unchanged.
 
 ## Editing a project's plan
 
@@ -119,33 +119,51 @@ projects from before the feature.
 - Submissions are never touched: each keeps the `pick_limit` / `extra_price`
   it snapshotted; only later submits see the new plan.
 
-**Enforcement** — `PUT /api/pick/selections`: the ♥ photos (rating ≥ 1) the
-save would leave must be ≤ `MAX(pick_limit + extra_max, ♥ now)` when both are
-non-NULL. Checked inside every statement of the save batch (same gate as
-`selection_cap`/`row_cap`/`marks_cap`), against the project row as it stands
-inside the transaction, so two saves racing for the last slot cannot both land
-and a PATCH lowering the plan mid-save wins. Refusal: **409**
+**Enforcement** — at **submit**, not at save (changed 2026-09-30,
+docs/pick-handover.md §1).
+
+- `PUT /api/pick/selections` has **no plan cap**: any number of ♥ photos
+  saves, up to the system caps only (`selection_cap` 500, `row_cap` 1000,
+  `marks_cap` 300, unchanged). A save never answers `pick_cap`.
+- `POST /api/pick/submit`: the ♥ photos (rating ≥ 1 — exactly the photos
+  the submit snapshots, counted inside the statement) must be ≤
+  `pick_limit + extra_max` when both are non-NULL. The condition is part of
+  every statement of the submit batch (the `INSERT` of the submission, the
+  picker's contact-info `UPDATE`, the phase `UPDATE`), evaluated against the
+  selections and the project row as they stand inside the transaction, so a
+  save or a PATCH lowering the plan that lands after the route's reads is
+  seen, and a save racing the submit cannot produce an over-cap submission.
+  Refusal: **409**
 
 ```json
-{"error": "已達可挑上限：方案 40 張 + 加選 10 張，最多 50 張",
- "code": "pick_cap", "max": 50, "limit": 40, "extra_max": 10}
+{"error": "目前選了 120 張，最多可送出 50 張（方案 40 + 加選 10）。請先取消 70 張再送出",
+ "code": "pick_cap", "count": 120, "max": 50, "over": 70, "limit": 40, "extra_max": 10}
 ```
 
-(`extra_max = 0`: 「已達可挑上限：方案 40 張，不可加選（最多 40 張）」), nothing
-written (ratings, notes, pins, deletes, `modified_after_submit`).
-Un-hearting (rating 0), rating-0 rows and deletes never count; a project over
-its cap (plan lowered later) may re-rate, shrink or swap, not grow.
+  `count` = ♥ photos now, `max` = `pick_limit + extra_max`, `over` =
+  `count − max`. `extra_max = 0`: 「目前選了 43 張，此專案最多 40 張，不可加選。請先取消
+  3 張再送出」. Nothing written: no submission row, no contact info on the
+  picker, no phase change, `modified_after_submit` unchanged, no email.
+  Rating-0 rows never count; exactly `max` goes through.
+- **Repeats** (same photos and pins as the latest submission) are refused the
+  same way when over a plan lowered since that submission — the plan is
+  authoritative. **⚠ Tim's decision pending (docs/pick-handover.md open Q4);
+  this is the recommended default, built and tested.** A repeat within the plan
+  is still a repeat (no new row).
 
-Refusal order: seat (403) → phase (409 `retouching`) → `row_cap` →
-`pick_cap` / `selection_cap` (when both fail, the smaller limit is reported:
-`pick_cap` when `pick_limit + extra_max ≤ 500`, else `selection_cap`) →
-`marks_cap`.
+Refusal order at submit (the code's existing order, with `pick_cap` put
+first among the caps): not the seat holder (403, before anything) → phase
+(409 `retouching`, before anything) → the batch → on a refused batch, re-read:
+archived since (401) → phase moved (409 `retouching`) → seat moved (403) →
+**`pick_cap`** → `marks_cap` → `submission_cap`. `pick_cap` is first among the
+caps because it is the one the guest can fix.
 
 **State** — `GET /api/pick/state` `project` gains `extra_max` and
-`max_picks` (= `pick_limit + extra_max`, `null` when either is NULL), for the
-owner and viewers alike.
+`max_picks` (= `pick_limit + extra_max`, `null` when either is NULL — the
+number the submit enforces), for the owner and viewers alike.
 
-**Before the migration**: every project is uncapped; saves, submit, state
+**Before the migration**: every project is uncapped (the submit adds the plan
+condition only when the project row has an `extra_max` column); saves, submit, state
 (`extra_max: null, max_picks: null`), list and detail work; create stores no
 `extra_max` (the response says `null`, even if the body sent one); settings
 read `default_extra_max: null`. Only a PATCH naming `extra_max` or a settings

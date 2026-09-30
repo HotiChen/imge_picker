@@ -80,6 +80,18 @@ root) can **take it back** from anyone (「要回選擇權」). Builds on `docs/
 
 ### Worker (exact)
 
+> **Built 2026-09-30** (branch `claude/lucid-cori-viif3w`, WP1). As designed
+> below, with these differences: the condition is named `planFit` (not
+> `planOk`) and the count `pickedCount`; the `extra_max = 0` message is
+> 「目前選了 {count} 張，此專案最多 {max} 張，不可加選。請先取消 {over} 張再送出」;
+> `not_root` does not exist yet (WP4), so the order today is seat 403 →
+> `retouching` 409 → `pick_cap` → `marks_cap` → `submission_cap` (on a batch
+> refused mid-flight the re-read goes archived 401 → `retouching` → seat 403 →
+> the caps, as `pickRefused` always did). Open Q4 is built as the recommended
+> default (repeat over a lowered plan refused), pending Tim.
+> Contract: `docs/project-plan.md` "Enforcement". Tests:
+> `worker/test/project-plan.test.mjs`.
+
 `PUT /api/pick/selections` — remove:
 - `withPlan`, `planFit` and the ` AND ${planFit}` term in `openFor`;
 - in `refused()`: the `plan` columns, the `FROM projects WHERE id = ?1` suffix
@@ -116,7 +128,7 @@ guest can fix. One extra read (`SELECT count, pick_limit, extra_max`) builds:
  "code": "pick_cap", "count": 120, "max": 50, "over": 70, "limit": 40, "extra_max": 10}
 ```
 
-`extra_max = 0`: 「…最多可送出 40 張（方案 40 張，不可加選）…」. Nothing written:
+`extra_max = 0` (as built): 「目前選了 43 張，此專案最多 40 張，不可加選。請先取消 3 張再送出」. Nothing written:
 no row, no contact info, no phase change, no email, `modified_after_submit`
 unchanged. Before the extra-max migration: no plan cap (as today).
 
@@ -655,6 +667,9 @@ code if its suite is added last. Migration SQL goes to Tim before the WP4 merge.
 3. Build the small draft improvements (retry, 已自動儲存) now?
 4. A repeat submit over a plan the photographer lowered after the last submit:
    refuse (recommended, the plan is authoritative) or let the repeat through?
+   **Built as "refuse" (WP1, 2026-09-30); flipping it is a small change (the plan term
+   out of `fits`, into the INSERT and the `room` branch of the UPDATEs) plus
+   its test — still Tim's call.**
 
 (Decided: take-back needs no approval; only the root may take back; only the
 root submits; notification v1 = prefilled message + banners + badge, no email.)

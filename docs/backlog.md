@@ -226,6 +226,12 @@ Replaces the seat-passing proposal in docs/pick-handover.md §3+ (kept only as h
 - Cap the number of photo keys listed in the change-notification email.
 
 ## Technical debt / security
+- `node --check <file>.js` does not catch syntax errors on our Node (v22): there
+  is no package.json, so the file is not treated as a module and an unbalanced
+  paren still exits 0. Use `node --input-type=module --check < worker/worker.js`
+  (or add `"type": "module"` where that is correct) in CLAUDE.md's commands and
+  in `.github/workflows/deploy.yml`. The worker tests import worker.js as ESM,
+  so they do catch it; the CI syntax step for the frontend JS files does not.
 - Upload route (`PUT` to any unmatched path) also accepts admin requests under
   `api/…` and stores them as R2 objects (e.g. `PUT /api/admin/projects/<id>/archive`
   writes a junk object; only the admin token can do it, the 180-day lifecycle

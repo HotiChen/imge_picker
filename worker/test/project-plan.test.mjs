@@ -1,10 +1,13 @@
 // Project plan: the extra-pick cap and editing a project's plan
 // (docs/project-plan.md).
 //
-// - projects.extra_max: how many ♥ photos the guest may pick above
-//   pick_limit. A save that would leave more than pick_limit + extra_max ♥
-//   photos is 409 pick_cap, checked inside the same conditional writes as the
-//   other caps. NULL pick_limit or NULL extra_max = no plan cap.
+// - projects.extra_max: how many ♥ photos the guest may send above
+//   pick_limit. ♥ itself is never limited by the plan (guests heart 100+ and
+//   narrow down; every save is a draft), only by the system caps. A SUBMIT
+//   with more than pick_limit + extra_max ♥ photos is 409 pick_cap
+//   {count, max, over, limit, extra_max}, checked inside the submit's own
+//   conditional writes, nothing written. NULL pick_limit or NULL extra_max =
+//   no plan cap.
 // - Set at creation (body → studio_settings.default_extra_max → 10), edited by
 //   PATCH /api/admin/projects/:id together with pick_limit, extra_price and
 //   allow_proof_download.
@@ -12,7 +15,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, existsSync } from 'node:fs';
 import {
-  SECRET, MINE, setup, call, pick, claimed, createProject, save, one, rows,
+  SECRET, MINE, setup, call, pick, claimed, createProject, save, one, rows, collectingCtx,
 } from './pick-helpers.mjs';
 import { fakeDB } from './fakes.mjs';
 
@@ -46,15 +49,36 @@ const admin = (env, id, action) => call(env, `/api/admin/projects/${id}/${action
 // a claimed project with the plan given (pick_limit / extra_max)
 const planned = (env, plan) => claimed(env, plan);
 
-async function expectPickCap(res, max, limit, extraMax) {
-  assert.equal(res.status, 409);
-  const json = await res.json();
-  assert.equal(json.code, 'pick_cap');
-  assert.equal(json.max, max);
-  assert.equal(json.limit, limit);
-  assert.equal(json.extra_max, extraMax);
-  assert.equal(typeof json.error, 'string');
-  assert.match(json.error, new RegExp(String(max)));
+function fakeMailer() {
+  const sent = [];
+  return { sent, async send(msg) { sent.push(msg); return { messageId: 'm1' }; } };
+}
+const mailEnv = (mailer = fakeMailer()) =>
+  setup({ NOTIFY_EMAIL: mailer, PHOTOGRAPHER_EMAIL: 'studio@example.com' });
+
+// key: omitted = the owner's own; null = no key header at all. Waits for the
+// background notification, so "no email" is really no email.
+async function submitRes(env, p, body = { relationship: '本人' }, key = p.key) {
+  const c = collectingCtx();
+  const res = await pick(env, 'POST', 'submit', p.token, { key, body }, c);
+  await c.settle();
+  return { res, json: await res.json() };
+}
+
+// every table a submit may touch, for "nothing written"
+const everything = env => JSON.stringify(
+  ['projects', 'pickers', 'selections', 'submissions'].map(t => rows(env, `SELECT * FROM ${t} ORDER BY rowid`)),
+);
+
+// runs fn once, the first time the Worker prepares a statement matching `re`
+// — after every read the route does, before its writes execute
+function landOnce(env, re, fn) {
+  const prepare = env.DB.prepare.bind(env.DB);
+  let done = false;
+  env.DB.prepare = s => {
+    if (!done && re.test(s)) { done = true; fn(); }
+    return prepare(s);
+  };
 }
 
 // schema.sql as a database that has not had the extra-max migration
@@ -400,269 +424,349 @@ test('PATCH before the migration: pick_limit and extra_price work; extra_max is 
   assert.deepEqual(projectRow(env, id), before);
 });
 
-// ─── the cap ─────────────────────────────────────────────────────────────────
+// ─── ♥ is never limited by the plan (drafts) ────────────────────────────────
 
-test('cap: exactly pick_limit + extra_max ♥ photos is fine, one more is 409 pick_cap and writes nothing', async () => {
+test('save: 120 ♥ with pick_limit 40 / extra_max 10 all save (a draft), and state shows all 120', async () => {
   const env = setup();
-  const p = await planned(env, { pick_limit: 3, extra_max: 2 });
-  // one save straight past the cap
-  let res = await save(env, p.token, p.key, { upsert: hearts(keysN(6)) });
-  await expectPickCap(res, 5, 3, 2);
-  assert.equal(one(env, 'SELECT COUNT(*) AS n FROM selections').n, 0);
-  // one save straight to it
-  assert.equal((await save(env, p.token, p.key, { upsert: hearts(keysN(5)) })).status, 200);
-  assert.equal(starred(env), 5);
-  // one more: refused whole, the note edit riding along included
-  const before = selectionRows(env);
-  res = await save(env, p.token, p.key, {
-    upsert: [{ photo_key: keysN(1)[0], rating: 3, note: 'changed' }, { photo_key: A, rating: 1 }],
-  });
-  await expectPickCap(res, 5, 3, 2);
-  assert.equal(selectionRows(env), before);
-  assert.equal(projectRow(env, p.project.id).modified_after_submit, 0);
+  const p = await planned(env, { pick_limit: 40, extra_max: 10 });
+  // in two saves, the second going further over
+  assert.equal((await save(env, p.token, p.key, { upsert: hearts(keysN(60)) })).status, 200);
+  assert.equal((await save(env, p.token, p.key, { upsert: hearts(keysN(60, 60)) })).status, 200);
+  assert.equal(starred(env), 120);
+  const st = await state(env, p.token, p.key);
+  assert.equal(st.selections.filter(s => s.rating > 0).length, 120);
+  assert.deepEqual([st.project.pick_limit, st.project.extra_max, st.project.max_picks], [40, 10, 50]);
 });
 
-test('cap: the refusal message names the plan', async () => {
-  const env = setup();
-  const p = await planned(env, { pick_limit: 3, extra_max: 2 });
-  const json = await (await save(env, p.token, p.key, { upsert: hearts(keysN(6)) })).json();
-  assert.match(json.error, /3/);
-  assert.match(json.error, /2/);
-  assert.match(json.error, /5/);
-});
-
-test('cap: extra_max 0 means no extras — pick_limit itself is the cap', async () => {
-  const env = setup();
-  const p = await planned(env, { pick_limit: 3, extra_max: 0 });
-  assert.equal((await save(env, p.token, p.key, { upsert: hearts(keysN(3)) })).status, 200);
-  await expectPickCap(await save(env, p.token, p.key, { upsert: hearts([A]) }), 3, 3, 0);
-  assert.equal(starred(env), 3);
-});
-
-test('cap: pick_limit 0 with extra_max 0 allows no ♥ at all, but rating-0 rows are fine', async () => {
-  const env = setup();
+test('save: the plan refuses nothing — 0/0, a plan lowered below the picks, and while submitted', async () => {
+  const env = mailEnv();
   const p = await planned(env, { pick_limit: 0, extra_max: 0 });
-  await expectPickCap(await save(env, p.token, p.key, { upsert: hearts([A]) }), 0, 0, 0);
-  assert.equal((await save(env, p.token, p.key, { upsert: [{ photo_key: A, rating: 0, note: '看看' }] })).status, 200);
-  assert.equal(one(env, 'SELECT COUNT(*) AS n FROM selections').n, 1);
+  assert.equal((await save(env, p.token, p.key, { upsert: hearts([A]) })).status, 200);
+  await patch(env, p.project.id, { pick_limit: 1, extra_max: 0 });
+  assert.equal((await submitRes(env, p)).res.status, 200);
+  await patch(env, p.project.id, { pick_limit: 0 });
+  // growing past a lowered plan while submitted: saved, and the flag goes up
+  const res = await save(env, p.token, p.key, { upsert: hearts([B, C]) });
+  assert.equal(res.status, 200);
+  assert.deepEqual(await res.json(), { ok: true });
+  assert.equal(starred(env), 3);
+  assert.equal(projectRow(env, p.project.id).modified_after_submit, 1);
 });
 
-test('cap: NULL pick_limit or NULL extra_max means no plan cap', async () => {
+test('save: the system caps are unchanged whatever the plan — selection_cap, row_cap, marks_cap', async () => {
+  const env = setup();
+  const p = await planned(env, { pick_limit: 3, extra_max: 2 });
+  seed(env, p.project.id, keysN(500));
+  let res = await save(env, p.token, p.key, { upsert: hearts([A]) });
+  assert.equal(res.status, 409);
+  assert.deepEqual(await res.json(), { error: '最多只能選 500 張', code: 'selection_cap', max: 500 });
+  const q = await planned(env, { pick_limit: 0, extra_max: 0 });
+  seed(env, q.project.id, keysN(1000, 5000), 0);
+  res = await save(env, q.token, q.key, { upsert: hearts([A]) });
+  assert.equal(res.status, 409);
+  assert.equal((await res.json()).code, 'row_cap');
+  const r = await planned(env, { pick_limit: 0, extra_max: 0 });
+  const pins = Array.from({ length: 10 }, (_, i) => ({ x: i / 10, y: 0.5, note: '' }));
+  const ins = env.DB._db.prepare(
+    "INSERT INTO selections (project_id, photo_key, rating, note, updated_by, updated_at, marks) VALUES (?, ?, 1, '', 'seed', 'seeded', ?)");
+  for (const k of keysN(30, 9000)) ins.run(r.project.id, k, JSON.stringify(pins));
+  res = await save(env, r.token, r.key, { upsert: [{ photo_key: A, rating: 1, marks: [pins[0]] }] });
+  assert.equal(res.status, 409);
+  assert.equal((await res.json()).code, 'marks_cap');
+});
+
+// ─── the cap, at submit ─────────────────────────────────────────────────────
+
+test('submit: 120 ♥ over 40 + 10 is 409 pick_cap with the numbers, and nothing is written', async () => {
+  const mailer = fakeMailer();
+  const env = mailEnv(mailer);
+  const p = await planned(env, { pick_limit: 40, extra_max: 10 });
+  assert.equal((await save(env, p.token, p.key, { upsert: hearts(keysN(120)) })).status, 200);
+  const before = everything(env);
+  const { res, json } = await submitRes(env, p, { relationship: '伴侶', email: 'a@b.tw' });
+  assert.equal(res.status, 409);
+  assert.deepEqual(json, {
+    error: '目前選了 120 張，最多可送出 50 張（方案 40 + 加選 10）。請先取消 70 張再送出',
+    code: 'pick_cap', count: 120, max: 50, over: 70, limit: 40, extra_max: 10,
+  });
+  assert.equal(everything(env), before, 'no submission, no contact info, no phase change, no flag');
+  assert.equal(projectRow(env, p.project.id).phase, 'picking');
+  assert.equal(one(env, 'SELECT COUNT(*) AS n FROM submissions').n, 0);
+  assert.equal(one(env, 'SELECT relationship FROM pickers').relationship, null);
+  assert.equal(mailer.sent.length, 0);
+});
+
+test('submit: trimmed from 120 to 50, it goes through and records 50', async () => {
+  const mailer = fakeMailer();
+  const env = mailEnv(mailer);
+  const p = await planned(env, { pick_limit: 40, extra_max: 10 });
+  await save(env, p.token, p.key, { upsert: hearts(keysN(120)) });
+  assert.equal((await submitRes(env, p)).res.status, 409);
+  // 50 un-hearted, 20 deleted
+  assert.equal((await save(env, p.token, p.key, { upsert: keysN(50).map(photo_key => ({ photo_key, rating: 0 })), delete: keysN(20, 50) })).status, 200);
+  const { res, json } = await submitRes(env, p, { relationship: '本人' });
+  assert.equal(res.status, 200, JSON.stringify(json));
+  const sub = one(env, 'SELECT * FROM submissions');
+  assert.equal(sub.count, 50);
+  assert.deepEqual(JSON.parse(sub.photo_keys), keysN(50, 70).sort());
+  assert.equal(projectRow(env, p.project.id).phase, 'submitted');
+  assert.equal(mailer.sent.length, 1);
+});
+
+test('submit: exactly pick_limit + extra_max is fine, one more is refused (over 1); only ♥ counts', async () => {
+  const env = mailEnv();
+  const p = await planned(env, { pick_limit: 40, extra_max: 10 });
+  // every rating ≥ 1 counts; rating-0 rows (notes kept) do not
+  seed(env, p.project.id, keysN(25), 1);
+  seed(env, p.project.id, keysN(26, 25), 5);
+  seed(env, p.project.id, keysN(30, 500), 0);
+  let r = await submitRes(env, p);
+  assert.equal(r.res.status, 409);
+  assert.deepEqual([r.json.code, r.json.count, r.json.max, r.json.over], ['pick_cap', 51, 50, 1]);
+  assert.equal(r.json.error, '目前選了 51 張，最多可送出 50 張（方案 40 + 加選 10）。請先取消 1 張再送出');
+  await save(env, p.token, p.key, { upsert: [{ photo_key: keysN(1)[0], rating: 0 }] });
+  r = await submitRes(env, p);
+  assert.equal(r.res.status, 200);
+  assert.equal(one(env, 'SELECT count FROM submissions').count, 50);
+});
+
+test('submit: extra_max 0 — pick_limit itself is the cap, and the message says no extras', async () => {
+  const env = mailEnv();
+  const p = await planned(env, { pick_limit: 40, extra_max: 0 });
+  seed(env, p.project.id, keysN(43));
+  const { res, json } = await submitRes(env, p);
+  assert.equal(res.status, 409);
+  assert.deepEqual(json, {
+    error: '目前選了 43 張，此專案最多 40 張，不可加選。請先取消 3 張再送出',
+    code: 'pick_cap', count: 43, max: 40, over: 3, limit: 40, extra_max: 0,
+  });
+  env.DB._db.prepare('DELETE FROM selections WHERE photo_key IN (?, ?, ?)').run(...keysN(3));
+  assert.equal((await submitRes(env, p)).res.status, 200);
+});
+
+test('submit: pick_limit 0 with extra_max 0 — no ♥ may be sent, an empty submit may', async () => {
+  const env = mailEnv();
+  const p = await planned(env, { pick_limit: 0, extra_max: 0 });
+  await save(env, p.token, p.key, { upsert: [{ photo_key: B, rating: 0, note: '看看' }] });
+  assert.equal((await submitRes(env, p)).res.status, 200);
+  await save(env, p.token, p.key, { upsert: hearts([A]) });
+  const { res, json } = await submitRes(env, p);
+  assert.equal(res.status, 409);
+  assert.deepEqual([json.code, json.count, json.max, json.over, json.limit, json.extra_max], ['pick_cap', 1, 0, 1, 0, 0]);
+});
+
+test('submit: NULL pick_limit or NULL extra_max means no plan cap', async () => {
   for (const plan of [{ pick_limit: null, extra_max: 2 }, { pick_limit: 3, extra_max: null }, { pick_limit: null, extra_max: null }]) {
-    const env = setup();
+    const env = mailEnv();
     const p = await planned(env, plan);
-    const res = await save(env, p.token, p.key, { upsert: hearts(keysN(30)) });
+    seed(env, p.project.id, keysN(30));
+    const { res } = await submitRes(env, p);
     assert.equal(res.status, 200, JSON.stringify(plan));
-    assert.equal(starred(env), 30);
+    assert.equal(one(env, 'SELECT count FROM submissions').count, 30);
   }
 });
 
-test('cap: a project from before the feature (extra_max NULL) behaves as it always did', async () => {
-  const env = setup();
-  const p = await planned(env, { pick_limit: 3 });
+test('submit: a project from before the feature (extra_max NULL) is uncapped, as it always was', async () => {
+  const env = mailEnv();
+  const p = await planned(env, { pick_limit: 3, extra_max: 2 });
   env.DB._db.prepare('UPDATE projects SET extra_max = NULL WHERE id = ?').run(p.project.id);
-  assert.equal((await save(env, p.token, p.key, { upsert: hearts(keysN(40)) })).status, 200);
-  assert.equal(starred(env), 40);
+  seed(env, p.project.id, keysN(40));
+  assert.equal((await submitRes(env, p)).res.status, 200);
+  assert.equal(one(env, 'SELECT count FROM submissions').count, 40);
 });
 
-test('cap: only ♥ counts — rating-0 rows are free, un-hearting at the cap works and frees a slot', async () => {
-  const env = setup();
-  const p = await planned(env, { pick_limit: 2, extra_max: 1 });
-  assert.equal((await save(env, p.token, p.key, { upsert: hearts(keysN(3)) })).status, 200);
-  // new rating-0 rows at the cap
-  assert.equal((await save(env, p.token, p.key, { upsert: [{ photo_key: A, rating: 0 }, { photo_key: B, rating: 0 }] })).status, 200);
-  // re-rating one already ♥ at the cap
-  assert.equal((await save(env, p.token, p.key, { upsert: [{ photo_key: keysN(1)[0], rating: 5, note: 'n' }] })).status, 200);
-  // re-hearting a rating-0 row is a new pick
-  await expectPickCap(await save(env, p.token, p.key, { upsert: hearts([A]) }), 3, 2, 1);
-  // un-heart one, then the other gets in
-  assert.equal((await save(env, p.token, p.key, { upsert: [{ photo_key: keysN(1)[0], rating: 0 }] })).status, 200);
-  assert.equal(starred(env), 2);
-  assert.equal((await save(env, p.token, p.key, { upsert: hearts([A]) })).status, 200);
-  assert.equal(starred(env), 3);
-  // a swap in one save nets out
-  assert.equal((await save(env, p.token, p.key, { upsert: [{ photo_key: A, rating: 0 }, { photo_key: B, rating: 1 }] })).status, 200);
-  assert.equal(starred(env), 3);
-  // a delete at the cap works and makes room
-  assert.equal((await save(env, p.token, p.key, { delete: [B] })).status, 200);
-  assert.equal((await save(env, p.token, p.key, { upsert: hearts([C]) })).status, 200);
-  assert.equal(starred(env), 3);
-});
-
-test('cap: a project already over it (plan lowered later) may shrink or stay, not grow', async () => {
-  const env = setup();
-  const p = await planned(env, { pick_limit: 40, extra_max: 10 });
-  seed(env, p.project.id, keysN(8));
-  assert.equal((await patch(env, p.project.id, { pick_limit: 3, extra_max: 2 })).status, 200);
-  // the picks stay
-  assert.equal(starred(env), 8);
-  // re-rate, un-heart, delete, swap
-  assert.equal((await save(env, p.token, p.key, { upsert: [{ photo_key: keysN(1)[0], rating: 4 }] })).status, 200);
-  assert.equal((await save(env, p.token, p.key, { upsert: [{ photo_key: keysN(1, 1)[0], rating: 0 }] })).status, 200);
-  assert.equal((await save(env, p.token, p.key, { delete: keysN(1, 2) })).status, 200);
-  assert.equal(starred(env), 6);
-  assert.equal((await save(env, p.token, p.key, { upsert: [{ photo_key: keysN(1, 3)[0], rating: 0 }, { photo_key: A, rating: 1 }] })).status, 200);
-  assert.equal(starred(env), 6);
-  // but not grow
-  await expectPickCap(await save(env, p.token, p.key, { upsert: hearts([B]) }), 5, 3, 2);
-  assert.equal(starred(env), 6);
-});
-
-test('cap: raising the plan by PATCH makes room at once', async () => {
-  const env = setup();
-  const p = await planned(env, { pick_limit: 1, extra_max: 0 });
-  assert.equal((await save(env, p.token, p.key, { upsert: hearts([A]) })).status, 200);
-  await expectPickCap(await save(env, p.token, p.key, { upsert: hearts([B]) }), 1, 1, 0);
-  assert.equal((await patch(env, p.project.id, { extra_max: 1 })).status, 200);
-  assert.equal((await save(env, p.token, p.key, { upsert: hearts([B]) })).status, 200);
-  assert.equal((await patch(env, p.project.id, { pick_limit: null })).status, 200);
-  assert.equal((await save(env, p.token, p.key, { upsert: hearts(keysN(20)) })).status, 200);
-});
-
-test('cap: two saves racing for the last slot — one wins, the other is 409 pick_cap and leaves nothing', async () => {
-  const env = setup();
-  const p = await planned(env, { pick_limit: 3, extra_max: 2 });
-  seed(env, p.project.id, keysN(4));
-  const [r1, r2] = await Promise.all([
-    save(env, p.token, p.key, { upsert: hearts([A]) }),
-    save(env, p.token, p.key, { upsert: hearts([B]) }),
-  ]);
-  assert.deepEqual([r1.status, r2.status].sort(), [200, 409]);
-  await expectPickCap(r1.status === 409 ? r1 : r2, 5, 3, 2);
-  assert.equal(starred(env), 5);
-  assert.equal(rows(env, 'SELECT photo_key FROM selections WHERE photo_key IN (?, ?)', A, B).length, 1);
-});
-
-test('cap: ten saves racing for the last two slots — exactly two win', async () => {
-  const env = setup();
-  const p = await planned(env, { pick_limit: 3, extra_max: 2 });
-  seed(env, p.project.id, keysN(3));
-  const results = await Promise.all(keysN(10, 100).map(k => save(env, p.token, p.key, { upsert: hearts([k]) })));
-  assert.deepEqual(results.map(r => r.status).sort(), [200, 200, 409, 409, 409, 409, 409, 409, 409, 409]);
-  for (const r of results.filter(r => r.status === 409)) await expectPickCap(r, 5, 3, 2);
-  assert.equal(starred(env), 5);
-});
-
-test('cap: checked inside the write — a ♥ landing after every read still counts', async () => {
-  const env = setup();
-  const p = await planned(env, { pick_limit: 3, extra_max: 2 });
-  seed(env, p.project.id, keysN(4));
-  const prepare = env.DB.prepare.bind(env.DB);
-  let done = false;
-  env.DB.prepare = s => {
-    if (!done && /^\s*UPDATE projects SET modified_after_submit/i.test(s)) { done = true; seed(env, p.project.id, ['20260819/late.jpg']); }
-    return prepare(s);
-  };
-  await expectPickCap(await save(env, p.token, p.key, { upsert: hearts([A]) }), 5, 3, 2);
-  assert.equal(starred(env), 5);
-});
-
-test('cap: a plan lowered after every read of the save still wins', async () => {
-  const env = setup();
-  const p = await planned(env, { pick_limit: 3, extra_max: 2 });
-  seed(env, p.project.id, keysN(3));
-  const prepare = env.DB.prepare.bind(env.DB);
-  let done = false;
-  env.DB.prepare = s => {
-    if (!done && /^\s*UPDATE projects SET modified_after_submit/i.test(s)) {
-      done = true;
-      env.DB._db.prepare('UPDATE projects SET extra_max = 0 WHERE id = ?').run(p.project.id);
-    }
-    return prepare(s);
-  };
-  await expectPickCap(await save(env, p.token, p.key, { upsert: hearts([A]) }), 3, 3, 0);
-  assert.equal(starred(env), 3);
-});
-
-test('cap: counts only this project, and the refusal names this project\'s plan', async () => {
-  const env = setup();
-  const p = await planned(env, { pick_limit: 1, extra_max: 0 });
-  const q = await planned(env, { pick_limit: 1, extra_max: 0 });
-  seed(env, p.project.id, keysN(5));
-  assert.equal((await save(env, q.token, q.key, { upsert: hearts([A]) })).status, 200);
-  await patch(env, q.project.id, { pick_limit: 2, extra_max: 1 });
-  seed(env, q.project.id, keysN(2, 50));
-  await expectPickCap(await save(env, q.token, q.key, { upsert: hearts([B]) }), 3, 2, 1);
-  await expectPickCap(await save(env, p.token, p.key, { upsert: hearts([B]) }), 1, 1, 0);
-});
-
-test('cap: while submitted it still applies, and a refused save does not raise modified_after_submit', async () => {
-  const env = setup();
+test('submit: while submitted, a re-submit over the cap is refused; phase, flag and the record stay', async () => {
+  const mailer = fakeMailer();
+  const env = mailEnv(mailer);
   const p = await planned(env, { pick_limit: 1, extra_max: 1 });
   await save(env, p.token, p.key, { upsert: hearts([A, B]) });
-  assert.equal((await pick(env, 'POST', 'submit', p.token, { key: p.key, body: { relationship: '本人' } })).status, 200);
-  await expectPickCap(await save(env, p.token, p.key, { upsert: hearts([C]) }), 2, 1, 1);
-  assert.equal(projectRow(env, p.project.id).modified_after_submit, 0);
-  assert.equal((await save(env, p.token, p.key, { upsert: [{ photo_key: A, rating: 0 }] })).status, 200);
+  assert.equal((await submitRes(env, p, { relationship: '本人' })).res.status, 200);
+  assert.equal((await save(env, p.token, p.key, { upsert: hearts([C]) })).status, 200);
   assert.equal(projectRow(env, p.project.id).modified_after_submit, 1);
+  const before = everything(env);
+  const { res, json } = await submitRes(env, p, { relationship: '家人', email: 'x@y.tw' });
+  assert.equal(res.status, 409);
+  assert.deepEqual([json.code, json.count, json.max, json.over], ['pick_cap', 3, 2, 1]);
+  assert.equal(everything(env), before);
+  assert.equal(projectRow(env, p.project.id).phase, 'submitted');
+  assert.equal(projectRow(env, p.project.id).modified_after_submit, 1);
+  assert.equal(mailer.sent.length, 1, 'only the first submit mailed');
+});
+
+// Tim's decision pending (docs/pick-handover.md open Q4) — recommended
+// default: the plan is authoritative, so a repeat is refused too.
+test('submit: PENDING TIM — a repeat of the last submission over a plan lowered since is refused (pick_cap)', async () => {
+  const env = mailEnv();
+  const p = await planned(env, { pick_limit: 40, extra_max: 10 });
+  seed(env, p.project.id, keysN(50));
+  assert.equal((await submitRes(env, p, { relationship: '本人' })).res.status, 200);
+  assert.equal((await patch(env, p.project.id, { pick_limit: 30 })).status, 200);
+  const before = everything(env);
+  const { res, json } = await submitRes(env, p, { relationship: '伴侶', email: 'n@b.tw' });
+  assert.equal(res.status, 409);
+  assert.deepEqual(json, {
+    error: '目前選了 50 張，最多可送出 40 張（方案 30 + 加選 10）。請先取消 10 張再送出',
+    code: 'pick_cap', count: 50, max: 40, over: 10, limit: 30, extra_max: 10,
+  });
+  assert.equal(everything(env), before, 'not even the contact info of a repeat lands');
+  // a repeat within the plan still goes through as a repeat (no new row)
+  await patch(env, p.project.id, { pick_limit: 40 });
+  assert.equal((await submitRes(env, p, { relationship: '伴侶' })).res.status, 200);
+  assert.equal(one(env, 'SELECT COUNT(*) AS n FROM submissions').n, 1);
+  assert.equal(one(env, 'SELECT relationship FROM pickers').relationship, '伴侶');
+});
+
+test('submit: raising the plan by PATCH lets the same picks through at once', async () => {
+  const env = mailEnv();
+  const p = await planned(env, { pick_limit: 1, extra_max: 0 });
+  seed(env, p.project.id, keysN(5));
+  assert.equal((await submitRes(env, p)).res.status, 409);
+  await patch(env, p.project.id, { extra_max: 4 });
+  assert.equal((await submitRes(env, p)).res.status, 200);
+});
+
+test('submit: counts only this project, and the refusal names this project\'s plan', async () => {
+  const env = mailEnv();
+  const p = await planned(env, { pick_limit: 1, extra_max: 0 });
+  const q = await planned(env, { pick_limit: 2, extra_max: 1 });
+  seed(env, p.project.id, keysN(5));
+  seed(env, q.project.id, keysN(3, 50));
+  assert.equal((await submitRes(env, q)).res.status, 200, 'p\'s five do not count against q');
+  seed(env, q.project.id, keysN(1, 60));
+  const r = await submitRes(env, q);
+  assert.deepEqual([r.json.code, r.json.count, r.json.max, r.json.limit, r.json.extra_max], ['pick_cap', 4, 3, 2, 1]);
+  const s = await submitRes(env, p);
+  assert.deepEqual([s.json.code, s.json.count, s.json.max, s.json.limit, s.json.extra_max], ['pick_cap', 5, 1, 1, 0]);
+});
+
+// ─── checked inside the submit's own writes ─────────────────────────────────
+
+test('submit race: a ♥ landing after every read of the submit still counts — refused, nothing written', async () => {
+  const mailer = fakeMailer();
+  const env = mailEnv(mailer);
+  const p = await planned(env, { pick_limit: 40, extra_max: 10 });
+  seed(env, p.project.id, keysN(50));
+  const before = everything(env);
+  landOnce(env, /^\s*INSERT INTO submissions/i, () => seed(env, p.project.id, ['20260819/late.jpg']));
+  const { res, json } = await submitRes(env, p);
+  assert.equal(res.status, 409);
+  assert.deepEqual([json.code, json.count, json.over], ['pick_cap', 51, 1]);
+  // the late ♥ itself is kept (it was a save), nothing of the submit is
+  env.DB._db.prepare("DELETE FROM selections WHERE photo_key = '20260819/late.jpg'").run();
+  assert.equal(everything(env), before);
+  assert.equal(mailer.sent.length, 0);
+});
+
+test('submit race: a ♥ landing just before the batch runs cannot slip past either', async () => {
+  const env = mailEnv();
+  const p = await planned(env, { pick_limit: 40, extra_max: 10 });
+  seed(env, p.project.id, keysN(50));
+  const batch = env.DB.batch.bind(env.DB);
+  let done = false;
+  env.DB.batch = stmts => {
+    if (!done) { done = true; seed(env, p.project.id, ['20260819/late.jpg']); }
+    return batch(stmts);
+  };
+  const { res, json } = await submitRes(env, p);
+  assert.equal(res.status, 409);
+  assert.equal(json.code, 'pick_cap');
+  assert.equal(one(env, 'SELECT COUNT(*) AS n FROM submissions').n, 0);
+  assert.equal(projectRow(env, p.project.id).phase, 'picking');
+});
+
+test('submit race: a plan lowered mid-submit wins; a trim landing mid-submit lets it through', async () => {
+  const env = mailEnv();
+  const p = await planned(env, { pick_limit: 40, extra_max: 10 });
+  seed(env, p.project.id, keysN(50));
+  landOnce(env, /^\s*INSERT INTO submissions/i, () => env.DB._db.prepare('UPDATE projects SET extra_max = 0 WHERE id = ?').run(p.project.id));
+  let r = await submitRes(env, p);
+  assert.equal(r.res.status, 409);
+  assert.deepEqual([r.json.code, r.json.max, r.json.over, r.json.extra_max], ['pick_cap', 40, 10, 0]);
+  assert.equal(one(env, 'SELECT COUNT(*) AS n FROM submissions').n, 0);
+  landOnce(env, /^\s*INSERT INTO submissions/i, () => env.DB._db.prepare('DELETE FROM selections WHERE photo_key IN (SELECT photo_key FROM selections ORDER BY photo_key LIMIT 10)').run());
+  r = await submitRes(env, p);
+  assert.equal(r.res.status, 200);
+  assert.equal(one(env, 'SELECT count FROM submissions').count, 40);
+});
+
+test('submit race: a save and a submit at once never leave an over-cap submission', async () => {
+  const env = mailEnv();
+  const p = await planned(env, { pick_limit: 40, extra_max: 10 });
+  seed(env, p.project.id, keysN(50));
+  const [sv, sb] = await Promise.all([
+    save(env, p.token, p.key, { upsert: hearts([A]) }),
+    submitRes(env, p),
+  ]);
+  assert.equal(sv.status, 200, 'the save itself is never refused by the plan');
+  for (const s of rows(env, 'SELECT count FROM submissions')) assert.ok(s.count <= 50, `recorded ${s.count}`);
+  if (sb.res.status === 409) assert.equal(sb.json.code, 'pick_cap');
+  else assert.equal(sb.res.status, 200);
 });
 
 // ─── which code wins ─────────────────────────────────────────────────────────
 
 test('codes: a viewer is 403 and retouching is 409 retouching before pick_cap', async () => {
-  const env = setup();
+  const env = mailEnv();
   const p = await planned(env, { pick_limit: 0, extra_max: 0 });
-  assert.equal((await save(env, p.token, 'wrong', { upsert: hearts([A]) })).status, 403);
-  assert.equal((await save(env, p.token, undefined, { upsert: hearts([A]) })).status, 403);
+  seed(env, p.project.id, keysN(5));
+  for (const key of ['wrong', null]) assert.equal((await submitRes(env, p, undefined, key)).res.status, 403);
   env.DB._db.prepare("UPDATE projects SET phase = 'retouching' WHERE id = ?").run(p.project.id);
-  const res = await save(env, p.token, p.key, { upsert: hearts([A]) });
-  assert.equal(res.status, 409);
-  assert.equal((await res.json()).code, 'retouching');
+  let r = await submitRes(env, p);
+  assert.equal(r.res.status, 409);
+  assert.equal(r.json.code, 'retouching');
+  // the same when retouching / a seat reset lands after the route's own checks
+  env.DB._db.prepare("UPDATE projects SET phase = 'picking' WHERE id = ?").run(p.project.id);
+  landOnce(env, /^\s*INSERT INTO submissions/i, () => env.DB._db.prepare("UPDATE projects SET phase = 'retouching'").run());
+  r = await submitRes(env, p);
+  assert.equal(r.res.status, 409);
+  assert.equal(r.json.code, 'retouching');
+  env.DB._db.prepare("UPDATE projects SET phase = 'picking' WHERE id = ?").run(p.project.id);
+  landOnce(env, /^\s*INSERT INTO submissions/i, () => env.DB._db.prepare('UPDATE projects SET owner_picker_id = NULL').run());
+  r = await submitRes(env, p);
+  assert.equal(r.res.status, 403);
+  assert.equal(one(env, 'SELECT COUNT(*) AS n FROM submissions').n, 0);
 });
 
-test('codes: row_cap wins over pick_cap', async () => {
-  const env = setup();
+test('codes: an archive landing mid-submit is 401 before pick_cap', async () => {
+  const env = mailEnv();
   const p = await planned(env, { pick_limit: 0, extra_max: 0 });
-  seed(env, p.project.id, keysN(1000), 0);
-  const res = await save(env, p.token, p.key, { upsert: hearts([A]) });
-  assert.equal(res.status, 409);
-  assert.equal((await res.json()).code, 'row_cap');
-});
-
-test('codes: pick_cap wins over selection_cap when the plan allows at most 500', async () => {
-  const env = setup();
-  const p = await planned(env, { pick_limit: 3, extra_max: 2 });
-  seed(env, p.project.id, keysN(500));
-  await expectPickCap(await save(env, p.token, p.key, { upsert: hearts([A]) }), 5, 3, 2);
-  // plan exactly 500: still pick_cap
-  env.DB._db.prepare('UPDATE projects SET pick_limit = 490, extra_max = 10 WHERE id = ?').run(p.project.id);
-  await expectPickCap(await save(env, p.token, p.key, { upsert: hearts([A]) }), 500, 490, 10);
-});
-
-test('codes: selection_cap when the plan allows more than 500 (the smaller limit is the one reported)', async () => {
-  const env = setup();
-  const p = await planned(env, { pick_limit: 495, extra_max: 10 });
-  seed(env, p.project.id, keysN(500));
-  // 510 breaks both 500 and 505: selection_cap, the tighter one
-  let res = await save(env, p.token, p.key, { upsert: hearts(keysN(10, 1000)) });
-  assert.equal(res.status, 409);
-  let json = await res.json();
-  assert.equal(json.code, 'selection_cap');
-  assert.equal(json.max, 500);
-  // 501 breaks only the system cap
-  res = await save(env, p.token, p.key, { upsert: hearts([A]) });
-  json = await res.json();
-  assert.equal(json.code, 'selection_cap');
+  seed(env, p.project.id, keysN(5));
+  landOnce(env, /^\s*INSERT INTO submissions/i, () => env.DB._db.prepare('UPDATE projects SET archived_at = ?').run(new Date().toISOString()));
+  assert.equal((await submitRes(env, p)).res.status, 401);
 });
 
 test('codes: pick_cap wins over marks_cap; marks_cap still shows when the plan fits', async () => {
-  const env = setup();
-  const p = await planned(env, { pick_limit: 30, extra_max: 0 });
-  // 30 ♥ photos with 10 pins each = the 300-pin cap
-  const pins = Array.from({ length: 10 }, (_, i) => ({ x: i / 10, y: 0.5, note: '' }));
-  const ins = env.DB._db.prepare(
-    "INSERT INTO selections (project_id, photo_key, rating, note, updated_by, updated_at, marks) VALUES (?, ?, 1, '', 'seed', 'seeded', ?)");
-  for (const k of keysN(30)) ins.run(p.project.id, k, JSON.stringify(pins));
-  // a new ♥ with a pin breaks both the plan (31 > 30) and the pins (301 > 300)
-  await expectPickCap(await save(env, p.token, p.key, { upsert: [{ photo_key: A, rating: 1, marks: [pins[0]] }] }), 30, 30, 0);
-  // a pin on a photo already ♥ breaks only the pins
-  const res = await save(env, p.token, p.key, { upsert: [{ photo_key: keysN(1)[0], rating: 1, marks: [...pins.slice(0, 9), pins[0]] }, { photo_key: keysN(1, 1)[0], rating: 0 }] });
-  assert.equal(res.status, 200, 'net fewer pins and fewer ♥ is fine');
-  env.DB._db.prepare('UPDATE projects SET extra_max = 5 WHERE id = ?').run(p.project.id);
-  const refill = await save(env, p.token, p.key, { upsert: [{ photo_key: keysN(1, 1)[0], rating: 1, marks: pins }, { photo_key: A, rating: 1, marks: [pins[0]] }] });
-  assert.equal(refill.status, 409);
-  assert.equal((await refill.json()).code, 'marks_cap');
+  const env = mailEnv();
+  const p = await planned(env, { pick_limit: 40, extra_max: 10 });
+  // a pins snapshot over the byte cap, only possible by hand
+  const heavy = JSON.stringify(Array.from({ length: 10 }, () => ({ x: 0.1234, y: 0.5678, note: '😀'.repeat(100) })));
+  const ins = env.DB._db.prepare("INSERT INTO selections (project_id, photo_key, rating, note, updated_by, updated_at, marks) VALUES (?, ?, 1, '', 'x', 'now', ?)");
+  for (let i = 0; i < 120; i++) ins.run(p.project.id, `20260819/${String(i).padStart(3, '0')}${'字'.repeat(244)}`, heavy);
+  let r = await submitRes(env, p);
+  assert.equal(r.res.status, 409);
+  assert.equal(r.json.code, 'pick_cap');
+  await patch(env, p.project.id, { pick_limit: 200 });
+  r = await submitRes(env, p);
+  assert.equal(r.res.status, 409);
+  assert.equal(r.json.code, 'marks_cap');
+  assert.equal(one(env, 'SELECT COUNT(*) AS n FROM submissions').n, 0);
 });
+
+test('codes: pick_cap wins over submission_cap; submission_cap still shows when the plan fits', async () => {
+  const env = mailEnv();
+  const p = await planned(env, { pick_limit: 1, extra_max: 0 });
+  const ins = env.DB._db.prepare("INSERT INTO submissions (id, project_id, picker_id, relationship, photo_keys, count, created_at) VALUES (?, ?, 'x', '本人', '[]', 0, 'now')");
+  for (let i = 0; i < 50; i++) ins.run(`s${i}`, p.project.id);
+  seed(env, p.project.id, keysN(2));
+  let r = await submitRes(env, p);
+  assert.equal(r.res.status, 409);
+  assert.equal(r.json.code, 'pick_cap');
+  env.DB._db.prepare('DELETE FROM selections WHERE photo_key = ?').run(keysN(1)[0]);
+  r = await submitRes(env, p);
+  assert.equal(r.res.status, 409);
+  assert.equal(r.json.code, 'submission_cap');
+});
+
 
 // ─── before the migration ────────────────────────────────────────────────────
 
@@ -682,7 +786,9 @@ test('before the migration: create, save, un-heart, pins, submit, state, list an
   assert.equal((await save(env, created.token, key, { upsert: hearts(keysN(20)) })).status, 200);
   assert.equal((await save(env, created.token, key, { upsert: [{ photo_key: keysN(1)[0], rating: 0 }] })).status, 200);
   assert.equal((await save(env, created.token, key, { upsert: [{ photo_key: A, rating: 1, marks: [{ x: 0.5, y: 0.5, note: '' }] }] })).status, 200);
+  // 20 ♥ over a pick_limit of 3: no plan cap at submit either
   assert.equal((await pick(env, 'POST', 'submit', created.token, { key, body: { relationship: '本人' } })).status, 200);
+  assert.equal(one(env, 'SELECT count FROM submissions').count, 20);
   const st = await state(env, created.token, key);
   assert.equal(st.project.extra_max, null);
   assert.equal(st.project.max_picks, null);
@@ -714,11 +820,15 @@ test('state: owner and viewer both get extra_max and max_picks', async () => {
   assert.deepEqual([st.project.pick_limit, st.project.extra_max, st.project.max_picks], [null, 5, null]);
 });
 
-test('state: max_picks is the number the save enforces', async () => {
-  const env = setup();
+
+test('state: max_picks is the number the submit enforces', async () => {
+  const env = mailEnv();
   const p = await planned(env, { pick_limit: 2, extra_max: 3 });
   const { max_picks } = (await state(env, p.token, p.key)).project;
-  assert.equal((await save(env, p.token, p.key, { upsert: hearts(keysN(max_picks)) })).status, 200);
-  await expectPickCap(await save(env, p.token, p.key, { upsert: hearts([A]) }), max_picks, 2, 3);
+  assert.equal((await save(env, p.token, p.key, { upsert: hearts(keysN(max_picks + 1)) })).status, 200);
+  const { res, json } = await submitRes(env, p);
+  assert.equal(res.status, 409);
+  assert.deepEqual([json.code, json.max, json.limit, json.extra_max], ['pick_cap', max_picks, 2, 3]);
+  assert.equal((await save(env, p.token, p.key, { delete: keysN(1) })).status, 200);
+  assert.equal((await submitRes(env, p)).res.status, 200);
 });
-
