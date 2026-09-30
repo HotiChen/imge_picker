@@ -5896,6 +5896,63 @@ await suite('preview annotations — an old saved circle renders on the same spo
   },
   { initScript: () => sessionStorage.setItem('studio_token', 'x'), before: mockWorker(3, {}, BIG_PHOTO) });
 
+// The photographer's own tool, on a phone: a finger-drawn circle used to be
+// lost (stopDrawing read clientX from a TouchEvent → NaN end point), and the
+// −/+ buttons zoomed about the photo's top-left instead of the view's centre.
+await suite('preview annotations — a circle drawn with a finger is saved with real numbers; the − / + buttons zoom about the centre of the view',
+  `${base}/index.html`,
+  async page => {
+    const out = [];
+    const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+    await page.waitForFunction(() => !!window.app, null, { timeout: 5000 });
+    await page.evaluate(() => {
+      app.filteredPhotos = Array.from({ length: 3 }, (_, i) => ({ id: `20260819/p${i}.jpg`, name: `p${i}.jpg`, rating: 0, annotations: [] }));
+      driveManager.photos = app.filteredPhotos;
+      app.openModal(0);
+    });
+    await page.waitForSelector('#photoModal.active', { timeout: 5000 });
+    await page.waitForFunction(PREVIEW_SETTLED, null, { timeout: 5000 });
+    await page.waitForTimeout(100);
+    const old = await page.evaluate(OLD_FIT_RECT, [BIG_W, BIG_H]);
+    const stored = () => page.evaluate(() =>
+      JSON.parse(localStorage.getItem('r2_photo_picker_annotations') || '{}')['20260819/p0.jpg'] || []);
+
+    // 1. Finger-drawn circle (circle tool): start, move, lift.
+    await page.evaluate(() => annotationManager.setTool('circle'));
+    const x1 = old.left + 100, y1 = old.top + 80, x2 = old.left + 220, y2 = old.top + 200;
+    await touchSequence(page, '#photoCanvas', [
+      { type: 'touchstart', points: [{ x: x1, y: y1 }] },
+      { type: 'touchmove', points: [{ x: (x1 + x2) / 2, y: (y1 + y2) / 2 }] },
+      { type: 'touchmove', points: [{ x: x2, y: y2 }] },
+      { type: 'touchend', points: [{ x: x2, y: y2 }] },
+    ]);
+    await page.waitForTimeout(80);
+    const a = await stored();
+    const c = a[0];
+    ok('a circle was saved', a.length === 1, JSON.stringify(a));
+    ok('its numbers are real (no NaN / null)', !!c && [c.startX, c.startY, c.endX, c.endY].every(Number.isFinite), JSON.stringify(c));
+    ok('and it runs from where the finger went down to where it lifted',
+      !!c && Math.abs(c.startX - 100) <= 2 && Math.abs(c.startY - 80) <= 2 && Math.abs(c.endX - 220) <= 2 && Math.abs(c.endY - 200) <= 2, JSON.stringify(c));
+
+    // 2. − / + zoom about the centre of the view, not the photo's top-left.
+    await page.evaluate(() => annotationManager.setTool('pan'));
+    await page.evaluate(() => annotationManager.resetZoom({ quiet: true }));
+    const centre = await page.evaluate(() => ({ x: annotationManager.fitW / 2, y: annotationManager.fitH / 2 }));
+    const beforeWorld = await page.evaluate(() => {
+      const m = annotationManager; return { x: (m.fitW / 2 - m.panX) / m.zoom, y: (m.fitH / 2 - m.panY) / m.zoom };
+    });
+    await page.evaluate(() => { document.getElementById('zoomInBtn').click(); document.getElementById('zoomInBtn').click(); });
+    const after = await page.evaluate(() => {
+      const m = annotationManager;
+      return { z: m.zoom, x: (m.fitW / 2 - m.panX) / m.zoom, y: (m.fitH / 2 - m.panY) / m.zoom };
+    });
+    ok('the buttons zoomed in', after.z > 1.3, JSON.stringify(after));
+    ok('and the photo point in the middle of the view stayed in the middle',
+      Math.abs(after.x - beforeWorld.x) <= 1 && Math.abs(after.y - beforeWorld.y) <= 1, JSON.stringify({ beforeWorld, after, centre }));
+    return out;
+  },
+  { initScript: () => sessionStorage.setItem('studio_token', 'x'), contextOptions: MOBILE, before: mockWorker(3, {}, BIG_PHOTO) });
+
 {
   const m = pickFakeWorker({ ownerName: 'Kai', ownerKey: 'KAI-KEY', photos: [
     // a real camera-length filename, so the bar's name has to give way
@@ -9861,6 +9918,26 @@ const todayTaipeiNode = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia
         const w = document.getElementById('pd-extra-warn'); const l = document.getElementById('pd-order-list');
         return !!document.getElementById('pd-orders').contains(w) && !!(w.compareDocumentPosition(l) & Node.DOCUMENT_POSITION_FOLLOWING);
       }));
+      return out;
+    },
+    { before: async p => { await m.attach(p); await o.attach(p); }, initScript: ADMIN });
+}
+
+{
+  // Before 開始精修 there is no extra-pick order yet: "原 0 → 現 9，請確認" reads
+  // as if something changed. It should say the order is created on 開始精修.
+  const m = pickFakeWorker({ projectId: 'proj-z', title: '尚未開始精修', phase: 'submitted' });
+  const o = ordersFake({ products: [], extra: { count: 19, pick_limit: 10, extra_price: 1000, extra: 9, fee: 9000, order_id: null, order_extra: null, matches: false } });
+  await suite('admin — 送出後還沒開始精修：加挑訂單尚未建立，說明「按開始精修時自動建立」而不是「已變更」警告',
+    `${base}/admin.html#project=proj-z`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('#pd-extra-pick', { timeout: 5000 });
+      const pending = await page.textContent('#pd-extra-pending').catch(() => null);
+      ok('a neutral note says the order is created when 開始精修 is pressed', !!pending && pending.includes('開始精修') && pending.includes('自動建立'), String(pending));
+      ok('the fee line is still shown (9 張 × NT$1,000 = NT$9,000)', (await page.textContent('#pd-extra-pick')).includes('9 張 × NT$1,000 = NT$9,000'));
+      ok('and there is no 「已變更」 warning at all', (await page.$('#pd-extra-warn')) === null && !(await page.textContent('#pd-orders')).includes('已變更'));
       return out;
     },
     { before: async p => { await m.attach(p); await o.attach(p); }, initScript: ADMIN });

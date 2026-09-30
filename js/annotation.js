@@ -466,7 +466,10 @@ class AnnotationManager {
         this.isDrawing = false;
         this.updateCursor();
 
-        const { x: endX, y: endY } = this._clampToPhoto(this._toWorld(e.clientX, e.clientY));
+        // A finger lifting gives a TouchEvent: no clientX of its own, the last
+        // point is in changedTouches (reading e.clientX made the end NaN).
+        const pt = (e.changedTouches && e.changedTouches[0]) || e;
+        const { x: endX, y: endY } = this._clampToPhoto(this._toWorld(pt.clientX, pt.clientY));
 
         if (Math.abs(endX - this.startX) > 10) {
             const circleCount = this.annotations.filter(a => a.type === 'circle').length;
@@ -689,6 +692,12 @@ class AnnotationManager {
     }
 
     zoomBy(delta, mouseX = null, mouseY = null) {
+        // The − / + buttons pass no point: zoom about the middle of the view
+        // (in the fitted photo's own pixels, like the wheel's point) instead
+        // of its top-left corner.
+        if (mouseX == null || mouseY == null) {
+            if (Number.isFinite(this.fitW) && Number.isFinite(this.fitH)) { mouseX = this.fitW / 2; mouseY = this.fitH / 2; }
+        }
         const newZoom = Math.max(this.minZoom, Math.min(this.maxZoom, this.zoom + delta));
         this.setZoomAbsolute(newZoom, mouseX, mouseY);
     }

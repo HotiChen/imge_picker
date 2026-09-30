@@ -195,6 +195,7 @@
   .ord-err { color: var(--danger); font-size: 12px; min-height: 0; margin-top: 6px; }
   .ord-err:empty { display: none; }
   .ord-warn { border: 1px solid rgba(229,164,72,.5); background: rgba(229,164,72,.12); color: var(--accent); border-radius: 6px; padding: 8px 12px; margin-top: 8px; font-size: 13px; }
+  .ord-hint { margin-top: 8px; font-size: 12px; color: var(--ink-55); }
   .ord-extra { border: 1px dashed var(--border); border-radius: 6px; padding: 8px 12px; margin-bottom: 10px; font-size: 12px; color: var(--ink-55); }
   .ord-form { border: 1px solid var(--border); border-radius: 6px; background: var(--card); padding: 12px 14px; margin: 10px 0; display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end; }
   .ord-form label { display: block; font-size: 11px; color: var(--ink-55); margin-bottom: 4px; }
@@ -312,10 +313,10 @@
   </div>
 </div>
 
-<script src="js/shoot-types.js?v=20260929f"></script>
-<script src="js/build-version.js?v=20260929f"></script>
-<script src="js/side-nav.js?v=20260929f"></script>
-<script src="js/orders-common.js?v=20260929f"></script>
+<script src="js/shoot-types.js?v=20260930a"></script>
+<script src="js/build-version.js?v=20260930a"></script>
+<script src="js/side-nav.js?v=20260930a"></script>
+<script src="js/orders-common.js?v=20260930a"></script>
 <script>
 (function() {
   const WORKER_URL = 'https://imagepicker.hotichen.workers.dev';
@@ -1264,8 +1265,13 @@
     const info = applies
       ? `加挑：最近一次送出 ${escHtml(x.count)} 張，上限 ${escHtml(x.pick_limit)}，多挑 ${escHtml(x.extra)} 張 × ${O.money(x.extra_price)} = ${O.money(x.fee)}`
       : '加挑：已有加挑訂單';
-    const warn = x.matches === false
-      ? `<div class="ord-warn" id="pd-extra-warn">加挑張數已變更（原 ${escHtml(x.order_extra == null ? 0 : x.order_extra)} → 現 ${escHtml(x.extra)}），請確認</div>` : '';
+    // No extra-pick order exists until 開始精修 writes it, so before that the
+    // "count changed" warning is wrong: say when the order will appear instead.
+    const pending = x.matches === false && !x.order_id && !(currentProject && currentProject.phase === 'retouching');
+    const warn = pending
+      ? '<div class="ord-hint" id="pd-extra-pending">按「開始精修」時會自動建立加挑訂單</div>'
+      : x.matches === false
+        ? `<div class="ord-warn" id="pd-extra-warn">加挑張數已變更（原 ${escHtml(x.order_extra == null ? 0 : x.order_extra)} → 現 ${escHtml(x.extra)}），請確認</div>` : '';
     return `<div class="ord-extra" id="pd-extra-pick">${info}${warn}</div>`;
   }
 
