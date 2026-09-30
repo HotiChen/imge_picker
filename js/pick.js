@@ -188,13 +188,13 @@
         // Everything that depends on which view is showing.
         _applyView() {
             const gallery = this.isGallery();
-            const bar = document.getElementById('pickFilterBar');
-            if (bar) bar.hidden = gallery;
             if (gallery && !this._galleryUIRemoved) {
-                // removed, not hidden (.btn's display beats [hidden])
+                // removed, not hidden (.btn's display beats [hidden]); the
+                // delivered gallery / proofs list has a folder selector only
+                document.getElementById('pickFilterBar')?.remove();
+                document.getElementById('pickFilterSection')?.remove();
                 document.getElementById('pickCounter')?.remove();
                 document.getElementById('mobileActionBar')?.remove(); // the counter lives here
-                document.getElementById('submitJobBtn')?.remove();
                 document.getElementById('pickBanner')?.remove();
                 this._galleryUIRemoved = true;
             }
@@ -379,6 +379,7 @@
             this._removeAnnotationToolbox();
             this._removeZipDownloads();
             this._replaceFilterBar();
+            this._restructureGuestChrome();
             this._wireHooks(app);
             this._wireSubmitModal();
 
@@ -391,7 +392,7 @@
             }
             this._applyState(data);
             this._renderStudioHeader();
-            this._updateSubmitButton();
+            this._layoutGuest();
             // No download button exists for a guest unless this link may
             // download: removed from the DOM, not hidden.
             if (!this.canDownload()) {
@@ -438,9 +439,9 @@
         // GET /api/pick/state's studio.{name, booking_url, has_logo}. Every
         // value here is guest-untrusted server data — name/alt go through
         // textContent, the logo is loaded by property assignment (never
-        // built into an HTML string), and the booking link's href is set
-        // only when it starts with https://, so anything else (or nothing)
-        // leaves the link hidden with its href untouched.
+        // built into an HTML string). The guest page has no 預約拍攝 button at
+        // all (docs/backlog.md, "Guest pick page UI"): booking_url stays a
+        // setting, unused here.
         _renderStudioHeader() {
             const studio = this.studio;
             if (!studio) return;
@@ -458,20 +459,9 @@
                     markEl.replaceWith(img);
                 }
             }
-            const link = document.getElementById('studioBookingLink');
-            if (link && typeof studio.booking_url === 'string' && studio.booking_url.startsWith('https://')) {
-                link.href = studio.booking_url;
-                link.hidden = false;
-            }
-        },
-
-        _updateSubmitButton() {
-            const btn = document.getElementById('submitJobBtn');
-            if (btn) btn.style.display = (this.isOwner && !this.isGallery()) ? 'inline-flex' : 'none';
         },
 
         async afterClaim() {
-            this._updateSubmitButton();
             this.renderBanner();
             await this.loadGrid();
         },
@@ -534,7 +524,126 @@
         },
 
         _hideStudioOnlyUI() {
-            ['uploadPageBtn', 'openBookEditorBtn'].forEach(id => document.getElementById(id)?.remove());
+            ['uploadPageBtn', 'openBookEditorBtn', 'studioBookingLink',
+             // the one submit button is the bottom bar's #pickSubmitBtn; the
+             // header 完成挑圖 stays only for the ?folder= mode (index.html)
+             'submitJobBtn', 'sidebarToggle', 'sidebarBackdrop',
+             'headerSortBtn', 'headerViewBtn', 'expiryBadge']
+                .forEach(id => document.getElementById(id)?.remove());
+            document.querySelector('.header-vsep')?.remove();
+            document.querySelector('.logo-label')?.remove();
+            document.getElementById('buildVersion')?.remove();
+        },
+
+        // A guest gets only 資料夾 and the 全部 / 已選 / 未選 filter
+        // (docs/backlog.md "Guest pick page UI"): every other sidebar section
+        // is removed from the DOM, the filter bar is rescued out of the
+        // 02 / RATING section first, and the HC avatar becomes a person icon.
+        _restructureGuestChrome() {
+            const sidebar = document.querySelector('aside.sidebar');
+            const bar = document.getElementById('pickFilterBar');
+            if (sidebar) {
+                const sections = Array.from(sidebar.querySelectorAll(':scope > .sidebar-section'));
+                const filterSection = document.createElement('div');
+                filterSection.className = 'sidebar-section';
+                filterSection.id = 'pickFilterSection';
+                if (bar) filterSection.appendChild(bar);
+                sections.slice(1).forEach(sec => sec.remove());
+                sidebar.appendChild(filterSection);
+                if (sections[0]) {
+                    sections[0].querySelector('.side-title')?.remove();
+                    sections[0].querySelector('#sourceMeta')?.remove();
+                }
+            }
+            const avatar = document.getElementById('userAvatarStudio');
+            if (avatar) {
+                avatar.classList.add('guest-avatar');
+                avatar.setAttribute('role', 'img');
+                avatar.setAttribute('aria-label', '訪客');
+                avatar.textContent = '';
+                // static markup only: a person icon, no guest text involved
+                avatar.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" ' +
+                    'stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" ' +
+                    'aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4.4 3.6-8 8-8s8 3.6 8 8"/></svg>';
+            }
+        },
+
+        // ≤1024px (where the ☰ drawer used to be): no sidebar at all — a
+        // sticky #guestBar at the top of the grid column carries the project
+        // title, a folder selector and the filter. Wider: the sidebar comes
+        // back holding just 資料夾 and the filter. Re-run on a width change
+        // (rotation), moving the same nodes so their listeners survive.
+        _layoutGuest() {
+            const title = document.querySelector('#headerBreadcrumbs');
+            if (title && this.projectTitle) title.textContent = this.projectTitle;
+            if (!this._sidebarEl) this._sidebarEl = document.querySelector('aside.sidebar');
+            if (!this._mq) {
+                this._mq = window.matchMedia('(max-width: 1024px)');
+                this._mq.addEventListener('change', () => this._layoutGuest());
+            }
+            const main = document.querySelector('main.main-content');
+            const content = document.querySelector('main.main-content > .content');
+            if (!main || !content || !this._sidebarEl) return;
+            const bar = document.getElementById('pickFilterBar');
+            if (this._mq.matches) {
+                let gb = document.getElementById('guestBar');
+                if (!gb) {
+                    gb = document.createElement('div');
+                    gb.id = 'guestBar';
+                    gb.className = 'guest-bar';
+                    const t = document.createElement('div');
+                    t.id = 'guestBarTitle';
+                    t.className = 'guest-bar-title';
+                    const row = document.createElement('label');
+                    row.className = 'guest-folder-row';
+                    row.id = 'guestFolderRow';
+                    const cap = document.createElement('span');
+                    cap.className = 'guest-folder-cap';
+                    cap.textContent = '資料夾：';
+                    const sel = document.createElement('select');
+                    sel.id = 'guestFolderSelect';
+                    sel.className = 'guest-folder-select';
+                    sel.setAttribute('aria-label', '資料夾');
+                    sel.addEventListener('change', () => this.app.handleLoadPhotos(sel.value));
+                    row.append(cap, sel);
+                    gb.append(t, row);
+                    content.insertBefore(gb, content.firstChild);
+                }
+                content.classList.add('has-guest-bar');
+                gb.querySelector('#guestBarTitle').textContent = this.projectTitle || '';
+                if (bar) gb.appendChild(bar);
+                this._sidebarEl.remove();
+            } else {
+                document.getElementById('guestBar')?.remove();
+                content.classList.remove('has-guest-bar');
+                if (!this._sidebarEl.isConnected) main.insertBefore(this._sidebarEl, content);
+                const sec = document.getElementById('pickFilterSection');
+                if (bar && sec) sec.appendChild(bar);
+            }
+            this.renderFolderPanel();
+        },
+
+        // The <select> in #guestBar: same rows as the desktop tree (roots +
+        // every subfolder seen so far, indented), same click target
+        // (handleLoadPhotos), only present while the bar is.
+        _renderFolderSelect() {
+            const sel = document.getElementById('guestFolderSelect');
+            const row = document.getElementById('guestFolderRow');
+            if (!sel || !row) return;
+            const roots = this.viewFolders();
+            row.hidden = !roots.length;
+            const current = (typeof driveManager !== 'undefined') ? driveManager.currentFolderId : '';
+            sel.textContent = '';
+            const add = (folder, depth) => {
+                const o = document.createElement('option');
+                o.value = folder;
+                const name = folder.replace(/\/$/, '').split('/').pop() || folder;
+                o.textContent = (depth ? '\u3000'.repeat(depth) + '└ ' : '') + name;
+                sel.appendChild(o);
+                (this.folderChildren.get(folder) || []).forEach(c => add(c.id, depth + 1));
+            };
+            roots.forEach(f => add(f, 0));
+            sel.value = current;
         },
 
         // 01/SOURCE's path box + LOAD button are the studio's own way to type
@@ -574,6 +683,7 @@
         // after every load (see _wireHooks) so it survives app.js's own
         // subfolder-tree render, which targets this same container.
         renderFolderPanel() {
+            this._renderFolderSelect();
             const container = document.getElementById('folderTreeContainer');
             const list = document.getElementById('folderTree');
             if (!container || !list) return;

@@ -185,7 +185,10 @@ body {
   font-weight: 600;
   color: var(--ink);
   white-space: nowrap;
-  flex-shrink: 0;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* 預約拍攝 — only shown to a guest whose studio has an https booking_url set
@@ -1734,6 +1737,9 @@ body {
   justify-content: space-between;
 }
 
+/* the bar's submit button (was inline in index.html) */
+.mobile-action-bar > .btn { font-weight: bold; flex: 1; margin-left: 15px; }
+
 /* ── Footer ──────────────────────────────────────────── */
 .app-footer {
   padding: 12px 20px;
@@ -1918,8 +1924,15 @@ body {
     border: 1px solid var(--border);
     border-radius: 8px;
   }
-  body.pick-active .mobile-action-bar > .btn { display: none; }
+  /* the bottom bar's 完成提交 is the one submit button at every width:
+     counter + button as one pill, bottom-left */
+  body.pick-active .mobile-action-bar { gap: 14px; }
+  body.pick-active .mobile-action-bar > .btn { flex: none; margin-left: 0; min-height: 40px; }
+  /* keep the pill off the last folder row / the last grid row */
+  body.pick-active .sidebar { padding-bottom: 88px; }
+  body.pick-active .content { padding-bottom: 84px; }
 }
+#pickSubmitBtn { min-height: 44px; }
 body .mobile-action-bar.pick-bar-off,
 body.pick-active .mobile-action-bar.pick-bar-off { display: none !important; }
 
@@ -2208,4 +2221,63 @@ span.pick-heart-btn { cursor: default; }
   .zoom-tools-compact { gap: 0; flex-shrink: 0; }
   .zoom-tools-compact button { min-width: 44px; min-height: 44px; justify-content: center; }
   #modalPhotoRating { flex-shrink: 0; }
+}
+
+
+/* ══════════════════════════════════════════════════════
+   Guest pick page UI (docs/backlog.md) — js/pick.js _layoutGuest
+   ≤1024px: no ☰ drawer; a sticky #guestBar at the top of the grid column
+   holds the project title, the folder selector and the 全部/已選/未選 filter.
+   ══════════════════════════════════════════════════════ */
+.guest-avatar { background: var(--card-hi); color: var(--ink-70); pointer-events: none; }
+.guest-avatar svg { display: block; }
+
+.guest-bar { display: none; }
+@media (max-width: 1024px) {
+  .guest-bar {
+    display: block;
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    flex-shrink: 0;
+    background: var(--surface);
+    border-bottom: 1px solid var(--rule);
+    margin: 0 -20px 14px;
+    padding: 8px 20px;
+  }
+  /* no top padding above the bar: a sticky box cannot rise past the content
+     edge, so a negative top margin would leave a 12-20px gap under the header */
+  .content.has-guest-bar { padding-top: 0; }
+  .guest-bar-title {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--ink);
+    line-height: 1.4;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .guest-folder-row:not([hidden]) {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin: 4px 0;
+  }
+  .guest-folder-cap { font-size: 13px; color: var(--ink-70); flex-shrink: 0; }
+  .guest-folder-select {
+    flex: 1;
+    min-width: 0;
+    min-height: 44px;
+    font-size: 16px;
+    font-family: var(--font-sans);
+    color: var(--ink);
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0 8px;
+  }
+  .guest-bar .pick-filter-btn { min-height: 44px; }
+}
+@media (max-width: 768px) {
+  .guest-bar { margin: 0 -12px 12px; padding: 8px 12px; }
 }
