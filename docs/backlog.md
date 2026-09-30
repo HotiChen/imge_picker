@@ -122,7 +122,7 @@ Guest link only (owner and viewers); the photographer's own index.html keeps eve
   「資料夾：<current> ▾」 + the 3-way filter. Desktop: sidebar with only those two.
 - Delivered gallery: folder switch only (no filter, no ♥).
 - **One submit button only: the bottom one (完成提交).** Remove 完成挑圖 from the header.
-- 預約拍攝: no calendar icon; the link is the photographer's booking URL from settings.
+- **No 預約拍攝 button on the guest page at all** (Tim: not wanted). The booking_url setting stays, unused on this page.
 - Top-left brand: the photographer's own studio logo / name from settings.
 - Replace the 「HC」 circle with a small person icon (placeholder for a future client login).
 
