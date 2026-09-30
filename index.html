@@ -13,7 +13,7 @@
     <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 
     <!-- Stylesheets -->
-    <link rel="stylesheet" href="css/styles.css?v=20260930d">
+    <link rel="stylesheet" href="css/styles.css?v=20260930e">
 
     <!-- Shows a startup error on screen instead of leaving a blank page.
          Stays inline and first so it is listening before anything else runs. -->
@@ -632,6 +632,20 @@
         </div>
     </div>
 
+    <!-- Guest picking — the count is past pick_limit + extra_max: submit is
+         refused (client pre-check or the Worker's 409 pick_cap). Text by
+         js/pick.js with textContent. -->
+    <div id="pickCapModal" class="modal">
+        <div class="modal-overlay"></div>
+        <div class="modal-content pick-submit-content pick-over-content" role="dialog" aria-labelledby="pickCapTitle">
+            <h3 id="pickCapTitle">已超出可送出張數</h3>
+            <div id="pickCapBody" class="pick-over-body"></div>
+            <div class="pick-submit-actions">
+                <button id="pickCapBackBtn" class="btn btn-success">回去刪減</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Global Loading Modal -->
     <div id="loadingModal" class="modal">
         <div class="modal-overlay"></div>
@@ -655,20 +669,20 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 
     <!-- Scripts -->
-    <script src="js/build-version.js?v=20260930d"></script>
-    <script src="js/config.js?v=20260930d"></script>
-    <script src="js/studio-token.js?v=20260930d"></script>
-    <script src="js/session-token.js?v=20260930d"></script>
-    <script src="js/pick.js?v=20260930d"></script>
-    <script src="js/project-view.js?v=20260930d"></script>
-    <script src="js/client-auth-check.js?v=20260930d"></script>
-    <script src="js/toast.js?v=20260930d"></script>
-    <script src="js/logger.js?v=20260930d"></script>
-    <script src="js/diagnostics.js?v=20260930d"></script>
-    <script src="js/drive.js?v=20260930d"></script>
-    <script src="js/annotation.js?v=20260930d"></script>
-    <script src="js/rating.js?v=20260930d"></script>
-    <script src="js/app.js?v=20260930d"></script>
+    <script src="js/build-version.js?v=20260930e"></script>
+    <script src="js/config.js?v=20260930e"></script>
+    <script src="js/studio-token.js?v=20260930e"></script>
+    <script src="js/session-token.js?v=20260930e"></script>
+    <script src="js/pick.js?v=20260930e"></script>
+    <script src="js/project-view.js?v=20260930e"></script>
+    <script src="js/client-auth-check.js?v=20260930e"></script>
+    <script src="js/toast.js?v=20260930e"></script>
+    <script src="js/logger.js?v=20260930e"></script>
+    <script src="js/diagnostics.js?v=20260930e"></script>
+    <script src="js/drive.js?v=20260930e"></script>
+    <script src="js/annotation.js?v=20260930e"></script>
+    <script src="js/rating.js?v=20260930e"></script>
+    <script src="js/app.js?v=20260930e"></script>
 </body>
 
 </html>

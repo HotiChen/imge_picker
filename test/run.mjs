@@ -3753,6 +3753,15 @@ function pickFakeWorker(opts = {}) {
         if (Buffer.byteLength(req.postData() || '') > 2000000)
           return json({ error: '資料太大', code: 'too_large', max: 2000000 }, 413);
         if (opts.failNextSave) { const f = opts.failNextSave; opts.failNextSave = null; return json(f.body, f.status); }
+        // opts.failSaves: a FIFO of injected failures for the retry paths — 'net'
+        // drops the connection (a fetch TypeError), a number answers that status
+        if (opts.failSaves && opts.failSaves.length) {
+          const f0 = opts.failSaves.shift();
+          const f = f0 && typeof f0 === 'object' ? f0.fail : f0;
+          if (f0 && f0.delay) await new Promise(r => setTimeout(r, f0.delay)); // a slow, then failing, request
+          if (f === 'net') return route.abort('failed');
+          return json({ error: '暫時無法處理', code: 'unavailable' }, f);
+        }
         // marks: shape first, per item (400 invalid_marks, nothing written) —
         // rating 0 pins are ignored but still validated
         for (const item of upsert) {
@@ -3785,15 +3794,8 @@ function pickFakeWorker(opts = {}) {
         }
         const priorStars = Array.from(state.selections.values()).filter(s => s.rating > 0).length;
         const priorRows = state.selections.size;
-        // the plan cap: ♥ left <= MAX(pick_limit + extra_max, ♥ now), both non-NULL;
-        // only reported when it is the smaller of the two limits (worker.js)
-        const { pick_limit: pl, extra_max: em } = state.project;
-        if (pl != null && em != null && pl + em <= PICK_MAX_SELECTIONS && starCount > Math.max(pl + em, priorStars)) {
-          return json({
-            error: em === 0 ? `已達可挑上限：方案 ${pl} 張，不可加選（最多 ${pl} 張）`
-              : `已達可挑上限：方案 ${pl} 張 + 加選 ${em} 張，最多 ${pl + em} 張`,
-            code: 'pick_cap', max: pl + em, limit: pl, extra_max: em }, 409);
-        }
+        // hearts are drafts (docs/pick-handover.md §1): a save never answers
+        // pick_cap — the plan cap is enforced at submit only
         if (starCount > Math.max(PICK_MAX_SELECTIONS, priorStars)) {
           return json({ error: `最多只能選 ${PICK_MAX_SELECTIONS} 張`, code: 'selection_cap', max: PICK_MAX_SELECTIONS }, 409);
         }
@@ -3839,6 +3841,20 @@ function pickFakeWorker(opts = {}) {
         if (body.email !== undefined && body.email !== null && body.email !== '') {
           if (!/^[^\s@]+@[^\s@]+$/.test(body.email)) return json({ error: 'Email 格式不正確' }, 400);
           mail = body.email;
+        }
+        // the plan cap at submit (worker.js pickCapRefused): count > pick_limit +
+        // extra_max (both non-NULL) -> 409 pick_cap, nothing recorded
+        {
+          const { pick_limit: pl, extra_max: em } = state.project;
+          const count = Array.from(state.selections.values()).filter(s => s.rating > 0).length;
+          if (pl != null && em != null && count > pl + em) {
+            const max = pl + em, over = count - max;
+            return json({
+              error: em > 0
+                ? `目前選了 ${count} 張，最多可送出 ${max} 張（方案 ${pl} + 加選 ${em}）。請先取消 ${over} 張再送出`
+                : `目前選了 ${count} 張，此專案最多 ${max} 張，不可加選。請先取消 ${over} 張再送出`,
+              code: 'pick_cap', count, max, over, limit: pl, extra_max: em }, 409);
+          }
         }
         const photo_keys = Array.from(state.selections.entries())
           .filter(([, s]) => s.rating > 0).map(([k]) => k).sort();
@@ -11885,70 +11901,97 @@ const createPosts = m => m.requests.filter(r => r.method === 'POST' && r.path ==
     { before: m.attach, initScript: ADMIN });
 }
 
-// ── guest page ──────────────────────────────────────────────────────────
+// ── guest page: hearts are drafts, the plan cap bites at submit ─────────
+const savedHearts = m => Array.from(m.state.selections.values()).filter(s => s.rating > 0).length;
+const heartAll = (page, n) => page.evaluate(n => {
+  const btns = Array.from(document.querySelectorAll('.photo-card .pick-heart-btn')).slice(0, n);
+  btns.forEach(b => b.click());
+  return btns.length;
+}, n);
+const colorOf = (page, sel) => page.evaluate(s => getComputedStyle(document.querySelector(s)).color, sel);
+const WARN_COLOR = page => page.evaluate(() => {
+  const t = document.createElement('i'); t.style.color = getComputedStyle(document.documentElement).getPropertyValue('--warning');
+  document.body.appendChild(t); const c = getComputedStyle(t).color; t.remove(); return c;
+});
+const DANGER_COLOR = page => page.evaluate(() => {
+  const t = document.createElement('i'); t.style.color = getComputedStyle(document.documentElement).getPropertyValue('--danger');
+  document.body.appendChild(t); const c = getComputedStyle(t).color; t.remove(); return c;
+});
+const SHOTS = '/tmp/claude-0/-home-user-imge-picker/239eaf5f-50a8-5d76-9673-4b17f1434015/scratchpad';
+
 for (const [label, co] of [['desktop', undefined], ['phone 390px', MOBILE]]) {
-  const m = pickFakeWorker({ ownerName: 'Cap', ownerKey: 'CAP-KEY', pickLimit: 2, extraMax: 1, photos: PHOTOS(5) });
-  seedHearts(m, ['p0', 'p1', 'p2']);
-  await suite(`plan cap — counter 已選 3 / 2 張（最多可加選到 3）; ♥ at the cap: message, NO save request; un-heart works (${label})`,
+  const m = pickFakeWorker({ ownerName: 'Cap', ownerKey: 'CAP-KEY', pickLimit: 40, extraMax: 10, extraPrice: 300, photos: PHOTOS(120) });
+  await suite(`draft cap — 120 hearts on a 40+10 plan all save, counter goes red with the exact text, ♥ never blocked (${label})`,
     `${base}/index.html?t=TOK`,
     async page => {
       const out = [];
       const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
       await page.waitForSelector('.photo-card', { timeout: 5000 });
-      const c = await page.textContent('#pickCounter');
-      ok('counter reads the cap', c === '已選 3 / 2 張（最多可加選到 3）', c);
-      ok('over-plan colour stays', await page.evaluate(() => document.getElementById('pickCounter').classList.contains('over')));
-      ok('the three seeded hearts are on (positive)', (await heartOn(page, 0)) && (await heartOn(page, 1)) && (await heartOn(page, 2)));
-      ok('p3 is off', !(await heartOn(page, 3)));
-
-      await pickHeart(page, 3);
-      await page.waitForTimeout(1200); // past the 800ms autosave debounce
-      if (process.env.CAP_SHOT && co) await page.screenshot({ path: process.env.CAP_SHOT });
-      ok('a message is shown, exact', (await toastText(page)) === '已達可挑上限：方案 2 張 + 加選 1 張', String(await toastText(page)));
-      ok('the heart did not turn on', !(await heartOn(page, 3)));
-      ok('counter still 3', (await page.textContent('#pickCounter')) === '已選 3 / 2 張（最多可加選到 3）');
-      ok('NO save request was sent', puts(m).length === 0, JSON.stringify(puts(m)));
-
-      await pickHeart(page, 0); // un-heart at the cap always works
-      await page.waitForFunction(() => document.getElementById('pickCounter').textContent.startsWith('已選 2'), null, { timeout: 3000 });
-      await page.waitForTimeout(1200);
-      ok('un-heart saved rating 0', puts(m).length === 1 && puts(m)[0].body.upsert[0].rating === 0 && puts(m)[0].body.upsert[0].photo_key === '20260819/p0.jpg', JSON.stringify(puts(m)));
-      await pickHeart(page, 3); // room again
-      await page.waitForTimeout(1200);
-      ok('hearting a new photo works again below the cap', (await heartOn(page, 3)) && puts(m).length === 2 && puts(m)[1].body.upsert[0].rating === 1, JSON.stringify(puts(m)));
-      if (co) {
-        ok('no horizontal scroll at 390', await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
-        const box = await page.evaluate(() => { const r = document.getElementById('pickCounter').getBoundingClientRect(); return { l: r.left, r: r.right, w: innerWidth }; });
-        ok('the counter fits inside the viewport', box.l >= 0 && box.r <= box.w, JSON.stringify(box));
-      }
+      ok('starts in the plan', (await page.textContent('#pickCounter')) === '已選 0 / 40 張（最多可加選到 50）');
+      const n = await heartAll(page, 45);
+      ok('45 hearts clicked (positive)', n === 45, String(n));
+      await page.waitForFunction(() => document.getElementById('pickCounter').textContent.startsWith('已選 45'), null, { timeout: 4000 });
+      const orangeText = await page.textContent('#pickCounter');
+      ok('45 (fee zone): still the plan text', orangeText === '已選 45 / 40 張（最多可加選到 50）', orangeText);
+      const orange = await colorOf(page, '#pickCounter');
+      ok('45 is the warning orange', orange === await WARN_COLOR(page), orange);
+      await heartAll(page, 120); // toggles the first 45 OFF; so click only the rest
+      // (heartAll toggled 0..44 back off and 45..119 on = 75) -> re-toggle the first 45
+      await page.waitForFunction(() => document.getElementById('pickCounter').textContent.startsWith('已選 75'), null, { timeout: 4000 });
+      await heartAll(page, 45);
+      await page.waitForFunction(() => document.getElementById('pickCounter').textContent.startsWith('已選 120'), null, { timeout: 4000 });
+      const t = await page.textContent('#pickCounter');
+      ok('120 hearts: red text, exact', t === '已選 120 張（上限 50 張，需減 70 張）', t);
+      const red = await colorOf(page, '#pickCounter');
+      ok('red is the danger token', red === await DANGER_COLOR(page), red);
+      ok('and differs from the orange', red !== orange && red !== await WARN_COLOR(page), `${red} vs ${orange}`);
+      ok('over-cap class on, plain over class off', await page.evaluate(() => {
+        const c = document.getElementById('pickCounter').classList; return c.contains('over-cap') && !c.contains('over'); }));
+      ok('no cap toast, ever', (await toastText(page)) === null, String(await toastText(page)));
+      await page.waitForTimeout(1500);
+      ok('all 120 hearts saved server-side', savedHearts(m) === 120, String(savedHearts(m)));
+      ok('no save was answered pick_cap / nothing reverted (still 120 on screen)', (await page.textContent('#pickCounter')).startsWith('已選 120'));
+      ok('no horizontal scroll', await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+      const box = await page.evaluate(() => { const r = document.getElementById('pickCounter').getBoundingClientRect(); return { l: r.left, r: r.right, w: innerWidth }; });
+      ok('the counter fits inside the viewport', box.l >= 0 && box.r <= box.w + 0.5, JSON.stringify(box));
+      const btn = await page.evaluate(() => document.getElementById('pickSubmitBtn').getBoundingClientRect().height);
+      ok('submit button ≥ 40px', btn >= 40, String(btn));
+      if (co) await page.screenshot({ path: `${SHOTS}/cap-red-390.png` });
       return out;
     },
     { before: m.attach, initScript: () => localStorage.setItem('pick_key:TOK', 'CAP-KEY'), contextOptions: co });
 }
 
-for (const [label, co] of [['desktop', undefined], ['phone 390px', MOBILE]]) {
-  const m = pickFakeWorker({ ownerName: 'Zero', ownerKey: 'ZERO-KEY', pickLimit: 2, extraMax: 0, photos: PHOTOS(4) });
-  seedHearts(m, ['p0', 'p1']);
-  await suite(`plan cap — extra_max 0: 已選 2 / 2 張（不可加選）, ♥ refused with 此專案不可加選 (${label})`,
+{
+  const m = pickFakeWorker({ ownerName: 'Zero', ownerKey: 'ZERO-KEY', pickLimit: 2, extraMax: 0, photos: PHOTOS(6) });
+  await suite('draft cap — extra_max 0: 已選 2 / 2 張（不可加選）; past it the red text says 不可加選，需減 N 張; ♥ still works',
     `${base}/index.html?t=TOK`,
     async page => {
       const out = [];
       const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
       await page.waitForSelector('.photo-card', { timeout: 5000 });
-      ok('counter', (await page.textContent('#pickCounter')) === '已選 2 / 2 張（不可加選）', await page.textContent('#pickCounter'));
-      ok('not over-coloured at exactly the plan', await page.evaluate(() => !document.getElementById('pickCounter').classList.contains('over')));
-      await pickHeart(page, 2);
-      await page.waitForTimeout(1200);
-      ok('message', (await toastText(page)) === '已達可挑上限：方案 2 張，此專案不可加選', String(await toastText(page)));
-      ok('heart stays off, no save request', !(await heartOn(page, 2)) && puts(m).length === 0, JSON.stringify(puts(m)));
+      await pickHeart(page, 0); await pickHeart(page, 1);
+      ok('at the plan', (await page.textContent('#pickCounter')) === '已選 2 / 2 張（不可加選）', await page.textContent('#pickCounter'));
+      ok('not red at exactly the plan', await page.evaluate(() => !document.getElementById('pickCounter').classList.contains('over-cap')));
+      await pickHeart(page, 2); await pickHeart(page, 3); await pickHeart(page, 4);
+      ok('the hearts are on, none refused (positive)', (await heartOn(page, 2)) && (await heartOn(page, 3)) && (await heartOn(page, 4)));
+      ok('red text, 0-extras variant', (await page.textContent('#pickCounter')) === '已選 5 張（上限 2 張，不可加選，需減 3 張）', await page.textContent('#pickCounter'));
+      ok('no toast', (await toastText(page)) === null);
+      await page.waitForTimeout(1300);
+      ok('all 5 saved', savedHearts(m) === 5, String(savedHearts(m)));
+      // submit refused client-side, with the 0-extras dialog text
+      await page.click('#pickSubmitBtn');
+      await page.waitForSelector('#pickCapModal.active', { timeout: 3000 });
+      ok('0-extras dialog text exact', (await page.textContent('#pickCapBody')) === '目前選了 5 張，此專案最多 2 張，不可加選。請先取消 3 張再送出', await page.textContent('#pickCapBody'));
+      ok('no submit request', pickSubmits(m).length === 0);
       return out;
     },
-    { before: m.attach, initScript: () => localStorage.setItem('pick_key:TOK', 'ZERO-KEY'), contextOptions: co });
+    { before: m.attach, initScript: () => localStorage.setItem('pick_key:TOK', 'ZERO-KEY') });
 }
 
 {
   const m = pickFakeWorker({ ownerName: 'Old', ownerKey: 'OLD-KEY', pickLimit: 2, extraMax: null, photos: PHOTOS(5) });
-  await suite('plan cap — no cap (extra_max null, an old project): counter as before, hearting past the plan is free, no message',
+  await suite('draft cap — no plan cap (extra_max null, an old project): counter as before, never red, submit goes to the price dialog, no cap dialog',
     `${base}/index.html?t=TOK`,
     async page => {
       const out = [];
@@ -11956,34 +11999,89 @@ for (const [label, co] of [['desktop', undefined], ['phone 390px', MOBILE]]) {
       await page.waitForSelector('.photo-card', { timeout: 5000 });
       ok('counter without the extra clause', (await page.textContent('#pickCounter')) === '已選 0 / 2 張');
       for (let i = 0; i < 4; i++) await pickHeart(page, i);
-      await page.waitForTimeout(1200);
-      ok('4 hearts on', (await Promise.all([0, 1, 2, 3].map(i => heartOn(page, i)))).every(Boolean));
-      ok('counter 已選 4 / 2 張, no parenthesis', (await page.textContent('#pickCounter')) === '已選 4 / 2 張');
-      ok('no cap message', (await toastText(page)) === null);
-      ok('saves went out', puts(m).length >= 1);
+      ok('counter 已選 4 / 2 張', (await page.textContent('#pickCounter')) === '已選 4 / 2 張');
+      ok('orange over, not the red class', await page.evaluate(() => { const c = document.getElementById('pickCounter').classList; return c.contains('over') && !c.contains('over-cap'); }));
+      await page.click('#pickSubmitBtn');
+      await page.waitForSelector('#pickOverModal.active', { timeout: 3000 });
+      ok('the over-plan dialog opened (positive)', true);
+      ok('the cap dialog did not', await page.evaluate(() => !document.getElementById('pickCapModal').classList.contains('active')));
       return out;
     },
     { before: m.attach, initScript: () => localStorage.setItem('pick_key:TOK', 'OLD-KEY') });
 }
 
-{
-  const m = pickFakeWorker({ ownerName: 'Srv', ownerKey: 'SRV-KEY', pickLimit: 2, extraMax: 5, photos: PHOTOS(5) });
-  seedHearts(m, ['p0', 'p1', 'p2']);
-  await suite('plan cap — server 409 pick_cap (photographer lowered the plan after the page loaded): ♥ reverts, message uses the response’s numbers',
+for (const [label, co] of [['desktop', undefined], ['phone 390px', MOBILE]]) {
+  const m = pickFakeWorker({ ownerName: 'Sub', ownerKey: 'SUB-KEY', pickLimit: 2, extraMax: 1, extraPrice: 500, photos: PHOTOS(8) });
+  await suite(`draft cap — submit over the cap: NO submit request, dialog with exact text, 回去刪減 → 已選 filter; trim then submit works (${label})`,
     `${base}/index.html?t=TOK`,
     async page => {
       const out = [];
       const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
       await page.waitForSelector('.photo-card', { timeout: 5000 });
-      ok('page thinks the cap is 7', (await page.textContent('#pickCounter')) === '已選 3 / 2 張（最多可加選到 7）', await page.textContent('#pickCounter'));
-      m.state.project.extra_max = 1; // PATCH from the admin side; the page still holds 5
-      await pickHeart(page, 3);
-      await page.waitForFunction(() => document.querySelector('.toast.error .toast-message'), null, { timeout: 5000 });
-      ok('one save was attempted (the client had no reason to refuse)', puts(m).length === 1 && puts(m)[0].body.upsert[0].rating === 1, JSON.stringify(puts(m)));
-      ok('the message uses the server’s limit/extra_max (1, not 5)', (await toastText(page)) === '已達可挑上限：方案 2 張 + 加選 1 張', String(await toastText(page)));
-      ok('the heart reverts to off', await page.waitForFunction(() => !document.querySelectorAll('.photo-card')[3].querySelector('.pick-heart-btn.on'), null, { timeout: 3000 }).then(() => true, () => false));
-      ok('counter back to 3', (await page.textContent('#pickCounter')).startsWith('已選 3 /'));
-      ok('the other hearts are untouched', (await heartOn(page, 0)) && (await heartOn(page, 1)) && (await heartOn(page, 2)));
+      for (let i = 0; i < 6; i++) await pickHeart(page, i);
+      await page.waitForTimeout(1300);
+      ok('6 hearts saved (cap 3), nothing refused', savedHearts(m) === 6 && (await toastText(page)) === null, String(savedHearts(m)));
+      await page.click('#pickSubmitBtn');
+      await page.waitForSelector('#pickCapModal.active', { timeout: 3000 });
+      const title = await page.textContent('#pickCapTitle');
+      ok('title', title === '已超出可送出張數', title);
+      const body = await page.textContent('#pickCapBody');
+      ok('text exact', body === '目前選了 6 張，最多可送出 3 張（方案 2 + 加選 1）。請先取消 3 張再送出', body);
+      ok('NO submit request was sent', pickSubmits(m).length === 0, JSON.stringify(pickSubmits(m)));
+      ok('the submit form and price dialog stayed closed', await page.evaluate(() =>
+        !document.getElementById('pickSubmitModal').classList.contains('active') && !document.getElementById('pickOverModal').classList.contains('active')));
+      const btns = await page.$$eval('#pickCapModal .modal-content button', bs => bs.map(b => ({ t: b.textContent.trim(), h: b.getBoundingClientRect().height })));
+      ok('one button 回去刪減, ≥ 44px', btns.length === 1 && btns[0].t === '回去刪減' && btns[0].h >= 43.9, JSON.stringify(btns));
+      const geo = await page.evaluate(() => { const r = document.querySelector('#pickCapModal .modal-content').getBoundingClientRect();
+        return { l: r.left, r: r.right, t: r.top, b: r.bottom, w: innerWidth, h: innerHeight }; });
+      ok('the dialog fits the viewport and is centred', geo.l >= 0 && geo.r <= geo.w && Math.abs((geo.l + geo.r) / 2 - geo.w / 2) < 2 && geo.t >= 0 && geo.b <= geo.h, JSON.stringify(geo));
+      if (co) await page.screenshot({ path: `${SHOTS}/cap-dialog-390.png` });
+      await page.click('#pickCapBackBtn');
+      ok('closes', await page.evaluate(() => !document.getElementById('pickCapModal').classList.contains('active')));
+      ok('switched to the 已選 filter', await page.evaluate(() => document.querySelector('#pickFilterBar [data-pick-filter="selected"]').classList.contains('active')));
+      ok('the grid shows exactly the 6 picks (positive)', (await page.locator('.photo-card').count()) === 6, String(await page.locator('.photo-card').count()));
+      // trim 3 in the 已選 view
+      for (let i = 0; i < 3; i++) await page.locator('.photo-card').first().locator('.pick-heart-btn').click();
+      await page.waitForFunction(() => document.getElementById('pickCounter').textContent.startsWith('已選 3'), null, { timeout: 3000 });
+      ok('counter no longer red at 3', await page.evaluate(() => !document.getElementById('pickCounter').classList.contains('over-cap')));
+      await page.click('#pickSubmitBtn');
+      await page.waitForSelector('#pickOverModal.active', { timeout: 3000 });
+      ok('within the cap: the price dialog (3 > plan 2), unchanged', (await page.$$eval('#pickOverBody p', ps => ps[0].textContent)) === '方案 2 張，目前已選 3 張，超出 1 張');
+      await page.click('#pickOverConfirmBtn');
+      await page.selectOption('#pickSubmitRelationship', '朋友');
+      await page.click('#pickSubmitConfirmBtn');
+      await page.waitForFunction(() => document.getElementById('pickSubmitModal') && !document.getElementById('pickSubmitModal').classList.contains('active'), null, { timeout: 4000 });
+      ok('exactly one submit request, recorded with 3 photos', pickSubmits(m).length === 1 && m.state.submissions.length === 1 && m.state.submissions[0].count === 3, JSON.stringify(pickSubmits(m)));
+      return out;
+    },
+    { before: m.attach, initScript: () => localStorage.setItem('pick_key:TOK', 'SUB-KEY'), contextOptions: co });
+}
+
+{
+  const m = pickFakeWorker({ ownerName: 'Srv', ownerKey: 'SRV-KEY', pickLimit: 2, extraMax: 5, photos: PHOTOS(6) });
+  seedHearts(m, ['p0', 'p1', 'p2', 'p3']);
+  await suite('draft cap — stale page: the server’s 409 pick_cap on the real submit opens the dialog with the server’s numbers; spinner not stuck',
+    `${base}/index.html?t=TOK`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('.photo-card', { timeout: 5000 });
+      ok('page holds max 7', (await page.textContent('#pickCounter')) === '已選 4 / 2 張（最多可加選到 7）', await page.textContent('#pickCounter'));
+      m.state.project.extra_max = 1; // photographer lowered it after the page loaded: real max is 3
+      await page.click('#pickSubmitBtn');
+      await page.waitForSelector('#pickOverModal.active', { timeout: 3000 }); // client still believes it fits
+      await page.click('#pickOverConfirmBtn');
+      await page.selectOption('#pickSubmitRelationship', '朋友');
+      await page.click('#pickSubmitConfirmBtn');
+      await page.waitForSelector('#pickCapModal.active', { timeout: 4000 });
+      ok('one submit request went out (the server is the authority)', pickSubmits(m).length === 1);
+      const body = await page.textContent('#pickCapBody');
+      ok('dialog uses the response’s numbers', body === '目前選了 4 張，最多可送出 3 張（方案 2 + 加選 1）。請先取消 1 張再送出', body);
+      ok('submit form and price dialog closed', await page.evaluate(() =>
+        !document.getElementById('pickSubmitModal').classList.contains('active') && !document.getElementById('pickOverModal').classList.contains('active')));
+      ok('confirm button re-enabled (no stuck spinner)', await page.evaluate(() => !document.getElementById('pickSubmitConfirmBtn').disabled));
+      ok('nothing recorded server-side', m.state.submissions.length === 0 && m.state.project.phase === 'picking');
+      ok('counter took the server’s cap: red', (await page.textContent('#pickCounter')) === '已選 4 張（上限 3 張，需減 1 張）', await page.textContent('#pickCounter'));
       return out;
     },
     { before: m.attach, initScript: () => localStorage.setItem('pick_key:TOK', 'SRV-KEY') });
@@ -11991,24 +12089,176 @@ for (const [label, co] of [['desktop', undefined], ['phone 390px', MOBILE]]) {
 
 {
   const m = pickFakeWorker({ ownerName: 'Mod', ownerKey: 'MOD-KEY', pickLimit: 1, extraMax: 2, extraPrice: 500, photos: PHOTOS(4) });
-  await suite('plan cap — over-limit submit modal still works within the cap (1 + 2 extra: 3 hearts), and the 4th is refused',
+  await suite('draft cap — over-plan price dialog unchanged within the cap (1 + 2 extra: 3 hearts); a 4th heart is allowed (draft), submit then refused',
     `${base}/index.html?t=TOK`,
     async page => {
       const out = [];
       const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
       await page.waitForSelector('.photo-card', { timeout: 5000 });
       await pickHeart(page, 0); await pickHeart(page, 1); await pickHeart(page, 2);
-      await pickHeart(page, 3);
-      ok('the 4th heart is refused (positive: three are on, fourth off)',
-        (await heartOn(page, 0)) && (await heartOn(page, 1)) && (await heartOn(page, 2)) && !(await heartOn(page, 3)));
       await page.click('#pickSubmitBtn');
       await page.waitForSelector('#pickOverModal.active', { timeout: 3000 });
       const lines = await page.$$eval('#pickOverBody p', ps => ps.map(p => p.textContent));
       ok('modal line 1 unchanged', lines[0] === '方案 1 張，目前已選 3 張，超出 2 張', JSON.stringify(lines));
       ok('modal line 2 unchanged', lines[1] === '加挑每張 NT$500，加價 NT$500 × 2 = NT$1,000', JSON.stringify(lines));
+      await page.click('#pickOverBackBtn');
+      await pickHeart(page, 3);
+      ok('the 4th heart turns on', await heartOn(page, 3));
+      await page.click('#pickSubmitBtn');
+      await page.waitForSelector('#pickCapModal.active', { timeout: 3000 });
+      ok('cap dialog, not the price dialog', await page.evaluate(() => !document.getElementById('pickOverModal').classList.contains('active')));
       return out;
     },
     { before: m.attach, initScript: () => localStorage.setItem('pick_key:TOK', 'MOD-KEY') });
+}
+
+// ── draft reliability: requeue + retry, keepalive on pagehide, status ────
+const statusLog = page => page.evaluate(() => {
+  window.__st = [];
+  const el = document.getElementById('pickSaveStatus');
+  new MutationObserver(() => { const t = el.textContent; if (t && window.__st[window.__st.length - 1] !== t) window.__st.push(t); })
+    .observe(el, { childList: true, characterData: true, subtree: true });
+});
+
+for (const [label, fails] of [['network error twice', ['net', 'net']], ['503 then network error', [503, 'net']], ['429 once', [429]]]) {
+  const m = pickFakeWorker({ ownerName: 'Ret', ownerKey: 'RET-KEY', pickLimit: 40, extraMax: 10, photos: PHOTOS(4), failSaves: [...fails] });
+  await suite(`draft retry — ${label}: the ♥ ends up saved exactly once, status 儲存中… → 儲存失敗，重試中… → 已自動儲存`,
+    `${base}/index.html?t=TOK`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('.photo-card', { timeout: 5000 });
+      await page.waitForSelector('#pickSaveStatus');
+      await page.evaluate(() => { PickController.retryDelays = [150, 150, 150]; });
+      await statusLog(page);
+      await pickHeart(page, 1);
+      await page.waitForFunction(() => window.__st.includes('已自動儲存'), null, { timeout: 6000 });
+      const st = await page.evaluate(() => window.__st);
+      ok('status sequence', JSON.stringify(st) === JSON.stringify(['儲存中…', '儲存失敗，重試中…', '已自動儲存']), JSON.stringify(st));
+      const reqs = puts(m);
+      ok(`${fails.length + 1} attempts, all the same single ♥ (no duplicate rows, no reorder)`,
+        reqs.length === fails.length + 1 && reqs.every(r => r.body.upsert.length === 1 && r.body.upsert[0].photo_key === '20260819/p1.jpg' && r.body.upsert[0].rating === 1),
+        JSON.stringify(reqs.map(r => r.body)));
+      ok('server holds exactly one row, rating 1', m.state.selections.size === 1 && m.state.selections.get('20260819/p1.jpg').rating === 1);
+      ok('the ♥ never left the screen', await heartOn(page, 1));
+      ok('no error toast during a recoverable outage', (await toastText(page)) === null);
+      await page.waitForFunction(() => document.getElementById('pickSaveStatus').textContent === '', null, { timeout: 5000 });
+      ok('the 已自動儲存 note fades out (positive: it was shown, now empty)', true);
+      return out;
+    },
+    { before: async page => { await m.attach(page); }, initScript: () => localStorage.setItem('pick_key:TOK', 'RET-KEY') });
+}
+
+{
+  const m = pickFakeWorker({ ownerName: 'Mrg', ownerKey: 'MRG-KEY', pickLimit: 40, extraMax: 10, photos: PHOTOS(4), failSaves: [{ fail: 'net', delay: 900 }] });
+  await suite('draft retry — a newer change made while the failed batch is in flight wins (last mention of a key); other keys survive; one row each',
+    `${base}/index.html?t=TOK`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('.photo-card', { timeout: 5000 });
+      await page.evaluate(() => { PickController.retryDelays = [300, 300, 300]; });
+      await pickHeart(page, 0); await pickHeart(page, 1);
+      await page.waitForTimeout(1100); // the debounce (800ms) fired, the slow request (900ms) is in flight
+      await pickHeart(page, 0); // un-heart p0 while p0+p1 are on the wire (it then fails)
+      await page.waitForFunction(() => document.getElementById('pickSaveStatus').textContent === '已自動儲存', null, { timeout: 8000 });
+      const sel = Array.from(m.state.selections.entries()).map(([k, v]) => `${k}:${v.rating}`).sort();
+      ok('final server state: p0 rating 0 (newer wins), p1 rating 1, no duplicates', JSON.stringify(sel) === JSON.stringify(['20260819/p0.jpg:0', '20260819/p1.jpg:1']), JSON.stringify(sel));
+      ok('screen agrees', !(await heartOn(page, 0)) && (await heartOn(page, 1)));
+      // requests: first (failed) had both; later ones must never resurrect p0=1 after the un-heart
+      const last = puts(m).slice(1).flatMap(r => r.body.upsert).filter(u => u.photo_key.endsWith('p0.jpg')).map(u => u.rating);
+      ok('no request after the failure carries p0 rating 1', !last.includes(1), JSON.stringify(last));
+      return out;
+    },
+    { before: m.attach, initScript: () => localStorage.setItem('pick_key:TOK', 'MRG-KEY') });
+}
+
+{
+  const o = { ownerName: 'Bad', ownerKey: 'BAD-KEY', pickLimit: 40, extraMax: 10, photos: PHOTOS(3) };
+  const m = pickFakeWorker(o);
+  await suite('draft retry — a non-retryable refusal (409 selection_cap) is NOT retried: revert + toast as before',
+    `${base}/index.html?t=TOK`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('.photo-card', { timeout: 5000 });
+      await page.evaluate(() => { PickController.retryDelays = [100, 100, 100]; });
+      o.failNextSave = { status: 409, body: { error: 'x', code: 'selection_cap', max: 500 } };
+      await pickHeart(page, 0);
+      await page.waitForFunction(() => document.querySelector('.toast.error .toast-message'), null, { timeout: 4000 });
+      await page.waitForTimeout(600);
+      ok('one request only', puts(m).length === 1, String(puts(m).length));
+      ok('toast 最多可選 500 張', (await toastText(page)) === '最多可選 500 張', String(await toastText(page)));
+      ok('heart reverted', !(await heartOn(page, 0)));
+      ok('no retrying status', (await page.textContent('#pickSaveStatus')) !== '儲存失敗，重試中…');
+      return out;
+    },
+    { before: m.attach, initScript: () => localStorage.setItem('pick_key:TOK', 'BAD-KEY') });
+}
+
+{
+  const m = pickFakeWorker({ ownerName: 'Uns', ownerKey: 'UNS-KEY', pickLimit: 40, extraMax: 10, photos: PHOTOS(3),
+    failSaves: Array.from({ length: 12 }, () => 'net') });
+  await suite('draft retry — submit while a ♥ is still unsaved is refused with a message (never submits a different list); spinner released',
+    `${base}/index.html?t=TOK`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('.photo-card', { timeout: 5000 });
+      await page.evaluate(() => { PickController.retryDelays = [5000, 5000, 5000]; });
+      await pickHeart(page, 0);
+      await page.waitForFunction(() => document.getElementById('pickSaveStatus').textContent === '儲存失敗，重試中…', null, { timeout: 4000 });
+      await page.click('#pickSubmitBtn');
+      await page.selectOption('#pickSubmitRelationship', '朋友');
+      await page.click('#pickSubmitConfirmBtn');
+      await page.waitForFunction(() => document.getElementById('pickSubmitErr').textContent.length > 0, null, { timeout: 4000 });
+      ok('message shown', (await page.textContent('#pickSubmitErr')) === '尚有選擇未儲存，請確認網路後再試一次');
+      ok('no submit request', pickSubmits(m).length === 0);
+      ok('confirm button re-enabled', await page.evaluate(() => !document.getElementById('pickSubmitConfirmBtn').disabled));
+      return out;
+    },
+    { before: m.attach, initScript: () => localStorage.setItem('pick_key:TOK', 'UNS-KEY') });
+}
+
+{
+  const m = pickFakeWorker({ ownerName: 'Hid', ownerKey: 'HID-KEY', pickLimit: 40, extraMax: 10, photos: PHOTOS(3) });
+  await suite('draft keepalive — pagehide flushes a pending ♥ with fetch keepalive and the same headers; nothing pending → nothing sent',
+    `${base}/index.html?t=TOK`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('.photo-card', { timeout: 5000 });
+      await page.evaluate(() => {
+        window.__f = [];
+        const orig = window.fetch;
+        window.fetch = function (u, init) { window.__f.push({ u: String(u), keepalive: !!(init && init.keepalive), method: init && init.method, h: init && init.headers }); return orig.apply(this, arguments); };
+      });
+      // nothing pending: pagehide sends nothing
+      await page.evaluate(() => window.dispatchEvent(new Event('pagehide')));
+      await page.waitForTimeout(300);
+      ok('no pending → no request', puts(m).length === 0);
+      await pickHeart(page, 2);
+      await page.evaluate(() => window.dispatchEvent(new Event('pagehide'))); // well inside the 800ms debounce
+      await page.waitForFunction(() => window.__f.some(f => f.keepalive), null, { timeout: 2000 });
+      const f = await page.evaluate(() => window.__f.filter(x => x.keepalive));
+      ok('one keepalive PUT to /api/pick/selections', f.length === 1 && f[0].method === 'PUT' && f[0].u.endsWith('/api/pick/selections'), JSON.stringify(f));
+      ok('carries X-Share-Token and X-Picker-Key', f[0].h['X-Share-Token'] === 'TOK' && f[0].h['X-Picker-Key'] === 'HID-KEY', JSON.stringify(f[0].h));
+      await page.waitForFunction(() => true);
+      await page.waitForTimeout(200);
+      const early = puts(m)[0];
+      ok('the server got the ♥ before the debounce fired', early && early.body.upsert[0].photo_key === '20260819/p2.jpg' && early.body.upsert[0].rating === 1 && early.key === 'HID-KEY' && early.t === 'TOK', JSON.stringify(early));
+      ok('server state holds it', m.state.selections.get('20260819/p2.jpg')?.rating === 1);
+      // visibilitychange to hidden does the same
+      await pickHeart(page, 1);
+      await page.evaluate(() => {
+        Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' });
+        document.dispatchEvent(new Event('visibilitychange'));
+      });
+      await page.waitForFunction(() => window.__f.filter(f => f.keepalive).length === 2, null, { timeout: 2000 });
+      ok('visibilitychange→hidden also flushes with keepalive', true);
+      return out;
+    },
+    { before: m.attach, initScript: () => localStorage.setItem('pick_key:TOK', 'HID-KEY') });
 }
 
 {

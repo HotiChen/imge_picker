@@ -1911,6 +1911,19 @@ body {
   line-height: 1.4;
 }
 .pick-counter.over { color: var(--warning); font-weight: 600; }
+/* past pick_limit + extra_max: submit is refused until the guest trims */
+.pick-counter.over-cap { color: var(--danger); font-weight: 600; }
+.pick-counter-wrap { min-width: 0; }
+/* quiet draft status: its line is always reserved, so no layout jump */
+.pick-save-status {
+  font-size: 12px;
+  line-height: 16px;
+  min-height: 16px;
+  color: var(--ink-70);
+  transition: opacity 0.6s;
+}
+.pick-save-status[data-state=""] { opacity: 0; }
+.pick-save-status[data-state="retry"] { color: var(--danger); }
 
 /* The bottom bar is a phone/tablet thing (<= 1024px, always on there). On a
    wide screen the pick page shows just the counter as a small pill,
@@ -1941,6 +1954,7 @@ body.pick-active .mobile-action-bar.pick-bar-off { display: none !important; }
 .pick-over-line { color: var(--ink); font-size: 15px; margin: 0 0 10px; }
 .pick-over-price { color: var(--ink-70); font-size: 14px; margin: 0 0 10px; }
 .pick-over-content .pick-submit-actions .btn { min-height: 44px; }
+#pickCapBackBtn { min-width: 44px; }
 
 .pick-banner {
   background: var(--accent-dim);

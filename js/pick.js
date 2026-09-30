@@ -281,12 +281,139 @@
             if (this.filterMode !== 'all' && marks === undefined) this.rerenderGrid();
             if (this._pinPhotoId === photoKey && (!prevSel || (prevSel.rating > 0) !== (rating > 0))) this.syncPinUI();
             clearTimeout(this._saveTimer);
+            if (this._retryCount >= this.retryDelays.length) this._retryCount = 0; // a new action earns a fresh round
+            this._setSaveStatus(this._retryCount > 0 ? 'retry' : 'saving');
             this._saveTimer = setTimeout(() => this.flush(), 800);
         },
 
-        async flush() {
+        // One flush at a time (a second caller waits for, and then drains, the
+        // first): a failed batch is put back into the queue, and two batches in
+        // flight could otherwise land out of order and let an older ♥ win.
+        // Resolves once nothing is left to send OR a retry is pending; check
+        // hasPending() afterwards if that matters (submit does).
+        flush() {
             clearTimeout(this._saveTimer);
-            if (!this._pendingUpsert.size && !this._pendingDelete.size) return;
+            if (this._flushP) { this._flushWanted = true; return this._flushP; }
+            if (!this.hasPending()) return Promise.resolve();
+            // _drain awaits a request before it can finish, so its finally
+            // always runs after this assignment
+            this._flushP = this._drain();
+            return this._flushP;
+        },
+
+        async _drain() {
+            try {
+                do {
+                    this._flushWanted = false;
+                    const retry = await this._flushOnce();
+                    if (retry) break;
+                } while (this._flushWanted || this.hasPending());
+            } finally {
+                this._flushP = null;
+            }
+        },
+
+        hasPending() { return this._pendingUpsert.size > 0 || this._pendingDelete.size > 0; },
+
+        // ── draft status: 儲存中… / 已自動儲存 / 儲存失敗，重試中… ─────────────
+        _setSaveStatus(kind) {
+            const el = document.getElementById('pickSaveStatus');
+            clearTimeout(this._statusTimer);
+            this._saveStatusKind = kind;
+            if (!el) return;
+            el.textContent = kind === 'saving' ? '儲存中…'
+                : (kind === 'saved' ? '已自動儲存'
+                    : (kind === 'retry' ? '儲存失敗，重試中…' : ''));
+            el.dataset.state = kind || '';
+            if (kind === 'saved') {
+                this._statusTimer = setTimeout(() => {
+                    if (this._saveStatusKind === 'saved') this._setSaveStatus('');
+                }, 2500);
+            }
+        },
+
+        // Backoff for a batch the network/server could not take: 2 s, 5 s, 15 s,
+        // then it waits for the next ♥ (queueUpsert flushes) or the browser
+        // coming back online.
+        retryDelays: [2000, 5000, 15000],
+        _retryCount: 0,
+        _retryTimer: null,
+
+        _scheduleRetry() {
+            clearTimeout(this._retryTimer);
+            const i = this._retryCount;
+            if (i >= this.retryDelays.length) {
+                if (i === this.retryDelays.length) {
+                    this._retryCount++;
+                    if (typeof toast !== 'undefined') toast.error('儲存失敗，請檢查網路連線');
+                }
+                return; // wait for the next action / 'online'
+            }
+            this._retryCount++;
+            this._retryTimer = setTimeout(() => this.flush(), this.retryDelays[i]);
+        },
+
+        // Put a failed batch back. Anything touched again since (still queued)
+        // is newer and wins; the pre-batch snapshot is older, so it wins over a
+        // newer batch's own snapshot (a revert must go back to what the server
+        // holds).
+        _requeue(upsert, del, prevSnapshot) {
+            for (const item of upsert) {
+                if (this._pendingUpsert.has(item.photo_key) || this._pendingDelete.has(item.photo_key)) continue;
+                this._pendingUpsert.set(item.photo_key, item);
+            }
+            for (const key of del) {
+                if (this._pendingUpsert.has(key) || this._pendingDelete.has(key)) continue;
+                this._pendingDelete.add(key);
+            }
+            for (const [key, prev] of prevSnapshot) this._pendingPrev.set(key, prev);
+        },
+
+        // The pending queue plus the batch still in flight, one item per key
+        // (newer wins) — what a closing page must not lose.
+        _draftPayload() {
+            const up = new Map();
+            const del = new Set();
+            if (this._inflight) {
+                for (const it of this._inflight.upsert) up.set(it.photo_key, it);
+                for (const k of this._inflight.del) del.add(k);
+            }
+            for (const [k, it] of this._pendingUpsert) { up.set(k, it); del.delete(k); }
+            for (const k of this._pendingDelete) { del.add(k); up.delete(k); }
+            return { upsert: Array.from(up.values()), delete: Array.from(del) };
+        },
+
+        // pagehide / visibilitychange→hidden: sendBeacon cannot carry
+        // X-Share-Token / X-Picker-Key, keepalive fetch can. The queue is kept
+        // (a resumed page re-sends the same idempotent upserts).
+        flushKeepalive() {
+            if (!this.canEdit()) return;
+            const payload = this._draftPayload();
+            if (!payload.upsert.length && !payload.delete.length) return;
+            try {
+                fetch(`${CONFIG.WORKER_URL}/api/pick/selections`, {
+                    method: 'PUT',
+                    headers: this.headers({ 'Content-Type': 'application/json' }),
+                    body: JSON.stringify(payload),
+                    keepalive: true,
+                }).catch(() => {});
+            } catch (e) { /* best effort */ }
+        },
+
+        _wireDraftSafety() {
+            if (this._draftWired) return;
+            this._draftWired = true;
+            window.addEventListener('pagehide', () => this.flushKeepalive());
+            document.addEventListener('visibilitychange', () => {
+                if (document.visibilityState === 'hidden') this.flushKeepalive();
+            });
+            window.addEventListener('online', () => {
+                if (this.hasPending()) { this._retryCount = 0; this.flush(); }
+            });
+        },
+
+        // Sends one batch. Returns true when it failed retryably (re-queued).
+        async _flushOnce() {
             const upsert = Array.from(this._pendingUpsert.values());
             const del = Array.from(this._pendingDelete);
             const prevSnapshot = this._pendingPrev;
@@ -294,8 +421,19 @@
             this._pendingDelete.clear();
             this._pendingPrev = new Map();
             this._marksClear = new Set();
-            const { ok, status, data } = await this.saveSelections({ upsert, delete: del });
+            this._inflight = { upsert, del };
+            this._setSaveStatus(this._retryCount > 0 ? 'retry' : 'saving');
+            let res;
+            try {
+                res = await this.saveSelections({ upsert, delete: del });
+            } finally {
+                this._inflight = null;
+            }
+            const { ok, status, data } = res;
             if (ok) {
+                this._retryCount = 0;
+                clearTimeout(this._retryTimer);
+                this._setSaveStatus(this.hasPending() ? 'saving' : 'saved');
                 // mirrors the gate UPDATE in worker.js: a save while already
                 // 'submitted' raises modified_after_submit, so the banner has
                 // to catch up here too — nothing re-fetches state for us.
@@ -303,8 +441,16 @@
                     this.modifiedAfterSubmit = true;
                     this.renderBanner();
                 }
-                return;
+                return false;
             }
+            if (status === 0 || status === 429 || (status >= 500 && !(data && data.code === 'marks_unavailable'))) {
+                this._requeue(upsert, del, prevSnapshot);
+                this._setSaveStatus('retry');
+                this._scheduleRetry();
+                return true;
+            }
+            this._retryCount = 0;
+            this._setSaveStatus(this.hasPending() ? 'saving' : '');
             if (status === 409 && data && data.code === 'retouching') {
                 this.phase = 'retouching';
                 this.renderBanner();
@@ -326,13 +472,6 @@
                     toast.error(status === 413 ? '內容太大，無法儲存，請減少標示或備註的文字'
                         : (status === 500 ? '標示功能尚未啟用，請稍後再試' : '標示內容不正確，請修改後再試'));
                 }
-                return;
-            }
-            if (status === 409 && data && data.code === 'pick_cap') {
-                // the plan's ♥ cap (server-authoritative): nothing written, so
-                // put the optimistic ♥ back, same as selection_cap
-                this._revertBatch(prevSnapshot);
-                this.showPickCapMessage(data);
                 return;
             }
             if (status === 409 && data && (data.code === 'selection_cap' || data.code === 'row_cap')) {
@@ -451,6 +590,7 @@
             this._restructureGuestChrome();
             this._wireHooks(app);
             this._wireSubmitModal();
+            this._wireDraftSafety();
 
             const { ok, status, data } = await this.fetchState();
             if (!ok) {
@@ -1135,33 +1275,33 @@
                 el = document.createElement('span');
                 el.id = 'pickCounter';
                 el.className = 'pick-counter';
-                status.replaceChildren(el);
+                // the quiet draft status sits under the counter in a line whose
+                // height is reserved, so its text never moves the bar
+                const st = document.createElement('div');
+                st.id = 'pickSaveStatus';
+                st.className = 'pick-save-status';
+                st.setAttribute('aria-live', 'polite');
+                const wrap = document.createElement('div');
+                wrap.className = 'pick-counter-wrap';
+                wrap.append(el, st);
+                status.replaceChildren(wrap);
             }
             const count = this._selectedCount();
             const limit = this.pickLimit;
+            const max = this.maxPicks;
+            const overCap = max != null && count > max;
             let text = limit == null ? `已選 ${count} 張` : `已選 ${count} / ${limit} 張`;
-            if (limit != null && this.extraMax != null) {
+            if (overCap) {
+                // hearts are drafts: past the plan's cap is allowed, submit is not
+                text = this.extraMax === 0
+                    ? `已選 ${count} 張（上限 ${max} 張，不可加選，需減 ${count - max} 張）`
+                    : `已選 ${count} 張（上限 ${max} 張，需減 ${count - max} 張）`;
+            } else if (limit != null && this.extraMax != null) {
                 text += this.extraMax === 0 ? '（不可加選）' : `（最多可加選到 ${limit + this.extraMax}）`;
             }
             el.textContent = text;
-            el.classList.toggle('over', limit != null && count > limit);
-        },
-
-        // True when a NEW ♥ would go past the plan cap (pick_limit + extra_max).
-        // A UX pre-check only — the Worker's 409 pick_cap is the real gate.
-        atPickCap() {
-            return this.maxPicks != null && this._selectedCount() >= this.maxPicks;
-        },
-
-        // 「已達可挑上限：方案 40 張 + 加選 10 張」; `d` is the 409 body
-        // ({limit, extra_max, max}) or, for the pre-check, this project's plan.
-        showPickCapMessage(d) {
-            const limit = d && d.limit != null ? d.limit : this.pickLimit;
-            const extra = d && d.extra_max != null ? d.extra_max : this.extraMax;
-            const msg = extra === 0
-                ? `已達可挑上限：方案 ${limit} 張，此專案不可加選`
-                : `已達可挑上限：方案 ${limit} 張 + 加選 ${extra} 張`;
-            if (typeof toast !== 'undefined') toast.error(msg);
+            el.classList.toggle('over', !overCap && limit != null && count > limit);
+            el.classList.toggle('over-cap', overCap);
         },
 
         // How many picks exceed the plan (0 when there is no limit).
@@ -1219,6 +1359,13 @@
         // The over-limit modal comes first; 確認送出 there opens the ordinary
         // submit form (relationship / email), so that step is unchanged.
         requestSubmit() {
+            const max = this.maxPicks;
+            const n = this._selectedCount();
+            if (max != null && n > max) {
+                // nothing is sent: the server would refuse it with 409 pick_cap
+                this.openCapModal({ count: n, max, over: n - max, limit: this.pickLimit, extra_max: this.extraMax });
+                return;
+            }
             if (this.overCount() > 0) this.openOverModal();
             else this.openSubmitModal();
         },
@@ -1243,6 +1390,29 @@
             }));
             modal.classList.add('active');
         },
+        // 已超出可送出張數: d = {count, max, over, limit, extra_max} (from the
+        // local numbers, or the server's 409 pick_cap body).
+        openCapModal(d) {
+            const modal = document.getElementById('pickCapModal');
+            const body = document.getElementById('pickCapBody');
+            const count = d.count != null ? d.count : this._selectedCount();
+            const max = d.max != null ? d.max : this.maxPicks;
+            const over = d.over != null ? d.over : count - max;
+            const limit = d.limit != null ? d.limit : this.pickLimit;
+            const extra = d.extra_max != null ? d.extra_max : this.extraMax;
+            if (!modal || !body) return;
+            const text = extra === 0
+                ? `目前選了 ${count} 張，此專案最多 ${max} 張，不可加選。請先取消 ${over} 張再送出`
+                : `目前選了 ${count} 張，最多可送出 ${max} 張（方案 ${limit} + 加選 ${extra}）。請先取消 ${over} 張再送出`;
+            const p = document.createElement('p');
+            p.className = 'pick-over-line';
+            p.textContent = text;
+            body.replaceChildren(p);
+            modal.classList.add('active');
+        },
+        closeCapModal() {
+            document.getElementById('pickCapModal')?.classList.remove('active');
+        },
         closeOverModal() {
             document.getElementById('pickOverModal')?.classList.remove('active');
         },
@@ -1266,6 +1436,9 @@
         },
 
         _wireSubmitModal() {
+            document.getElementById('pickCapBackBtn')?.addEventListener('click', () => {
+                this.closeCapModal();
+            });
             document.getElementById('pickOverBackBtn')?.addEventListener('click', () => this.closeOverModal());
             document.getElementById('pickOverConfirmBtn')?.addEventListener('click', () => {
                 this.closeOverModal();
@@ -1284,10 +1457,20 @@
             const email = emailEl ? emailEl.value.trim() : '';
             if (errEl) errEl.textContent = '';
 
-            await this.flush();
             if (btn) btn.disabled = true;
-            const { ok, status, data } = await this.submitPicks({ relationship, email: email || undefined });
-            if (btn) btn.disabled = false;
+            let ok = false, status = 0, data = {};
+            try {
+                await this.flush();
+                if (this.hasPending()) {
+                    // the hearts on screen are not all saved: submitting now would
+                    // send a different list than the guest sees
+                    if (errEl) errEl.textContent = '尚有選擇未儲存，請確認網路後再試一次';
+                    return;
+                }
+                ({ ok, status, data } = await this.submitPicks({ relationship, email: email || undefined }));
+            } finally {
+                if (btn) btn.disabled = false;
+            }
 
             if (ok) {
                 this.phase = 'submitted';
@@ -1301,6 +1484,16 @@
                     if (data.over) msg += `，超出方案 ${data.over} 張`;
                     toast.success(msg);
                 }
+            } else if (status === 409 && data && data.code === 'pick_cap') {
+                // the plan changed since this page loaded (or a stale count):
+                // take the server's numbers, nothing was written
+                if (data.limit != null) this.pickLimit = data.limit;
+                if (data.extra_max != null) this.extraMax = data.extra_max;
+                if (data.max != null) this.maxPicks = data.max;
+                this.closeSubmitModal();
+                this.closeOverModal();
+                this.renderCounter();
+                this.openCapModal(data);
             } else if (status === 409 && data && data.code === 'retouching') {
                 this.phase = 'retouching';
                 this.closeSubmitModal();
