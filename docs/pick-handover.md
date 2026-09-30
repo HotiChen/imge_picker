@@ -9,6 +9,16 @@
 > the root submits, root can remove collaborators) is much simpler than moving a
 > single seat, and root-only submit is what pulls in the return button and the
 > notification machinery. See docs/backlog.md.
+>
+> **Tim (2026-09-30): collaborators are wanted, as co-picking.** Two people by
+> default (a couple: the first person + one collaborator), raisable per project
+> (`max_pickers`) for family portraits. Each person's hearts show in their own
+> colour (with the first letter of their name, colour alone is not enough), a
+> photo hearted by both counts once, both may add comments. Still to settle:
+> who can remove a photo (proposal: the first person removes any, a collaborator
+> only their own heart), who sees a collaborator's comments (proposal: the family
+> only), and only the first person submits. To be re-designed as co-picking,
+> replacing the seat-passing sections below.
 
 
 Guests heart 100+ photos in a first round and narrow down over days, often

@@ -15,6 +15,7 @@ prefill the create form.
 | **`extra_max`** | how many photos the guest may pick **above** `pick_limit`; **0 = no extra picks** | **10** | new |
 | `promo_days`, `promo_percent` | delivery promo window / discount (docs/guest-shop.md) | settings | later (S1) |
 | `shipping_fee` | NT$ added to a shipped order (docs/guest-shop.md) | settings | later (S2) |
+| `max_pickers` | how many people may pick on one link (1 first person + collaborators; the co-picking feature, not built yet) | **2** (a couple); raise per project for a family portrait | later (collaborators) |
 
 Columns are added by append-only `ALTER`s, hand-run in the D1 Console before
 the merge that needs them (`projects.extra_max`,
