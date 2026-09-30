@@ -120,7 +120,17 @@ Guest link only (owner and viewers); the photographer's own index.html keeps eve
   Remove FLAGS (PICK/REVIEW/REJECT), ANNOTATION, 排序 and DATA from the guest view (from the DOM).
 - Phone: no ☰ / drawer for guests. An always-visible bar under the header:
   「資料夾：<current> ▾」 + the 3-way filter. Desktop: sidebar with only those two.
-- Delivered gallery: folder switch only (no filter, no ♥).
+- Delivered gallery: folder switch only (no filter, no ♥) — **plus (Tim, 2026-09-30,
+  scope still to confirm): 購買資訊 and a 分享 button.**
+  - 購買資訊: options — (A) info only: the photographer's guest-visible products
+    (name, spec/price, photo) + a 「聯絡攝影師訂購」 link; a read-only guest route
+    (delivered mode only, never cost); needs a guest_visible switch in settings
+    (column exists, no UI yet); ~0.5–1 day. (B) full order request from the
+    gallery = Phase B guest shop, guest writes, High tier, 2–3 days. Recommended: A first.
+  - 分享: share the gallery link (Web Share API, fallback copy). Anyone with the
+    link can view AND download the finals (owner and viewers already see the same
+    gallery); the photographer can revoke the link. A separate view-only /
+    no-download share link is a bigger change — not planned.
 - **One submit button only: the bottom one (完成提交).** Remove 完成挑圖 from the header.
 - **No 預約拍攝 button on the guest page at all** (Tim: not wanted). The booking_url setting stays, unused on this page.
 - Top-left brand: the photographer's own studio logo / name from settings.
