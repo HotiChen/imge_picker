@@ -137,8 +137,13 @@ Guest link only (owner and viewers); the photographer's own index.html keeps eve
     ♥ photos; limits (e.g. ≤ 10 pins per photo, note ≤ 100 chars).
   - Submission snapshot includes the pins; changes after a submit show in
     已修改 / the diff.
-  - Photographer sees the numbered pins over the photo + the list of notes
-    in the project view.
+  - Photographer (Tim, 2026-09-30): wherever he opens the picked photos —
+    the project's 「看照片 →」 view (index.html?project=<id>) — every photo
+    shows the guest's pins: a pin-count badge on the grid card, and in
+    preview the numbered pins drawn over the photo (they follow zoom/pan)
+    with the matching notes listed beside/below. Read-only for him.
+    Later, if retouchers need it: export the pins (a list per file, or the
+    photo with the pins drawn on) with 下載選片.
   - Guest writes → High tier: TDD + security review. ~1.5 days.
   - Build together with the guest pick page UI changes above.
 
