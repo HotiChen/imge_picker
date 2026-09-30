@@ -91,14 +91,8 @@
                     hasAnnotations: false,
                     // the guest's retouch pins (docs/guest-picking.md); null
                     // before the D1 migration ran = none
-                    marks: this._cleanMarks(s.marks),
+                    marks: window.cleanPinMarks(s.marks),
                 }));
-        },
-
-        _cleanMarks(arr) {
-            return (Array.isArray(arr) ? arr : [])
-                .filter(m => m && Number.isFinite(m.x) && Number.isFinite(m.y) && m.x >= 0 && m.x <= 1 && m.y >= 0 && m.y <= 1)
-                .map(m => ({ x: m.x, y: m.y, note: typeof m.note === 'string' ? m.note : '' }));
         },
 
         // Preview: the guest's pins are drawn over the photo by

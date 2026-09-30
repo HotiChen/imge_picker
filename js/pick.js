@@ -28,9 +28,7 @@
     const pinLen = v => Array.from(v).length;
     // what the server sends is canonical already; this only keeps a bad row
     // from ever reaching the canvas
-    const cleanMarks = arr => (Array.isArray(arr) ? arr : []).slice(0, PIN_MAX)
-        .filter(m => m && Number.isFinite(m.x) && Number.isFinite(m.y) && m.x >= 0 && m.x <= 1 && m.y >= 0 && m.y <= 1)
-        .map(m => ({ x: m.x, y: m.y, note: typeof m.note === 'string' ? m.note : '' }));
+    const cleanMarks = arr => window.cleanPinMarks(arr, PIN_MAX); // js/annotation.js
 
     const PickController = {
         active: !!token,

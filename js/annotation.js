@@ -19,6 +19,13 @@ function gestureTouchDist(a, b) {
     return Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
 }
 
+// The one shape guard for retouch pins (docs/guest-picking.md): finite x,y in
+// [0,1] and a string note. js/pick.js (guest) and js/project-view.js
+// (photographer) both use it; `max` caps the list where the guest UI needs it.
+window.cleanPinMarks = (arr, max = Infinity) => (Array.isArray(arr) ? arr : []).slice(0, max)
+    .filter(m => m && Number.isFinite(m.x) && Number.isFinite(m.y) && m.x >= 0 && m.x <= 1 && m.y >= 0 && m.y <= 1)
+    .map(m => ({ x: m.x, y: m.y, note: typeof m.note === 'string' ? m.note : '' }));
+
 class AnnotationManager {
     constructor() {
         this.canvas = null;
