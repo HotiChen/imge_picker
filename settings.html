@@ -149,7 +149,12 @@
             <input id="set-default-extra-price" class="field" type="number" min="0" step="1">
           </div>
         </div>
-        <div class="hint" style="margin-bottom:12px;">建立新選片專案時會預先帶入這兩個值，仍可依專案調整。</div>
+        <div class="field-group">
+          <label for="set-default-extra-max">最多可加選（張）</label>
+          <input id="set-default-extra-max" class="field" type="number" min="0" max="500" step="1">
+          <div class="hint" id="set-extra-max-hint">客人可在精修張數之外多挑幾張。0 = 不可加選。未設定時為 10。</div>
+        </div>
+        <div class="hint" style="margin-bottom:12px;">建立新選片專案時會預先帶入這些值，仍可依專案調整。</div>
         <button id="set-save-btn" class="btn btn-accent" type="button">儲存設定</button>
         <div id="set-err" class="err"></div>
         <div id="set-ok" class="ok-msg"></div>
@@ -209,9 +214,9 @@
   </main>
 </div>
 
-<script src="js/build-version.js?v=20260930c"></script>
-<script src="js/side-nav.js?v=20260930c"></script>
-<script src="js/orders-common.js?v=20260930c"></script>
+<script src="js/build-version.js?v=20260930d"></script>
+<script src="js/side-nav.js?v=20260930d"></script>
+<script src="js/orders-common.js?v=20260930d"></script>
 <script>
 (function () {
   const WORKER_URL = 'https://imagepicker.hotichen.workers.dev';
@@ -276,6 +281,11 @@
     const urlInput = document.getElementById('set-booking-url');
     const limitInput = document.getElementById('set-default-pick-limit');
     const priceInput = document.getElementById('set-default-extra-price');
+    const extraMaxInput = document.getElementById('set-default-extra-max');
+    // the stored default as loaded (null = unset): a PUT names default_extra_max
+    // only when it changed, so saving other settings never depends on the
+    // extra-max migration having been run
+    let loadedExtraMax = null;
     const saveBtn = document.getElementById('set-save-btn');
     const errEl = document.getElementById('set-err');
     const okEl = document.getElementById('set-ok');
@@ -314,6 +324,10 @@
         urlInput.value = s.booking_url || '';
         limitInput.value = s.default_pick_limit != null ? s.default_pick_limit : '';
         priceInput.value = s.default_extra_price != null ? s.default_extra_price : '';
+        loadedExtraMax = s.default_extra_max != null ? s.default_extra_max : null;
+        extraMaxInput.value = loadedExtraMax != null ? loadedExtraMax : '';
+        const eff = s.effective_default_extra_max != null ? s.effective_default_extra_max : 10;
+        extraMaxInput.placeholder = `未設定時為 ${eff}`;
         renderLogo(!!s.has_logo);
       } catch (e) {
         if (e.message !== '401') errEl.textContent = '無法連線到 Worker';
@@ -326,6 +340,8 @@
       invalid_booking_url: '預約網址需為 https:// 開頭的合法網址',
       invalid_default_pick_limit: '預設精修張數上限需為 0 以上整數',
       invalid_default_extra_price: '預設加選單價需為 0 以上整數',
+      invalid_default_extra_max: '最多可加選需為 0–500 的整數',
+      extra_max_unavailable: '請先在 D1 執行 extra-max migration',
     };
 
     saveBtn.addEventListener('click', async function () {
@@ -349,23 +365,31 @@
       if (extra_price !== null && (!Number.isInteger(extra_price) || extra_price < 0)) {
         errEl.textContent = ERROR_LABEL.invalid_default_extra_price; return;
       }
+      const extraRaw = extraMaxInput.value.trim();
+      const extra_max = extraRaw === '' ? null : Number(extraRaw);
+      if (extra_max !== null && (!Number.isInteger(extra_max) || extra_max < 0 || extra_max > 500)) {
+        errEl.textContent = ERROR_LABEL.invalid_default_extra_max; return;
+      }
+      const putBody = {
+        studio_name: nameInput.value.trim() === '' ? '' : nameInput.value.trim(),
+        booking_url: bookingUrl,
+        default_pick_limit: pick_limit,
+        default_extra_price: extra_price,
+      };
+      if (extra_max !== loadedExtraMax) putBody.default_extra_max = extra_max;
       saveBtn.disabled = true;
       try {
         const r = await authedFetch('/api/admin/settings', {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            studio_name: nameInput.value.trim() === '' ? '' : nameInput.value.trim(),
-            booking_url: bookingUrl,
-            default_pick_limit: pick_limit,
-            default_extra_price: extra_price,
-          }),
+          body: JSON.stringify(putBody),
         });
         const data = await r.json().catch(() => ({}));
         if (!r.ok) {
           errEl.textContent = ERROR_LABEL[data.code] || data.error || `儲存失敗（${r.status}）`;
           return;
         }
+        if ('default_extra_max' in putBody) loadedExtraMax = extra_max;
         okEl.textContent = '已儲存';
         setTimeout(() => { okEl.textContent = ''; }, 2500);
       } catch (e) {

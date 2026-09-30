@@ -877,6 +877,12 @@ class App {
     // highlight/pulse below apply identically to a click or a double-tap.
     togglePickHeart(photo, btnEl) {
         const next = (photo.rating || 0) > 0 ? 0 : 1;
+        // plan cap (pick_limit + extra_max): a NEW ♥ at the cap is refused
+        // here without touching the UI or the network; un-hearting never is
+        if (next === 1 && window.PickController && PickController.active && PickController.atPickCap()) {
+            PickController.showPickCapMessage();
+            return false;
+        }
         // Retouch pins go with the ♥ (the server clears them on a rating 0):
         // ask first, and only then send the un-heart. Returns whether it toggled.
         if (next === 0 && window.PickController && PickController.active) {

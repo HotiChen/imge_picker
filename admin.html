@@ -120,6 +120,7 @@
   
   /* Error */
   .err { color: var(--danger); font-size: 12px; min-height: 16px; margin-top: 8px; }
+  .ok-msg { color: var(--success, #2e7d32); font-size: 12px; min-height: 16px; margin-top: 8px; }
   
   /* Empty state */
   .empty { text-align: center; padding: 48px 0; color: var(--ink-55); }
@@ -261,6 +262,10 @@
             <label for="proj-extra-price">加選單價 NT$（留空 = 不顯示）</label>
             <input id="proj-extra-price" class="field" type="number" min="0" step="1">
           </div>
+          <div class="pick-admin-field">
+            <label for="proj-extra-max">最多可加選（張，0 = 不可加選）</label>
+            <input id="proj-extra-max" class="field" type="number" min="0" max="500" step="1">
+          </div>
         </div>
         <button id="proj-create-btn" class="btn btn-accent" type="button">建立專案並產生連結</button>
         <div id="proj-create-err" class="err"></div>
@@ -313,10 +318,10 @@
   </div>
 </div>
 
-<script src="js/shoot-types.js?v=20260930c"></script>
-<script src="js/build-version.js?v=20260930c"></script>
-<script src="js/side-nav.js?v=20260930c"></script>
-<script src="js/orders-common.js?v=20260930c"></script>
+<script src="js/shoot-types.js?v=20260930d"></script>
+<script src="js/build-version.js?v=20260930d"></script>
+<script src="js/side-nav.js?v=20260930d"></script>
+<script src="js/orders-common.js?v=20260930d"></script>
 <script>
 (function() {
   const WORKER_URL = 'https://imagepicker.hotichen.workers.dev';
@@ -421,6 +426,8 @@
       const priceEl = document.getElementById('proj-extra-price');
       if (limitEl && !limitEl.value && s.default_pick_limit != null) limitEl.value = s.default_pick_limit;
       if (priceEl && !priceEl.value && s.default_extra_price != null) priceEl.value = s.default_extra_price;
+      const extraEl = document.getElementById('proj-extra-max');
+      if (extraEl && !extraEl.value && s.effective_default_extra_max != null) extraEl.value = s.effective_default_extra_max;
     } catch (e) { /* best effort */ }
   }
 
@@ -803,12 +810,22 @@
     if (extra_price !== null && (!Number.isInteger(extra_price) || extra_price < 0)) {
       errEl.textContent = '加選單價需為 0 以上整數'; return;
     }
+    // 最多可加選: the number the field shows; a cleared field sends NOTHING (the
+    // Worker then applies the studio default). Never null — null would mean
+    // "no plan cap" to the Worker.
+    const extraRaw = document.getElementById('proj-extra-max').value.trim();
+    const extraMaxNum = extraRaw === '' ? undefined : Number(extraRaw);
+    if (extraMaxNum !== undefined && (!Number.isInteger(extraMaxNum) || extraMaxNum < 0 || extraMaxNum > 500)) {
+      errEl.textContent = '最多可加選需為 0–500 的整數'; return;
+    }
+    const createBody = { title, folders: projectFolders, pick_limit, extra_price };
+    if (extraMaxNum !== undefined) createBody.extra_max = extraMaxNum;
     this.disabled = true;
     try {
       const r = await fetch(`${WORKER_URL}/api/admin/projects`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${getToken()}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title, folders: projectFolders, pick_limit, extra_price }),
+        body: JSON.stringify(createBody),
       });
       const data = await r.json().catch(() => ({}));
       if (!r.ok) { errEl.textContent = data.error || `建立失敗（${r.status}）`; return; }
@@ -820,6 +837,8 @@
       document.getElementById('proj-title').value = '';
       document.getElementById('proj-pick-limit').value = '';
       document.getElementById('proj-extra-price').value = '';
+      document.getElementById('proj-extra-max').value = '';
+      loadProjectDefaults();
       projectFolders = [];
       renderProjectFolders();
       await openProjectDetail(data.project.id);
@@ -928,6 +947,7 @@
 
       <div id="pd-delivery" class="pd-block"></div>
       <div id="pd-proofdl" class="pd-block"></div>
+      <div id="pd-plan" class="pd-block"></div>
 
       <details id="pd-selections-details">
         <summary>目前選取（${selected.length} 張） <a class="pd-link" href="index.html?project=${encodeURIComponent(project.id)}">看照片 →</a></summary>
@@ -995,6 +1015,7 @@
     finalEditing = false;
     renderDeliveryBlock();
     renderProofDownloadBlock();
+    renderPlanBlock();
     document.getElementById('pd-archive-btn')?.addEventListener('click', async () => {
       if (!confirm('封存後連結會立即失效，資料會保留')) return;
       await projectAction('archive'); // refreshes the list too, see projectAction
@@ -1212,6 +1233,90 @@
         if (errEl) errEl.textContent = '無法連線到 Worker';
       } finally {
         input.disabled = false;
+      }
+    });
+  }
+
+  // 編輯方案 — PATCH pick_limit / extra_price / extra_max (only the keys that
+  // changed). Blank 張數 / 加挑單價 → null; blank 最多可加選 → null = NO cap.
+  const PLAN_ERRORS = {
+    invalid_body: '數值不正確：張數、單價需為 0 以上整數，最多可加選為 0–500',
+    archived: '專案已封存，請先取消封存再修改方案',
+    extra_max_unavailable: '請先在 D1 執行 extra-max migration',
+  };
+  function planMaxText(p) {
+    if (p.pick_limit == null) return '不限';
+    if (p.extra_max == null) return '不限（舊專案未設加選上限）';
+    return `${p.pick_limit + p.extra_max} 張（${p.pick_limit} + 加選 ${p.extra_max}）`;
+  }
+  function renderPlanBlock() {
+    const box = document.getElementById('pd-plan');
+    const project = currentProject;
+    if (!box || !project) return;
+    const val = v => (v == null ? '' : String(v));
+    box.innerHTML = `
+      <h4>編輯方案</h4>
+      <div class="pick-admin-row">
+        <div class="pick-admin-field">
+          <label for="pd-plan-limit">精修張數上限（留空 = 不限）</label>
+          <input id="pd-plan-limit" class="field" type="number" min="0" step="1" value="${escHtml(val(project.pick_limit))}">
+        </div>
+        <div class="pick-admin-field">
+          <label for="pd-plan-price">加挑單價 NT$（留空 = 不顯示）</label>
+          <input id="pd-plan-price" class="field" type="number" min="0" step="1" value="${escHtml(val(project.extra_price))}">
+        </div>
+        <div class="pick-admin-field">
+          <label for="pd-plan-extra">最多可加選（張，留空 = 不限制，0 = 不可加選）</label>
+          <input id="pd-plan-extra" class="field" type="number" min="0" max="500" step="1" value="${escHtml(val(project.extra_max))}">
+        </div>
+      </div>
+      <div id="pd-plan-result" class="pd-note">客人最多可挑：${escHtml(planMaxText(project))}${project.extra_max == null ? '　最多可加選：不限制（舊專案）' : ''}</div>
+      <div class="pd-note">已送出的紀錄維持送出當時的方案，修改只影響之後的送出。</div>
+      <button id="pd-plan-save" class="btn btn-accent" type="button">儲存方案</button>
+      <div id="pd-plan-err" class="err"></div>
+      <div id="pd-plan-ok" class="ok-msg"></div>`;
+    const errEl = box.querySelector('#pd-plan-err');
+    const okEl = box.querySelector('#pd-plan-ok');
+    const btn = box.querySelector('#pd-plan-save');
+    btn.addEventListener('click', async () => {
+      errEl.textContent = ''; okEl.textContent = '';
+      const read = (id, max) => {
+        const raw = box.querySelector(id).value.trim();
+        if (raw === '') return { v: null };
+        const n = Number(raw);
+        return (Number.isInteger(n) && n >= 0 && n <= max) ? { v: n } : { bad: true };
+      };
+      const fields = [
+        ['pick_limit', read('#pd-plan-limit', Number.MAX_SAFE_INTEGER), '精修張數上限需為 0 以上整數'],
+        ['extra_price', read('#pd-plan-price', 10000000), '加挑單價需為 0 以上整數'],
+        ['extra_max', read('#pd-plan-extra', 500), '最多可加選需為 0–500 的整數'],
+      ];
+      const body = {};
+      for (const [key, res, msg] of fields) {
+        if (res.bad) { errEl.textContent = msg; return; }
+        const before = project[key] == null ? null : project[key];
+        if (res.v !== before) body[key] = res.v;
+      }
+      if (!Object.keys(body).length) { okEl.textContent = '沒有變更'; return; }
+      btn.disabled = true;
+      try {
+        const r = await fetch(`${WORKER_URL}/api/admin/projects/${encodeURIComponent(currentProjectId)}`, {
+          method: 'PATCH',
+          headers: { 'Authorization': `Bearer ${getToken()}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok) {
+          errEl.textContent = PLAN_ERRORS[data.code] || data.error || `儲存失敗（${r.status}）`;
+          btn.disabled = false;
+          return;
+        }
+        await Promise.all([openProjectDetail(currentProjectId), loadProjectList()]);
+        const ok = document.getElementById('pd-plan-ok');
+        if (ok) ok.textContent = '已儲存';
+      } catch (e) {
+        errEl.textContent = '無法連線到 Worker';
+        btn.disabled = false;
       }
     });
   }

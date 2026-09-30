@@ -40,6 +40,8 @@
         ownerName: null,          // the seat holder's name, whoever that is
         phase: 'picking',
         pickLimit: null,
+        extraMax: null,   // ♥ allowed above pickLimit (null = no plan cap)
+        maxPicks: null,   // pickLimit + extraMax from the server (null = no plan cap)
         extraPrice: null,
         modifiedAfterSubmit: false,
         submittedAt: null,
@@ -326,6 +328,13 @@
                 }
                 return;
             }
+            if (status === 409 && data && data.code === 'pick_cap') {
+                // the plan's ♥ cap (server-authoritative): nothing written, so
+                // put the optimistic ♥ back, same as selection_cap
+                this._revertBatch(prevSnapshot);
+                this.showPickCapMessage(data);
+                return;
+            }
             if (status === 409 && data && (data.code === 'selection_cap' || data.code === 'row_cap')) {
                 // nothing was written server-side — put every key this batch
                 // touched back to what it held before, so the optimistic ♥
@@ -476,6 +485,8 @@
             this.projectId = project.id || '';
             this.projectTitle = project.title || '';
             this.pickLimit = project.pick_limit ?? null;
+            this.extraMax = project.extra_max ?? null;
+            this.maxPicks = project.max_picks ?? null;
             this.extraPrice = project.extra_price ?? null;
             this.isOwner = !!data.is_owner;
             this.ownerName = data.owner === undefined ? null : data.owner;
@@ -1128,8 +1139,29 @@
             }
             const count = this._selectedCount();
             const limit = this.pickLimit;
-            el.textContent = limit == null ? `已選 ${count} 張` : `已選 ${count} / ${limit} 張`;
+            let text = limit == null ? `已選 ${count} 張` : `已選 ${count} / ${limit} 張`;
+            if (limit != null && this.extraMax != null) {
+                text += this.extraMax === 0 ? '（不可加選）' : `（最多可加選到 ${limit + this.extraMax}）`;
+            }
+            el.textContent = text;
             el.classList.toggle('over', limit != null && count > limit);
+        },
+
+        // True when a NEW ♥ would go past the plan cap (pick_limit + extra_max).
+        // A UX pre-check only — the Worker's 409 pick_cap is the real gate.
+        atPickCap() {
+            return this.maxPicks != null && this._selectedCount() >= this.maxPicks;
+        },
+
+        // 「已達可挑上限：方案 40 張 + 加選 10 張」; `d` is the 409 body
+        // ({limit, extra_max, max}) or, for the pre-check, this project's plan.
+        showPickCapMessage(d) {
+            const limit = d && d.limit != null ? d.limit : this.pickLimit;
+            const extra = d && d.extra_max != null ? d.extra_max : this.extraMax;
+            const msg = extra === 0
+                ? `已達可挑上限：方案 ${limit} 張，此專案不可加選`
+                : `已達可挑上限：方案 ${limit} 張 + 加選 ${extra} 張`;
+            if (typeof toast !== 'undefined') toast.error(msg);
         },
 
         // How many picks exceed the plan (0 when there is no limit).
