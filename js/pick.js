@@ -1438,6 +1438,7 @@
         _wireSubmitModal() {
             document.getElementById('pickCapBackBtn')?.addEventListener('click', () => {
                 this.closeCapModal();
+                this._setFilterMode('selected');
             });
             document.getElementById('pickOverBackBtn')?.addEventListener('click', () => this.closeOverModal());
             document.getElementById('pickOverConfirmBtn')?.addEventListener('click', () => {
