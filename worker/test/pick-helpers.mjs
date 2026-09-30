@@ -58,10 +58,13 @@ export function call(env, path, opts = {}, c = ctx) {
 export const pick = (env, method, route, t, { key, body, headers } = {}, c) =>
   call(env, withT(`/api/pick/${route}`, t), { method, key, body, headers }, c);
 
+// extra_max: null = no plan cap (docs/project-plan.md), as every project had
+// before it, so the other suites test the system caps alone; a test of the
+// plan cap (project-plan.test.mjs) passes its own.
 export async function createProject(env, body = {}) {
   const res = await call(env, '/api/admin/projects', {
     method: 'POST', token: SECRET,
-    body: { title: '王先生 婚紗', folders: [MINE], pick_limit: 40, extra_price: 200, ...body },
+    body: { title: '王先生 婚紗', folders: [MINE], pick_limit: 40, extra_price: 200, extra_max: null, ...body },
   });
   if (res.status !== 201) throw new Error(`createProject: ${res.status} ${await res.text()}`);
   return res.json();

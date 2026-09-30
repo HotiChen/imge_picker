@@ -142,7 +142,15 @@ CREATE TABLE IF NOT EXISTS projects (
   --   ALTER TABLE projects ADD COLUMN allow_proof_download INTEGER NOT NULL DEFAULT 0;
   -- (worker/migrations/2026-09-30-delivery.sql).
   final_folders   TEXT,
-  allow_proof_download INTEGER NOT NULL DEFAULT 0
+  allow_proof_download INTEGER NOT NULL DEFAULT 0,
+  -- how many ♥ photos the guest may pick above pick_limit (0 = none); the
+  -- save refuses more than pick_limit + extra_max (409 pick_cap). NULL = no
+  -- plan cap (every project from before it); set at creation (body, else
+  -- studio_settings.default_extra_max, else 10) and by PATCH
+  -- /api/admin/projects/:id (docs/project-plan.md). Appended, from a hand-run
+  --   ALTER TABLE projects ADD COLUMN extra_max INTEGER;
+  -- (worker/migrations/2026-09-30-extra-max.sql).
+  extra_max       INTEGER
 );
 
 -- Everyone who ever held the seat. key_hash is the SHA-256 of the bearer key
@@ -235,7 +243,12 @@ CREATE TABLE IF NOT EXISTS studio_settings (
   logo                BLOB,
   logo_type           TEXT,
   logo_updated_at     TEXT,
-  updated_at          TEXT
+  updated_at          TEXT,
+  -- the extra_max a new project starts with; NULL = unset, which means 10.
+  -- Appended, from a hand-run
+  --   ALTER TABLE studio_settings ADD COLUMN default_extra_max INTEGER;
+  -- (worker/migrations/2026-09-30-extra-max.sql).
+  default_extra_max   INTEGER
 );
 
 -- ─── Products and orders (docs/products-orders.md) ─────────────────────────

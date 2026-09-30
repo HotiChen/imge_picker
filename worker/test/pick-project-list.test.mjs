@@ -77,6 +77,9 @@ test('each project shows phase, flag, seat holder, submits and its live link', a
     title: '王先生 婚紗',
     phase: 'submitted',
     modified_after_submit: 1,
+    pick_limit: 40, // the plan (docs/project-plan.md)
+    extra_price: 200,
+    extra_max: null, // the fixture's: no plan cap
     owner_name: '<b>王</b>小明', // raw in JSON; admin.html escapes on render
     created_at: created,
     archived_at: null, // the default list only ever shows active projects

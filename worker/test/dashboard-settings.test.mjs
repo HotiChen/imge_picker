@@ -146,6 +146,7 @@ test('settings start empty and never return the blob', async () => {
   assert.equal(res.headers.get('Cache-Control'), 'private, no-store');
   assert.deepEqual(await res.json(), {
     studio_name: null, booking_url: null, default_pick_limit: null, default_extra_price: null,
+    default_extra_max: null, effective_default_extra_max: 10, // docs/project-plan.md
     has_logo: false, logo_type: null, logo_updated_at: null, updated_at: null,
   });
   await putLogo(env, PNG);
@@ -554,10 +555,11 @@ test('the dashboard migration: fresh == archive-era database + it', () => {
   // (the delivery columns appended after delivered_at go too, and come back
   // from their own migration on top, so the column order is pinned)
   const deployed = fresh
-    .replace(/,\n(?:\s*--[^\n]*\n)*\s*delivered_at\s+TEXT,\n(?:\s*--[^\n]*\n)*\s*final_folders\s+TEXT,\n\s*allow_proof_download[^\n]*\n\);/, '\n);')
+    .replace(/,\n(?:\s*--[^\n]*\n)*\s*delivered_at\s+TEXT,\n(?:\s*--[^\n]*\n)*\s*final_folders\s+TEXT,\n\s*allow_proof_download[^\n]*\n(?:\s*--[^\n]*\n)*\s*extra_max\s+INTEGER\n\);/, '\n);')
     .replace(/\n-- ─── Studio settings[\s\S]*$/, '\n');
-  assert.doesNotMatch(deployed, /delivered_at|studio_settings|final_folders/, 'fixture still has the new schema');
-  const later = readFileSync(new URL('../migrations/2026-09-30-delivery.sql', import.meta.url), 'utf8');
+  assert.doesNotMatch(deployed, /delivered_at|studio_settings|final_folders|extra_max/, 'fixture still has the new schema');
+  const later = readFileSync(new URL('../migrations/2026-09-30-delivery.sql', import.meta.url), 'utf8') +
+    '\n' + readFileSync(new URL('../migrations/2026-09-30-extra-max.sql', import.meta.url), 'utf8');
   const shape = db => ['projects', 'studio_settings'].map(t => db._db.prepare(`PRAGMA table_info(${t})`).all());
   assert.deepEqual(shape(fakeDB({ schema: deployed + '\n' + migration + '\n' + later })), shape(fakeDB({ schema: fresh })));
   assert.match(fresh, /ALTER TABLE projects ADD COLUMN delivered_at TEXT;/, 'schema.sql names the hand-run ALTER');

@@ -97,6 +97,14 @@ browser. This replaces the fake `submitJob()` in `js/app.js`.
   would exceed either → **409** `{code: 'selection_cap', max: 500}` or
   `{code: 'row_cap', max: 1000}`, nothing written. A project already over a cap
   (constant lowered) can still re-rate, un-star and delete — just not grow.
+- **Plan cap** (`docs/project-plan.md`): on top of those, at most
+  `pick_limit + extra_max` ♥ photos when both are non-NULL (NULL in either =
+  no plan cap; every project from before `extra_max` is NULL). Same gate,
+  same "shrink or stay, not grow" rule, refused with **409**
+  `{error, code: 'pick_cap', max, limit, extra_max}`, nothing written.
+  Order when several fail: `row_cap`, then `pick_cap`/`selection_cap`
+  (the smaller limit: `pick_cap` when `pick_limit + extra_max ≤ 500`), then
+  `marks_cap`.
 - **Notes are the owner's**: `/api/pick/state` returns `note` only to the
   current seat holder; everyone else gets `{photo_key, rating}` per selection.
   Admin sees notes.
@@ -160,6 +168,11 @@ unaffected). `worker/migrations/2026-09-28-dashboard-settings.sql` adds
 `submissions.marks` (both `TEXT`, NULL = none); run it **before** merging the
 Worker that saves pins. Until then every route keeps working without pins,
 except a save that carries `marks` (500 `marks_unavailable`).
+`worker/migrations/2026-09-30-extra-max.sql` adds `projects.extra_max` and
+`studio_settings.default_extra_max` (`docs/project-plan.md`); run it **before**
+merging the Worker that enforces the plan cap. Until then every project is
+uncapped and everything works, except a PATCH naming `extra_max` or a settings
+PUT naming `default_extra_max` (500 `extra_max_unavailable`).
 
 ```sql
 CREATE TABLE IF NOT EXISTS projects (
@@ -176,7 +189,9 @@ CREATE TABLE IF NOT EXISTS projects (
   modified_after_submit INTEGER NOT NULL DEFAULT 0, -- 1 = saved since last submit
   last_notified_at TEXT,                  -- last notification email; NULL = never
   archived_at     TEXT,                   -- NULL = active (2026-09-28 migration)
-  delivered_at    TEXT                    -- NULL = not delivered (dashboard migration)
+  delivered_at    TEXT,                   -- NULL = not delivered (dashboard migration)
+  -- final_folders, allow_proof_download: docs/delivery.md
+  extra_max       INTEGER                 -- ♥ allowed above pick_limit; NULL = no plan cap (extra-max migration)
 );
 CREATE TABLE IF NOT EXISTS pickers (
   id           TEXT PRIMARY KEY,
@@ -227,9 +242,10 @@ ALTER TABLE share_tokens ADD COLUMN project_id TEXT;
 
 | Route | Auth | Purpose |
 |---|---|---|
-| `POST /api/admin/projects` | admin | create project + mint pick link |
-| `GET /api/admin/projects[?archived=1]` | admin | `{projects: [{id, title, phase, modified_after_submit, owner_name, created_at, archived_at, delivered_at, submission_count, last_submitted_at, unnotified_submissions, token}]}` newest first, this photographer only (`photographer_id = 'default'`), ≤ 200 rows, one SQL query; `owner_name` null when the seat is free; `token` is the newest live pick link (not revoked, not expired, inside the 180-day ceiling) or null. Archived projects are hidden; `?archived=1` returns only archived ones (any other value = default) |
-| `GET /api/admin/projects/:id` | admin | project incl. `phase`, `modified_after_submit`, `last_notified_at`; owner, pickers, selections with `updated_by`, `note` and `marks` (parsed `[{x, y, note}]`, `null` when none), `tokens` (every pick link, newest first: `{token, created_at, expires_at, revoked_at, last_seen_at, status: 'live'\|'revoked'\|'expired'}`), `submissions` newest first, at most `PICK_MAX_SUBMISSIONS` (50) (`photo_keys` parsed, `notified` 0/1, `marks` parsed `{photo_key: [{x, y, note}]}` or `null`), `unnotified_submissions` |
+| `POST /api/admin/projects` `{title?, folders, pick_limit?, extra_price?, extra_max?}` | admin | create project + mint pick link; `extra_max` 0–500 or `null`, left out → studio `default_extra_max` → 10 (`docs/project-plan.md`); the response's `project` carries `extra_max` |
+| `PATCH /api/admin/projects/:id` | admin | any non-empty subset of `{allow_proof_download: bool, pick_limit, extra_price, extra_max}` (`null` or whole numbers: `pick_limit` ≥ 0, `extra_price` ≤ 10,000,000, `extra_max` ≤ 500) → `{ok: true, ...keys sent}`; 400 `invalid_body` (other key, bad value, empty); 404 other photographer; 409 `archived` for a plan key on an archived project; never touches submissions |
+| `GET /api/admin/projects[?archived=1]` | admin | `{projects: [{id, title, phase, modified_after_submit, pick_limit, extra_price, extra_max, owner_name, created_at, archived_at, delivered_at, submission_count, last_submitted_at, unnotified_submissions, token}]}` newest first, this photographer only (`photographer_id = 'default'`), ≤ 200 rows, one SQL query; `owner_name` null when the seat is free; `token` is the newest live pick link (not revoked, not expired, inside the 180-day ceiling) or null. Archived projects are hidden; `?archived=1` returns only archived ones (any other value = default) |
+| `GET /api/admin/projects/:id` | admin | project incl. `phase`, `modified_after_submit`, `last_notified_at`, `pick_limit`, `extra_price`, `extra_max` (`null` = no plan cap); owner, pickers, selections with `updated_by`, `note` and `marks` (parsed `[{x, y, note}]`, `null` when none), `tokens` (every pick link, newest first: `{token, created_at, expires_at, revoked_at, last_seen_at, status: 'live'\|'revoked'\|'expired'}`), `submissions` newest first, at most `PICK_MAX_SUBMISSIONS` (50) (`photo_keys` parsed, `notified` 0/1, `marks` parsed `{photo_key: [{x, y, note}]}` or `null`), `unnotified_submissions` |
 | `POST /api/admin/projects/:id/links` | admin | mint a new pick link → 201 `{token, expires_at, created_at, status: 'live'}` |
 | `POST /api/shares/:token/revoke` | admin | revoke any link, pick links included → `{ok: true}`; 404 if unknown or already revoked |
 | `POST /api/admin/projects/:id/archive` | admin | stamp `archived_at` + revoke live pick links (one batch) → `{ok: true, archived_at, revoked}` (`revoked` = links revoked by this call; a repeat keeps the first stamp, `revoked: 0`); 404 unknown / other photographer |
@@ -239,9 +255,9 @@ ALTER TABLE share_tokens ADD COLUMN project_id TEXT;
 | `POST /api/admin/projects/:id/start-retouch` | admin | `submitted` → `retouching`; 409 `not_submitted` from `picking` |
 | `POST /api/admin/projects/:id/reopen` | admin | `submitted`/`retouching` → `picking`, flag and `delivered_at` cleared |
 | `POST /api/admin/projects/:id/deliver` / `undeliver` | admin | stamp / clear `delivered_at` (deliver only from `retouching`, else 409 `not_retouching`) — see `docs/dashboard-settings.md` |
-| `GET /api/pick/state` | pick token (+ key) | owner name, am-I-owner, limit/price, selections, `phase`, `studio: {name, booking_url, has_logo}`; owner also gets `modified_after_submit`, `submitted_at` (latest submission) and each selection as `{photo_key, rating, note, marks}` (`marks`: `[{x, y, note}]` or `null`); viewers get `{photo_key, rating}` only — no `note`, no `marks` key |
+| `GET /api/pick/state` | pick token (+ key) | owner name, am-I-owner, `project: {id, title, pick_limit, extra_price, extra_max, max_picks}` (`max_picks` = `pick_limit + extra_max`, `null` when either is NULL; owner and viewers alike), selections, `phase`, `studio: {name, booking_url, has_logo}`; owner also gets `modified_after_submit`, `submitted_at` (latest submission) and each selection as `{photo_key, rating, note, marks}` (`marks`: `[{x, y, note}]` or `null`); viewers get `{photo_key, rating}` only — no `note`, no `marks` key |
 | `POST /api/pick/claim` `{name}` | pick token | atomic claim → `picker_key` |
-| `PUT /api/pick/selections` `{upsert: [{photo_key, rating, note?, marks?}], delete: [photo_key]}` | token + key, owner only | batch upsert/delete → `{ok: true}`; 400 `invalid_photo_key` / `invalid_marks` / `Invalid JSON`; 403 not the owner or a key outside the link's folders; 409 `retouching` / `selection_cap` / `row_cap` / `marks_cap`; 413 `too_large` (body > 2,000,000 bytes, or its items > 1,900,000 bytes as one value); 500 `marks_unavailable` (migration not run); raises the flag when `submitted`. `marks` rules: see "Retouch pins" |
+| `PUT /api/pick/selections` `{upsert: [{photo_key, rating, note?, marks?}], delete: [photo_key]}` | token + key, owner only | batch upsert/delete → `{ok: true}`; 400 `invalid_photo_key` / `invalid_marks` / `Invalid JSON`; 403 not the owner or a key outside the link's folders; 409 `retouching` / `selection_cap` / `row_cap` / `pick_cap` (`{max, limit, extra_max}`) / `marks_cap`; 413 `too_large` (body > 2,000,000 bytes, or its items > 1,900,000 bytes as one value); 500 `marks_unavailable` (migration not run); raises the flag when `submitted`. `marks` rules: see "Retouch pins" |
 | `POST /api/pick/submit` `{relationship, email?}` | token + key, owner only | append `submissions` row with the photo-key and pin snapshots (none for a repeat of the latest keys **and** pins: 200 with the latest), phase → `submitted`, email with diff (throttled, see above); 409 `retouching` / `submission_cap` / `marks_cap` (pin snapshot over 446,400 bytes — only reachable by hand-edited rows); 413 `too_large` (body > 16 KB) |
 
 Admin routes check `isAdminToken` (the photographer token only; fails closed
@@ -369,3 +385,9 @@ A save with no `marks` and no rating 0 item never names the column in SQL.
     pins-only change is a new row without an email. ≤ 300 pins per project
     (409 `marks_cap`, atomic); save body ≤ 2,000,000 bytes, submit body ≤
     16 KB, bound items ≤ 1,900,000 bytes (413 `too_large`).
+18. Plan cap (`worker/test/project-plan.test.mjs`): ≤ `pick_limit + extra_max`
+    ♥ photos, atomic, 409 `pick_cap`; NULL in either = uncapped; rating 0,
+    un-heart and delete always work; over-cap projects shrink or stay. PATCH
+    takes only the four keys (400 `invalid_body`), is scoped to this
+    photographer (404), refuses plan edits on archived projects (409
+    `archived`) and never rewrites a submission.

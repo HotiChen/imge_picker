@@ -454,6 +454,24 @@ const TAIPEI_OFFSET_MS = 8 * 60 * 60 * 1000;
 const STATS_MONTHS = 12;
 const STUDIO_INT_FIELDS = ['default_pick_limit', 'default_extra_price'];
 
+// ─── Project plan (docs/project-plan.md) ────────────────────────────────────
+// projects.extra_max: how many ♥ photos the guest may pick above pick_limit.
+// A save may leave at most pick_limit + extra_max of them (409 pick_cap);
+// NULL in either = no plan cap. A new project takes the body's value, else
+// studio_settings.default_extra_max, else EXTRA_MAX_DEFAULT.
+const EXTRA_MAX_MAX = 500;
+const EXTRA_MAX_DEFAULT = 10;
+const isExtraMax = v => Number.isSafeInteger(v) && v >= 0 && v <= EXTRA_MAX_MAX;
+// what PATCH /api/admin/projects/:id accepts, key by key (null clears the
+// plan fields; the proof switch is a plain boolean)
+const PROJECT_PATCH_FIELDS = {
+  allow_proof_download: v => typeof v === 'boolean',
+  pick_limit: v => v === null || (Number.isSafeInteger(v) && v >= 0),
+  extra_price: v => v === null || isMoney(v),
+  extra_max: v => v === null || isExtraMax(v),
+};
+const EXTRA_MAX_UNAVAILABLE = { error: '加選上限功能尚未啟用', code: 'extra_max_unavailable' };
+
 // The only image types a logo may be, decided by the bytes themselves. The
 // client's Content-Type is never consulted: an SVG (script) or HTML file
 // labelled image/png is exactly what this is here to refuse.
@@ -557,15 +575,21 @@ function cleanBookingUrl(raw) {
 // Everything the photographer set, minus the logo bytes. An absent row reads
 // as all-null.
 async function readStudioSettings(env, photographerId) {
-  const row = await env.DB.prepare(
-    'SELECT studio_name, booking_url, default_pick_limit, default_extra_price, logo IS NOT NULL AS has_logo, logo_type, logo_updated_at, updated_at FROM studio_settings WHERE photographer_id = ?'
+  // default_extra_max arrives in a hand-run migration; until then it reads unset
+  const read = cols => env.DB.prepare(
+    `SELECT studio_name, booking_url, default_pick_limit, default_extra_price${cols}, logo IS NOT NULL AS has_logo, logo_type, logo_updated_at, updated_at FROM studio_settings WHERE photographer_id = ?`
   ).bind(photographerId).first();
+  const row = await withoutMissingColumn(() => read(', default_extra_max'), () => read(''));
   const hasLogo = !!row?.has_logo;
+  const extraMax = row?.default_extra_max ?? null;
   return {
     studio_name: row?.studio_name ?? null,
     booking_url: row?.booking_url ?? null,
     default_pick_limit: row?.default_pick_limit ?? null,
     default_extra_price: row?.default_extra_price ?? null,
+    default_extra_max: extraMax,
+    // what a new project gets when the create body leaves extra_max out
+    effective_default_extra_max: isExtraMax(extraMax) ? extraMax : EXTRA_MAX_DEFAULT,
     has_logo: hasLogo,
     logo_type: hasLogo ? row.logo_type : null,
     logo_updated_at: hasLogo ? row.logo_updated_at : null,
@@ -582,6 +606,20 @@ async function pickStudio(env, photographerId) {
     return { name: s.studio_name, booking_url: s.booking_url, has_logo: s.has_logo };
   } catch {
     return { name: null, booking_url: null, has_logo: false };
+  }
+}
+
+// The extra_max a new project starts with: the studio's default when it is a
+// valid one, else EXTRA_MAX_DEFAULT — also on a database without the column
+// or the table yet.
+async function studioDefaultExtraMax(env, photographerId) {
+  try {
+    const row = await env.DB.prepare('SELECT default_extra_max FROM studio_settings WHERE photographer_id = ?')
+      .bind(photographerId).first();
+    return isExtraMax(row?.default_extra_max) ? row.default_extra_max : EXTRA_MAX_DEFAULT;
+  } catch (e) {
+    if (isMissingColumn(e) || /no such table/i.test(String(e?.message || ''))) return EXTRA_MAX_DEFAULT;
+    throw e;
   }
 }
 
@@ -1753,6 +1791,15 @@ export default {
         const max = name === 'extra_price' ? MONEY_MAX : Number.MAX_SAFE_INTEGER;
         if (v !== null && !(Number.isSafeInteger(v) && v >= 0 && v <= max)) return jsonErr(`${name} must be a whole number from 0`);
       }
+      // extra_max: the body's (null = no plan cap), else the studio default,
+      // else EXTRA_MAX_DEFAULT
+      let extra_max;
+      if (body && hasField(body, 'extra_max')) {
+        extra_max = body.extra_max;
+        if (extra_max !== null && !isExtraMax(extra_max)) return jsonErr(`extra_max must be a whole number from 0 to ${EXTRA_MAX_MAX}`);
+      } else {
+        extra_max = await studioDefaultExtraMax(env, DEFAULT_PHOTOGRAPHER_ID);
+      }
       const id = crypto.randomUUID();
       const token = newShareToken();
       const now = Date.now();
@@ -1760,16 +1807,23 @@ export default {
       const expiresAt = new Date(now + SHARE_TTL_MS).toISOString();
       const foldersJson = JSON.stringify(snapshot);
       const cleanTitle = title.trim().slice(0, 200);
-      await env.DB.prepare(
-        'INSERT INTO projects (id, title, folders, pick_limit, extra_price, created_at, photographer_id) VALUES (?, ?, ?, ?, ?, ?, ?)'
-      ).bind(id, cleanTitle, foldersJson, pick_limit, extra_price, createdAt, DEFAULT_PHOTOGRAPHER_ID).run();
+      // a database without the column yet (hand-run migration) still gets
+      // the project, uncapped like every project before the feature
+      const inserted = await withoutMissingColumn(
+        () => env.DB.prepare(
+          'INSERT INTO projects (id, title, folders, pick_limit, extra_price, created_at, photographer_id, extra_max) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+        ).bind(id, cleanTitle, foldersJson, pick_limit, extra_price, createdAt, DEFAULT_PHOTOGRAPHER_ID, extra_max).run().then(() => extra_max),
+        () => env.DB.prepare(
+          'INSERT INTO projects (id, title, folders, pick_limit, extra_price, created_at, photographer_id) VALUES (?, ?, ?, ?, ?, ?, ?)'
+        ).bind(id, cleanTitle, foldersJson, pick_limit, extra_price, createdAt, DEFAULT_PHOTOGRAPHER_ID).run().then(() => null),
+      );
       // book_id '' keeps it off every book route and out of the per-album
       // list; the kind keeps it off everything else that is not a pick route
       await env.DB.prepare(
         "INSERT INTO share_tokens (token, book_id, label, kind, project_id, folders, created_at, expires_at) VALUES (?, '', ?, 'pick', ?, ?, ?, ?)"
       ).bind(token, cleanTitle, id, foldersJson, createdAt, expiresAt).run();
       return jsonOk({
-        project: { id, title: cleanTitle, folders: snapshot, pick_limit, extra_price, photographer_id: DEFAULT_PHOTOGRAPHER_ID },
+        project: { id, title: cleanTitle, folders: snapshot, pick_limit, extra_price, extra_max: inserted, photographer_id: DEFAULT_PHOTOGRAPHER_ID },
         token, expires_at: expiresAt,
       }, 201);
     }
@@ -1791,7 +1845,7 @@ export default {
       // the delivery columns come from a hand-run migration: until it runs the
       // list still loads, with every project undelivered and the switch off
       const listed = delivery => env.DB.prepare(
-        `SELECT p.id, p.title, p.phase, p.modified_after_submit,
+        `SELECT p.id, p.title, p.phase, p.modified_after_submit, p.pick_limit, p.extra_price,
                 o.name AS owner_name, p.created_at, p.archived_at, p.delivered_at,${delivery}
                 (SELECT COUNT(*) FROM submissions s WHERE s.project_id = p.id) AS submission_count,
                 (SELECT MAX(s.created_at) FROM submissions s WHERE s.project_id = p.id) AS last_submitted_at,
@@ -1810,11 +1864,16 @@ export default {
         new Date(now - SHARE_MAX_LIFE_MS).toISOString(),
         DEFAULT_PHOTOGRAPHER_ID,
       ).all();
+      // extra_max (the plan's extra-pick cap) comes from a later hand-run
+      // migration still: without it every project lists as uncapped (null)
       const { results } = await withoutMissingColumn(
-        () => listed(' p.final_folders, p.allow_proof_download,'),
-        () => listed(''),
+        () => listed(' p.final_folders, p.allow_proof_download, p.extra_max,'),
+        () => withoutMissingColumn(
+          () => listed(' p.final_folders, p.allow_proof_download,'),
+          () => listed(''),
+        ),
       );
-      return jsonOk({ projects: results.map(r => ({ ...r, ...deliveryFields(r) })) }, 200, ADMIN_ONLY_HEADERS);
+      return jsonOk({ projects: results.map(r => ({ ...r, extra_max: r.extra_max ?? null, ...deliveryFields(r) })) }, 200, ADMIN_ONLY_HEADERS);
     }
 
     // GET /api/admin/projects/:id — the seat holder, every submit record and
@@ -1859,7 +1918,7 @@ export default {
       let folders = null;
       try { folders = JSON.parse(project.folders); } catch {}
       return jsonOk({
-        project: { ...project, folders, ...deliveryFields(project) },
+        project: { ...project, folders, extra_max: project.extra_max ?? null, ...deliveryFields(project) },
         owner: pickers.find(p => p.id === project.owner_picker_id) || null,
         pickers, selections, tokens, submissions, unnotified_submissions: unnotified,
       }, 200, ADMIN_ONLY_HEADERS);
@@ -2099,23 +2158,56 @@ export default {
       return jsonOk({ ok: true, delivered_at: row.delivered_at, final_folders: finals }, 200, ADMIN_ONLY_HEADERS);
     }
 
-    // PATCH /api/admin/projects/:id {allow_proof_download: bool} — the
-    // per-project switch that lets the guest download the proof originals
-    // (docs/delivery.md). The only field this route takes today; anything
-    // else in the body is refused, so a typo cannot pass for a change.
+    // PATCH /api/admin/projects/:id — any non-empty subset of
+    // {allow_proof_download: bool} (the proof-originals switch,
+    // docs/delivery.md) and the plan {pick_limit, extra_price, extra_max}
+    // (whole numbers from 0, or null; docs/project-plan.md). Any other key or
+    // a bad value refuses the whole body (400 invalid_body), so a typo cannot
+    // pass for a change. One conditional UPDATE: another photographer's
+    // project is 404, and an archived one refuses a plan edit (409 archived;
+    // the switch alone still flips, as it always did). Submissions keep the
+    // plan as it stood at submit: nothing here touches them.
     if (request.method === 'PATCH' && pathParts[0] === 'api' && pathParts[1] === 'admin' && pathParts[2] === 'projects' && pathParts[3] && !pathParts[4]) {
       if (!isAdminToken(request, env)) return jsonErr('Unauthorized', 401);
       if (!env.DB) return jsonErr('DB not configured', 500);
       let body = null;
       try { body = await request.json(); } catch {}
-      if (!isPlainObject(body) || Object.keys(body).join() !== 'allow_proof_download' || typeof body.allow_proof_download !== 'boolean') {
-        return jsonOk({ error: 'Only {allow_proof_download: true|false}', code: 'invalid_body' }, 400, ADMIN_ONLY_HEADERS);
+      const keys = isPlainObject(body) ? Object.keys(body) : [];
+      if (!keys.length || !keys.every(k => hasField(PROJECT_PATCH_FIELDS, k) && PROJECT_PATCH_FIELDS[k](body[k]))) {
+        return jsonOk({
+          error: 'Send any of {allow_proof_download: true|false, pick_limit, extra_price, extra_max: a whole number from 0, or null}',
+          code: 'invalid_body',
+        }, 400, ADMIN_ONLY_HEADERS);
       }
-      const on = body.allow_proof_download;
-      const result = await env.DB.prepare('UPDATE projects SET allow_proof_download = ? WHERE id = ? AND photographer_id = ?')
-        .bind(on ? 1 : 0, pathParts[3], DEFAULT_PHOTOGRAPHER_ID).run();
-      if (!result.meta?.changes) return jsonErr('Not found', 404);
-      return jsonOk({ ok: true, allow_proof_download: on }, 200, ADMIN_ONLY_HEADERS);
+      const planEdit = keys.some(k => k !== 'allow_proof_download');
+      const value = k => k === 'allow_proof_download' ? (body[k] ? 1 : 0) : body[k];
+      // column names are the allow-listed keys above, never free text
+      let result;
+      try {
+        result = await env.DB.prepare(
+          `UPDATE projects SET ${keys.map(k => `${k} = ?`).join(', ')} WHERE id = ? AND photographer_id = ?` +
+          (planEdit ? ' AND archived_at IS NULL' : '')
+        ).bind(...keys.map(value), pathParts[3], DEFAULT_PHOTOGRAPHER_ID).run();
+      } catch (e) {
+        // extra_max before its hand-run migration: nothing was written
+        if (isMissingColumn(e) && keys.includes('extra_max')) return jsonOk(EXTRA_MAX_UNAVAILABLE, 500, ADMIN_ONLY_HEADERS);
+        throw e;
+      }
+      if (!result.meta?.changes) {
+        const row = await env.DB.prepare('SELECT archived_at FROM projects WHERE id = ? AND photographer_id = ?')
+          .bind(pathParts[3], DEFAULT_PHOTOGRAPHER_ID).first();
+        if (row?.archived_at && planEdit) {
+          return jsonOk({ error: 'Project is archived; unarchive it first', code: 'archived' }, 409, ADMIN_ONLY_HEADERS);
+        }
+        return jsonErr('Not found', 404);
+      }
+      return jsonOk({ ok: true, ...Object.fromEntries(keys.map(k => [k, body[k]])) }, 200, ADMIN_ONLY_HEADERS);
+    }
+    // any other write to /api/admin/projects/:id is not a route (without this
+    // a PUT would fall through to the upload route and store it as a key)
+    if ((request.method === 'PUT' || request.method === 'POST') && pathParts[0] === 'api' && pathParts[1] === 'admin' && pathParts[2] === 'projects' && pathParts[3] && !pathParts[4]) {
+      if (!isAdminToken(request, env)) return jsonErr('Unauthorized', 401);
+      return jsonErr('Method not allowed', 405);
     }
 
     // ─── The platform catalogue: operator routes ───────────────────────────
@@ -2773,13 +2865,25 @@ export default {
           if (v !== null && !(Number.isSafeInteger(v) && v >= 0)) return bad(field);
           set[field] = v;
         }
+        // the create route's bound, so a default can always be used as is
+        if (has('default_extra_max')) {
+          const v = body.default_extra_max;
+          if (v !== null && !isExtraMax(v)) return bad('default_extra_max');
+          set.default_extra_max = v;
+        }
         // column names come from the fixed list above, never from the body
         const cols = [...Object.keys(set), 'updated_at'];
         const all = ['photographer_id', ...cols];
-        await env.DB.prepare(
-          `INSERT INTO studio_settings (${all.join(', ')}) VALUES (${all.map(() => '?').join(', ')}) ` +
-          `ON CONFLICT(photographer_id) DO UPDATE SET ${cols.map(k => `${k} = excluded.${k}`).join(', ')}`
-        ).bind(DEFAULT_PHOTOGRAPHER_ID, ...Object.values(set), new Date().toISOString()).run();
+        try {
+          await env.DB.prepare(
+            `INSERT INTO studio_settings (${all.join(', ')}) VALUES (${all.map(() => '?').join(', ')}) ` +
+            `ON CONFLICT(photographer_id) DO UPDATE SET ${cols.map(k => `${k} = excluded.${k}`).join(', ')}`
+          ).bind(DEFAULT_PHOTOGRAPHER_ID, ...Object.values(set), new Date().toISOString()).run();
+        } catch (e) {
+          // default_extra_max before its migration: one statement, so nothing landed
+          if (isMissingColumn(e) && 'default_extra_max' in set) return jsonOk(EXTRA_MAX_UNAVAILABLE, 500, ADMIN_ONLY_HEADERS);
+          throw e;
+        }
       }
       return jsonOk(await readStudioSettings(env, DEFAULT_PHOTOGRAPHER_ID), 200, ADMIN_ONLY_HEADERS);
     }
@@ -2904,7 +3008,13 @@ export default {
         // finals ([] until delivered); the page lists each through ?list=.
         const scope = pickReadScope(s);
         return jsonOk({
-          project: { id: project.id, title: project.title, pick_limit: project.pick_limit, extra_price: project.extra_price },
+          // extra_max / max_picks: the plan's cap as the save enforces it
+          // (null = none, also on a database without the column yet)
+          project: {
+            id: project.id, title: project.title, pick_limit: project.pick_limit, extra_price: project.extra_price,
+            extra_max: project.extra_max ?? null,
+            max_picks: project.pick_limit != null && project.extra_max != null ? project.pick_limit + project.extra_max : null,
+          },
           mode: scope.mode,
           folders: scope.proofs,
           final_folders: scope.finals,
@@ -3017,10 +3127,21 @@ export default {
         const upsertKeys = JSON.stringify(items.map(i => i.k));
         const removeKeys = JSON.stringify(remove);
         const notRemoved = 'NOT IN (SELECT value FROM json_each(?4))';
-        const starsFit =
+        // the ♥ photos (rating ≥ 1) this save leaves, and those there now
+        const starsAfter =
           `((SELECT COUNT(*) FROM json_each(?6) WHERE json_extract(value, '$.r') > 0 AND json_extract(value, '$.k') ${notRemoved}) + ` +
-          `(SELECT COUNT(*) FROM selections WHERE project_id = ?1 AND rating > 0 AND photo_key NOT IN (SELECT value FROM json_each(?3)) AND photo_key ${notRemoved})) ` +
-          '<= MAX(?5, (SELECT COUNT(*) FROM selections WHERE project_id = ?1 AND rating > 0))';
+          `(SELECT COUNT(*) FROM selections WHERE project_id = ?1 AND rating > 0 AND photo_key NOT IN (SELECT value FROM json_each(?3)) AND photo_key ${notRemoved}))`;
+        const starsNow = '(SELECT COUNT(*) FROM selections WHERE project_id = ?1 AND rating > 0)';
+        const starsFit = `${starsAfter} <= MAX(?5, ${starsNow})`;
+        // The plan's cap (docs/project-plan.md) the same way: at most
+        // pick_limit + extra_max ♥, or no more than now (a plan lowered below
+        // the picks may shrink or stay, not grow); NULL in either = none. It
+        // reads the project row it is evaluated against (the gate's FROM
+        // projects), so a PATCH landing mid-save is seen inside the write.
+        // Only on a database that has the column (resolveShareToken reads
+        // the project with SELECT *, so the key is there exactly then).
+        const withPlan = hasField(project, 'extra_max');
+        const planFit = `(pick_limit IS NULL OR extra_max IS NULL OR ${starsAfter} <= MAX(pick_limit + extra_max, ${starsNow}))`;
         const rowsFit =
           '(SELECT COUNT(*) FROM (SELECT photo_key FROM selections WHERE project_id = ?1 UNION SELECT value FROM json_each(?3)) ' +
           `WHERE photo_key ${notRemoved}) ` +
@@ -3037,7 +3158,7 @@ export default {
           `(SELECT COALESCE(SUM(${pinsOf}), 0) FROM selections WHERE project_id = ?1 AND marks IS NOT NULL AND photo_key NOT IN (${setsPins}) AND photo_key ${notRemoved})) ` +
           `<= MAX(${PICK_MARKS_TOTAL_MAX}, (SELECT COALESCE(SUM(${pinsOf}), 0) FROM selections WHERE project_id = ?1 AND marks IS NOT NULL))`;
         const openFor = withMarks => `id = ?1 AND owner_picker_id = ?2 AND phase IN ${PICK_OPEN_SQL} AND archived_at IS NULL AND ${starsFit} AND ${rowsFit}` +
-          (withMarks ? ` AND ${marksFit}` : '');
+          (withPlan ? ` AND ${planFit}` : '') + (withMarks ? ` AND ${marksFit}` : '');
         const itemsJson = JSON.stringify(items);
         // the one big bound value: D1 fails a value over 2 MB as an error, so
         // it is refused here, before anything is tried
@@ -3102,11 +3223,29 @@ export default {
           return pickRefused(env, project.id, '只有挑選人可以修改', {
             pickerId: picker.id,
             // only which message to show; the writes above already decided
+            // Which cap, in this order: row_cap; then pick_cap or
+            // selection_cap, whichever is the smaller limit when both fail
+            // (pick_cap when the plan allows ≤ PICK_MAX_SELECTIONS); then
+            // marks_cap. None failing now (the rows moved since): selection_cap.
             refused: async () => {
+              const plan = withPlan ? `, ${planFit} AS plan_ok, pick_limit, extra_max` : '';
               const fit = await env.DB.prepare(
-                `SELECT ${rowsFit} AS rows_ok, ${starsFit} AS stars_ok${usedMarks ? `, ${marksFit} AS marks_ok` : ''}`
+                `SELECT ${rowsFit} AS rows_ok, ${starsFit} AS stars_ok${usedMarks ? `, ${marksFit} AS marks_ok` : ''}${plan}${withPlan ? ' FROM projects WHERE id = ?1' : ''}`
               ).bind(...gateArgs).first();
               if (!fit?.rows_ok) return jsonOk({ error: `最多只能保留 ${PICK_MAX_ROWS} 筆`, code: 'row_cap', max: PICK_MAX_ROWS }, 409);
+              // (a plan failure with stars_ok answers here, so marks_cap below
+              // is only reached when the plan fits)
+              if (withPlan && !fit.plan_ok) {
+                const max = fit.pick_limit + fit.extra_max;
+                if (fit.stars_ok || max <= PICK_MAX_SELECTIONS) {
+                  return jsonOk({
+                    error: fit.extra_max > 0
+                      ? `已達可挑上限：方案 ${fit.pick_limit} 張 + 加選 ${fit.extra_max} 張，最多 ${max} 張`
+                      : `已達可挑上限：方案 ${fit.pick_limit} 張，不可加選（最多 ${max} 張）`,
+                    code: 'pick_cap', max, limit: fit.pick_limit, extra_max: fit.extra_max,
+                  }, 409);
+                }
+              }
               if (usedMarks && fit.stars_ok && !fit.marks_ok) {
                 return jsonOk({ error: `標示總數已達上限（${PICK_MARKS_TOTAL_MAX} 個）`, code: 'marks_cap', max: PICK_MARKS_TOTAL_MAX }, 409);
               }

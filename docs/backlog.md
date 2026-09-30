@@ -202,6 +202,10 @@ Guest link only (owner and viewers); the photographer's own index.html keeps eve
 - Cap the number of photo keys listed in the change-notification email.
 
 ## Technical debt / security
+- Upload route (`PUT` to any unmatched path) also accepts admin requests under
+  `api/…` and stores them as R2 objects (e.g. `PUT /api/admin/projects/<id>/archive`
+  writes a junk object; only the admin token can do it, the 180-day lifecycle
+  removes it). Make the upload route refuse any key starting with `api/`.
 - Browser E2E suite in CI (fix the flaky suites first: book_editor "no token
   is minted for an empty folder set", and mobile preview "preloads i±1 … at
   the responsive width bucket" — both pass alone, fail under load).
