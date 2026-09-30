@@ -262,3 +262,18 @@ Replaces the seat-passing proposal in docs/pick-handover.md §3+ (kept only as h
 - GitHub "Security and quality" shows 1 alert — look at it.
 - Real D1 behaviour not yet proven in prod: `batch()` as a transaction under
   load, row/value size limits.
+
+## Open questions and where we stopped (2026-09-30, for whoever continues the discussion)
+
+Open — need Tim's answer:
+- Collaborator limit "最多五個人": 5 total (A + 4, recommended) or 5 collaborators?
+- Removal dialog default: keep the removed person's photos (recommended) or remove?
+- Repeat submit after the plan was lowered below the current count: refuse (recommended) or allow?
+- Collaborator link lifetime (7 days?) vs the normal pick link (48 hours?).
+- Collaborator link safeguards to confirm: A can disable/regenerate it, capacity stops joins, A sees every name and can remove.
+
+State of the branch `claude/lucid-cori-viif3w`:
+- Worker for submit-time cap is committed (04e1ee1) and tested (682 worker tests).
+- Frontend for it (no cap while hearting, red counter + over-limit dialog at submit, reliable drafts) was still being built by an agent: NOT committed, NOT verified. Do not merge until the full browser + worker suites pass.
+- Before merging, Tim runs 4 D1 ALTERs in the D1 Console: `selections.marks`, `submissions.marks`, `projects.extra_max`, `studio_settings.default_extra_max` (files in `worker/migrations/2026-09-30-*.sql`). Merge to main deploys; only when Tim says 合併. Then Purge Everything, test on a real iPhone/LINE.
+- Co-picking ("共同挑選") is decided in principle only; `docs/pick-handover.md` §3+ (seat passing) is superseded and must be rewritten before any build.
