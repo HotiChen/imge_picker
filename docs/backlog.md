@@ -182,6 +182,19 @@ Replaces the seat-passing proposal in docs/pick-handover.md §3+ (kept only as h
   photographer tagged with the writer's name/colour. The input is labelled
   「給攝影師的修圖備註」. Limits: ≤10 pins per person per photo, ≤300 per project.
 - Removing a photo also clears the pins/notes on it; the writer sees 「這張已被移除」.
+- **Collaborator link (Tim's proposal, 2026-09-30):** the first person generates ONE
+  reusable 協作者連結 (separate from the pick link); anyone who has it can join as a
+  collaborator by entering a name, until the project's `max_pickers` is reached
+  (default 2, raisable to at most 5 — whether 5 counts the first person is still
+  to confirm; recommended: 5 people in total). Safeguards: the first person sees the
+  joined list (n/5) with 移除, can close or regenerate the link at any time, default
+  validity 7 days; joining needs an explicit tap (a LINE preview never takes a slot);
+  the last slot is taken atomically; no approval step. Two devices = two people.
+- **Removing a collaborator (Tim's proposal):** a dialog tells the first person how
+  many photos that person picked (and how many only they picked) and asks:
+  keep their picks (they become the first person's ♥; their notes/pins stay,
+  shown as 「小美（已移除）」) or remove their picks (photos only they picked leave
+  the list, their notes/pins go with them). Default: keep (not destructive).
 - The plan cap is checked at submit on the union of hearts (in progress: the
   submit-time cap, separate from this).
 - Not decided yet: how the collaborator link works (one-time link, 48 h, revocable
