@@ -125,6 +125,22 @@ Guest link only (owner and viewers); the photographer's own index.html keeps eve
 - **No 預約拍攝 button on the guest page at all** (Tim: not wanted). The booking_url setting stays, unused on this page.
 - Top-left brand: the photographer's own studio logo / name from settings.
 - Replace the 「HC」 circle with a small person icon (placeholder for a future client login).
+- **Retouch pins (decided 2026-09-30, option A):** in preview the guest taps
+  「標示修改」, then taps spots on the photo → numbered pins ①②…, each with a
+  short note (「這裡痘痘」). No freehand circles for now (option B, later if
+  clients need it; keep the data shape open for it).
+  - Server-side: an append-only column on `selections` (e.g. `marks` JSON:
+    `[{x, y, note}]`, x/y as 0–1 fractions of the photo so any screen size
+    lines up — this also retires the old pixel-coordinate bug). Tim runs the
+    ALTER in D1 before the merge.
+  - Saved with the selection (same phase gates as ratings/notes); only on
+    ♥ photos; limits (e.g. ≤ 10 pins per photo, note ≤ 100 chars).
+  - Submission snapshot includes the pins; changes after a submit show in
+    已修改 / the diff.
+  - Photographer sees the numbered pins over the photo + the list of notes
+    in the project view.
+  - Guest writes → High tier: TDD + security review. ~1.5 days.
+  - Build together with the guest pick page UI changes above.
 
 ## Bugs
 - Phone preview: the orange tools toggle (`.mobile-tools-toggle`, fixed
