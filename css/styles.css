@@ -2281,3 +2281,122 @@ span.pick-heart-btn { cursor: default; }
 @media (max-width: 768px) {
   .guest-bar { margin: 0 -12px 12px; padding: 8px 12px; }
 }
+
+
+/* ══════════════════════════════════════════════════════
+   Retouch pins (docs/guest-picking.md "Retouch pins") — js/pick.js,
+   js/project-view.js, js/annotation.js
+   ══════════════════════════════════════════════════════ */
+/* Buttons over the photo: inside .canvas-container, i.e. ABOVE the bottom ♥
+   bar (which is its own flex row under the container), never over it. */
+.pick-modal-tools {
+  position: absolute;
+  left: 8px; right: 8px; bottom: 8px;
+  z-index: 8;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 8px;
+  pointer-events: none;
+}
+.pick-modal-tools > * { display: flex; gap: 8px; pointer-events: auto; }
+.pick-tool-btn {
+  min-height: 44px;
+  padding: 0 16px;
+  background: rgba(14,12,8,.85);
+  color: #fff;
+  border: 1px solid rgba(255,255,255,.45);
+  border-radius: 22px;
+  font-size: 15px;
+  font-family: var(--font-sans);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.pick-tool-btn.pick-tool-done { background: var(--accent); color: var(--bg); border-color: var(--accent); font-weight: 600; }
+/* the panel is the always-open sidebar on a wide screen: no button there */
+.pick-panel-btn { display: none; }
+@media (max-width: 1024px) { .pick-panel-btn { display: inline-flex; align-items: center; } }
+
+.canvas-container.pin-mode { border-color: var(--accent); }
+.canvas-container.pin-mode.pick-picked { border-color: var(--accent); }
+.pick-pin-hint {
+  position: absolute;
+  top: 8px; left: 8px; right: 60px;
+  z-index: 8;
+  padding: 6px 10px;
+  background: rgba(14,12,8,.8);
+  color: #fff;
+  font-size: 13px;
+  border-radius: 6px;
+  pointer-events: none;
+}
+
+/* the 修改標示 list in the note panel */
+.pick-pins-empty { margin: 0; font-size: 12px; color: var(--ink-55); line-height: 1.5; }
+.pick-pin-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.pick-pin-item { display: flex; align-items: center; gap: 6px; }
+.pick-pin-num, .pv-pin-num {
+  flex: none;
+  min-width: 24px; height: 24px;
+  border-radius: 50%;
+  background: rgb(229,72,77);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 700;
+  display: flex; align-items: center; justify-content: center;
+}
+.pick-pin-note {
+  flex: 1; min-width: 0;
+  min-height: 40px;
+  padding: 0 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--ink);
+  font-size: 16px; /* no iOS focus zoom */
+  font-family: var(--font-sans);
+  unicode-bidi: isolate;
+}
+.pick-pin-note:focus { outline: none; border-color: var(--accent); }
+.pick-pin-count { flex: none; font-size: 10px; color: var(--ink-35); font-family: var(--font-mono); min-width: 38px; text-align: right; }
+.pick-pin-del {
+  flex: none;
+  width: 40px; height: 40px;
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--ink-70);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+/* photographer project view: 📍N on the card, notes under the photo */
+.pv-pin-badge {
+  position: absolute;
+  left: 6px; bottom: 6px;
+  z-index: 5;
+  padding: 2px 8px;
+  background: rgba(14,12,8,.8);
+  border: 1px solid rgba(255,255,255,.25);
+  border-radius: 12px;
+  color: #fff;
+  font-size: 12px;
+  line-height: 18px;
+}
+.pv-pin-list {
+  position: absolute;
+  left: 8px; right: 8px; bottom: 8px;
+  z-index: 8;
+  margin: 0; padding: 8px 10px;
+  max-height: 38%;
+  overflow-y: auto;
+  list-style: none;
+  background: rgba(14,12,8,.82);
+  border-radius: 8px;
+  color: #fff;
+  font-size: 14px;
+  display: flex; flex-direction: column; gap: 6px;
+  touch-action: pan-y;
+}
+.pv-pin-list li { display: flex; align-items: flex-start; gap: 8px; }
+.pv-pin-list .pv-pin-num { min-width: 22px; height: 22px; font-size: 12px; }
+.pv-pin-text { unicode-bidi: isolate; overflow-wrap: anywhere; min-width: 0; }

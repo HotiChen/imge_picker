@@ -313,10 +313,10 @@
   </div>
 </div>
 
-<script src="js/shoot-types.js?v=20260930b"></script>
-<script src="js/build-version.js?v=20260930b"></script>
-<script src="js/side-nav.js?v=20260930b"></script>
-<script src="js/orders-common.js?v=20260930b"></script>
+<script src="js/shoot-types.js?v=20260930c"></script>
+<script src="js/build-version.js?v=20260930c"></script>
+<script src="js/side-nav.js?v=20260930c"></script>
+<script src="js/orders-common.js?v=20260930c"></script>
 <script>
 (function() {
   const WORKER_URL = 'https://imagepicker.hotichen.workers.dev';
@@ -855,6 +855,18 @@
     };
   }
 
+  // Photos whose retouch pins differ between two submissions (each a
+  // {photo_key: [{x,y,note}]} snapshot, or null before the D1 migration ran —
+  // treated as none). Only the count and the file names are shown: the pins'
+  // own notes are guest text and never rendered here.
+  function marksChangedKeys(current, previous) {
+    const a = current && typeof current === 'object' ? current : {};
+    const b = previous && typeof previous === 'object' ? previous : {};
+    const norm = v => JSON.stringify((Array.isArray(v) ? v : []).map(m => [m && m.x, m && m.y, m && m.note]));
+    return Array.from(new Set([...Object.keys(a), ...Object.keys(b)]))
+      .filter(k => norm(a[k]) !== norm(b[k])).sort();
+  }
+
   async function openProjectDetail(id) {
     currentProjectId = id;
     const panel = document.getElementById('project-detail-panel');
@@ -933,9 +945,16 @@
       <div id="pd-submissions">${submissions.length ? submissions.map((s, i) => {
         const prev = submissions[i + 1];
         const diff = prev ? projectDiff(s.photo_keys, prev.photo_keys) : null;
+        const pinKeys = prev ? marksChangedKeys(s.marks, prev.marks) : [];
+        const pinLine = pinKeys.length ? `標示變更 ${pinKeys.length} 張：${pinKeys.map(escHtml).join('、')}` : '';
+        const keyLines = diff ? [
+          diff.added.length ? `新增 ${diff.added.length} 張：${diff.added.map(escHtml).join('、')}` : '',
+          diff.removed.length ? `移除 ${diff.removed.length} 張：${diff.removed.map(escHtml).join('、')}` : '',
+          pinLine,
+        ].filter(Boolean) : [];
         const diffHtml = !diff ? '<div class="pd-diff">（第一次送出）</div>'
-          : (!diff.added.length && !diff.removed.length ? '<div class="pd-diff">與上次相同</div>'
-            : `<div class="pd-diff">${diff.added.length ? `新增 ${diff.added.length} 張：${diff.added.map(escHtml).join('、')}` : ''}${diff.added.length && diff.removed.length ? '<br>' : ''}${diff.removed.length ? `移除 ${diff.removed.length} 張：${diff.removed.map(escHtml).join('、')}` : ''}</div>`);
+          : (!keyLines.length ? '<div class="pd-diff">與上次相同</div>'
+            : `<div class="pd-diff">${keyLines.join('<br>')}</div>`);
         return `<div class="pd-submission">
           <div><strong>${escHtml(fmtTime(s.created_at))}</strong> — ${escHtml(pickerNameOf(pickers, s.picker_id))}
             （${escHtml(s.relationship)}${s.email ? ' · ' + escHtml(s.email) : ''}）— ${escHtml(s.count)} 張${s.pick_limit != null ? ` / 上限 ${escHtml(s.pick_limit)}` : ''}

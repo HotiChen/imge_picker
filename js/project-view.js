@@ -89,7 +89,45 @@
                     // list mode's "updated time" column (task: 專案選片 grid/list)
                     updatedAt: s.updated_at || null,
                     hasAnnotations: false,
+                    // the guest's retouch pins (docs/guest-picking.md); null
+                    // before the D1 migration ran = none
+                    marks: this._cleanMarks(s.marks),
                 }));
+        },
+
+        _cleanMarks(arr) {
+            return (Array.isArray(arr) ? arr : [])
+                .filter(m => m && Number.isFinite(m.x) && Number.isFinite(m.y) && m.x >= 0 && m.x <= 1 && m.y >= 0 && m.y <= 1)
+                .map(m => ({ x: m.x, y: m.y, note: typeof m.note === 'string' ? m.note : '' }));
+        },
+
+        // Preview: the guest's pins are drawn over the photo by
+        // annotationManager (read-only, following zoom/pan); this lists their
+        // notes under it — 「① 這裡痘痘」. A note is guest text: textContent
+        // only, isolated (dir=auto + unicode-bidi: isolate in CSS) so bidi
+        // characters cannot reorder anything around it.
+        syncPinUI(photo) {
+            const cc = document.querySelector('.canvas-container');
+            if (!cc) return;
+            document.getElementById('pvPinList')?.remove();
+            const marks = photo && Array.isArray(photo.marks) ? photo.marks : [];
+            if (!marks.length) return;
+            const list = document.createElement('ol');
+            list.id = 'pvPinList';
+            list.className = 'pv-pin-list';
+            marks.forEach((m, i) => {
+                const li = document.createElement('li');
+                const num = document.createElement('span');
+                num.className = 'pv-pin-num';
+                num.textContent = '①②③④⑤⑥⑦⑧⑨⑩'[i] || String(i + 1);
+                const text = document.createElement('span');
+                text.className = 'pv-pin-text';
+                text.setAttribute('dir', 'auto');
+                text.textContent = m.note || '（無備註）';
+                li.append(num, text);
+                list.appendChild(li);
+            });
+            cc.appendChild(list);
         },
 
         // ── sidebar trim: this view is read-only and has no one folder ──────

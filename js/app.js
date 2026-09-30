@@ -795,6 +795,9 @@ class App {
                 ? `<button type="button" class="pick-heart-btn${isPicked ? ' on' : ''}" title="選">♥</button>`
                 : `<span class="pick-heart-btn${isPicked ? ' on' : ''}" title="選">♥</span>`)
             : (projectMode ? `<span class="pick-heart-btn on" title="已選">♥</span>` : '');
+        const pinCount = projectMode && Array.isArray(photo.marks) ? photo.marks.length : 0;
+        const pinBadge = pinCount > 0
+            ? `<span class="pv-pin-badge" title="有 ${pinCount} 個標示">📍${pinCount}</span>` : '';
         const noteMarker = projectMode && photo.note
             ? '<span class="pv-note-badge" title="有備註">💬</span>' : '';
         const dlTag = gallery
@@ -806,7 +809,7 @@ class App {
                 <div class="photo-overlay">
                     ${photo.hasAnnotations ? '<span class="photo-badge">✎</span>' : ''}
                 </div>
-                ${heartTag}${noteMarker}
+                ${heartTag}${noteMarker}${pinBadge}
                 ${(!heartTag && canEdit) ? '<div class="select-toggle-btn" title="選取此照片"></div>' : ''}
             </div>
             <div class="photo-info-section">
@@ -874,6 +877,12 @@ class App {
     // highlight/pulse below apply identically to a click or a double-tap.
     togglePickHeart(photo, btnEl) {
         const next = (photo.rating || 0) > 0 ? 0 : 1;
+        // Retouch pins go with the ♥ (the server clears them on a rating 0):
+        // ask first, and only then send the un-heart. Returns whether it toggled.
+        if (next === 0 && window.PickController && PickController.active) {
+            const pins = PickController.marksOf(photo.id).length;
+            if (pins > 0 && !window.confirm(`取消 ♥ 會一併清除這張的 ${pins} 個標示`)) return false;
+        }
         photo.rating = next;
         // grid card, modal footer and hover preview pane can all show the
         // same photo at once — every one of them carries data-photo-key (the
@@ -897,6 +906,7 @@ class App {
             }
         }
         driveManager.saveRating(photo.id, next); // pick.js wraps this to autosave
+        return true;
     }
 
     // Double-tap feedback over the preview: a big ♥ (on) or hollow ♡ (off)
@@ -1066,6 +1076,11 @@ class App {
         const sidebar = document.getElementById('modalSidebar');
         if (sidebar) sidebar.classList.remove('active');
 
+        // Retouch pins: the guest's 標示修改 controls / the photographer's
+        // read-only list for this photo (the canvas reads its pins itself)
+        if (pickMode) PickController.syncPinUI(photo);
+        if (projectMode) ProjectViewController.syncPinUI(photo);
+
         await annotationManager.loadPhoto(photo);
     }
 
@@ -1095,6 +1110,7 @@ class App {
     }
 
     closeModal() {
+        if (window.PickController && PickController.active) PickController._exitPinMode(true);
         this.saveCurrentNote();
         document.getElementById('photoModal').classList.remove('active');
     }

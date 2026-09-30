@@ -19,6 +19,19 @@
 (function () {
     const token = new URLSearchParams(window.location.search).get('t') || '';
 
+    // Retouch pins (docs/guest-picking.md "Retouch pins — the save contract").
+    const PIN_MAX = 10;         // per photo (server PICK_MARKS_MAX)
+    const PIN_NOTE_MAX = 100;   // characters (server PICK_MARK_NOTE_MAX)
+    // control / line-separator characters the server refuses in a note
+    const PIN_NOTE_BAD = /[\u0000-\u001F\u007F-\u009F\u2028\u2029]/g;
+    const pinSanitize = v => String(v == null ? '' : v).replace(PIN_NOTE_BAD, '');
+    const pinLen = v => Array.from(v).length;
+    // what the server sends is canonical already; this only keeps a bad row
+    // from ever reaching the canvas
+    const cleanMarks = arr => (Array.isArray(arr) ? arr : []).slice(0, PIN_MAX)
+        .filter(m => m && Number.isFinite(m.x) && Number.isFinite(m.y) && m.x >= 0 && m.x <= 1 && m.y >= 0 && m.y <= 1)
+        .map(m => ({ x: m.x, y: m.y, note: typeof m.note === 'string' ? m.note : '' }));
+
     const PickController = {
         active: !!token,
         token,
@@ -61,6 +74,12 @@
         // (or null if the key was new), so a 409 selection_cap/row_cap can put
         // the optimistic UI back exactly where it was.
         _pendingPrev: new Map(),
+        // keys whose pins an un-heart just cleared locally: a re-heart in the
+        // same batch must say `marks: []` (absent would keep the server's)
+        _marksClear: new Set(),
+        // retouch pins: pin mode + the photo the pin UI is showing
+        pinMode: false,
+        _pinPhotoId: null,
 
         // ── localStorage: the picker key, kept per link so two different
         // pick links opened in the same browser never share one seat's key.
@@ -196,6 +215,7 @@
                 document.getElementById('pickCounter')?.remove();
                 document.getElementById('mobileActionBar')?.remove(); // the counter lives here
                 document.getElementById('pickBanner')?.remove();
+                document.getElementById('pickModalTools')?.remove();
                 this._galleryUIRemoved = true;
             }
             this._renderDeliveryBar();
@@ -224,20 +244,42 @@
         },
 
         // ── autosave: debounced, batched ─────────────────────────────────
-        queueUpsert(photoKey, rating, note) {
+        // `marks` undefined = the photo's pins did not change: the request
+        // item carries no `marks` (the server keeps them). A defined array is
+        // the photo's FULL pin list (the numbering is its order).
+        queueUpsert(photoKey, rating, note, marks) {
             if (!this.canEdit()) return;
+            const prevSel = this.selections.get(photoKey);
             if (!this._pendingPrev.has(photoKey)) {
-                const prev = this.selections.get(photoKey);
-                this._pendingPrev.set(photoKey, prev ? { ...prev } : null);
+                this._pendingPrev.set(photoKey, prevSel ? { ...prevSel } : null);
             }
             this._pendingDelete.delete(photoKey);
-            this._pendingUpsert.set(photoKey, { photo_key: photoKey, rating, note: note || '' });
-            this.selections.set(photoKey, { rating, note: note || '' });
+            const prevPending = this._pendingUpsert.get(photoKey);
+            const item = { photo_key: photoKey, rating, note: note || '' };
+            let stored;
+            if (rating > 0) {
+                if (marks !== undefined) {
+                    item.marks = marks;
+                    stored = marks;
+                    this._marksClear.delete(photoKey);
+                } else {
+                    stored = prevSel && Array.isArray(prevSel.marks) ? prevSel.marks : [];
+                    if (prevPending && prevPending.marks !== undefined) item.marks = prevPending.marks;
+                    else if (this._marksClear.has(photoKey)) item.marks = [];
+                }
+            } else {
+                // un-heart: the server clears the pins itself; never send them
+                stored = [];
+                if (prevSel && Array.isArray(prevSel.marks) && prevSel.marks.length) this._marksClear.add(photoKey);
+            }
+            this._pendingUpsert.set(photoKey, item);
+            this.selections.set(photoKey, { rating, note: note || '', marks: stored });
             this.renderCounter();
             // 'all' shows the current folder regardless of what is picked, so
             // it never needs a repaint here; 已選/未選 depend on the rating
             // that just changed, both in and out of the current folder.
-            if (this.filterMode !== 'all') this.rerenderGrid();
+            if (this.filterMode !== 'all' && marks === undefined) this.rerenderGrid();
+            if (this._pinPhotoId === photoKey && (!prevSel || (prevSel.rating > 0) !== (rating > 0))) this.syncPinUI();
             clearTimeout(this._saveTimer);
             this._saveTimer = setTimeout(() => this.flush(), 800);
         },
@@ -251,6 +293,7 @@
             this._pendingUpsert.clear();
             this._pendingDelete.clear();
             this._pendingPrev = new Map();
+            this._marksClear = new Set();
             const { ok, status, data } = await this.saveSelections({ upsert, delete: del });
             if (ok) {
                 // mirrors the gate UPDATE in worker.js: a save while already
@@ -266,6 +309,23 @@
                 this.phase = 'retouching';
                 this.renderBanner();
                 this.rerenderGrid();
+                this.syncPinUI();
+                return;
+            }
+            if (status === 409 && data && data.code === 'marks_cap') {
+                // nothing was written: take the optimistic pin(s) back
+                this._revertBatch(prevSnapshot);
+                if (typeof toast !== 'undefined') toast.error('標註總數已達上限（300 個）');
+                return;
+            }
+            if (status === 413 || (status === 500 && data && data.code === 'marks_unavailable') ||
+                (status === 400 && data && data.code === 'invalid_marks')) {
+                // nothing was written in any of these either
+                this._revertBatch(prevSnapshot);
+                if (typeof toast !== 'undefined') {
+                    toast.error(status === 413 ? '內容太大，無法儲存，請減少標示或備註的文字'
+                        : (status === 500 ? '標示功能尚未啟用，請稍後再試' : '標示內容不正確，請修改後再試'));
+                }
                 return;
             }
             if (status === 409 && data && (data.code === 'selection_cap' || data.code === 'row_cap')) {
@@ -308,6 +368,7 @@
             // `selections`, the same way a reload does, is what actually
             // undoes it on screen, not only in this map.
             this.applyServerSelections();
+            this.syncPinUI();
         },
 
         _selectedCount() {
@@ -377,6 +438,7 @@
             this._hideStudioOnlyUI();
             this._removeSourceControls();
             this._removeAnnotationToolbox();
+            this._setupGuestModal();
             this._removeZipDownloads();
             this._replaceFilterBar();
             this._restructureGuestChrome();
@@ -430,7 +492,11 @@
             this.deliveredAt = data.delivered_at || null;
             this.view = this.mode === 'delivered' ? 'finals' : 'picking';
             this.selections = new Map(
-                (data.selections || []).map(s => [s.photo_key, { rating: s.rating || 0, note: s.note || '' }])
+                (data.selections || []).map(s => [s.photo_key, {
+                    rating: s.rating || 0, note: s.note || '',
+                    // only the seat owner is sent pins; a viewer has none
+                    marks: this.isOwner && (s.rating || 0) > 0 ? cleanMarks(s.marks) : [],
+                }])
             );
             this.studio = data.studio || null;
         },
@@ -666,6 +732,237 @@
         _removeZipDownloads() {
             ['downloadAllBtn', 'downloadSelectedHeaderBtn', 'selectAllBtn', 'deselectAllBtn', 'bulkActionBar']
                 .forEach(id => document.getElementById(id)?.remove());
+        },
+
+        // ── the preview's own controls (docs/backlog.md "Retouch pins") ──────
+        // The orange #mobileToolsToggle covered the ♥ on a phone; a guest gets
+        // a labelled 備註・標示 button instead, inside the photo area (above the
+        // bottom ♥ bar, never over it). The photographer's own toggle stays.
+        _setupGuestModal() {
+            document.getElementById('mobileToolsToggle')?.remove();
+            const head = document.querySelector('.sidebar-header-mobile h4');
+            if (head) head.textContent = '備註・標示';
+            const deskHead = document.querySelector('.annotation-tools > h4');
+            if (deskHead) deskHead.textContent = '備註・標示';
+        },
+
+        // The row of buttons over the photo, built on demand and only for the
+        // seat owner (a viewer has neither notes nor pins to work with).
+        _ensureToolsRow() {
+            const cc = document.querySelector('.canvas-container');
+            if (!cc) return null;
+            const wanted = this.isOwner && !this.isGallery();
+            let row = document.getElementById('pickModalTools');
+            if (!wanted) { row?.remove(); this._exitPinMode(true); return null; }
+            if (row) return row;
+            row = document.createElement('div');
+            row.id = 'pickModalTools';
+            row.className = 'pick-modal-tools';
+            const left = document.createElement('div');
+            left.className = 'pick-tools-left';
+            const right = document.createElement('div');
+            right.className = 'pick-tools-right';
+
+            const pinBtn = document.createElement('button');
+            pinBtn.type = 'button';
+            pinBtn.id = 'pickPinBtn';
+            pinBtn.className = 'pick-tool-btn';
+            pinBtn.textContent = '標示修改';
+            pinBtn.addEventListener('click', () => this._enterPinMode());
+            const doneBtn = document.createElement('button');
+            doneBtn.type = 'button';
+            doneBtn.id = 'pickPinDoneBtn';
+            doneBtn.className = 'pick-tool-btn pick-tool-done';
+            doneBtn.textContent = '完成';
+            doneBtn.addEventListener('click', () => this._exitPinMode());
+            const panelBtn = document.createElement('button');
+            panelBtn.type = 'button';
+            panelBtn.id = 'pickPanelBtn';
+            panelBtn.className = 'pick-tool-btn pick-panel-btn';
+            panelBtn.textContent = '備註・標示';
+            panelBtn.addEventListener('click', () => {
+                document.getElementById('modalSidebar')?.classList.toggle('active');
+            });
+            right.appendChild(panelBtn);
+            row.append(left, right);
+            cc.appendChild(row);
+            this._pinBtn = pinBtn;
+            this._pinDoneBtn = doneBtn;
+            return row;
+        },
+
+        _currentPinPhoto() {
+            const a = window.annotationManager;
+            return (a && a.currentPhoto && a.currentPhoto.id === this._pinPhotoId) ? a.currentPhoto : null;
+        },
+
+        _enterPinMode() {
+            if (!this.canEdit() || !this._pinPhotoId) return;
+            const sel = this.selections.get(this._pinPhotoId);
+            if (!sel || !(sel.rating > 0)) return;
+            this.pinMode = true;
+            document.getElementById('modalSidebar')?.classList.remove('active');
+            annotationManager.setPinMode(true);
+            this.syncPinUI();
+        },
+
+        _exitPinMode(quiet) {
+            if (!this.pinMode) return;
+            this.pinMode = false;
+            if (window.annotationManager) annotationManager.setPinMode(false);
+            if (!quiet) this.syncPinUI();
+        },
+
+        // Called when the preview shows a photo (js/app.js openModal, with the
+        // photo) and whenever something that decides what the pin UI shows
+        // changes: the ♥, the phase, a revert. Rebuilds the buttons and the
+        // list; the canvas pins are re-read from `selections`.
+        syncPinUI(photo) {
+            if (!this.active) return;
+            if (photo) {
+                if (this._pinPhotoId !== photo.id) this._exitPinMode(true);
+                this._pinPhotoId = photo.id;
+            }
+            const id = this._pinPhotoId;
+            const row = this._ensureToolsRow();
+            const sel = id ? this.selections.get(id) : null;
+            const hearted = !!sel && sel.rating > 0;
+            const editable = this.canEdit() && hearted;
+            if (!editable && this.pinMode) this._exitPinMode(true);
+            if (row) {
+                const left = row.querySelector('.pick-tools-left');
+                left.replaceChildren();
+                if (editable) left.appendChild(this.pinMode ? this._pinDoneBtn : this._pinBtn);
+            }
+            this._renderPinHint();
+            const marks = hearted ? this.marksOf(id) : [];
+            const cur = this._currentPinPhoto();
+            if (cur && window.annotationManager) annotationManager.setMarks(marks);
+            this._renderPinList(hearted, editable, marks);
+        },
+
+        _renderPinHint() {
+            const cc = document.querySelector('.canvas-container');
+            let hint = document.getElementById('pickPinHint');
+            if (!this.pinMode || !cc) { hint?.remove(); return; }
+            if (!hint) {
+                hint = document.createElement('div');
+                hint.id = 'pickPinHint';
+                hint.className = 'pick-pin-hint';
+                cc.appendChild(hint);
+            }
+            const n = this.marksOf(this._pinPhotoId).length;
+            hint.textContent = `點照片上要修改的位置（已標 ${n}/${PIN_MAX}）`;
+        },
+
+        // The 修改標示 list in the note panel: one row per pin — number, note
+        // input (≤100 chars, with a counter), × to delete. Every note goes
+        // through .value / textContent; nothing is built as HTML.
+        _renderPinList(visible, editable, marks) {
+            const group = document.getElementById('noteInputGroup');
+            let sec = document.getElementById('pickPinsSection');
+            if (!visible || !group || !this.isOwner) { sec?.remove(); return; }
+            if (!sec) {
+                sec = document.createElement('div');
+                sec.id = 'pickPinsSection';
+                sec.className = 'note-input-group pick-pins-section';
+                group.after(sec);
+            }
+            sec.replaceChildren();
+            const label = document.createElement('label');
+            label.textContent = '修改標示';
+            sec.appendChild(label);
+            if (!marks.length) {
+                const p = document.createElement('p');
+                p.className = 'pick-pins-empty';
+                p.textContent = editable ? '尚無標示。按「標示修改」，再點照片上要修改的位置。' : '這張沒有標示。';
+                sec.appendChild(p);
+                return;
+            }
+            const key = this._pinPhotoId;
+            const ol = document.createElement('ol');
+            ol.id = 'pickPinList';
+            ol.className = 'pick-pin-list';
+            marks.forEach((m, i) => {
+                const li = document.createElement('li');
+                li.className = 'pick-pin-item';
+                const num = document.createElement('span');
+                num.className = 'pick-pin-num';
+                num.textContent = String(i + 1);
+                const input = document.createElement('input');
+                input.type = 'text';
+                input.className = 'pick-pin-note';
+                input.maxLength = PIN_NOTE_MAX;
+                input.value = m.note;
+                input.placeholder = '這裡要修改什麼？例：這裡痘痘';
+                input.setAttribute('dir', 'auto');
+                input.setAttribute('aria-label', `標示 ${i + 1} 的備註`);
+                input.readOnly = !editable;
+                const count = document.createElement('span');
+                count.className = 'pick-pin-count';
+                count.textContent = `${pinLen(m.note)}/${PIN_NOTE_MAX}`;
+                input.addEventListener('input', () => {
+                    const clean = pinSanitize(input.value);
+                    if (clean !== input.value) input.value = clean;
+                    count.textContent = `${pinLen(clean)}/${PIN_NOTE_MAX}`;
+                    this.setPinNote(key, i, clean);
+                });
+                li.append(num, input, count);
+                if (editable) {
+                    const del = document.createElement('button');
+                    del.type = 'button';
+                    del.className = 'pick-pin-del';
+                    del.textContent = '×';
+                    del.setAttribute('aria-label', `刪除標示 ${i + 1}`);
+                    del.addEventListener('click', () => this.removePin(key, i));
+                    li.appendChild(del);
+                }
+                ol.appendChild(li);
+            });
+            sec.appendChild(ol);
+        },
+
+        // ── pin data (all writes go through queueUpsert, full list each time) ─
+        marksOf(key) {
+            const s = this.selections.get(key);
+            return s && s.rating > 0 && Array.isArray(s.marks)
+                ? s.marks.map(m => ({ x: m.x, y: m.y, note: m.note })) : [];
+        },
+
+        _saveMarks(key, marks) {
+            const s = this.selections.get(key);
+            if (!s || !(s.rating > 0)) return;
+            this.queueUpsert(key, s.rating, s.note, marks);
+        },
+
+        addPin(key, x, y) {
+            if (!this.canEdit()) return;
+            const cur = this.marksOf(key);
+            const s = this.selections.get(key);
+            if (!s || !(s.rating > 0)) return;
+            if (cur.length >= PIN_MAX) {
+                if (typeof toast !== 'undefined') toast.info(`每張照片最多標示 ${PIN_MAX} 個位置`);
+                return;
+            }
+            this._saveMarks(key, cur.concat({ x, y, note: '' }));
+            this.syncPinUI();
+        },
+
+        setPinNote(key, index, note) {
+            if (!this.canEdit()) return;
+            const cur = this.marksOf(key);
+            if (!cur[index]) return;
+            cur[index].note = note;
+            this._saveMarks(key, cur);
+        },
+
+        removePin(key, index) {
+            if (!this.canEdit()) return;
+            const cur = this.marksOf(key);
+            if (!cur[index]) return;
+            cur.splice(index, 1);
+            this._saveMarks(key, cur);
+            this.syncPinUI();
         },
 
         _removeAnnotationToolbox() {

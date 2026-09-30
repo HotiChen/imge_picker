@@ -11,6 +11,9 @@ const GESTURE_SWIPE_CLOSE_PX = 80;   // vertical swipe down → close
 const GESTURE_TAP_TOLERANCE_PX = 10; // more movement than this isn't a tap
 const GESTURE_DOUBLE_TAP_MS = 400;   // max gap between two taps
 const GESTURE_DOUBLE_TAP_PX = 40;    // max drift between two taps' positions
+// Retouch pins (docs/guest-picking.md): the marker's on-screen radius. The
+// canvas draws in world units under zoom, so it is divided by the zoom.
+const PIN_RADIUS_PX = 13;
 
 function gestureTouchDist(a, b) {
     return Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
@@ -61,6 +64,16 @@ class AnnotationManager {
         this._lastTapTime = 0;
         this._lastTapX = 0;
         this._lastTapY = 0;
+
+        // Retouch pins: [{x, y, note}] of the photo on screen, x/y = 0-1
+        // fractions of the fitted photo (so any screen size lines up). The
+        // guest's pins come from PickController, the photographer's from the
+        // photo object (read-only there). pinMode = a tap places a pin.
+        this.marks = [];
+        this.pinMode = false;
+        this._lastPinTouchAt = 0;
+        this._mdX = null;
+        this._mdY = null;
     }
 
     // 初始化畫布
@@ -76,6 +89,8 @@ class AnnotationManager {
 
         // 滾輪縮放
         this.canvas.addEventListener('wheel', this.handleWheel.bind(this));
+        // Pin mode with a mouse: a click (not a drag) places a pin.
+        (this.canvas.parentElement || this.canvas).addEventListener('click', this._onPinClick.bind(this));
 
         // 觸控支援 — { passive: false } so preventDefault() on a pan-tool
         // swipe/pinch actually stops the page (and iOS Safari's own
@@ -102,6 +117,7 @@ class AnnotationManager {
         this.currentPhoto = photo;
         // 載入該照片的標注（深拷貝避免引用問題）
         this.annotations = photo.annotations ? JSON.parse(JSON.stringify(photo.annotations)) : [];
+        this.marks = this._marksFor(photo);
 
         // 重置 Undo/Redo 棧
         this.undoStack = [];
@@ -303,8 +319,81 @@ class AnnotationManager {
             }
         }
 
+        this.drawMarks();
+
         // 恢復狀態
         this.ctx.restore();
+    }
+
+    // ── Retouch pins ─────────────────────────────────────────────────────
+    // Which pins belong to `photo`: a pick link's owner reads them from the
+    // PickController (the one place they are edited and saved); the
+    // photographer's project view carries them on the photo (read-only).
+    _marksFor(photo) {
+        const pc = window.PickController;
+        if (pc && pc.active) return pc.marksOf(photo.id);
+        const pv = window.ProjectViewController;
+        if (pv && pv.active && Array.isArray(photo.marks)) return photo.marks.map(m => ({ x: m.x, y: m.y, note: m.note }));
+        return [];
+    }
+
+    setMarks(marks) {
+        this.marks = Array.isArray(marks) ? marks : [];
+        this.redraw();
+    }
+
+    setPinMode(on) {
+        this.pinMode = !!on;
+        this._touch = null;
+        this._pinch = null;
+        this.canvas?.parentElement?.classList.toggle('pin-mode', this.pinMode);
+        this.updateCursor();
+    }
+
+    // Drawn in the photo's own (world) space, so the pins follow zoom and
+    // pan; radius and stroke are divided by the zoom to stay finger-sized.
+    drawMarks() {
+        if (!this.marks.length || !this.fitW || !this.fitH) return;
+        const ctx = this.ctx;
+        const z = this.zoom || 1;
+        const r = PIN_RADIUS_PX / z;
+        ctx.save();
+        this.marks.forEach((m, i) => {
+            const cx = m.x * this.fitW, cy = m.y * this.fitH;
+            ctx.beginPath();
+            ctx.arc(cx, cy, r, 0, 2 * Math.PI);
+            ctx.fillStyle = 'rgba(229,72,77,0.92)';
+            ctx.fill();
+            ctx.lineWidth = 2 / z;
+            ctx.strokeStyle = '#fff';
+            ctx.stroke();
+            ctx.fillStyle = '#fff';
+            ctx.font = `bold ${14 / z}px sans-serif`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(String(i + 1), cx, cy + 0.5 / z);
+        });
+        ctx.restore();
+    }
+
+    // A tap/click at a screen point → fractions of the fitted photo, undoing
+    // the current zoom and pan (_toWorld). Off the photo (the black bars) is
+    // not a pin.
+    _placePinAt(clientX, clientY) {
+        const pc = window.PickController;
+        if (!this.pinMode || !pc || !pc.active || !this.currentPhoto || !this.fitW || !this.fitH) return;
+        const p = this._toWorld(clientX, clientY);
+        if (!this._onPhoto(p)) return;
+        const frac = v => Math.round(Math.min(1, Math.max(0, v)) * 10000) / 10000;
+        pc.addPin(this.currentPhoto.id, frac(p.x / this.fitW), frac(p.y / this.fitH));
+    }
+
+    _onPinClick(e) {
+        if (!this.pinMode) return;
+        if (e.target.closest?.('button, a, input, textarea, select, .pv-pin-list')) return;
+        if (Date.now() - this._lastPinTouchAt < 700) return; // the touch already placed it
+        if (this._mdX != null && Math.hypot(e.clientX - this._mdX, e.clientY - this._mdY) > GESTURE_TAP_TOLERANCE_PX) return;
+        this._placePinAt(e.clientX, e.clientY);
     }
 
     // 繪製標注 (支援編號)
@@ -348,6 +437,8 @@ class AnnotationManager {
 
     // 開始繪圖
     startDrawing(e) {
+        this._mdX = e.clientX;
+        this._mdY = e.clientY;
         // Only the pan tool works off the photo: a drawing tool pressed on
         // the black bars does nothing, as when the canvas ended at the photo.
         const pt = this._toWorld(e.clientX, e.clientY);
@@ -361,7 +452,7 @@ class AnnotationManager {
 
         if (this.currentTool === 'pan') {
             if (this.zoom <= 1.0) {
-                toast.info('請先放大照片再使用平移功能');
+                if (!this.pinMode) toast.info('請先放大照片再使用平移功能');
                 return;
             }
             this.isPanning = true;
@@ -508,7 +599,7 @@ class AnnotationManager {
     // now; startDrawing ignores a press off the photo, as before.)
     _ignoreTouch(e) {
         if (e.target === this.canvas) return false;
-        return this.currentTool !== 'pan' || !!e.target.closest?.('button, a, input, textarea, select');
+        return this.currentTool !== 'pan' || !!e.target.closest?.('button, a, input, textarea, select, .pv-pin-list');
     }
 
     handleTouchStart(e) {
@@ -579,6 +670,15 @@ class AnnotationManager {
         this._touch = null;
         if (!touch) return;                         // the tail of a pinch
         if (touch.panning && touch.moved) return;   // a pan drag — not a tap/swipe
+        // Pin mode: a tap only places a pin — no swipe-to-next / swipe-to-close,
+        // no double-tap ♥ (a pinch and a zoomed pan above still work).
+        if (this.pinMode) {
+            if (!touch.moved) {
+                this._lastPinTouchAt = Date.now();
+                this._placePinAt(touch.startX, touch.startY);
+            }
+            return;
+        }
         // (A zoomed touch that didn't move past the tap tolerance can't
         // clear either swipe threshold below, so it can only be a tap.)
 
@@ -624,11 +724,14 @@ class AnnotationManager {
     // retouching, or not a pick link at all — changes nothing, exactly like
     // the pitfall list asks to prove with a negative assertion.
     _handleDoubleTap() {
+        if (this.pinMode) return;
         if (this.zoom > 1) { this.resetZoom({ quiet: true }); return; }
         const pc = window.PickController;
         if (!pc || !pc.active || !pc.canEdit()) return;
         if (!this.currentPhoto || !window.app) return;
-        window.app.togglePickHeart(this.currentPhoto); // same code path as the ♥ button
+        // same code path as the ♥ button; a cancelled un-heart (it had pins)
+        // toggled nothing, so it gets no burst either
+        if (window.app.togglePickHeart(this.currentPhoto) === false) return;
         window.app.burstHeart((this.currentPhoto.rating || 0) > 0);
     }
 
@@ -656,6 +759,7 @@ class AnnotationManager {
 
     updateCursor() {
         if (!this.canvas) return;
+        if (this.pinMode) { this.canvas.style.cursor = 'crosshair'; return; }
         switch (this.currentTool) {
             case 'pan': this.canvas.style.cursor = 'grab'; break;
             case 'select': this.canvas.style.cursor = 'default'; break;
