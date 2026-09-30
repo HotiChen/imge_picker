@@ -127,6 +127,13 @@ Guest link only (owner and viewers); the photographer's own index.html keeps eve
     (delivered mode only, never cost); needs a guest_visible switch in settings
     (column exists, no UI yet); ~0.5–1 day. (B) full order request from the
     gallery = Phase B guest shop, guest writes, High tier, 2–3 days. Recommended: A first.
+  - **Tim's goal (2026-09-30): end state is B** — the guest orders from the
+    delivered gallery and the order reaches the photographer with no manual
+    step (「無感」): it appears in orders (status requested), an email/notice
+    arrives, one tap to confirm. Build in stages (info first, then ordering);
+    a detailed Phase B design (docs/products-orders.md has only an outline)
+    comes before building. Payment stays a bank transfer until online
+    payment (parked).
   - 分享: share the gallery link (Web Share API, fallback copy). Anyone with the
     link can view AND download the finals (owner and viewers already see the same
     gallery); the photographer can revoke the link. A separate view-only /
