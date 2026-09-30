@@ -169,6 +169,14 @@ CREATE TABLE IF NOT EXISTS selections (
   note       TEXT NOT NULL DEFAULT '',
   updated_by TEXT NOT NULL,               -- picker id
   updated_at TEXT NOT NULL,
+  -- Retouch pins on a ♥ photo: a JSON array [{x, y, note}] (x/y 0–1
+  -- fractions of the photo, ≤ 10 pins, note ≤ 100 characters; ≤ 300 pins per
+  -- project, PICK_MARKS_TOTAL_MAX), in the
+  -- Worker's own serialisation; NULL = none, never '[]'. Only ever non-NULL
+  -- on a row with rating > 0. Appended, from a hand-run
+  --   ALTER TABLE selections ADD COLUMN marks TEXT;
+  -- (worker/migrations/2026-09-30-retouch-pins.sql).
+  marks      TEXT,
   PRIMARY KEY (project_id, photo_key)
 );
 
@@ -189,7 +197,13 @@ CREATE TABLE IF NOT EXISTS submissions (
   created_at   TEXT NOT NULL,
   -- 1 = the photographer was emailed about this submit; 0 = throttled,
   -- unchanged since the last email, or the mail failed / is not set up
-  notified     INTEGER NOT NULL DEFAULT 0
+  notified     INTEGER NOT NULL DEFAULT 0,
+  -- The pins of the submitted (rating >= 1) photos, snapshotted by the same
+  -- INSERT: JSON {photo_key: [{x, y, note}]}, key order, only photos that
+  -- have pins; NULL = none. Appended, from the same hand-run file as
+  -- selections.marks:
+  --   ALTER TABLE submissions ADD COLUMN marks TEXT;
+  marks        TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_submissions_project ON submissions(project_id, created_at);
 

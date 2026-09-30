@@ -36,8 +36,8 @@ test('the owner saves picks, and state hands them back to anyone holding the lin
   ]);
   const owner = await (await pick(env, 'GET', 'state', p.token, { key: p.key })).json();
   assert.deepEqual(owner.selections, [
-    { photo_key: A, rating: 5, note: '放大這張' },
-    { photo_key: B, rating: 2, note: '' },
+    { photo_key: A, rating: 5, note: '放大這張', marks: null },
+    { photo_key: B, rating: 2, note: '', marks: null },
   ]);
 });
 

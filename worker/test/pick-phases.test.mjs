@@ -69,7 +69,7 @@ test('the submit snapshot lives in submissions, not on pickers', () => {
   const cols = rows(env, 'PRAGMA table_info(pickers)').map(c => c.name);
   for (const gone of ['submit_count', 'submit_limit', 'submit_price']) assert.ok(!cols.includes(gone), gone);
   assert.deepEqual(rows(env, 'PRAGMA table_info(submissions)').map(c => c.name), [
-    'id', 'project_id', 'picker_id', 'relationship', 'email', 'photo_keys', 'count', 'pick_limit', 'extra_price', 'created_at', 'notified',
+    'id', 'project_id', 'picker_id', 'relationship', 'email', 'photo_keys', 'count', 'pick_limit', 'extra_price', 'created_at', 'notified', 'marks',
   ]);
 });
 

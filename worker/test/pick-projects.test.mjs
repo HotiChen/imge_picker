@@ -199,7 +199,8 @@ test('the migration file turns a deployed database into exactly what schema.sql 
   const migration = readFileSync(new URL('../migrations/2026-09-27-guest-picking.sql', import.meta.url), 'utf8') +
     '\n' + readFileSync(new URL('../migrations/2026-09-28-project-archive.sql', import.meta.url), 'utf8') +
     '\n' + readFileSync(new URL('../migrations/2026-09-28-dashboard-settings.sql', import.meta.url), 'utf8') +
-    '\n' + readFileSync(new URL('../migrations/2026-09-30-delivery.sql', import.meta.url), 'utf8');
+    '\n' + readFileSync(new URL('../migrations/2026-09-30-delivery.sql', import.meta.url), 'utf8') +
+    '\n' + readFileSync(new URL('../migrations/2026-09-30-retouch-pins.sql', import.meta.url), 'utf8');
   // the live database: share_tokens without project_id, none of the new tables
   const deployed = fresh
     .replace(/,\n(?:\s*--[^\n]*\n)*\s*project_id\s+TEXT\n\);/, '\n);')

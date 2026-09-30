@@ -48,12 +48,14 @@ browser. This replaces the fake `submitJob()` in `js/app.js`.
   - `reset-seat` keeps the phase and every submission.
 - **Every submit that changed the picked set appends a row to `submissions`**
   and nothing ever rewrites or deletes one (only `notified` is set once):
-  the picker, relationship, email, the snapshot of photo keys with rating ≥ 1 (JSON, key order), the count, and `pick_limit` /
+  the picker, relationship, email, the snapshot of photo keys with rating ≥ 1 (JSON, key order), their retouch pins
+  (`marks`: JSON `{photo_key: [{x, y, note}]}` over the rating ≥ 1 photos that
+  have pins, key order; NULL when none), the count, and `pick_limit` /
   `extra_price` as they stood — the record the fee is charged from. The
   snapshot is read inside the same conditional `INSERT`. `pickers` keeps only
   the latest relationship/email as contact info.
-- **Repeat submits are idempotent**: a submit whose picked-key set equals the
-  **latest** submission's writes no row (checked inside the `INSERT`) and
+- **Repeat submits are idempotent**: a submit whose picked-key set **and
+  retouch-pin snapshot** equal the **latest** submission's writes no row (checked inside the `INSERT`) and
   answers 200 with that latest submission (`submission_id`, `submitted_at`,
   `count`, `limit`, `price`, `over` — same shape as a new one). The rest of
   the submit still lands: contact info, phase → `submitted`,
@@ -98,6 +100,19 @@ browser. This replaces the fake `submitJob()` in `js/app.js`.
 - **Notes are the owner's**: `/api/pick/state` returns `note` only to the
   current seat holder; everyone else gets `{photo_key, rating}` per selection.
   Admin sees notes.
+- **Retouch pins** (`selections.marks`, 2026-09-30): on a ♥ photo (rating
+  ≥ 1) the seat holder taps spots and leaves a short note at each. Stored as
+  JSON `[{x, y, note}]`, NULL = none (never `'[]'`). See "Retouch pins" below
+  for the exact save contract.
+  - Saved with the selection, by `PUT /api/pick/selections`, in the **same
+    batch** and under the same gate as ratings and notes (seat, phase, not
+    archived, both caps). Pins never count toward a cap.
+  - **Viewers never get pins** (Tim's default, same rule as notes): only the
+    seat holder's `/api/pick/state` carries `marks`; admin always sees them.
+  - Submit snapshots them (see below), and **a submit that changed only the
+    pins is a change**: it appends a row, but the email stays keyed on photo
+    keys only, so it sends **no email** (the row is `notified = 0` and shows
+    in `unnotified_submissions`). It counts toward `PICK_MAX_SUBMISSIONS`.
 - **Lost / leaked link**: `POST /api/admin/projects/:id/links` mints a new pick
   link (snapshot = `projects.folders`, 90-day expiry like creation); the old
   one is killed with the ordinary `POST /api/shares/:token/revoke`. Old and new
@@ -141,6 +156,10 @@ their own migration files, run by hand in order:
 until then the project list fails and pick links are refused; album links are
 unaffected). `worker/migrations/2026-09-28-dashboard-settings.sql` adds
 `projects.delivered_at` and `studio_settings` (`docs/dashboard-settings.md`).
+`worker/migrations/2026-09-30-retouch-pins.sql` adds `selections.marks` and
+`submissions.marks` (both `TEXT`, NULL = none); run it **before** merging the
+Worker that saves pins. Until then every route keeps working without pins,
+except a save that carries `marks` (500 `marks_unavailable`).
 
 ```sql
 CREATE TABLE IF NOT EXISTS projects (
@@ -180,7 +199,8 @@ CREATE TABLE IF NOT EXISTS submissions (       -- append-only, one row per submi
   pick_limit   INTEGER,                   -- plan as it stood at submit
   extra_price  INTEGER,
   created_at   TEXT NOT NULL,
-  notified     INTEGER NOT NULL DEFAULT 0 -- 1 = the photographer was emailed about it
+  notified     INTEGER NOT NULL DEFAULT 0, -- 1 = the photographer was emailed about it
+  marks        TEXT                       -- JSON {photo_key:[{x,y,note}]} snapshot, NULL = none (retouch-pins migration)
 );
 CREATE INDEX IF NOT EXISTS idx_submissions_project ON submissions(project_id, created_at);
 CREATE TABLE IF NOT EXISTS selections (
@@ -190,6 +210,7 @@ CREATE TABLE IF NOT EXISTS selections (
   note       TEXT NOT NULL DEFAULT '',
   updated_by TEXT NOT NULL,               -- picker id
   updated_at TEXT NOT NULL,
+  marks      TEXT,                        -- JSON [{x,y,note}], NULL = none (retouch-pins migration)
   PRIMARY KEY (project_id, photo_key)
 );
 CREATE TABLE IF NOT EXISTS project_members (   -- deferred feature, table now
@@ -208,7 +229,7 @@ ALTER TABLE share_tokens ADD COLUMN project_id TEXT;
 |---|---|---|
 | `POST /api/admin/projects` | admin | create project + mint pick link |
 | `GET /api/admin/projects[?archived=1]` | admin | `{projects: [{id, title, phase, modified_after_submit, owner_name, created_at, archived_at, delivered_at, submission_count, last_submitted_at, unnotified_submissions, token}]}` newest first, this photographer only (`photographer_id = 'default'`), ≤ 200 rows, one SQL query; `owner_name` null when the seat is free; `token` is the newest live pick link (not revoked, not expired, inside the 180-day ceiling) or null. Archived projects are hidden; `?archived=1` returns only archived ones (any other value = default) |
-| `GET /api/admin/projects/:id` | admin | project incl. `phase`, `modified_after_submit`, `last_notified_at`; owner, pickers, selections with `updated_by` and `note`, `tokens` (every pick link, newest first: `{token, created_at, expires_at, revoked_at, last_seen_at, status: 'live'\|'revoked'\|'expired'}`), `submissions` newest first, at most `PICK_MAX_SUBMISSIONS` (50) (`photo_keys` parsed, `notified` 0/1), `unnotified_submissions` |
+| `GET /api/admin/projects/:id` | admin | project incl. `phase`, `modified_after_submit`, `last_notified_at`; owner, pickers, selections with `updated_by`, `note` and `marks` (parsed `[{x, y, note}]`, `null` when none), `tokens` (every pick link, newest first: `{token, created_at, expires_at, revoked_at, last_seen_at, status: 'live'\|'revoked'\|'expired'}`), `submissions` newest first, at most `PICK_MAX_SUBMISSIONS` (50) (`photo_keys` parsed, `notified` 0/1, `marks` parsed `{photo_key: [{x, y, note}]}` or `null`), `unnotified_submissions` |
 | `POST /api/admin/projects/:id/links` | admin | mint a new pick link → 201 `{token, expires_at, created_at, status: 'live'}` |
 | `POST /api/shares/:token/revoke` | admin | revoke any link, pick links included → `{ok: true}`; 404 if unknown or already revoked |
 | `POST /api/admin/projects/:id/archive` | admin | stamp `archived_at` + revoke live pick links (one batch) → `{ok: true, archived_at, revoked}` (`revoked` = links revoked by this call; a repeat keeps the first stamp, `revoked: 0`); 404 unknown / other photographer |
@@ -218,15 +239,96 @@ ALTER TABLE share_tokens ADD COLUMN project_id TEXT;
 | `POST /api/admin/projects/:id/start-retouch` | admin | `submitted` → `retouching`; 409 `not_submitted` from `picking` |
 | `POST /api/admin/projects/:id/reopen` | admin | `submitted`/`retouching` → `picking`, flag and `delivered_at` cleared |
 | `POST /api/admin/projects/:id/deliver` / `undeliver` | admin | stamp / clear `delivered_at` (deliver only from `retouching`, else 409 `not_retouching`) — see `docs/dashboard-settings.md` |
-| `GET /api/pick/state` | pick token (+ key) | owner name, am-I-owner, limit/price, selections, `phase`, `studio: {name, booking_url, has_logo}`; owner also gets `modified_after_submit`, `submitted_at` (latest submission) and each selection's `note` (viewers get `{photo_key, rating}` only) |
+| `GET /api/pick/state` | pick token (+ key) | owner name, am-I-owner, limit/price, selections, `phase`, `studio: {name, booking_url, has_logo}`; owner also gets `modified_after_submit`, `submitted_at` (latest submission) and each selection as `{photo_key, rating, note, marks}` (`marks`: `[{x, y, note}]` or `null`); viewers get `{photo_key, rating}` only — no `note`, no `marks` key |
 | `POST /api/pick/claim` `{name}` | pick token | atomic claim → `picker_key` |
-| `PUT /api/pick/selections` | token + key, owner only | batch upsert/delete; 400 `invalid_photo_key`; 409 `retouching` / `selection_cap` / `row_cap`; raises the flag when `submitted` |
-| `POST /api/pick/submit` `{relationship, email?}` | token + key, owner only | append `submissions` row (none for a repeat of the latest set: 200 with the latest), phase → `submitted`, email with diff (throttled, see above); 409 `retouching` / `submission_cap` |
+| `PUT /api/pick/selections` `{upsert: [{photo_key, rating, note?, marks?}], delete: [photo_key]}` | token + key, owner only | batch upsert/delete → `{ok: true}`; 400 `invalid_photo_key` / `invalid_marks` / `Invalid JSON`; 403 not the owner or a key outside the link's folders; 409 `retouching` / `selection_cap` / `row_cap` / `marks_cap`; 413 `too_large` (body > 2,000,000 bytes, or its items > 1,900,000 bytes as one value); 500 `marks_unavailable` (migration not run); raises the flag when `submitted`. `marks` rules: see "Retouch pins" |
+| `POST /api/pick/submit` `{relationship, email?}` | token + key, owner only | append `submissions` row with the photo-key and pin snapshots (none for a repeat of the latest keys **and** pins: 200 with the latest), phase → `submitted`, email with diff (throttled, see above); 409 `retouching` / `submission_cap` / `marks_cap` (pin snapshot over 446,400 bytes — only reachable by hand-edited rows); 413 `too_large` (body > 16 KB) |
 
 Admin routes check `isAdminToken` (the photographer token only; fails closed
 when unset). Pick, client, session and studio tokens are refused. Every
 `/api/admin/projects/:id…` route also filters on `photographer_id =
 DEFAULT_PHOTOGRAPHER_ID`: another photographer's project is 404 and untouched.
+
+## Retouch pins — the save contract
+
+`PUT /api/pick/selections`, per upsert item, `marks` is optional:
+
+| Item | Stored `marks` after the save |
+|---|---|
+| `marks` absent, rating ≥ 1 | **unchanged** (a cached pick.js from before pins cannot wipe them; a new row has none) |
+| `marks: [...]` (1–10 pins), rating ≥ 1 | replaced by the canonical form of that list (whole list, in the order sent: the order is the ①②③ numbering) |
+| `marks: []`, rating ≥ 1 | cleared (NULL) |
+| rating 0 (or rating absent, which is 0), with or without `marks` | cleared (NULL). Pins sent on a rating 0 item are **ignored**, not refused — but still validated, so malformed ones are still 400 |
+| key in `delete` | the row goes, pins with it |
+
+A key named twice in one save is written as its **last** mention, `marks`
+(or its absence) included.
+
+Validation — any failure is **400** `{error, code: 'invalid_marks'}` and
+nothing in the save is written:
+
+- `marks` must be an array (`null`, an object, a string … are 400; to clear,
+  send `[]`), at most **10** items (`PICK_MARKS_MAX`).
+- Each item a plain object (not `null`, not an array) with `x` and `y`
+  JSON numbers, finite, `0 ≤ v ≤ 1` (fractions of the photo's width and
+  height from its top-left). Strings like `"0.5"` are refused. Stored
+  rounded to 4 decimals.
+- `note` optional (missing = `''`), a string, trimmed, then at most **100**
+  characters (`PICK_MARK_NOTE_MAX`; characters, not UTF-16 units — an emoji
+  is one) with no control or line-separator character (U+0000–U+001F,
+  U+007F–U+009F, U+2028, U+2029; a trailing newline is trimmed away first).
+- Every other field of a pin is dropped; the server stores and returns only
+  `{x, y, note}` in that key order.
+
+Order of checks inside one item: rating, note, `marks`, photo key
+(`invalid_photo_key`), folder (403) — the first failing item decides the
+answer. Seat (403), phase (409 `retouching`) and caps (409) are checked as
+for any save.
+
+Before `2026-09-30-retouch-pins.sql` has run: a save that carries `marks`
+(even `[]`) answers **500** `{error, code: 'marks_unavailable'}` and writes
+nothing; every other save works (an un-heart is retried without the column);
+state gives the owner `marks: null`; submit snapshots photo keys only and a
+repeat is judged on photo keys only; admin detail gives `marks: null`.
+
+A save with no `marks` and no rating 0 item never names the column in SQL.
+
+### Size bounds (security review 2026-09-30; constants in `worker.js`)
+
+- **`PICK_MARKS_TOTAL_MAX = 300` pins per project**, across all its
+  selections. A save that would leave more → **409**
+  `{error: '標示總數已達上限（300 個）', code: 'marks_cap', max: 300}`, nothing
+  written (rating, note, deletes included). Checked inside every statement of
+  the save batch, like the other caps, against what the save would leave:
+  its own items' new pin counts (0 for `[]` and for every rating 0 item —
+  pins sent there never count) + every other row's pins − deleted rows. So
+  replacing a photo's pins counts the net result (editing at the cap works),
+  clearing / un-hearting / deleting always works, and a project already over
+  (by hand) may shrink or stay, not grow. Two racing saves cannot both pass.
+  Only checked in a save that writes pins. If `row_cap` or `selection_cap`
+  also fails, those codes win.
+- **Submit snapshot ≤ `PICK_MARKS_SNAPSHOT_MAX` = 446,400 bytes**
+  (300 × (4·256 + 4·100 + 64): every pin on its own photo, every character
+  4 bytes). A save cannot produce more (the worst legal snapshot measures
+  428,101 bytes; with ASCII keys/notes 118,501), so it only refuses
+  hand-edited rows: **409** `{code: 'marks_cap', max: 300}`, no row, no
+  phase change, no email.
+- **Request bodies** (read with a streaming cap, Content-Length not
+  trusted): save ≤ **`PICK_BODY_MAX` = 2,000,000 bytes** (the worst legal save
+  — 500 items with 256-character keys and 500-character notes at 4 bytes a
+  character, plus 300 pins — is ~1.7 MB; a realistic full save is a few
+  hundred KB); submit ≤ **`PICK_SUBMIT_BODY_MAX` = 16 KB**. Over → **413**
+  `{error: '資料太大', code: 'too_large', max}`. Unparseable JSON is still
+  400 `Invalid JSON`.
+- The save's items travel to D1 as one bound JSON value; over
+  **`PICK_BIND_MAX` = 1,900,000 bytes** (D1 fails a value over 2 MB) → **413**
+  `too_large` (`max: 1900000`) before any write. Reachable only with pin notes
+  full of `"` / `\` (escaped twice) on thousands of pins.
+- Length checks on name, note, email, photo key and pin note refuse a
+  string over 2 × max UTF-16 units before counting its characters.
+- Worst case for the photographer's detail page: 50 submissions × (photo
+  keys + pin snapshot). With 4-byte-character keys and notes that is ~37 MB
+  (measured, 300 pinned photos); with ASCII keys the pins add ≤ ~5.9 MB.
 
 ## Rules the tests must pin
 
@@ -259,3 +361,11 @@ DEFAULT_PHOTOGRAPHER_ID`: another photographer's project is 404 and untouched.
 16. Delete only with zero submissions (409 `has_submissions`); every statement
     of its batch re-checks that, so a racing submit is never lost or orphaned;
     R2 is never touched.
+17. Retouch pins (`worker/test/pick-marks.test.mjs`): ≤ 10 per photo,
+    x/y in [0, 1], note ≤ 100 characters without control characters, else
+    400 `invalid_marks` with nothing written; absent keeps, `[]` clears,
+    rating 0 clears; only the seat holder writes them (same batch, same gate)
+    and reads them through state; the submit snapshot includes them and a
+    pins-only change is a new row without an email. ≤ 300 pins per project
+    (409 `marks_cap`, atomic); save body ≤ 2,000,000 bytes, submit body ≤
+    16 KB, bound items ≤ 1,900,000 bytes (413 `too_large`).

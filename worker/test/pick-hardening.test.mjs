@@ -489,8 +489,8 @@ test('state gives notes to the owner only; viewers see picks and ratings', async
   await save(env, p.token, p.key, { upsert: [{ photo_key: A, rating: 5, note: '放大這張' }, { photo_key: B, rating: 0 }] });
   const st = async key => (await (await pick(env, 'GET', 'state', p.token, { key })).json()).selections;
   assert.deepEqual(await st(p.key), [
-    { photo_key: A, rating: 5, note: '放大這張' },
-    { photo_key: B, rating: 0, note: '' },
+    { photo_key: A, rating: 5, note: '放大這張', marks: null },
+    { photo_key: B, rating: 0, note: '', marks: null },
   ]);
   for (const key of [null, 'wrong']) {
     assert.deepEqual(await st(key), [{ photo_key: A, rating: 5 }, { photo_key: B, rating: 0 }], String(key));

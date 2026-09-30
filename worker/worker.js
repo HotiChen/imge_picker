@@ -411,12 +411,39 @@ const PICK_RELATIONSHIPS = ['本人', '伴侶', '家人', '朋友', '其他'];
 // photographer's; only the admin reopen route leaves it.
 const PICK_OPEN_PHASES = ['picking', 'submitted'];
 const PICK_OPEN_SQL = "('picking', 'submitted')";
+// Retouch pins on one ♥ photo (selections.marks): at most this many, each a
+// note of at most this many characters. Change them here only.
+const PICK_MARKS_MAX = 10;
+const PICK_MARK_NOTE_MAX = 100;
+// The most pins one project may hold across all its selections (a real one
+// is well under 100). Enforced inside the save's own writes like the other
+// caps (409 marks_cap). It is what bounds a submission's marks snapshot, and
+// with it the admin detail, which returns up to 50 of them.
+const PICK_MARKS_TOTAL_MAX = 300;
+// A submission's marks snapshot in bytes: every pin on its own photo, every
+// character of key and note 4 bytes, plus the JSON around them. A save can
+// never produce more; a snapshot over it (hand-edited rows) is refused (409
+// marks_cap) rather than stored. 300 × (4·256 + 4·100 + 64) = 446,400.
+const PICK_MARKS_SNAPSHOT_MAX = PICK_MARKS_TOTAL_MAX * (4 * PICK_PHOTO_KEY_MAX + 4 * PICK_MARK_NOTE_MAX + 64);
+// Request bodies, read with readBodyCapped (413 too_large). A save's worst
+// legitimate body is ~1.7 MB: 500 items × (a 256-character key and a
+// 500-character note at 4 bytes a character, + JSON) plus 300 pins with
+// 100-character notes. A submit is a relationship and an email.
+const PICK_BODY_MAX = 2000000;
+const PICK_SUBMIT_BODY_MAX = 16 * 1024;
+// D1 refuses a single string value over 2,000,000 bytes as an error; a save's
+// items travel as one bound JSON value, so one over this is refused (413)
+// before the batch rather than failing inside it.
+const PICK_BIND_MAX = 1900000;
 // One photographer today. Written by the Worker on every project so the data
 // is attributable from day one; a request body never chooses it.
 const DEFAULT_PHOTOGRAPHER_ID = 'default';
 
 // Characters, not UTF-16 units, so an emoji is one of the fifty.
 const charCount = s => [...s].length;
+// More than `max` characters, refusing a string over 2·max UTF-16 units
+// before spreading it (it cannot be ≤ max characters then).
+const overChars = (s, max) => s.length > 2 * max || charCount(s) > max;
 
 // ─── Studio settings and dashboard (docs/dashboard-settings.md) ─────────────
 const STUDIO_NAME_MAX = 60;
@@ -466,6 +493,14 @@ async function readBodyCapped(request, max) {
   let offset = 0;
   for (const c of chunks) { out.set(c, offset); offset += c.byteLength; }
   return out;
+}
+
+// A JSON body of at most `max` bytes: {body} or {refused: Response} — 413
+// too_large over the cap, 400 'Invalid JSON' when it does not parse.
+async function readJsonCapped(request, max) {
+  const bytes = await readBodyCapped(request, max);
+  if (!bytes) return { refused: jsonOk({ error: '資料太大', code: 'too_large', max }, 413) };
+  try { return { body: JSON.parse(new TextDecoder().decode(bytes)) }; } catch { return { refused: jsonErr('Invalid JSON') }; }
 }
 
 // An uploaded image (the logo, a platform product's photo): the raw body,
@@ -1054,7 +1089,7 @@ function pickKeyAllowed(share, key) {
 // characters (they would forge lines in the email's text part and logs), and
 // not a folder.
 function pickKeyValid(key) {
-  return typeof key === 'string' && charCount(key) <= PICK_PHOTO_KEY_MAX &&
+  return typeof key === 'string' && !overChars(key, PICK_PHOTO_KEY_MAX) &&
     !PICK_KEY_CONTROL.test(key) && !key.endsWith('/');
 }
 
@@ -1232,6 +1267,58 @@ function pickOverText(count, limit, price) {
   const over = count - limit;
   return `方案 ${limit} 張精修，您已選 ${count} 張，多 ${over} 張` +
     (price != null ? `，每張 NT$${price} 加挑費` : '');
+}
+
+// A save's `marks` in the one form the Worker stores: an array of at most
+// PICK_MARKS_MAX {x, y, note}, x and y finite numbers in [0, 1] rounded to 4
+// decimals, note a string (missing = '') trimmed to at most
+// PICK_MARK_NOTE_MAX characters with no control or line-separator character.
+// Any other field is dropped. null when the value is not that.
+function pickMarks(value) {
+  if (!Array.isArray(value) || value.length > PICK_MARKS_MAX) return null;
+  const out = [];
+  for (const m of value) {
+    if (!m || typeof m !== 'object' || Array.isArray(m)) return null;
+    const { x, y } = m;
+    if (typeof x !== 'number' || !Number.isFinite(x) || x < 0 || x > 1) return null;
+    if (typeof y !== 'number' || !Number.isFinite(y) || y < 0 || y > 1) return null;
+    const raw = m.note === undefined ? '' : m.note;
+    if (typeof raw !== 'string') return null;
+    const note = raw.trim();
+    if (overChars(note, PICK_MARK_NOTE_MAX) || PICK_KEY_CONTROL.test(note)) return null;
+    out.push({ x: Math.round(x * 1e4) / 1e4, y: Math.round(y * 1e4) / 1e4, note });
+  }
+  return out;
+}
+
+function pickMarksInvalid() {
+  return jsonOk({ error: '標示格式不正確', code: 'invalid_marks' }, 400);
+}
+
+// A selections.marks column back as an array, re-checked (a value edited by
+// hand in the console reads as none); null when there are none.
+function parseMarks(json) {
+  if (typeof json !== 'string') return null;
+  let v;
+  try { v = JSON.parse(json); } catch { return null; }
+  const marks = pickMarks(v);
+  return marks && marks.length ? marks : null;
+}
+
+// A submissions.marks snapshot back as {photo_key: [pins]}; null when there
+// is none or it will not parse as that.
+function parseMarksSnapshot(json) {
+  if (typeof json !== 'string') return null;
+  let v;
+  try { v = JSON.parse(json); } catch { return null; }
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return null;
+  const out = {};
+  for (const [k, pins] of Object.entries(v)) {
+    const marks = pickMarks(pins);
+    if (!marks) return null;
+    if (marks.length) out[k] = marks;
+  }
+  return Object.keys(out).length ? out : null;
 }
 
 // A submissions.photo_keys column back as an array; [] if it will not parse.
@@ -1747,16 +1834,21 @@ export default {
       // newest first; rowid breaks a tie inside one millisecond, since rows
       // are only ever appended. At most PICK_MAX_SUBMISSIONS: a project the
       // cap never covered (rows from before it) still loads a bounded page
-      const { results: submitted } = await env.DB.prepare(
-        'SELECT id, picker_id, relationship, email, photo_keys, count, pick_limit, extra_price, created_at, notified FROM submissions WHERE project_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?'
+      // `marks` (retouch pins) parsed on both, null when none — and on a
+      // database that has not had the retouch-pins migration yet
+      const submittedRows = cols => env.DB.prepare(
+        `SELECT id, picker_id, relationship, email, photo_keys, count, pick_limit, extra_price, created_at, notified${cols} FROM submissions WHERE project_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?`
       ).bind(project.id, PICK_MAX_SUBMISSIONS).all();
+      const { results: submitted } = await withoutMissingColumn(() => submittedRows(', marks'), () => submittedRows(''));
       const { unnotified } = await env.DB.prepare(
         `SELECT ${PICK_UNNOTIFIED_SQL} AS unnotified FROM projects p WHERE p.id = ?`
       ).bind(project.id).first();
-      const submissions = submitted.map(r => ({ ...r, photo_keys: parsePhotoKeys(r.photo_keys) }));
-      const { results: selections } = await env.DB.prepare(
-        'SELECT photo_key, rating, note, updated_by, updated_at FROM selections WHERE project_id = ? ORDER BY photo_key'
+      const submissions = submitted.map(r => ({ ...r, photo_keys: parsePhotoKeys(r.photo_keys), marks: parseMarksSnapshot(r.marks) }));
+      const selectionRows = cols => env.DB.prepare(
+        `SELECT photo_key, rating, note, updated_by, updated_at${cols} FROM selections WHERE project_id = ? ORDER BY photo_key`
       ).bind(project.id).all();
+      const { results: selectionsRaw } = await withoutMissingColumn(() => selectionRows(', marks'), () => selectionRows(''));
+      const selections = selectionsRaw.map(r => ({ ...r, marks: parseMarks(r.marks) }));
       // every pick link the project ever had, live or not, so the page can
       // offer revoke on the live ones
       const { results: tokenRows } = await env.DB.prepare(
@@ -2790,11 +2882,17 @@ export default {
       // GET /api/pick/state — what anyone holding the link may see
       if (request.method === 'GET' && route === 'state') {
         await touchShareToken(s, request, env);
-        // notes are the owner's own words to the photographer: a viewer sees
-        // what was picked and how it was rated, never the note
-        const { results: selections } = await env.DB.prepare(
-          `SELECT photo_key, rating${isOwner ? ', note' : ''} FROM selections WHERE project_id = ? ORDER BY photo_key`
+        // notes and retouch pins are the owner's own words to the
+        // photographer: a viewer sees what was picked and how it was rated,
+        // never the note or the pins. The owner's `marks` is the parsed array
+        // or null (also on a database without the column yet).
+        const selected = cols => env.DB.prepare(
+          `SELECT photo_key, rating${cols} FROM selections WHERE project_id = ? ORDER BY photo_key`
         ).bind(project.id).all();
+        const { results: selections } = isOwner
+          ? await withoutMissingColumn(() => selected(', note, marks'), () => selected(', note'))
+          : await selected('');
+        if (isOwner) for (const r of selections) r.marks = parseMarks(r.marks);
         // the owner learns when the project was last submitted and whether they
         // changed anything since; a viewer only which phase it is in
         const last = isOwner ? await env.DB.prepare(
@@ -2827,7 +2925,7 @@ export default {
         let body;
         try { body = await request.json(); } catch { return jsonErr('Invalid JSON'); }
         const name = typeof body?.name === 'string' ? body.name.trim() : '';
-        if (!name || charCount(name) > PICK_NAME_MAX) return jsonErr(`請輸入 1–${PICK_NAME_MAX} 字的名字`);
+        if (!name || overChars(name, PICK_NAME_MAX)) return jsonErr(`請輸入 1–${PICK_NAME_MAX} 字的名字`);
         const pickerId = crypto.randomUUID();
         // returned once and never stored: the row keeps its hash
         const key = newShareToken();
@@ -2854,8 +2952,9 @@ export default {
       if (request.method === 'PUT' && route === 'selections') {
         if (!isOwner) return jsonErr('只有挑選人可以修改', 403);
         if (!PICK_OPEN_PHASES.includes(project.phase)) return pickRetouching();
-        let body;
-        try { body = await request.json(); } catch { return jsonErr('Invalid JSON'); }
+        const read = await readJsonCapped(request, PICK_BODY_MAX);
+        if (read.refused) return read.refused;
+        const { body } = read;
         if (!body || typeof body !== 'object' || Array.isArray(body)) return jsonErr('Invalid body');
         const upsert = body.upsert ?? [];
         const remove = body.delete ?? [];
@@ -2864,17 +2963,32 @@ export default {
         // every item is checked before anything is written, so a refused save
         // leaves nothing half-applied
         const byKey = new Map();
+        let carriesMarks = false;
         for (const item of upsert) {
           if (!item || typeof item !== 'object' || typeof item.photo_key !== 'string') return jsonErr('Invalid item');
           const rating = item.rating === undefined ? 0 : item.rating;
           if (!Number.isInteger(rating) || rating < 0 || rating > PICK_RATING_MAX) return jsonErr('Invalid rating');
           const note = item.note === undefined ? '' : item.note;
-          if (typeof note !== 'string' || charCount(note) > PICK_NOTE_MAX) return jsonErr(`備註最多 ${PICK_NOTE_MAX} 字`);
+          if (typeof note !== 'string' || overChars(note, PICK_NOTE_MAX)) return jsonErr(`備註最多 ${PICK_NOTE_MAX} 字`);
+          // retouch pins: validated whenever sent, even on a rating 0 item,
+          // where they are then ignored
+          const marks = item.marks === undefined ? undefined : pickMarks(item.marks);
+          if (marks === null) return pickMarksInvalid();
           if (!pickKeyValid(item.photo_key)) return pickKeyInvalid();
           if (!pickKeyAllowed(s, item.photo_key)) return jsonErr('照片不在開放資料夾內', 403);
+          // What the save does to the stored pins: `s` = 1 means write `m`
+          // (the canonical JSON, or null = none). A pin only makes sense on a
+          // ♥ photo, so rating 0 always clears them, whatever the item says.
+          // An item with no `marks` on a ♥ photo leaves them alone: a pick.js
+          // from before pins, still cached, must not wipe them.
+          const entry = { k: item.photo_key, r: rating, n: note };
+          // `c`: how many pins that leaves on the photo, for the pins cap
+          if (rating === 0) Object.assign(entry, { s: 1, m: null, c: 0 });
+          else if (marks) Object.assign(entry, { s: 1, m: marks.length ? JSON.stringify(marks) : null, c: marks.length });
           // a key named twice is written once, as its last mention
           byKey.delete(item.photo_key);
-          byKey.set(item.photo_key, { k: item.photo_key, r: rating, n: note });
+          byKey.set(item.photo_key, entry);
+          if (marks) carriesMarks = true;
         }
         const items = [...byKey.values()];
         for (const k of remove) {
@@ -2911,34 +3025,93 @@ export default {
           '(SELECT COUNT(*) FROM (SELECT photo_key FROM selections WHERE project_id = ?1 UNION SELECT value FROM json_each(?3)) ' +
           `WHERE photo_key ${notRemoved}) ` +
           '<= MAX(?7, (SELECT COUNT(*) FROM selections WHERE project_id = ?1))';
-        const open = `id = ?1 AND owner_picker_id = ?2 AND phase IN ${PICK_OPEN_SQL} AND archived_at IS NULL AND ${starsFit} AND ${rowsFit}`;
-        const gate = `EXISTS (SELECT 1 FROM projects WHERE ${open})`;
-        const gateArgs = [project.id, picker.id, upsertKeys, removeKeys, PICK_MAX_SELECTIONS, JSON.stringify(items), PICK_MAX_ROWS];
-        const writes = [env.DB.prepare(
-          "UPDATE projects SET modified_after_submit = CASE WHEN phase = 'submitted' THEN 1 ELSE modified_after_submit END " +
-          `WHERE ${open}`
-        ).bind(...gateArgs)];
-        if (items.length) {
-          writes.push(env.DB.prepare(
-            'INSERT INTO selections (project_id, photo_key, rating, note, updated_by, updated_at) ' +
-            "SELECT ?1, json_extract(value, '$.k'), json_extract(value, '$.r'), json_extract(value, '$.n'), ?2, ?8 " +
-            `FROM json_each(?6) WHERE ${gate} ` +
-            'ON CONFLICT(project_id, photo_key) DO UPDATE SET rating = excluded.rating, note = excluded.note, updated_by = excluded.updated_by, updated_at = excluded.updated_at'
-          ).bind(...gateArgs, new Date().toISOString()));
+        // The pins cap the same way: the pins this save leaves — its own
+        // `s` = 1 items' counts (0 for a clear or an unrate), plus every other
+        // row's pins, minus the deletes — at most PICK_MARKS_TOTAL_MAX, or no
+        // more than there are now. Only in a batch that writes pins (a save
+        // that writes none cannot add any, and the column may not exist yet).
+        const pinsOf = "CASE WHEN json_valid(marks) THEN json_array_length(marks) ELSE 0 END";
+        const setsPins = "SELECT json_extract(value, '$.k') FROM json_each(?6) WHERE json_extract(value, '$.s') = 1";
+        const marksFit =
+          `((SELECT COALESCE(SUM(json_extract(value, '$.c')), 0) FROM json_each(?6) WHERE json_extract(value, '$.s') = 1 AND json_extract(value, '$.k') ${notRemoved}) + ` +
+          `(SELECT COALESCE(SUM(${pinsOf}), 0) FROM selections WHERE project_id = ?1 AND marks IS NOT NULL AND photo_key NOT IN (${setsPins}) AND photo_key ${notRemoved})) ` +
+          `<= MAX(${PICK_MARKS_TOTAL_MAX}, (SELECT COALESCE(SUM(${pinsOf}), 0) FROM selections WHERE project_id = ?1 AND marks IS NOT NULL))`;
+        const openFor = withMarks => `id = ?1 AND owner_picker_id = ?2 AND phase IN ${PICK_OPEN_SQL} AND archived_at IS NULL AND ${starsFit} AND ${rowsFit}` +
+          (withMarks ? ` AND ${marksFit}` : '');
+        const itemsJson = JSON.stringify(items);
+        // the one big bound value: D1 fails a value over 2 MB as an error, so
+        // it is refused here, before anything is tried
+        if (new TextEncoder().encode(itemsJson).byteLength > PICK_BIND_MAX) {
+          return jsonOk({ error: '資料太大', code: 'too_large', max: PICK_BIND_MAX }, 413);
         }
-        if (remove.length) {
-          writes.push(env.DB.prepare(
-            `DELETE FROM selections WHERE project_id = ?1 AND photo_key IN (SELECT value FROM json_each(?4)) AND ${gate}`
-          ).bind(...gateArgs));
-        }
-        const [allowed] = await env.DB.batch(writes);
+        const gateArgs = [project.id, picker.id, upsertKeys, removeKeys, PICK_MAX_SELECTIONS, itemsJson, PICK_MAX_ROWS];
+        let usedMarks = false;
+        const updatedAt = new Date().toISOString();
+        // withMarks: whether the batch writes selections.marks at all. The
+        // INSERT never names the column (a new row starts with none, an
+        // existing one keeps its own); the pins are a second write over the
+        // rows the INSERT just wrote, for the items with `s` = 1 only, under
+        // the same gate. Before it the INSERT has made those rows, and the gate
+        // still holds for a save it let through (the DELETE after it relies on
+        // the same).
+        const build = withMarks => {
+          usedMarks = withMarks;
+          const open = openFor(withMarks);
+          const gate = `EXISTS (SELECT 1 FROM projects WHERE ${open})`;
+          const writes = [env.DB.prepare(
+            "UPDATE projects SET modified_after_submit = CASE WHEN phase = 'submitted' THEN 1 ELSE modified_after_submit END " +
+            `WHERE ${open}`
+          ).bind(...gateArgs)];
+          if (items.length) {
+            writes.push(env.DB.prepare(
+              'INSERT INTO selections (project_id, photo_key, rating, note, updated_by, updated_at) ' +
+              "SELECT ?1, json_extract(value, '$.k'), json_extract(value, '$.r'), json_extract(value, '$.n'), ?2, ?8 " +
+              `FROM json_each(?6) WHERE ${gate} ` +
+              'ON CONFLICT(project_id, photo_key) DO UPDATE SET rating = excluded.rating, note = excluded.note, updated_by = excluded.updated_by, updated_at = excluded.updated_at'
+            ).bind(...gateArgs, updatedAt));
+          }
+          if (withMarks) {
+            const marked = "SELECT value FROM json_each(?6) WHERE json_extract(value, '$.s') = 1";
+            writes.push(env.DB.prepare(
+              "UPDATE selections SET marks = (SELECT json_extract(value, '$.m') FROM json_each(?6) " +
+              "WHERE json_extract(value, '$.k') = selections.photo_key AND json_extract(value, '$.s') = 1) " +
+              `WHERE project_id = ?1 AND photo_key IN (SELECT json_extract(value, '$.k') FROM (${marked})) AND ${gate}`
+            ).bind(...gateArgs));
+          }
+          if (remove.length) {
+            writes.push(env.DB.prepare(
+              `DELETE FROM selections WHERE project_id = ?1 AND photo_key IN (SELECT value FROM json_each(?4)) AND ${gate}`
+            ).bind(...gateArgs));
+          }
+          return env.DB.batch(writes);
+        };
+        // A save that names no pins and un-hearts nothing never mentions the
+        // column. One that only un-hearts would clear pins, which a database
+        // without the column (the migration not run yet) has none of: it is
+        // retried without them. One that carries `marks` cannot be saved
+        // there, and says so rather than dropping the pins silently.
+        // (a failed batch is one transaction rolled back, so the retry starts
+        // from nothing)
+        const result = await withoutMissingColumn(
+          () => build(items.some(i => i.s === 1)),
+          async () => carriesMarks ? null : build(false),
+        );
+        if (!result) return jsonOk({ error: '標示功能尚未啟用', code: 'marks_unavailable' }, 500);
+        const [allowed] = result;
         if (!allowed.meta?.changes) {
           return pickRefused(env, project.id, '只有挑選人可以修改', {
             pickerId: picker.id,
             // only which message to show; the writes above already decided
-            refused: async () => (await env.DB.prepare(`SELECT ${rowsFit} AS ok`).bind(...gateArgs).first())?.ok
-              ? jsonOk({ error: `最多只能選 ${PICK_MAX_SELECTIONS} 張`, code: 'selection_cap', max: PICK_MAX_SELECTIONS }, 409)
-              : jsonOk({ error: `最多只能保留 ${PICK_MAX_ROWS} 筆`, code: 'row_cap', max: PICK_MAX_ROWS }, 409),
+            refused: async () => {
+              const fit = await env.DB.prepare(
+                `SELECT ${rowsFit} AS rows_ok, ${starsFit} AS stars_ok${usedMarks ? `, ${marksFit} AS marks_ok` : ''}`
+              ).bind(...gateArgs).first();
+              if (!fit?.rows_ok) return jsonOk({ error: `最多只能保留 ${PICK_MAX_ROWS} 筆`, code: 'row_cap', max: PICK_MAX_ROWS }, 409);
+              if (usedMarks && fit.stars_ok && !fit.marks_ok) {
+                return jsonOk({ error: `標示總數已達上限（${PICK_MARKS_TOTAL_MAX} 個）`, code: 'marks_cap', max: PICK_MARKS_TOTAL_MAX }, 409);
+              }
+              return jsonOk({ error: `最多只能選 ${PICK_MAX_SELECTIONS} 張`, code: 'selection_cap', max: PICK_MAX_SELECTIONS }, 409);
+            },
           });
         }
         return jsonOk({ ok: true });
@@ -2948,8 +3121,9 @@ export default {
       if (request.method === 'POST' && route === 'submit') {
         if (!isOwner) return jsonErr('只有挑選人可以送出', 403);
         if (!PICK_OPEN_PHASES.includes(project.phase)) return pickRetouching();
-        let body;
-        try { body = await request.json(); } catch { return jsonErr('Invalid JSON'); }
+        const read = await readJsonCapped(request, PICK_SUBMIT_BODY_MAX);
+        if (read.refused) return read.refused;
+        const { body } = read;
         const { relationship, email } = (body && typeof body === 'object') ? body : {};
         if (!PICK_RELATIONSHIPS.includes(relationship)) return jsonErr('請選擇與新人的關係');
         let mail = null;
@@ -2957,7 +3131,7 @@ export default {
           if (typeof email !== 'string') return jsonErr('Invalid email');
           const trimmed = email.trim();
           if (trimmed) {
-            if (charCount(trimmed) > PICK_EMAIL_MAX || !/^[^\s@]+@[^\s@]+$/.test(trimmed)) return jsonErr('Email 格式不正確');
+            if (overChars(trimmed, PICK_EMAIL_MAX) || !/^[^\s@]+@[^\s@]+$/.test(trimmed)) return jsonErr('Email 格式不正確');
             mail = trimmed;
           }
         }
@@ -2976,31 +3150,60 @@ export default {
         const submittedAt = new Date().toISOString();
         const picked = 'SELECT photo_key FROM selections WHERE project_id = p.id AND rating > 0 ORDER BY photo_key';
         const snapshot = `(SELECT json_group_array(photo_key) FROM (${picked}))`;
-        // both sides built by json_group_array over keys in the same order
-        const repeat = `(SELECT photo_keys FROM submissions WHERE project_id = p.id ORDER BY rowid DESC LIMIT 1) IS ${snapshot}`;
+        // the retouch pins of the same photos, {photo_key: [pins]} in key
+        // order over the photos that have any; NULL when none do. A value
+        // that is not JSON (only ever by hand) is left out rather than
+        // failing the submit.
+        const pinned = 'SELECT photo_key, marks FROM selections WHERE project_id = p.id AND rating > 0 AND marks IS NOT NULL AND json_valid(marks) ORDER BY photo_key';
+        const marksSnapshot = `(SELECT NULLIF(json_group_object(photo_key, json(marks)), '{}') FROM (${pinned}))`;
         const room = `(SELECT COUNT(*) FROM submissions WHERE project_id = p.id) < ${PICK_MAX_SUBMISSIONS}`;
         const open = `p.id = ? AND p.owner_picker_id = ? AND p.phase IN ${PICK_OPEN_SQL} AND p.archived_at IS NULL`;
-        const [inserted, , moved] = await env.DB.batch([
-          env.DB.prepare(
-            'INSERT INTO submissions (id, project_id, picker_id, relationship, email, photo_keys, count, pick_limit, extra_price, created_at) ' +
-            `SELECT ?, p.id, ?, ?, ?, ${snapshot}, (SELECT COUNT(*) FROM (${picked})), ` +
-            `p.pick_limit, p.extra_price, ? FROM projects p WHERE ${open} AND NOT (${repeat}) AND ${room}`
-          ).bind(submissionId, picker.id, relationship, mail, submittedAt, project.id, picker.id),
-          // the latest contact info stays on the picker
-          env.DB.prepare(
-            `UPDATE pickers SET relationship = ?, email = ? WHERE id = ? AND EXISTS (SELECT 1 FROM projects p WHERE ${open} AND (${repeat} OR ${room}))`
-          ).bind(relationship, mail, picker.id, project.id, picker.id),
-          env.DB.prepare(
-            `UPDATE projects SET phase = 'submitted', modified_after_submit = 0 WHERE id IN (SELECT p.id FROM projects p WHERE ${open} AND (${repeat} OR ${room}))`
-          ).bind(project.id, picker.id),
-        ]);
+        // withMarks: false on a database without the marks columns yet, where
+        // a repeat is the same photos, as it was before pins
+        // and the snapshot must fit PICK_MARKS_SNAPSHOT_MAX bytes; a save
+        // cannot make one that does not, so only hand-edited rows are refused
+        const marksFit = `COALESCE(length(CAST(${marksSnapshot} AS BLOB)), 0) <= ${PICK_MARKS_SNAPSHOT_MAX}`;
+        let usedMarks = false;
+        const submitBatch = withMarks => {
+          usedMarks = withMarks;
+          const fits = withMarks ? ` AND ${marksFit}` : '';
+          // both sides built the same way (json_group_array / _object over
+          // keys in the same order), so equal means unchanged: a repeat is
+          // the same photos AND the same pins
+          const latest = `SELECT photo_keys${withMarks ? ', marks' : ''} FROM submissions WHERE project_id = p.id ORDER BY rowid DESC LIMIT 1`;
+          const repeat = `EXISTS (SELECT 1 FROM (${latest}) l WHERE l.photo_keys IS ${snapshot}` +
+            `${withMarks ? ` AND l.marks IS ${marksSnapshot}` : ''})`;
+          return env.DB.batch([
+            env.DB.prepare(
+              `INSERT INTO submissions (id, project_id, picker_id, relationship, email, photo_keys, count, pick_limit, extra_price, created_at${withMarks ? ', marks' : ''}) ` +
+              `SELECT ?, p.id, ?, ?, ?, ${snapshot}, (SELECT COUNT(*) FROM (${picked})), ` +
+              `p.pick_limit, p.extra_price, ?${withMarks ? `, ${marksSnapshot}` : ''} FROM projects p WHERE ${open} AND NOT (${repeat}) AND ${room}${fits}`
+            ).bind(submissionId, picker.id, relationship, mail, submittedAt, project.id, picker.id),
+            // the latest contact info stays on the picker
+            env.DB.prepare(
+              `UPDATE pickers SET relationship = ?, email = ? WHERE id = ? AND EXISTS (SELECT 1 FROM projects p WHERE ${open} AND (${repeat} OR ${room})${fits})`
+            ).bind(relationship, mail, picker.id, project.id, picker.id),
+            env.DB.prepare(
+              `UPDATE projects SET phase = 'submitted', modified_after_submit = 0 WHERE id IN (SELECT p.id FROM projects p WHERE ${open} AND (${repeat} OR ${room})${fits})`
+            ).bind(project.id, picker.id),
+          ]);
+        };
+        const [inserted, , moved] = await withoutMissingColumn(() => submitBatch(true), () => submitBatch(false));
         if (!moved.meta?.changes) {
           return pickRefused(env, project.id, '只有挑選人可以送出', {
             pickerId: picker.id,
-            refused: () => jsonOk({
-              error: `送出次數已達上限（${PICK_MAX_SUBMISSIONS} 次），請聯絡攝影師`,
-              code: 'submission_cap', max: PICK_MAX_SUBMISSIONS,
-            }, 409),
+            refused: async () => {
+              const fit = usedMarks
+                ? await env.DB.prepare(`SELECT ${marksFit} AS ok FROM projects p WHERE p.id = ?`).bind(project.id).first()
+                : { ok: 1 };
+              if (!fit?.ok) {
+                return jsonOk({ error: `標示總數已達上限（${PICK_MARKS_TOTAL_MAX} 個）`, code: 'marks_cap', max: PICK_MARKS_TOTAL_MAX }, 409);
+              }
+              return jsonOk({
+                error: `送出次數已達上限（${PICK_MAX_SUBMISSIONS} 次），請聯絡攝影師`,
+                code: 'submission_cap', max: PICK_MAX_SUBMISSIONS,
+              }, 409);
+            },
           });
         }
         // the row this submit stands for: its own, or for a repeat the latest
