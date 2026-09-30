@@ -114,6 +114,18 @@ a proof → photographer / client approves → printed → shipped (tracking no.
 - Open: how Tim sends jobs today (LINE + Drive?); does the client approve a
   layout proof, or only the photographer?
 
+## Guest pick page UI (decided with Tim 2026-09-30, from his iPhone test — not built yet)
+Guest link only (owner and viewers); the photographer's own index.html keeps every tool.
+- Only two tools for guests: **資料夾** and the **全部 ｜ ♥ 已選 N ｜ 未選** filter.
+  Remove FLAGS (PICK/REVIEW/REJECT), ANNOTATION, 排序 and DATA from the guest view (from the DOM).
+- Phone: no ☰ / drawer for guests. An always-visible bar under the header:
+  「資料夾：<current> ▾」 + the 3-way filter. Desktop: sidebar with only those two.
+- Delivered gallery: folder switch only (no filter, no ♥).
+- **One submit button only: the bottom one (完成提交).** Remove 完成挑圖 from the header.
+- 預約拍攝: no calendar icon; the link is the photographer's booking URL from settings.
+- Top-left brand: the photographer's own studio logo / name from settings.
+- Replace the 「HC」 circle with a small person icon (placeholder for a future client login).
+
 ## Bugs
 - Phone preview: the orange tools toggle (`.mobile-tools-toggle`, fixed
   bottom-right, 52px) covers the bottom bar's ♥ on a 390px phone. Predates
