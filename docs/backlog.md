@@ -164,6 +164,30 @@ Guest link only (owner and viewers); the photographer's own index.html keeps eve
   - Guest writes → High tier: TDD + security review. ~1.5 days.
   - Build together with the guest pick page UI changes above.
 
+## Co-picking / collaborators (decided with Tim 2026-09-30 — design to be rewritten, not built)
+Replaces the seat-passing proposal in docs/pick-handover.md §3+ (kept only as history).
+- **Two people by default** (the first person + one collaborator, a couple);
+  `max_pickers` per project, raisable for a family portrait.
+- Each person's ♥ has their own colour **and the first character of their name**
+  (colour alone is not enough); same first character → 首字1 / 首字2, numbered by
+  join order. A photo hearted by both is **one** photo (union, counted once); the
+  card shows both marks.
+- Removing: **the first person may remove any photo** (clears everyone's ♥);
+  a collaborator can only cancel their own ♥.
+- **Only the first person submits.** A collaborator's edits after a submit mark
+  the project 「已修改，尚未重新送出」 (photographer and first person both see it).
+- Collaborator's notes and pins are **retouch requests to the photographer**
+  (no separate "family only" comments — families chat in LINE): saved per person,
+  included in the submission when the first person submits, shown to the
+  photographer tagged with the writer's name/colour. The input is labelled
+  「給攝影師的修圖備註」. Limits: ≤10 pins per person per photo, ≤300 per project.
+- Removing a photo also clears the pins/notes on it; the writer sees 「這張已被移除」.
+- The plan cap is checked at submit on the union of hearts (in progress: the
+  submit-time cap, separate from this).
+- Not decided yet: how the collaborator link works (one-time link, 48 h, revocable
+  by the first person — the redeem/`#h=` mechanics in pick-handover.md can be reused),
+  a photographer-visible history, and a 「兩人都選」 filter (likely yes).
+
 ## Bugs
 - Phone preview: the orange tools toggle (`.mobile-tools-toggle`, fixed
   bottom-right, 52px) covers the bottom bar's ♥ on a 390px phone. Predates
