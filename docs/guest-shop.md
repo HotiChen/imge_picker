@@ -380,3 +380,31 @@ Worker packages are serial (one file). Bump `?v=` on every frontend change.
    Who writes `privacy.html` / terms and checks them legally?
 6. Album: must the guest's photo count match the platform album's page/photo
    count (`photo_count`), or stay advisory as today?
+
+## Tim's answers (2026-09-30, round 2 — these supersede the recommendations above)
+
+1. **Transfer details are shown after the photographer confirms** the order.
+2. **Promo can be set per project.** More generally there is a studio-level
+   set of *project defaults*, and every project can edit its own copy — see
+   `docs/project-plan.md` (pick limit, extra price, extra-pick cap, promo,
+   shipping fee). *Cancel delivery → deliver again* restarts the promo window
+   (today `undeliver` clears `delivered_at`). Tim's view: that looks like a way
+   round the rule, but it should be deliberate — **listed for a later
+   discussion, not decided.** Until then the behaviour stays as built.
+3. **There must be a shipping fee.** Because custom products are off and
+   `order_items.kind` has a CHECK that cannot change without a table rebuild,
+   shipping is **not** a product line: `orders` gains `delivery_method`
+   (`pickup` | `ship`) and `shipping_fee` (integer NT$, snapshot). Total =
+   subtotal − discount + shipping_fee. The studio default fee lives in
+   settings (project default, editable per project); `pickup` is free; the
+   photographer can adjust the fee on the order when confirming. The guest sees
+   the fee before submitting and it is inside `expected_total`. The totals SQL
+   (`ORDER_TOTAL_SQL`, outstanding, revenue) and the platform-fee rule (shipping
+   is not margin) must account for it.
+4. **Shop only after delivery.**
+5. **Privacy / terms: find someone to review later.** Retention (180 days) and
+   the notice wording stay a *reference proposal* until reviewed.
+6. **Album photo count stays advisory.** Reference only, to be discussed later.
+
+Guest-shop stages are unchanged; S1 (info + promo) can start once the project
+defaults exist, because the promo settings live there.
