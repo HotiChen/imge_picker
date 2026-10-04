@@ -94,7 +94,7 @@ test('deliver / undeliver: unknown or other photographer is 404, untouched', asy
   assert.equal(one(env, 'SELECT delivered_at FROM projects').delivered_at, 'x');
 });
 
-test('undeliver clears the stamp; reopen clears it too (delivered implies retouching)', async () => {
+test('undeliver clears the stamp; reopen clears it too (delivered implies retouching); both keep the finals', async () => {
   const env = setup();
   const p = await retouching(env);
   assert.equal((await deliver(env, p.project.id)).status, 200);
@@ -105,7 +105,8 @@ test('undeliver clears the stamp; reopen clears it too (delivered implies retouc
   assert.equal(one(env, 'SELECT phase FROM projects').phase, 'retouching');
   assert.equal((await deliver(env, p.project.id)).status, 200);
   assert.equal((await admin(env, p.project.id, 'reopen')).status, 200);
-  assert.deepEqual({ ...one(env, 'SELECT phase, delivered_at FROM projects') }, { phase: 'picking', delivered_at: null });
+  assert.deepEqual({ ...one(env, 'SELECT phase, delivered_at, final_folders FROM projects') },
+    { phase: 'picking', delivered_at: null, final_folders: JSON.stringify(FINALS.final_folders) });
 });
 
 test('a delivered project refuses guest saves and submits like retouching', async () => {

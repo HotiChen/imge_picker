@@ -272,7 +272,7 @@ test('deliver is still only from retouching (409 not_retouching), checked before
   assert.deepEqual({ ...one(env, 'SELECT delivered_at, final_folders FROM projects') }, { delivered_at: null, final_folders: null });
 });
 
-test('deliver / undeliver / the switch: unknown or other photographer is 404, untouched', async () => {
+test('deliver / undeliver / reopen / the switch: unknown or other photographer is 404, untouched', async () => {
   const env = setup();
   const p = await retouching(env);
   env.DB._db.prepare("UPDATE projects SET photographer_id = 'other'").run();
@@ -280,12 +280,19 @@ test('deliver / undeliver / the switch: unknown or other photographer is 404, un
   for (const id of [p.id, 'nope']) {
     assert.equal((await deliver(env, id)).status, 404);
     assert.equal((await admin(env, id, 'undeliver')).status, 404);
+    assert.equal((await admin(env, id, 'reopen')).status, 404);
     assert.equal((await patch(env, id, { allow_proof_download: true })).status, 404);
   }
   assert.equal(JSON.stringify(rows(env, 'SELECT * FROM projects')), before);
+  // a delivered project of another photographer: reopen leaves the stamp, the
+  // finals and the phase alone
+  env.DB._db.prepare("UPDATE projects SET delivered_at = '2026-01-01T00:00:00.000Z', final_folders = ?").run(JSON.stringify([FINAL]));
+  const delivered = JSON.stringify(rows(env, 'SELECT * FROM projects'));
+  assert.equal((await admin(env, p.id, 'reopen')).status, 404);
+  assert.equal(JSON.stringify(rows(env, 'SELECT * FROM projects')), delivered);
 });
 
-test('undeliver clears delivered_at only and keeps the finals snapshot; reopen still clears both', async () => {
+test('undeliver clears delivered_at only and keeps the finals snapshot; reopen does the same and moves to picking', async () => {
   const env = setup();
   const p = await delivered(env, [FINAL, 'shoot/精修2/']);
   const res = await admin(env, p.id, 'undeliver');
@@ -300,9 +307,17 @@ test('undeliver clears delivered_at only and keeps the finals snapshot; reopen s
   assert.equal((await admin(env, p.id, 'undeliver')).status, 200);
   assert.deepEqual(JSON.parse(one(env, 'SELECT final_folders FROM projects').final_folders), [FINAL, 'shoot/精修2/']);
   assert.equal((await deliver(env, p.id)).status, 200);
-  assert.equal((await admin(env, p.id, 'reopen')).status, 200);
-  assert.deepEqual({ ...one(env, 'SELECT delivered_at, final_folders, phase FROM projects') },
-    { delivered_at: null, final_folders: null, phase: 'picking' });
+  const reopened = await admin(env, p.id, 'reopen');
+  assert.equal(reopened.status, 200);
+  assert.deepEqual(await reopened.json(), { ok: true, phase: 'picking' });
+  const after = one(env, 'SELECT delivered_at, final_folders, phase, modified_after_submit FROM projects');
+  assert.equal(after.delivered_at, null);
+  assert.equal(after.phase, 'picking');
+  assert.equal(after.modified_after_submit, 0);
+  // the last deliver's finals stay, like undeliver: reopen is not clearing the setup
+  assert.deepEqual(JSON.parse(after.final_folders), [FINAL]);
+  // and no reopen statement names the column (so it runs before the migration too)
+  assert.deepEqual(env.DB._writes().filter(s => /phase = 'picking'/.test(s) && /final_folders/.test(s)), []);
 });
 
 // ─── the switch ──────────────────────────────────────────────────────────────
@@ -617,6 +632,109 @@ test('deliver after undeliver replaces the kept finals and stamps a new delivere
   assert.equal(s.delivered_at, json.delivered_at);
 });
 
+// ─── reopen (退回挑片) keeps the finals too ───────────────────────────────────
+
+test('reopen takes the gallery down: the kept finals are never readable, picking scope as before', async () => {
+  for (const on of [false, true]) {
+    const env = setup();
+    const p = await delivered(env);
+    setSwitch(env, on);
+    // delivered: every finals read is served (so the 401s below are the gate,
+    // not a path that never worked)
+    for (const [path, body] of FINAL_READS) await expectStatus(env, p.token, path, 200, body);
+    assert.equal((await state(env, p.token)).mode, 'delivered');
+    assert.equal((await admin(env, p.id, 'reopen')).status, 200);
+    // the snapshot is still on the project: the refusals below come from the
+    // stamp being gone, which is the case this guards
+    assert.deepEqual({ ...one(env, 'SELECT delivered_at, phase FROM projects') }, { delivered_at: null, phase: 'picking' });
+    assert.deepEqual(JSON.parse(one(env, 'SELECT final_folders FROM projects').final_folders), [FINAL]);
+    for (const [path] of FINAL_READS) await expectStatus(env, p.token, path, 401);
+    // the proofs are back as while picking: thumbnails, originals only with the switch
+    await expectStatus(env, p.token, `${enc(PA)}?w=400`, 200, 'PROOF-A-400');
+    await expectStatus(env, p.token, enc(PA), on ? 200 : 403);
+    for (const key of [p.key, undefined, 'not-a-key']) {
+      const s = await state(env, p.token, key);
+      assert.equal(s.mode, 'picking', `switch ${on}`);
+      assert.deepEqual(s.final_folders, []);
+      assert.deepEqual(s.folders, [PROOF]);
+      assert.equal(s.delivered_at, null);
+      assert.equal(s.allow_proof_download, on);
+    }
+    // picking again: the owner's writes are open
+    assert.equal((await save(env, p.token, p.key, { upsert: [{ photo_key: PA, rating: 2 }] })).status, 200);
+  }
+});
+
+test('after reopen, a new start-retouch is still not delivered; deliver checks the overlap and replaces the kept finals with a fresh stamp', async () => {
+  const env = setup();
+  const p = await delivered(env);
+  env.DB._db.prepare("UPDATE projects SET delivered_at = '2026-01-01T00:00:00.000Z'").run();
+  assert.equal((await admin(env, p.id, 'reopen')).status, 200);
+  assert.equal((await submit(env, p.token, p.key)).status, 200);
+  assert.equal((await admin(env, p.id, 'start-retouch')).status, 200);
+  // retouching with the kept snapshot and no stamp: still not delivered
+  assert.deepEqual({ ...one(env, 'SELECT delivered_at, phase FROM projects') }, { delivered_at: null, phase: 'retouching' });
+  assert.deepEqual(JSON.parse(one(env, 'SELECT final_folders FROM projects').final_folders), [FINAL]);
+  assert.equal((await state(env, p.token)).mode, 'picking');
+  await expectStatus(env, p.token, enc(FA), 401);
+  // the overlap check runs on the new body, the kept snapshot is no pass
+  const clash = await deliver(env, p.id, ['shoot/精修3/', PROOF]);
+  assert.equal(clash.status, 400);
+  assert.deepEqual(await clash.json(), {
+    error: `「${PROOF}」與毛片資料夾重疊，精修請放在獨立的資料夾`, code: 'final_overlaps_proofs', folder: PROOF,
+  });
+  assert.deepEqual({ ...one(env, 'SELECT delivered_at, final_folders FROM projects') },
+    { delivered_at: null, final_folders: JSON.stringify([FINAL]) });
+  const res = await deliver(env, p.id, ['shoot/精修2/']);
+  assert.equal(res.status, 200);
+  const json = await res.json();
+  assert.deepEqual(json.final_folders, ['shoot/精修2/']);
+  assert.match(json.delivered_at, /^\d{4}-\d\d-\d\dT/);
+  assert.notEqual(json.delivered_at, '2026-01-01T00:00:00.000Z', 'a fresh stamp, not the reopened one');
+  const row = one(env, 'SELECT delivered_at, final_folders FROM projects');
+  assert.equal(row.delivered_at, json.delivered_at);
+  assert.deepEqual(JSON.parse(row.final_folders), ['shoot/精修2/']);
+  await expectStatus(env, p.token, enc(FA), 401);
+  const s = await state(env, p.token);
+  assert.equal(s.mode, 'delivered');
+  assert.deepEqual(s.final_folders, ['shoot/精修2/']);
+});
+
+test('after reopen the admin list and detail still carry the last finals, with delivered_at null', async () => {
+  const env = setup();
+  const p = await delivered(env, [FINAL, 'shoot/精修2/']);
+  assert.equal((await admin(env, p.id, 'reopen')).status, 200);
+  const d = await detail(env, p.id);
+  assert.deepEqual(d.project.final_folders, [FINAL, 'shoot/精修2/']);
+  assert.equal(d.project.delivered_at, null);
+  assert.equal(d.project.phase, 'picking');
+  const l = (await list(env)).projects.find(r => r.id === p.id);
+  assert.deepEqual(l.final_folders, [FINAL, 'shoot/精修2/']);
+  assert.equal(l.delivered_at, null);
+  assert.equal(l.phase, 'picking');
+});
+
+test('reopen of a project that was never delivered leaves final_folders NULL; an undelivered one keeps its last finals', async () => {
+  const env = setup();
+  const p = await retouching(env);
+  const res = await admin(env, p.id, 'reopen');
+  assert.equal(res.status, 200);
+  assert.deepEqual(await res.json(), { ok: true, phase: 'picking' });
+  assert.deepEqual({ ...one(env, 'SELECT delivered_at, final_folders, phase FROM projects') },
+    { delivered_at: null, final_folders: null, phase: 'picking' });
+  // reopen while already picking is harmless and still writes no finals
+  assert.equal((await admin(env, p.id, 'reopen')).status, 200);
+  assert.equal(one(env, 'SELECT final_folders FROM projects').final_folders, null);
+  // delivered, then undelivered, then reopened: the choice is still there
+  const env2 = setup();
+  const r = await delivered(env2);
+  assert.equal((await admin(env2, r.id, 'undeliver')).status, 200);
+  assert.equal((await admin(env2, r.id, 'reopen')).status, 200);
+  assert.deepEqual({ ...one(env2, 'SELECT delivered_at, final_folders, phase FROM projects') },
+    { delivered_at: null, final_folders: JSON.stringify([FINAL]), phase: 'picking' });
+  await expectStatus(env2, r.token, enc(FA), 401);
+});
+
 test('a legacy delivered stamp without finals keeps the picking scope', async () => {
   const env = setup();
   const p = await retouching(env);
@@ -731,7 +849,9 @@ test('on a database the migration has not reached, the rest of the app keeps wor
   assert.equal((await admin(env, p.id, 'undeliver')).status, 200);
   assert.equal(one(env, 'SELECT delivered_at FROM projects').delivered_at, null);
   env.DB._db.prepare("UPDATE projects SET delivered_at = 'x'").run();
-  assert.equal((await admin(env, p.id, 'reopen')).status, 200);
+  const reopened = await admin(env, p.id, 'reopen');
+  assert.equal(reopened.status, 200);
+  assert.deepEqual(await reopened.json(), { ok: true, phase: 'picking' });
   assert.deepEqual({ ...one(env, 'SELECT phase, delivered_at FROM projects') }, { phase: 'picking', delivered_at: null });
 });
 
