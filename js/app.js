@@ -742,6 +742,11 @@ class App {
 
     renderPhotoGrid() {
         const grid = document.getElementById('photoGrid');
+        // the delivered finals view is a web album (js/finals-gallery.js), not cards
+        if (window.PickController && PickController.active && PickController.renderFinals(this.filteredPhotos)) {
+            grid.innerHTML = '';
+            return;
+        }
         grid.innerHTML = '';
         if (this.filteredPhotos.length === 0) {
             document.getElementById('emptyState').style.display = 'flex';

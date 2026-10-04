@@ -2605,3 +2605,122 @@ html.album-open, html.album-open body { overflow: hidden; }
 @media (prefers-reduced-motion: reduce) {
   .album-slide, .album-progress-bar span { transition: none; }
 }
+
+/* ══════════════════════════════════════════════════════
+   Finals gallery (js/finals-gallery.js, docs/delivery.md): the delivered
+   finish page as a web album — hero, justified rows, lightbox. New classes
+   only; the dark client theme from the existing tokens, no :root change.
+   ══════════════════════════════════════════════════════ */
+
+/* The page scrolls as a document (a phone's address bar can then fold away)
+   instead of inside .content; the sidebar / preview pane / old card grid have
+   no place here. The scrollbar is always there so a growing page cannot change
+   the rows' width and start a reflow loop. */
+/* (not while a viewer is open: the album viewer / lightbox lock the page with overflow: hidden) */
+html.fg-on:not(.album-open):not(.fg-open) { overflow-y: scroll; }
+body.fg-mode .main-content { display: block; height: auto; overflow: visible; }
+body.fg-mode .content { height: auto; overflow: visible; padding: 0; }
+body.fg-mode aside.sidebar, body.fg-mode .preview-pane, body.fg-mode .guest-bar,
+body.fg-mode .content-header, body.fg-mode #photoGrid, body.fg-mode #emptyState,
+body.fg-mode #folderNav { display: none !important; }
+body.fg-mode .app-footer { margin-top: 0; }
+
+/* The 確認完成 block and the proofs entry become thin strips at the top. */
+body.fg-mode #deliveryBar:not(.fg-bar-proofs) { display: none !important; }
+body.fg-mode #deliveryBar { padding: 6px 16px; }
+body.fg-mode .delivery-done { padding: 6px 16px; gap: 6px 12px; flex-wrap: wrap; font-size: 13px; }
+body.fg-mode .delivery-done-status { flex: 1 1 150px; min-width: 0; line-height: 1.35; }
+body.fg-mode .delivery-done-actions { margin-left: auto; flex: 0 0 auto; }
+
+.fg { --fg-pad: clamp(12px, 2.2vw, 32px); background: var(--bg); color: var(--ink); padding-bottom: 40px; }
+
+/* hero: a dark box of its final height from the first paint; the cover fades in */
+.fg-hero { position: relative; height: clamp(260px, 52vh, 520px); overflow: hidden; background: var(--bg-deep); isolation: isolate; }
+.fg-hero--bare { height: 150px; }
+.fg-hero-media { position: absolute; inset: 0; background: var(--bg-deep); }
+.fg-cover { display: block; width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity .5s ease; }
+.fg-cover.on { opacity: 1; }
+.fg-hero-shade { position: absolute; inset: 0; pointer-events: none;
+  background: linear-gradient(to top, rgba(14,12,8,.88) 0%, rgba(14,12,8,.4) 42%, rgba(14,12,8,.12) 100%); }
+.fg-hero-body { position: absolute; left: var(--fg-pad); right: var(--fg-pad); bottom: clamp(16px, 3vw, 36px); min-width: 0; }
+.fg-studio { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; min-width: 0; color: var(--ink-70);
+  font-size: 13px; letter-spacing: .14em; }
+.fg-studio-logo { flex: 0 0 auto; width: 28px; height: 28px; object-fit: cover; border-radius: 50%; }
+.fg-studio-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fg-title { margin: 0; font-size: clamp(24px, 4.2vw, 46px); font-weight: 600; line-height: 1.18; letter-spacing: .02em;
+  color: var(--ink); overflow-wrap: anywhere; text-wrap: balance; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.fg-count { margin-top: 8px; min-height: 1.4em; font-size: 13px; color: var(--ink-70); font-variant-numeric: tabular-nums; }
+.fg-share { position: absolute; top: 14px; right: var(--fg-pad); z-index: 2; min-height: 44px; padding: 0 18px;
+  background: rgba(14,12,8,.55); border: 1px solid var(--ink-35); color: var(--ink); font: inherit; font-size: 14px;
+  cursor: pointer; -webkit-tap-highlight-color: transparent; backdrop-filter: blur(6px); }
+.fg-share:hover { border-color: var(--ink-70); background: rgba(14,12,8,.75); }
+.fg-share:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* folder chips: one row that scrolls inside itself, never the page */
+.fg-chips { display: flex; gap: 8px; align-items: center; padding: 14px var(--fg-pad) 12px; overflow-x: auto;
+  scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+.fg-chips::-webkit-scrollbar { display: none; }
+.fg-chip { flex: 0 0 auto; min-height: 40px; padding: 0 18px; border-radius: 20px; background: var(--card);
+  border: 1px solid var(--border); color: var(--ink-70); font: inherit; font-size: 14px; white-space: nowrap; cursor: pointer;
+  -webkit-tap-highlight-color: transparent; }
+.fg-chip:hover { border-color: var(--ink-55); color: var(--ink); }
+.fg-chip[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #1a1408; font-weight: 600; }
+.fg-chip--sub { background: transparent; border-style: dashed; }
+.fg-chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.fg-empty { margin: 0; padding: 48px var(--fg-pad); text-align: center; color: var(--ink-55); font-size: 15px; }
+
+/* justified rows: js/finals-gallery.js sets each row's height and each tile's flex */
+.fg-rows { margin: 6px var(--fg-pad) 0; overflow-anchor: none; }
+.fg-chips + .fg-rows { margin-top: 0; }
+.fg-row { display: flex; gap: 6px; margin-bottom: 6px; overflow-anchor: none; }
+.fg-tile { position: relative; display: block; flex: 1 1 0; min-width: 0; padding: 0; border: 0; overflow: hidden;
+  background: linear-gradient(135deg, var(--card), var(--card-hi)); cursor: zoom-in; -webkit-tap-highlight-color: transparent; }
+.fg-tile img { position: absolute; inset: 0; width: 100%; height: 100%; max-width: none; object-fit: cover; display: block;
+  opacity: 0; transition: opacity .3s ease, filter .2s ease; user-select: none; -webkit-user-drag: none; }
+.fg-tile img.on { opacity: 1; }
+.fg-tile:hover img.on { filter: brightness(1.1); }
+.fg-tile:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; z-index: 1; }
+
+/* the album preview entry (js/album-preview.js) under the last row */
+.fg .album-entry { margin: 28px var(--fg-pad) 0; padding: 0; background: transparent; border-bottom: 0; }
+
+/* lightbox */
+html.fg-open, html.fg-open body { overflow: hidden; scrollbar-gutter: stable; }
+.fg-lightbox { position: fixed; top: 0; left: 0; right: 0; z-index: 3500; height: 100vh; height: 100dvh; display: flex; flex-direction: column;
+  background: var(--bg-deep); color: var(--ink); overscroll-behavior: none; outline: none; }
+.fg-lb-bar { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; min-width: 0;
+  height: calc(56px + env(safe-area-inset-top, 0px)); padding: env(safe-area-inset-top, 0px) 8px 0 16px; }
+.fg-lb-count { flex: 0 0 auto; font-family: var(--font-mono); font-size: 14px; color: var(--ink-70); font-variant-numeric: tabular-nums; }
+.fg-lb-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; color: var(--ink-55); }
+.fg-lb-btn { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; min-width: 44px; min-height: 44px; padding: 0 16px;
+  background: transparent; border: 1px solid transparent; color: var(--ink); font: inherit; font-size: 14px; text-decoration: none; cursor: pointer;
+  -webkit-tap-highlight-color: transparent; }
+.fg-lb-dl { border-color: var(--ink-35); }
+.fg-lb-close { padding: 0; font-size: 18px; }
+.fg-lb-btn:hover { border-color: var(--ink-70); }
+.fg-lb-btn:focus-visible, .fg-lb-nav:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.fg-lb-stage { position: relative; flex: 1 1 auto; min-height: 0; display: flex; align-items: center; justify-content: center;
+  overflow: hidden; touch-action: pan-y; --drag: 0px; padding: 0 0 env(safe-area-inset-bottom, 0px); }
+.fg-lb-img { display: block; width: 100%; height: 100%; object-fit: contain; opacity: 0; user-select: none; -webkit-user-drag: none;
+  transform: translateX(var(--drag, 0px)); transition: opacity .25s ease, transform .2s ease; }
+.fg-lb-img.on { opacity: 1; }
+.fg-lb-stage.dragging .fg-lb-img { transition: opacity .25s ease; }
+.fg-lb-msg { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--ink-55); font-size: 15px; pointer-events: none; }
+.fg-lb-msg[hidden] { display: none; }
+.fg-lb-nav { position: absolute; top: 50%; transform: translateY(-50%); z-index: 2; width: 48px; height: 64px; padding: 0;
+  display: inline-flex; align-items: center; justify-content: center; background: rgba(14,12,8,.45); border: 0; color: var(--ink);
+  font-size: 32px; line-height: 1; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.fg-lb-nav:hover:not(:disabled) { background: rgba(14,12,8,.75); }
+.fg-lb-nav:disabled { opacity: .25; cursor: default; }
+.fg-lb-prev { left: 8px; }
+.fg-lb-next { right: 8px; }
+
+@media (max-width: 768px) {
+  body.fg-mode .delivery-done-actions .btn { padding: 8px 12px; }
+  .fg-hero { height: clamp(240px, 52vh, 460px); }
+  .fg-share { top: 10px; }
+  .fg .album-entry { margin-top: 20px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .fg-cover, .fg-tile img, .fg-lb-img { transition: none; }
+}
