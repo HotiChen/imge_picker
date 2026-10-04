@@ -16,6 +16,38 @@ separated before he can run real shoots through the studio.
   folder would leak during picking). Convention: `<shoot>/毛片/` and
   `<shoot>/精修/` side by side; the picker for final folders refuses a folder
   inside (or containing) a proof folder of the project.
+- **Folder naming (decided with Tim 2026-10-04; frontend only, no Worker or
+  schema change).** Creating a project names its folders; the photographer no
+  longer picks them. R2 has no real folders (a folder is a key prefix), so
+  "creating" one only decides the name — it exists once its first photo is
+  uploaded. Names come from one place, `js/project-folders.js`:
+  - project root `YYYYMMDD 專案名稱/` (the **shoot date**, which defaults to
+    today and can be changed, one space, the name); the project `title` is the
+    same string (editable later; **the folders are fixed once created**);
+  - proofs `<root>/毛片/`, finals `<root>/精修/`, second version `精修二/`, then
+    `精修三 … 精修十`, then Arabic numerals (`精修11`, `精修12`);
+  - the name is cleaned: `/ \ ? # % * : | " < >`, control characters and
+    invisible formatting characters are removed, runs of whitespace become one
+    space, ends trimmed; it is cut so the root stays ≤ 176 characters (title ≤ 200,
+    photo key ≤ 256 with room for `精修NN/` and a file name); empty after cleaning
+    = no project.
+  - `POST /api/admin/projects` is unchanged: `folders: ["<root>/毛片/"]`. The root
+    is read back from that snapshot (parent of the first `…/毛片/` folder), so no
+    new column. Older projects keep whatever folders their snapshot holds; one
+    whose proofs are not in `…/毛片/` keeps the old ＋上傳精修 link
+    (`<parent>/精修/`, unlocked, no listing).
+  - Create form: 專案名稱 + 拍攝日期, a preview of the folder, and a non-blocking
+    note from `GET /?list=<root>/毛片/` (admin token): "已有 N 張照片，會沿用"
+    (re-creating a project over the same folder picks its photos up again);
+    a failed listing never blocks the create.
+  - Project page: 資料夾：`<root>/`; ＋上傳毛片 → `upload.html?folder=<root>/毛片/&project=<id>&lock=1`;
+    ＋上傳精修 → the next version after the biggest `精修*` under `<root>/` (read
+    from R2; never reuses a number, so it cannot overwrite a version). Until that
+    listing is known, or if it fails, the link names no folder and does not lock.
+    `lock=1` makes upload.html show the folder as fixed (no folder tree, no new
+    folders); without `lock=1` the page is unchanged.
+  - The 交件 chooser starts on the newest `精修*` when nothing was chosen before
+    (last delivery's folders win; a delivered project is not touched).
 - **Deliver** = the photographer picks the final folder(s) in the project
   detail and presses 「交件」. It stores the finals folder snapshot on the
   project and stamps `delivered_at` (today's rule stays: only from

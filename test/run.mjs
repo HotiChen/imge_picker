@@ -3813,7 +3813,7 @@ function pickFakeWorker(opts = {}) {
       const pickerKey = h['x-picker-key'] || '';
       let body = null;
       try { body = JSON.parse(req.postData() || 'null'); } catch (e) { /* not JSON */ }
-      requests.push({ method, path: u.pathname, search: u.search, t: shareTok, key: pickerKey, body, range: h['range'] || null });
+      requests.push({ method, path: u.pathname, search: u.search, t: shareTok, key: pickerKey, body, range: h['range'] || null, auth: h['authorization'] || null });
       const json = (data, status = 200) =>
         route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(data) });
 
@@ -4295,6 +4295,14 @@ function pickFakeWorker(opts = {}) {
       }
 
       if (u.searchParams.has('list')) {
+        // opts.listDelay {prefix: ms} holds the first listing of that prefix back; opts.listFail makes every
+        // listing fail (a status number, or 'net' for a dropped connection)
+        const listPrefixAsked = u.searchParams.get('list') || '';
+        if (opts.listDelay && opts.listDelay[listPrefixAsked]) {   // held back once, then answers at once
+          const ms = opts.listDelay[listPrefixAsked]; delete opts.listDelay[listPrefixAsked];
+          await new Promise(r => setTimeout(r, ms));
+        }
+        if (opts.listFail) return opts.listFail === 'net' ? route.abort() : json({ error: 'list failed' }, opts.listFail);
         // Nested subfolders (docs/backlog.md "Guest page hides subfolders"):
         // a flat list of full photo keys, delimiter-listed exactly like
         // worker.js's own R2 call — so `folders` for any prefix reflects
@@ -5195,45 +5203,314 @@ await suite('photographer mode — the path box, LOAD button and folder tree are
 // Admin — the guest-picking project panel (docs/guest-picking.md)
 // ═══════════════════════════════════════════════════════════════════════════
 
+// ═══════════════════════════════════════════════════════════════════════════
+// 資料夾流程 (docs/delivery.md「資料夾慣例」): 建專案時由「拍攝日期 + 專案名稱」決定資料夾，
+// 上傳與精修自動進對的資料夾。js/project-folders.js 是命名的唯一出處。
+// ═══════════════════════════════════════════════════════════════════════════
+const PF_ROOT = '20261004 王小明';
+const pfPosts = m => m.requests.filter(r => r.method === 'POST' && r.path === '/api/admin/projects');
+const pfLists = m => m.requests.filter(r => r.method === 'GET' && new URLSearchParams(r.search).has('list'))
+  .map(r => ({ prefix: new URLSearchParams(r.search).get('list'), auth: r.auth }));
+const PF_NAMES = ['精修', '精修二', '精修三', '精修四', '精修五', '精修六', '精修七', '精修八', '精修九', '精修十', '精修11', '精修12'];
+
 {
-  const m = pickFakeWorker({ bucketFolders: ['20260819/', '20260901/'] });
-  await suite('admin — create a pick project via the existing folder picker, and get a link back',
+  const FORBID = ['/', '\\', '?', '#', '%', '*', ':', '|', '"', '<', '>'];
+  const cleanCases = [
+    ['王小明', '王小明'], ['Wei & Lin 婚紗', 'Wei & Lin 婚紗'], ['建青 紅葉', '建青 紅葉'], ['a - b_c.d (1)', 'a - b_c.d (1)'],
+    ['  a   b  ', 'a b'], ['a\tb\nc', 'a b c'], ['a　b c', 'a b c'],
+    ['A\u0000B', 'AB'], ['A\u001fB', 'AB'], ['A\u007fB', 'AB'], ['A\u009fB', 'AB'],
+    ['A\u200bB', 'AB'], ['A\u202eB', 'AB'], ['A\ufeffB', 'AB'], ['A\u2028B', 'A B'], ['A😀B', 'A😀B'],
+    ['/\\?#%*:|"<>', ''], ['   ', ''], ['', ''], [' / ', ''],
+    ...FORBID.map(c => [`A${c}B`, 'AB']),
+    ...FORBID.map(c => [`A ${c} B`, 'A B']),
+  ];
+  const dateCases = [['2026-10-04', '20261004'], ['2026-01-01', '20260101'], ['2028-02-29', '20280229'], ['2099-12-31', '20991231'],
+    ['2027-02-29', null], ['2026-13-01', null], ['2026-00-10', null], ['2026-04-31', null], ['2026-1-4', null], ['26-10-04', null],
+    ['', null], [null, null], ['2026/10/04', null], ['2026-10-04x', null], ['0026-10-04', null], ['2026-10-4', null]];
+  const R = PF_ROOT;
+  const nextCases = [
+    [[], '精修'], [['毛片'], '精修'], [['精修'], '精修二'], [['精修', '精修二'], '精修三'], [['精修二'], '精修三'],
+    [PF_NAMES.slice(0, 9), '精修十'], [PF_NAMES.slice(0, 10), '精修11'], [PF_NAMES.slice(0, 11), '精修12'], [['精修11'], '精修12'],
+    [['精修', '精修三'], '精修四'], [['精修final'], '精修'], [['精修', '精修final'], '精修二'], [['精修九', '精修十', '精修11'], '精修12'],
+    [['精修十一'], '精修12'], [['精修2', '精修二'], '精修三'], [['毛片', '精修', '雜'], '精修二'],
+  ];
+  await suite('資料夾命名 — ProjectFolders：常數、名稱清理、日期、資料夾與 title、長度、精修版本號、專案 root',
+    `${base}/admin.html`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      const loaded = await page.evaluate(() => typeof window.ProjectFolders === 'object' && !!window.ProjectFolders);
+      ok('window.ProjectFolders is loaded by admin.html', loaded);
+      if (!loaded) return out;
+      const k = await page.evaluate(() => { const P = window.ProjectFolders;
+        return { proof: P.PROOF_NAME, fin: P.FINAL_NAME, nameMax: P.NAME_MAX, rootMax: P.ROOT_MAX, fileRoom: P.FILE_ROOM, keyMax: P.KEY_MAX, titleMax: P.TITLE_MAX }; });
+      ok('the two folder names live in one place: 毛片 / 精修', k.proof === '毛片' && k.fin === '精修', JSON.stringify(k));
+      ok('limits: key max mirrors worker PICK_PHOTO_KEY_MAX (256), title max 200', k.keyMax === 256 && k.titleMax === 200, JSON.stringify(k));
+      ok('root max = key max − room for a file name − room for 精修NN (so no path the Worker would refuse)',
+        k.rootMax > 0 && k.rootMax + k.fileRoom + 16 <= k.keyMax && k.rootMax <= k.titleMax && k.nameMax === k.rootMax - 9, JSON.stringify(k));
+
+      const cleaned = await page.evaluate(cs => cs.map(([i]) => window.ProjectFolders.cleanName(i)), cleanCases);
+      const badClean = cleanCases.map(([i, want], n) => [i, want, cleaned[n]]).filter(([, want, got]) => want !== got);
+      ok(`cleanName: ${cleanCases.length} cases (every forbidden character, controls, zero-width, spaces, emoji)`, badClean.length === 0, JSON.stringify(badClean.slice(0, 5)));
+      const odd = await page.evaluate(() => [window.ProjectFolders.cleanName(null), window.ProjectFolders.cleanName(undefined), window.ProjectFolders.cleanName(123)]);
+      ok('cleanName of null / undefined / a number does not throw', JSON.stringify(odd) === '["","","123"]', JSON.stringify(odd));
+
+      const dates = await page.evaluate(cs => cs.map(([i]) => window.ProjectFolders.compactDate(i)), dateCases);
+      const badDate = dateCases.map(([i, want], n) => [i, want, dates[n]]).filter(([, want, got]) => want !== got);
+      ok(`compactDate: ${dateCases.length} cases (leap days, impossible dates, wrong shapes)`, badDate.length === 0, JSON.stringify(badDate));
+
+      const p = await page.evaluate(() => { const P = window.ProjectFolders; return {
+        plain: P.plan('2026-10-04', '王小明'), dirty: P.plan('2026-10-04', ' a/b : c '), emptyName: P.plan('2026-10-04', '  '),
+        onlyBad: P.plan('2026-10-04', '///'), noDate: P.plan('', '王'), badDate: P.plan('2026-02-30', '王'),
+      }; });
+      ok('plan: root, title and the 毛片 folder come from date + name',
+        p.plain.ok === true && p.plain.root === PF_ROOT && p.plain.title === PF_ROOT && p.plain.proofFolder === `${PF_ROOT}/毛片/` && p.plain.truncated === false, JSON.stringify(p.plain));
+      ok('plan: a dirty name is cleaned first (one space between the parts)', p.dirty.ok && p.dirty.root === '20261004 ab c', JSON.stringify(p.dirty));
+      ok('plan: an empty name, or one that cleans to nothing, is refused', p.emptyName.ok === false && p.emptyName.reason === 'name' && p.onlyBad.ok === false && p.onlyBad.reason === 'name', JSON.stringify([p.emptyName, p.onlyBad]));
+      ok('plan: a missing or impossible date is refused', p.noDate.ok === false && p.noDate.reason === 'date' && p.badDate.ok === false && p.badDate.reason === 'date', JSON.stringify([p.noDate, p.badDate]));
+
+      const len = await page.evaluate(() => { const P = window.ProjectFolders; const cp = s => [...s].length;
+        const lone = s => /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(s);
+        const mk = n => P.plan('2026-10-04', n);
+        const long = mk('字'.repeat(300)), ascii = mk('x'.repeat(500)), emoji = mk('😀'.repeat(300));
+        const exact = mk('y'.repeat(P.NAME_MAX)), over = mk('y'.repeat(P.NAME_MAX + 1)), sp = mk('x'.repeat(P.NAME_MAX - 1) + ' y');
+        return { long: [cp(long.root), cp(long.title), cp(long.proofFolder), long.truncated], ascii: [cp(ascii.root), ascii.truncated],
+          emoji: [cp(emoji.root), lone(emoji.root), emoji.truncated], exact: [cp(exact.root), exact.truncated], over: [cp(over.root), over.truncated],
+          sp: [sp.root.endsWith(' '), sp.truncated], max: P.ROOT_MAX, file: P.FILE_ROOM }; });
+      ok('a 300-character name is cut: root ≤ ROOT_MAX, title ≤ 200, the folder key leaves room for a file name',
+        len.long[0] === len.max && len.long[1] <= 200 && len.long[2] + len.file <= 256 && len.long[3] === true, JSON.stringify(len));
+      ok('ASCII too', len.ascii[0] === len.max && len.ascii[1] === true, JSON.stringify(len.ascii));
+      ok('cutting never splits an emoji (code points, not UTF-16 units)', len.emoji[0] === len.max && len.emoji[1] === false && len.emoji[2] === true, JSON.stringify(len.emoji));
+      ok('boundary: exactly NAME_MAX characters is kept whole, one more is cut', len.exact[0] === len.max && len.exact[1] === false && len.over[0] === len.max && len.over[1] === true, JSON.stringify([len.exact, len.over]));
+      ok('a cut that lands after a space does not leave a trailing space', len.sp[0] === false && len.sp[1] === true, JSON.stringify(len.sp));
+
+      const dir = await page.evaluate(() => { const P = window.ProjectFolders; const o = [];
+        for (const n of [1, 2, 3, 9, 10, 11, 12, 100]) o.push(P.finalDirName(n));
+        const trip = []; for (let n = 1; n <= 120; n++) if (P.parseFinalVersion(P.finalDirName(n)) !== n) trip.push(n);
+        const parse = ['精修十一', '精修二十', '精修二十三', '精修九十九', '精修一', '精修2', '精修final', '精修0', '精修 二', '毛片', '', '精修二二', '精修十十', '精修百'].map(x => P.parseFinalVersion(x));
+        return { o, trip, parse }; });
+      ok('finalDirName: 精修, 精修二 … 精修十, then Arabic: 精修11 / 精修12 / 精修100',
+        JSON.stringify(dir.o) === JSON.stringify(['精修', '精修二', '精修三', '精修九', '精修十', '精修11', '精修12', '精修100']), JSON.stringify(dir.o));
+      ok('parseFinalVersion round-trips finalDirName for 1…120', dir.trip.length === 0, JSON.stringify(dir.trip));
+      ok('parseFinalVersion reads hand-made names (精修十一 = 11, 精修二十三 = 23) and refuses the rest',
+        JSON.stringify(dir.parse) === JSON.stringify([11, 20, 23, 99, 1, 2, null, null, null, null, null, null, null, null]), JSON.stringify(dir.parse));
+
+      const nx = await page.evaluate(({ R, cs }) => cs.map(([names]) => {
+        const P = window.ProjectFolders; const listed = names.map(n => `${R}/${n}/`);
+        return [P.nextFinalFolder(R, listed), P.latestFinalFolder(R, listed)];
+      }), { R, cs: nextCases });
+      const badNext = nextCases.map(([names, want], n) => [names.join(','), `${R}/${want}/`, nx[n][0]]).filter(([, w, g]) => w !== g);
+      ok(`nextFinalFolder: ${nextCases.length} cases (never reuses a number, gaps go on from the biggest, unparseable names ignored)`, badNext.length === 0, JSON.stringify(badNext));
+      const latest = await page.evaluate(({ R }) => { const P = window.ProjectFolders; const l = ns => P.latestFinalFolder(R, ns.map(n => `${R}/${n}/`));
+        return [l([]), l(['毛片']), l(['精修']), l(['精修', '精修二']), l(['精修二', '精修']), l(['精修', '精修十', '精修九']), l(['精修11', '精修十'])]; }, { R });
+      ok('latestFinalFolder: null when there is none, else the biggest version',
+        JSON.stringify(latest) === JSON.stringify([null, null, `${R}/精修/`, `${R}/精修二/`, `${R}/精修二/`, `${R}/精修十/`, `${R}/精修11/`]), JSON.stringify(latest));
+      const kids = await page.evaluate(({ R }) => { const P = window.ProjectFolders;
+        const listed = [`${R}/毛片/`, `${R}/精修二/sub/`, `other/精修五/`, `${R}/精修/`, `${R}精修九/`, `${R}/精修三`];
+        return [P.nextFinalFolder(R, listed), P.latestFinalFolder(R, listed)]; }, { R });
+      ok('only direct children of this root count (not a deeper folder, another root, or a name that merely shares the prefix)',
+        kids[0] === `${R}/精修二/` && kids[1] === `${R}/精修/`, JSON.stringify(kids));
+
+      const roots = await page.evaluate(() => { const P = window.ProjectFolders; const r = f => P.rootOfProject({ folders: f });
+        return [r(['20261004 王小明/毛片/']), r(['shoot/毛片/']), r(['2026/', '20260901/婚禮/毛片/']), r(['20260819/']), r(['20260819/Anita/']), r([]), P.rootOfProject({}), P.rootOfProject(null), r(['a/毛片/sub/']), r(['a//b//毛片//'])]; });
+      ok('rootOfProject: the parent of a …/毛片/ folder, proof-shaped',
+        roots[0].root === PF_ROOT && roots[0].proofShaped === true && roots[0].proofFolder === `${PF_ROOT}/毛片/` &&
+        roots[1].root === 'shoot' && roots[1].proofShaped === true, JSON.stringify(roots.slice(0, 2)));
+      ok('rootOfProject: the first folder with two levels is used (the old rule), here the second',
+        roots[2].root === '20260901/婚禮' && roots[2].proofShaped === true, JSON.stringify(roots[2]));
+      ok('rootOfProject: an old-style project (not …/毛片/) still gets a root, but is not proof-shaped',
+        roots[4].root === '20260819' && roots[4].proofShaped === false && roots[4].proofFolder === '20260819/Anita/' &&
+        roots[8].root === 'a/毛片' && roots[8].proofShaped === false, JSON.stringify([roots[4], roots[8]]));
+      ok('rootOfProject: a single level, nothing, or a missing project gives null', roots[3] === null && roots[5] === null && roots[6] === null && roots[7] === null, JSON.stringify([roots[3], roots[5], roots[6], roots[7]]));
+      ok('rootOfProject: empty segments are ignored', roots[9] && roots[9].root === 'a/b' && roots[9].proofShaped === true, JSON.stringify(roots[9]));
+
+      const hrefs = await page.evaluate(() => { const P = window.ProjectFolders; return [P.uploadHref('p1', 'x/毛片/', true), P.uploadHref('p1', 'x/精修/', false), P.uploadHref('p&x=1 #2', null, false), P.uploadHref('p1', 'a b/c/', true)]; });
+      ok('uploadHref: folder, project, then lock — ids and folders encoded, no folder → only project',
+        hrefs[0] === `upload.html?folder=${encodeURIComponent('x/毛片/')}&project=p1&lock=1` &&
+        hrefs[1] === `upload.html?folder=${encodeURIComponent('x/精修/')}&project=p1` &&
+        hrefs[2] === `upload.html?project=${encodeURIComponent('p&x=1 #2')}` &&
+        hrefs[3] === `upload.html?folder=${encodeURIComponent('a b/c/')}&project=p1&lock=1`, JSON.stringify(hrefs));
+      return out;
+    },
+    { initScript: ADMIN });
+}
+
+// ── 建專案表單：專案名稱 + 拍攝日期，沒有「選擇資料夾」──
+{
+  const m = pickFakeWorker({ pickFiles: [] });
+  await suite('建立專案 — 表單：專案名稱＋拍攝日期（預設今天），沒有選擇資料夾；預覽、送出的 folders 與 title',
     `${base}/admin.html`,
     async page => {
       const out = [];
       const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
       await page.waitForSelector('#admin-view', { state: 'visible', timeout: 5000 });
+      const f = await page.evaluate(() => {
+        const panel = document.getElementById('project-create-panel');
+        const lab = id => document.querySelector(`label[for="${id}"]`)?.textContent.trim() || null;
+        const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Taipei', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+        const d = document.getElementById('proj-date');
+        return { shown: !!panel && getComputedStyle(panel).display !== 'none', nameLabel: lab('proj-title'), dateLabel: lab('proj-date'),
+          dateType: d && d.type, date: d && d.value, today,
+          chooser: !!document.getElementById('proj-pick-folders-btn') || !!document.getElementById('proj-folders-cell') || !!panel.querySelector('.folder-chip'),
+          text: panel ? panel.textContent : '', disabled: document.getElementById('proj-create-btn')?.disabled };
+      });
+      ok('the create panel is on screen (positive)', f.shown === true, JSON.stringify(f));
+      ok('the fields are 專案名稱 and 拍攝日期', f.nameLabel === '專案名稱' && f.dateLabel === '拍攝日期', JSON.stringify(f));
+      ok('拍攝日期 is a date input that starts on today (Taipei)', f.dateType === 'date' && f.date === f.today, JSON.stringify(f));
+      ok('no folder chooser: no 選擇資料夾 button, no chips', f.chooser === false && !f.text.includes('選擇資料夾'), JSON.stringify(f));
+      ok('with no name yet 建立 is disabled', f.disabled === true, JSON.stringify(f));
 
-      await page.fill('#proj-title', 'Wei & Lin 婚紗');
-      await page.click('#proj-pick-folders-btn');
-      await page.waitForSelector('#folder-picker', { state: 'visible' });
-      await page.waitForSelector('[data-pick-folder]');
-      await page.click('[data-pick-folder]');
-      await page.click('[data-confirm-folders]');
-      await page.waitForSelector('#folder-picker', { state: 'hidden' });
-
-      const chipCount = await page.locator('#proj-folders-cell .folder-chip').count();
-      ok('the chosen folder is shown as a chip', chipCount === 1, String(chipCount));
-
+      await page.fill('#proj-date', '2026-10-04');
+      await page.fill('#proj-title', '王小明');
+      const pv = () => page.$eval('#proj-folder-preview', e => e.textContent);
+      ok('the preview names the folder that will be used', (await pv()).includes(`${PF_ROOT}/`), await pv());
+      ok('and where 毛片 and 精修 will go', /毛片/.test(await pv()) && /精修/.test(await pv()), await pv());
+      ok('建立 is enabled once name and date are valid', (await page.$eval('#proj-create-btn', b => b.disabled)) === false);
       await page.fill('#proj-pick-limit', '40');
-      await page.fill('#proj-extra-price', '300');
       await page.click('#proj-create-btn');
       await page.waitForSelector('#proj-create-result', { state: 'visible', timeout: 5000 });
+      const req = pfPosts(m)[0];
+      ok('POST folders is exactly [<root>/毛片/]', req && JSON.stringify(req.body.folders) === JSON.stringify([`${PF_ROOT}/毛片/`]), JSON.stringify(req));
+      ok('POST title is YYYYMMDD 專案名稱', req && req.body.title === PF_ROOT, JSON.stringify(req));
+      ok('the plan fields still go with it', req && req.body.pick_limit === 40 && 'extra_price' in req.body, JSON.stringify(req));
+      await page.waitForFunction(() => document.getElementById('proj-title').value === '', null, { timeout: 5000 });   // cleared once the list has reloaded
+      const after = await page.evaluate(() => ({ name: document.getElementById('proj-title').value, date: document.getElementById('proj-date').value,
+        today: new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Taipei', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date()),
+        disabled: document.getElementById('proj-create-btn').disabled }));
+      ok('afterwards the form is cleared: empty name, date back to today, 建立 disabled again', after.name === '' && after.date === after.today && after.disabled === true, JSON.stringify(after));
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN });
+}
 
-      const createReq = m.requests.find(r => r.method === 'POST' && r.path === '/api/admin/projects');
-      ok('posted title, folders and the plan',
-        createReq && createReq.body.title === 'Wei & Lin 婚紗' &&
-        Array.isArray(createReq.body.folders) && createReq.body.folders.length === 1 &&
-        createReq.body.pick_limit === 40 && createReq.body.extra_price === 300,
-        JSON.stringify(createReq));
+{
+  const m = pickFakeWorker({ pickFiles: [] });
+  await suite('建立專案 — 名稱清理：禁用字元、空名稱、日期不合法、過長都不會送出 Worker 會拒絕的路徑',
+    `${base}/admin.html`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('#admin-view', { state: 'visible', timeout: 5000 });
+      await page.fill('#proj-date', '2026-10-04');
+      const state = async () => page.evaluate(() => ({ preview: document.getElementById('proj-folder-preview').textContent,
+        disabled: document.getElementById('proj-create-btn').disabled, err: document.getElementById('proj-create-err').textContent }));
+      await page.fill('#proj-title', 'A/B:C*D?E');
+      let s = await state();
+      ok('禁用字元 are removed in the preview and 建立 stays enabled (positive)', s.preview.includes('20261004 ABCDE/') && s.disabled === false, JSON.stringify(s));
+      for (const [label, name] of [['only spaces', '    '], ['only forbidden characters', '/ \\ ? # % * : | " < >'], ['empty', '']]) {
+        await page.fill('#proj-title', name);
+        s = await state();
+        ok(`${label}: nothing to create — disabled, the preview asks for a name`, s.disabled === true && /專案名稱/.test(s.preview) && !s.preview.includes('20261004'), JSON.stringify(s));
+      }
+      // the click handler refuses too, should the button ever be enabled
+      await page.evaluate(() => { const b = document.getElementById('proj-create-btn'); b.disabled = false; b.click(); });
+      await page.waitForTimeout(300);
+      ok('a forced click with an empty name sends nothing and says why', pfPosts(m).length === 0 && /專案名稱/.test((await state()).err), JSON.stringify(await state()));
+      await page.fill('#proj-title', '王小明');
+      await page.fill('#proj-date', '');
+      s = await state();
+      ok('no date: disabled, the preview asks for a date', s.disabled === true && /拍攝日期/.test(s.preview), JSON.stringify(s));
+      await page.evaluate(() => { const b = document.getElementById('proj-create-btn'); b.disabled = false; b.click(); });
+      await page.waitForTimeout(300);
+      ok('a forced click with no date sends nothing', pfPosts(m).length === 0 && /拍攝日期/.test((await state()).err), JSON.stringify(await state()));
+      await page.fill('#proj-date', '2026-10-04');
+      ok('a valid date brings 建立 back', (await state()).disabled === false);
 
-      const link = await page.inputValue('#proj-link-output');
-      ok('the guest link carries the pick token', /[?&]t=PICK-TOKEN(&|$)/.test(link), link);
-      ok('and points at index.html', /index\.html\?/.test(link), link);
+      await page.fill('#proj-title', '字'.repeat(400));
+      s = await state();
+      ok('a 400-character name is cut and the preview says so', s.disabled === false && /過長|截|太長/.test(s.preview), JSON.stringify(s));
+      await page.click('#proj-create-btn');
+      await page.waitForSelector('#proj-create-result', { state: 'visible', timeout: 5000 });
+      const b = pfPosts(m)[0].body;
+      const cp = x => [...x].length;
+      ok('the POST stays inside what the Worker accepts: title ≤ 200, the folder (with 精修NN and a file name) ≤ 256',
+        cp(b.title) <= 200 && cp(b.folders[0]) + 64 <= 256 && b.title.startsWith('20261004 字') && b.folders[0] === `${b.title}/毛片/`, JSON.stringify([cp(b.title), cp(b.folders[0])]));
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN });
+}
 
-      const projectPanelShown = await page.evaluate(() =>
-        document.getElementById('project-detail-panel').style.display !== 'none');
-      ok('the new project opens its detail view right away', projectPanelShown);
+// ── 撞名提示（非阻擋）──
+for (const [label, opts, want] of [
+  ['已有 2 張照片', { pickFiles: [`${PF_ROOT}/毛片/a.jpg`, `${PF_ROOT}/毛片/b.jpg`, `${PF_ROOT}/精修/c.jpg`] }, { state: 'existing', text: '這個資料夾已有 2 張照片，會沿用' }],
+  ['沒有檔案', { pickFiles: [`${PF_ROOT}/精修/c.jpg`, 'other/毛片/z.jpg'] }, { state: 'empty', text: '上傳第一張' }],
+  ['只有子資料夾（整個資料夾上傳進來的）', { pickFiles: [`${PF_ROOT}/毛片/Card1/a.jpg`, `${PF_ROOT}/毛片/Card2/a.jpg`] }, { state: 'existing', text: '這個資料夾已有 2 個子資料夾' }],
+  ['列表失敗（500）', { pickFiles: [], listFail: 500 }, { state: 'unknown', text: '無法確認' }],
+  ['列表失敗（連線中斷）', { pickFiles: [], listFail: 'net' }, { state: 'unknown', text: '無法確認' }],
+]) {
+  const m = pickFakeWorker(opts);
+  await suite(`建立專案 — 撞名提示（不阻擋）：${label}`,
+    `${base}/admin.html`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('#admin-view', { state: 'visible', timeout: 5000 });
+      await page.fill('#proj-date', '2026-10-04');
+      await page.fill('#proj-title', '王小明');
+      await page.waitForSelector(`#proj-folder-note[data-state="${want.state}"]`, { timeout: 4000 }).catch(() => {});
+      const note = await page.$eval('#proj-folder-note', e => ({ state: e.dataset.state || null, text: e.textContent, shown: getComputedStyle(e).display !== 'none' }));
+      ok(`the note is in state "${want.state}" and says: …${want.text}…`, note.state === want.state && note.text.includes(want.text) && note.shown, JSON.stringify(note));
+      const asked = pfLists(m).filter(c => c.prefix === `${PF_ROOT}/毛片/`);
+      ok('it asked the Worker to list exactly <root>/毛片/ with the admin token', asked.length >= 1 && asked.every(c => c.auth === 'Bearer adm'), JSON.stringify(pfLists(m)));
+      ok('建立 is enabled whatever the answer', (await page.$eval('#proj-create-btn', b => b.disabled)) === false);
+      await page.click('#proj-create-btn');
+      await page.waitForSelector('#proj-create-result', { state: 'visible', timeout: 5000 });
+      ok('and creates as usual, with the same folder (the existing photos are reused, not an error)',
+        pfPosts(m).length === 1 && JSON.stringify(pfPosts(m)[0].body.folders) === JSON.stringify([`${PF_ROOT}/毛片/`]), JSON.stringify(pfPosts(m)));
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN });
+}
+
+for (const [tag, ctx] of [['390', { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true }], ['1280', { viewport: { width: 1280, height: 900 } }]]) {
+  const m = pickFakeWorker({ pickFiles: [`${PF_ROOT}/毛片/a.jpg`, `${PF_ROOT}/毛片/b.jpg`] });
+  await suite(`建立專案 — 版面 [${tag}]：名稱、日期、預覽與撞名提示都在畫面內，沒有橫向捲動`,
+    `${base}/admin.html`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('#admin-view', { state: 'visible', timeout: 5000 });
+      await page.fill('#proj-date', '2026-10-04');
+      await page.fill('#proj-title', '王小明');
+      await page.waitForSelector('#proj-folder-note[data-state="existing"]', { timeout: 4000 });
+      const s = await page.evaluate(() => { const r = id => document.getElementById(id).getBoundingClientRect();
+        return { sw: document.documentElement.scrollWidth, iw: innerWidth, name: r('proj-title'), date: r('proj-date'), prev: r('proj-folder-preview'), note: r('proj-folder-note'),
+          btn: r('proj-create-btn') }; });
+      ok('no horizontal scroll', s.sw <= s.iw, JSON.stringify(s));
+      ok('every part of the form is inside the screen and has a size', ['name', 'date', 'prev', 'note', 'btn'].every(k => s[k].left >= 0 && s[k].right <= s.iw && s[k].width > 60 && s[k].height > 10), JSON.stringify(s));
+      ok('the hint sits below the preview, above the create button', s.prev.bottom <= s.note.top + 1 && s.note.bottom <= s.btn.top + 40, JSON.stringify(s));
+      if (process.env.SHOTS_A) await page.screenshot({ path: `${process.env.SHOTS_A}/create-form-${tag}.png`, fullPage: true });
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN, contextOptions: ctx });
+}
+
+{
+  const m = pickFakeWorker({ pickFiles: [`${PF_ROOT}/毛片/a.jpg`], listDelay: { [`${PF_ROOT}/毛片/`]: 1200 } });
+  await suite('建立專案 — 撞名提示：改名後舊提示馬上清掉、晚到的舊結果不會蓋掉新的；檢查還沒回來也照常能建立',
+    `${base}/admin.html`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('#admin-view', { state: 'visible', timeout: 5000 });
+      await page.fill('#proj-date', '2026-10-04');
+      await page.fill('#proj-title', '王小明');
+      await page.waitForTimeout(600);   // past the debounce: the slow listing for 王小明 is now in flight
+      ok('the listing for 王小明 was asked for', pfLists(m).some(c => c.prefix === `${PF_ROOT}/毛片/`), JSON.stringify(pfLists(m)));
+      await page.fill('#proj-title', '李大華');
+      await page.waitForSelector('#proj-folder-note[data-state="empty"]', { timeout: 4000 });
+      await page.waitForTimeout(1300);   // the slow answer for 王小明 has arrived by now
+      const note = await page.$eval('#proj-folder-note', e => ({ state: e.dataset.state, text: e.textContent }));
+      ok('the note still belongs to 李大華 (no photos), not the late answer for 王小明', note.state === 'empty' && !/已有/.test(note.text), JSON.stringify(note));
+      // clearing on change: back to 王小明 (whose listing is slow again)
+      await page.fill('#proj-title', '王小明');
+      const cleared = await page.$eval('#proj-folder-note', e => ({ state: e.dataset.state || null, text: e.textContent.trim() }));
+      ok('the moment the name changes the old note is gone', cleared.state !== 'empty' && cleared.state !== 'existing', JSON.stringify(cleared));
+      // not blocking: create while the check for this name is still in flight
+      const t0 = Date.now();
+      await page.click('#proj-create-btn');
+      await page.waitForSelector('#proj-create-result', { state: 'visible', timeout: 5000 });
+      ok('建立 does not wait for the check', Date.now() - t0 < 1100 && pfPosts(m).length === 1, `${Date.now() - t0}ms`);
       return out;
     },
     { before: m.attach, initScript: ADMIN });
@@ -9347,6 +9624,22 @@ async function adminPickFinals(page, enterPath, folders) {
   await page.click('#folder-picker [data-confirm-folders]');
 }
 const deliverBodies = m => m.requests.filter(r => r.method === 'POST' && r.path.endsWith('/deliver')).map(r => r.body);
+// ＋上傳精修 / ＋上傳毛片: the link's parts, and waiting until the Worker's listing has told what 精修 folders exist
+// (until then the link names no folder at all: data-target="checking").
+const pfLink = (page, sel) => page.$eval(sel, a => { const u = new URL(a.href);
+  return { file: u.pathname.split('/').pop(), folder: u.searchParams.get('folder'), project: u.searchParams.get('project'),
+    lock: u.searchParams.get('lock'), keys: [...u.searchParams.keys()], target: a.dataset.target || null }; });
+const pfWaitFinalsLink = page => page.waitForSelector('#pd-upload-final-btn[data-target="ready"], #pd-upload-final-btn[data-target="failed"]', { timeout: 5000 });
+// The 交件 chooser of a project whose proofs are in <root>/毛片/ starts on the newest 精修 folder under
+// <root>/ (docs/delivery.md). Waits for that preselection, checks it is `folder`, and drops it so a test
+// that is about something else goes on from the empty draft it always started from.
+async function adminDropDefaultFinal(page, ok, folder) {
+  await page.waitForSelector('#pd-final-chips [data-final-chip]', { timeout: 5000 }).catch(() => {});
+  const chips = await page.$$eval('#pd-final-chips [data-final-chip]', els => els.map(e => e.dataset.finalChip));
+  ok(`the newest 精修 folder (${folder}) is preselected and 交件 is enabled`,
+    JSON.stringify(chips) === JSON.stringify([folder]) && !(await page.$eval('#pd-deliver-btn', b => b.disabled)), JSON.stringify(chips));
+  await page.click(`#pd-final-chips [data-remove-final="${folder}"]`);
+}
 const chipTexts = (page, sel) => page.$$eval(sel, els => els.map(e => e.dataset.finalChip));
 
 {
@@ -9361,6 +9654,9 @@ const chipTexts = (page, sel) => page.$$eval(sel, els => els.map(e => e.dataset.
       ok('the old 標記已交付 button is gone', !(await page.textContent('#project-detail-body')).includes('標記已交付'));
       ok('the block warns that finals must be a separate folder, not inside the proof folder',
         /獨立的資料夾/.test(await txt()) && /不能放在毛片/.test(await txt()), await txt());
+      // the chooser starts on the newest 精修 folder there is (精修二 here); dropping it
+      // gets back to the empty draft this test always started from
+      await adminDropDefaultFinal(page, ok, 'shoot/精修二/');
       ok('交件 is disabled until a folder is chosen', await page.$eval('#pd-deliver-btn', b => b.disabled));
       ok('nothing is shown as delivered yet',
         (await page.$('[data-delivered-status]')) === null && (await page.$('#pd-undeliver-btn')) === null);
@@ -9444,6 +9740,7 @@ const chipTexts = (page, sel) => page.$$eval(sel, els => els.map(e => e.dataset.
       const out = [];
       const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
       await page.waitForSelector('#pd-delivery #pd-final-pick-btn', { timeout: 5000 });
+      await pfWaitFinalsLink(page);   // the link names its folder once the Worker has said which 精修 folders exist
       const a = await page.$('#pd-delivery #pd-upload-final-btn');
       ok('the 上傳精修 link exists inside the delivery block', !!a);
       if (!a) return out;
@@ -9457,11 +9754,12 @@ const chipTexts = (page, sel) => page.$$eval(sel, els => els.map(e => e.dataset.
         const l = document.getElementById('pd-upload-final-btn');
         const url = new URL(l.href);
         return { file: url.pathname.split('/').pop(), folder: url.searchParams.get('folder'), project: url.searchParams.get('project'),
-          display: getComputedStyle(l).display, w: l.getBoundingClientRect().width };
+          lock: url.searchParams.get('lock'), display: getComputedStyle(l).display, w: l.getBoundingClientRect().width };
       });
       ok('it goes to upload.html', u.file === 'upload.html', JSON.stringify(u));
       ok('folder is <shoot>/精修/ — the parent of the proof folder, side by side with 毛片', u.folder === '20260819/shoot/精修/', JSON.stringify(u));
       ok('and carries the project id', u.project === 'proj-up', JSON.stringify(u));
+      ok('and locks the target there (the proofs are in …/毛片/)', u.lock === '1', JSON.stringify(u));
       ok('it is actually rendered (not hidden by CSS)', u.display !== 'none' && u.w > 20, JSON.stringify(u));
       const look = await page.evaluate(() => {
         const l = document.getElementById('pd-upload-final-btn'), b = document.getElementById('pd-final-pick-btn');
@@ -9508,13 +9806,15 @@ const chipTexts = (page, sel) => page.$$eval(sel, els => els.map(e => e.dataset.
     `${base}/admin.html#project=${encodeURIComponent('p&x=1 #2')}`,
     async page => {
       await page.waitForSelector('#pd-delivery #pd-final-pick-btn', { timeout: 5000 });
+      await pfWaitFinalsLink(page);
       const u = await page.evaluate(() => {
         const url = new URL(document.getElementById('pd-upload-final-btn').href);
         return { folder: url.searchParams.get('folder'), project: url.searchParams.get('project'), keys: [...url.searchParams.keys()] };
       });
       return [
         u.folder === '20260901/婚禮/精修/' ? 'ok    folder from the second proof folder' : `FAIL  ${JSON.stringify(u)}`,
-        u.project === 'p&x=1 #2' && JSON.stringify(u.keys) === '["folder","project"]' ? 'ok    project id round-trips, no param injection' : `FAIL  ${JSON.stringify(u)}`,
+        // the lock is the one new parameter: …/毛片/ makes the target a known folder
+        u.project === 'p&x=1 #2' && JSON.stringify(u.keys) === '["folder","project","lock"]' ? 'ok    project id round-trips, no param injection (folder, project, lock)' : `FAIL  ${JSON.stringify(u)}`,
       ];
     },
     { before: m.attach, initScript: ADMIN });
@@ -9588,6 +9888,7 @@ const chipTexts = (page, sel) => page.$$eval(sel, els => els.map(e => e.dataset.
       const out = [];
       const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
       await page.waitForSelector('#pd-final-pick-btn', { timeout: 5000 });
+      await adminDropDefaultFinal(page, ok, 'shoot/精修二/');
       await page.click('#pd-final-pick-btn');
       await adminPickFinals(page, ['shoot/'], ['shoot/精修/']);
       await page.waitForSelector('#pd-final-chips [data-final-chip]', { timeout: 3000 });
@@ -9635,6 +9936,7 @@ const chipTexts = (page, sel) => page.$$eval(sel, els => els.map(e => e.dataset.
       const out = [];
       const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
       await page.waitForSelector('#pd-final-pick-btn', { timeout: 5000 });
+      await adminDropDefaultFinal(page, ok, 'shoot/精修二/');
       await page.click('#pd-final-pick-btn');
       await adminPickFinals(page, ['shoot/'], ['shoot/精修/']);
       await page.waitForSelector('#pd-final-chips [data-final-chip]', { timeout: 3000 });
@@ -9671,6 +9973,336 @@ const chipTexts = (page, sel) => page.$$eval(sel, els => els.map(e => e.dataset.
       return out;
     },
     { before: m.attach, initScript: ADMIN });
+}
+
+// ── 專案詳情：資料夾、＋上傳毛片、＋上傳精修（自動編號、鎖定）、預設選最新精修 ──
+const pfNew = (extra = {}) => pickFakeWorker({ projectId: 'proj-new', title: PF_ROOT, phase: 'retouching', folders: [`${PF_ROOT}/毛片/`],
+  pickFiles: [`${PF_ROOT}/毛片/IMG_1.jpg`], ...extra });
+const pfFiles = names => [`${PF_ROOT}/毛片/IMG_1.jpg`, ...names.map(n => `${PF_ROOT}/${n}/a.jpg`)];
+
+{
+  const m = pfNew();
+  await suite('資料夾流程 — 專案詳情：資料夾一行、＋上傳毛片（鎖定在毛片）、＋上傳精修（鎖定在精修）',
+    `${base}/admin.html#project=proj-new`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('#pd-delivery #pd-final-pick-btn', { timeout: 5000 });
+      await pfWaitFinalsLink(page);
+      const line = await page.$eval('#pd-folder-line', e => ({ text: e.textContent.trim(), shown: getComputedStyle(e).display !== 'none' })).catch(() => null);
+      ok('the detail says 資料夾：<root>/', line && line.shown && line.text === `資料夾：${PF_ROOT}/`, JSON.stringify(line));
+      const up = await page.$('.pd-actions #pd-upload-proofs-btn');
+      ok('＋上傳毛片 is a link in the top action row', !!up);
+      if (!up) return out;
+      ok('its text says ＋上傳毛片', (await up.textContent()).trim() === '＋上傳毛片', await up.textContent());
+      const a = await pfLink(page, '#pd-upload-proofs-btn');
+      ok('it goes to upload.html on <root>/毛片/, for this project, locked',
+        a.file === 'upload.html' && a.folder === `${PF_ROOT}/毛片/` && a.project === 'proj-new' && a.lock === '1' && JSON.stringify(a.keys) === '["folder","project","lock"]', JSON.stringify(a));
+      const look = await page.evaluate(() => { const l = document.getElementById('pd-upload-proofs-btn'), r = l.getBoundingClientRect(), s = getComputedStyle(l);
+        const sib = document.getElementById('pd-download-btn').getBoundingClientRect();
+        return { deco: s.textDecorationLine, display: s.display, w: r.width, dh: Math.abs(r.height - sib.height), sameRow: Math.abs(r.top - sib.top) < 40 }; });
+      ok('rendered like its sibling buttons: no underline, shown, same height', look.deco === 'none' && look.display !== 'none' && look.w > 20 && look.dh <= 2, JSON.stringify(look));
+      const f = await pfLink(page, '#pd-upload-final-btn');
+      ok('＋上傳精修 goes to <root>/精修/, for this project, locked',
+        f.file === 'upload.html' && f.folder === `${PF_ROOT}/精修/` && f.project === 'proj-new' && f.lock === '1' && f.target === 'ready' &&
+        JSON.stringify(f.keys) === '["folder","project","lock"]', JSON.stringify(f));
+      ok('and says where it will upload', (await page.$eval('#pd-upload-final-hint', e => e.textContent)).includes(`${PF_ROOT}/精修/`));
+      ok('it listed the project root (<root>/) with the admin token to see what exists',
+        pfLists(m).some(c => c.prefix === `${PF_ROOT}/` && c.auth === 'Bearer adm'), JSON.stringify(pfLists(m)));
+      if (process.env.SHOTS_A) await page.screenshot({ path: `${process.env.SHOTS_A}/project-detail-folders-1500.png`, fullPage: true });
+      await page.goto(await page.$eval('#pd-upload-proofs-btn', l => l.href), { waitUntil: 'load' });
+      ok('following ＋上傳毛片 lands on the upload page with the target locked on 毛片',
+        (await page.$eval('#targetDisplay', e => e.textContent)) === `${PF_ROOT}/毛片/` && (await page.$eval('#targetBar', e => e.dataset.locked)) === '1');
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN });
+}
+
+for (const [names, want] of [[[], '精修'], [['精修'], '精修二'], [['精修', '精修二'], '精修三'], [PF_NAMES.slice(0, 9), '精修十'],
+  [PF_NAMES.slice(0, 10), '精修11'], [PF_NAMES.slice(0, 11), '精修12']]) {
+  const m = pfNew({ pickFiles: pfFiles(names) });
+  await suite(`資料夾流程 — ＋上傳精修的下一版：已有 [${names.join('、') || '無'}] → ${want}（不覆蓋前一版）`,
+    `${base}/admin.html#project=proj-new`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('#pd-delivery #pd-final-pick-btn', { timeout: 5000 });
+      await pfWaitFinalsLink(page);
+      const f = await pfLink(page, '#pd-upload-final-btn');
+      ok(`the target is <root>/${want}/, locked`, f.folder === `${PF_ROOT}/${want}/` && f.lock === '1' && f.target === 'ready', JSON.stringify(f));
+      ok('it is not one of the versions that already exist', !names.map(n => `${PF_ROOT}/${n}/`).includes(f.folder), JSON.stringify(f));
+      ok('the hint names the same folder', (await page.$eval('#pd-upload-final-hint', e => e.textContent)).includes(`${PF_ROOT}/${want}/`));
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN });
+}
+
+{
+  const m = pfNew({ pickFiles: pfFiles(['精修']), listDelay: { [`${PF_ROOT}/`]: 900 } });
+  await suite('＋上傳精修 — 還沒確認既有版本時連結不帶資料夾（點太快也蓋不掉前一版）；確認後才換成下一版',
+    `${base}/admin.html#project=proj-new`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('#pd-upload-final-btn', { timeout: 5000 });
+      const early = await pfLink(page, '#pd-upload-final-btn');
+      ok('while checking: data-target=checking, no folder, no lock, still ?project=',
+        early.target === 'checking' && early.folder === null && early.lock === null && early.project === 'proj-new' && early.file === 'upload.html', JSON.stringify(early));
+      await pfWaitFinalsLink(page);
+      const late = await pfLink(page, '#pd-upload-final-btn');
+      ok('once the listing is back it points at the next version, locked', late.folder === `${PF_ROOT}/精修二/` && late.lock === '1' && late.target === 'ready', JSON.stringify(late));
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN });
+}
+
+for (const fail of [500, 'net']) {
+  const m = pfNew({ listFail: fail });
+  await suite(`＋上傳精修 — 讀不到既有資料夾（${fail}）：連結不帶資料夾也不鎖定，旁邊說明原因；毛片連結、交件照常`,
+    `${base}/admin.html#project=proj-new`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('#pd-delivery #pd-final-pick-btn', { timeout: 5000 });
+      await pfWaitFinalsLink(page);
+      const f = await pfLink(page, '#pd-upload-final-btn');
+      ok('failed state: no folder, no lock, only ?project=', f.target === 'failed' && f.folder === null && f.lock === null && f.project === 'proj-new', JSON.stringify(f));
+      const note = await page.$eval('#pd-upload-final-note', e => ({ text: e.textContent, shown: getComputedStyle(e).display !== 'none' })).catch(() => null);
+      ok('a note says it could not read the folders and to choose one on the upload page', note && note.shown && /無法|讀不到/.test(note.text) && /自己選|上傳頁/.test(note.text), JSON.stringify(note));
+      const p = await pfLink(page, '#pd-upload-proofs-btn');
+      ok('＋上傳毛片 needs no listing and stays locked on 毛片', p.folder === `${PF_ROOT}/毛片/` && p.lock === '1', JSON.stringify(p));
+      ok('nothing is preselected for 交件 and it is disabled', (await page.$('#pd-final-chips [data-final-chip]')) === null && await page.$eval('#pd-deliver-btn', b => b.disabled));
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN });
+}
+
+// ── 交件資料夾選擇器：預設選最新的精修*（上次選的優先，不動已交件）──
+{
+  const m = pfNew({ pickFiles: pfFiles(['精修', '精修二']) });
+  await suite('交件 — 預設選取最新的精修資料夾（精修二），可修改，按交件才送出',
+    `${base}/admin.html#project=proj-new`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('#pd-final-chips [data-final-chip]', { timeout: 5000 }).catch(() => {});
+      ok('the newest 精修 folder is preselected as the draft', JSON.stringify(await chipTexts(page, '#pd-final-chips [data-final-chip]')) === JSON.stringify([`${PF_ROOT}/精修二/`]), JSON.stringify(await chipTexts(page, '#pd-final-chips [data-final-chip]')));
+      ok('and the block says so (default, editable, nothing sent until 交件)', !!(await page.$('#pd-delivery [data-final-default-hint]')) && !(await page.$('#pd-delivery [data-final-last-hint]')));
+      ok('交件 is enabled and nothing was sent yet', !(await page.$eval('#pd-deliver-btn', b => b.disabled)) && deliverBodies(m).length === 0);
+      await page.click('#pd-deliver-btn');
+      await page.waitForSelector('[data-delivered-status]', { timeout: 3000 });
+      ok('交件 sent exactly that folder', JSON.stringify(deliverBodies(m)) === JSON.stringify([{ final_folders: [`${PF_ROOT}/精修二/`] }]), JSON.stringify(deliverBodies(m)));
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN });
+}
+
+{
+  const m = pfNew();
+  await suite('交件 — 還沒有任何精修資料夾：不預選、交件停用',
+    `${base}/admin.html#project=proj-new`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('#pd-delivery #pd-final-pick-btn', { timeout: 5000 });
+      await pfWaitFinalsLink(page);
+      await page.waitForTimeout(200);
+      ok('no chip, no hint, 交件 disabled', (await page.$('#pd-final-chips [data-final-chip]')) === null && !(await page.$('#pd-delivery [data-final-default-hint]')) &&
+        await page.$eval('#pd-deliver-btn', b => b.disabled));
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN });
+}
+
+{
+  const m = pfNew({ pickFiles: pfFiles(['精修', '精修二']), finalFolders: [`${PF_ROOT}/精修/`] });
+  await suite('交件 — 有上次選的精修資料夾（取消交件後）：預填上次的，不被「最新」蓋掉',
+    `${base}/admin.html#project=proj-new`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('#pd-final-chips [data-final-chip]', { timeout: 5000 });
+      await pfWaitFinalsLink(page);
+      await page.waitForTimeout(200);
+      ok('the last choice is what is filled in (精修, not 精修二)', JSON.stringify(await chipTexts(page, '#pd-final-chips [data-final-chip]')) === JSON.stringify([`${PF_ROOT}/精修/`]), JSON.stringify(await chipTexts(page, '#pd-final-chips [data-final-chip]')));
+      ok('with the 上次選的 hint and no default hint', !!(await page.$('#pd-delivery [data-final-last-hint]')) && !(await page.$('#pd-delivery [data-final-default-hint]')));
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN });
+}
+
+{
+  const m = pfNew({ pickFiles: pfFiles(['精修', '精修二']), finalFolders: [`${PF_ROOT}/精修/`], listDelay: { [`${PF_ROOT}/`]: 1500 } });
+  await suite('交件 — 上次選的精修資料夾被你移除後，列表晚到也不會自己填回「最新」',
+    `${base}/admin.html#project=proj-new`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector(`#pd-final-chips [data-remove-final="${PF_ROOT}/精修/"]`, { timeout: 5000 });
+      ok('(the listing is still out)', (await page.$eval('#pd-upload-final-btn', a => a.dataset.target)) === 'checking');
+      await page.click(`#pd-final-chips [data-remove-final="${PF_ROOT}/精修/"]`);
+      await pfWaitFinalsLink(page);
+      await page.waitForTimeout(300);
+      ok('the draft stays empty (nothing re-filled), 交件 stays disabled', (await page.$('#pd-final-chips [data-final-chip]')) === null &&
+        await page.$eval('#pd-deliver-btn', b => b.disabled) && !(await page.$('#pd-delivery [data-final-default-hint]')));
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN });
+}
+
+{
+  const m = pfNew({ pickFiles: pfFiles(['精修', '精修二']), finalFolders: [`${PF_ROOT}/精修/`], deliveredAt: '2026-10-02T00:00:00.000Z' });
+  await suite('交件 — 已交件：交件資料夾不被「最新」改動；更換精修資料夾從目前交件的開始',
+    `${base}/admin.html#project=proj-new`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('#pd-delivered-folders [data-final-chip]', { timeout: 5000 });
+      await page.waitForTimeout(500);
+      ok('the delivered folders are the ones delivered', JSON.stringify(await chipTexts(page, '#pd-delivered-folders [data-final-chip]')) === JSON.stringify([`${PF_ROOT}/精修/`]));
+      ok('no default hint on a delivered project', !(await page.$('#pd-delivery [data-final-default-hint]')));
+      await page.click('#pd-replace-final-btn');
+      await page.click('#folder-picker-close');
+      ok('更換 starts from the delivered finals, not from the newest', JSON.stringify(await chipTexts(page, '#pd-final-chips [data-final-chip]')) === JSON.stringify([`${PF_ROOT}/精修/`]) &&
+        !(await page.$('#pd-delivery [data-final-default-hint]')));
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN });
+}
+
+{
+  const m = pfNew({ pickFiles: pfFiles(['精修', '精修二']), listDelay: { [`${PF_ROOT}/`]: 2500 } });
+  await suite('交件 — 預設選取不會蓋掉你已經選好的：列表還沒回來就先手動選了精修，之後不被改成最新',
+    `${base}/admin.html#project=proj-new`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('#pd-final-pick-btn', { timeout: 5000 });
+      ok('(the listing is still out: link is checking)', (await page.$eval('#pd-upload-final-btn', a => a.dataset.target)) === 'checking');
+      await page.click('#pd-final-pick-btn');
+      await adminPickFinals(page, [`${PF_ROOT}/`], [`${PF_ROOT}/精修/`]);
+      await page.waitForSelector('#pd-final-chips [data-final-chip]', { timeout: 3000 });
+      await pfWaitFinalsLink(page);
+      await page.waitForTimeout(300);
+      ok('the chosen 精修 stays; the late default did not replace it', JSON.stringify(await chipTexts(page, '#pd-final-chips [data-final-chip]')) === JSON.stringify([`${PF_ROOT}/精修/`]), JSON.stringify(await chipTexts(page, '#pd-final-chips [data-final-chip]')));
+      ok('and no default hint', !(await page.$('#pd-delivery [data-final-default-hint]')));
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN });
+}
+
+// ── 舊專案：資料夾由快照決定，推導與連結都不變 ──
+{
+  const m = pickFakeWorker({ projectId: 'proj-old', title: '舊專案', phase: 'retouching', folders: ['20260819/Anita/'],
+    pickFiles: ['20260819/Anita/a.jpg', '20260819/精修/x.jpg', '20260819/精修二/y.jpg'] });
+  await suite('舊專案（資料夾不是 …/毛片/）— 連結照舊：＋上傳精修 = <上層>/精修/、不鎖定、不列資料夾、不預選；沒有＋上傳毛片',
+    `${base}/admin.html#project=proj-old`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('#pd-delivery #pd-upload-final-btn', { timeout: 5000 });
+      const f = await pfLink(page, '#pd-upload-final-btn');
+      ok('the link is final at once (no checking state) and is the old one: <parent>/精修/, ?project=, no lock',
+        f.target === 'ready' && f.folder === '20260819/精修/' && f.project === 'proj-old' && f.lock === null && JSON.stringify(f.keys) === '["folder","project"]', JSON.stringify(f));
+      await page.waitForTimeout(500);
+      ok('no listing of the root was made for it', !pfLists(m).some(c => c.prefix === '20260819/'), JSON.stringify(pfLists(m)));
+      ok('no 精修 folder is preselected, no ＋上傳毛片, no hint', (await page.$('#pd-final-chips [data-final-chip]')) === null && !(await page.$('#pd-upload-proofs-btn')) && !(await page.$('#pd-upload-final-hint')));
+      ok('the folder line lists the snapshot folders', (await page.$eval('#pd-folder-line', e => e.textContent.trim())) === '資料夾：20260819/Anita/');
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN });
+}
+
+{
+  const m = pickFakeWorker({ projectId: 'proj-old1', title: '舊專案單層', phase: 'picking', folders: ['20260819/'] });
+  await suite('舊專案（單層資料夾）— 資料夾一行照實列出；沒有＋上傳毛片',
+    `${base}/admin.html#project=proj-old1`,
+    async page => {
+      await page.waitForSelector('#pd-folder-line', { timeout: 5000 });
+      return [
+        (await page.$eval('#pd-folder-line', e => e.textContent.trim())) === '資料夾：20260819/' ? 'ok    folder line' : 'FAIL  folder line',
+        !(await page.$('#pd-upload-proofs-btn')) ? 'ok    no ＋上傳毛片' : 'FAIL  ＋上傳毛片 offered for a single-level folder',
+      ];
+    },
+    { before: m.attach, initScript: ADMIN });
+}
+
+// ── upload.html：?folder=…&lock=1 鎖定目標資料夾；沒有 lock 時行為不變 ──
+{
+  const PROOF = `${PF_ROOT}/毛片/`;
+  const m = adminMock();
+  await suite('upload — ?folder=…&lock=1：目標鎖定（目錄樹隱藏、不載入、不能換、不能新增），檔案傳進鎖定的資料夾',
+    `${base}/upload.html?folder=${encodeURIComponent(PROOF)}&project=proj-new&lock=1`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('#targetDisplay', { timeout: 5000 });
+      await page.waitForTimeout(400);
+      const s = await page.evaluate(() => ({
+        target: document.getElementById('targetDisplay').textContent, hint: document.getElementById('targetHint').textContent,
+        locked: document.getElementById('targetBar').dataset.locked || null,
+        sidebar: getComputedStyle(document.querySelector('.sidebar')).display, nodes: document.querySelectorAll('.sb-node').length,
+        addRoot: !!document.querySelector('.sidebar').offsetParent,
+        dropOff: document.getElementById('dropZone').classList.contains('no-target'),
+        mainW: document.querySelector('.main').getBoundingClientRect().width, winW: innerWidth }));
+      ok('the target is the project folder, shown as locked', s.target === PROOF && /鎖定/.test(s.hint) && s.locked === '1', JSON.stringify(s));
+      ok('the folder tree is gone (display:none, no nodes, not even loaded)', s.sidebar === 'none' && s.nodes === 0 && s.addRoot === false && m.seen.filter(r => r.list !== null).length === 0, JSON.stringify([s, m.seen.map(r => r.list)]));
+      ok('the drop zone is active and the page uses the full width', s.dropOff === false && s.mainW > s.winW - 40, JSON.stringify(s));
+      const t = await page.evaluate(() => { selectFolder('other/'); addFolderToTree('x/y/'); return { target: targetFolder, shown: document.getElementById('targetDisplay').textContent }; });
+      ok('selecting or adding another folder from script changes nothing', t.target === PROOF && t.shown === PROOF, JSON.stringify(t));
+      await page.setInputFiles('#fileInput', { name: 'a.png', mimeType: 'image/png', buffer: PIXEL });
+      await page.waitForSelector('.queue-item.done, .queue-item.error', { timeout: 8000 });
+      const puts = m.seen.filter(r => r.method === 'PUT' && !decodeURIComponent(r.path.slice(1)).startsWith('_thumbs/')).map(r => decodeURIComponent(r.path.slice(1)));
+      ok('the photo went to the locked folder', JSON.stringify(puts) === JSON.stringify([`${PROOF}a.png`]), JSON.stringify(puts));
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN });
+}
+
+for (const [label, q, want] of [
+  ['沒有 lock（只有 folder）', `folder=${encodeURIComponent('20260819/')}`, { locked: false, hint: '已選定', target: '20260819/' }],
+  ['lock=1 但沒有 folder', 'lock=1', { locked: false, hint: '', target: '← 從左側點選資料夾' }],
+  ['lock=0', `folder=${encodeURIComponent('20260819/')}&lock=0`, { locked: false, hint: '已選定', target: '20260819/' }],
+  ['lock=true', `folder=${encodeURIComponent('20260819/')}&lock=true`, { locked: false, hint: '已選定', target: '20260819/' }],
+]) {
+  const m = adminMock();
+  await suite(`upload — ${label}：不鎖定，目錄樹照常，可以換資料夾`,
+    `${base}/upload.html?${q}`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('.sb-node', { timeout: 5000 });
+      const s = await page.evaluate(() => ({ target: document.getElementById('targetDisplay').textContent, hint: document.getElementById('targetHint').textContent,
+        locked: document.getElementById('targetBar').dataset.locked || null, sidebar: getComputedStyle(document.querySelector('.sidebar')).display,
+        nodes: document.querySelectorAll('.sb-node').length }));
+      ok('not locked: tree shown and loaded', s.locked === null && s.sidebar !== 'none' && s.nodes > 0, JSON.stringify(s));
+      ok(`target / hint as before (${want.target} / ${want.hint || 'empty'})`, s.target === want.target && s.hint === want.hint, JSON.stringify(s));
+      await page.click('.sb-node[data-path="20260901/"] .sb-name');
+      const after = await page.evaluate(() => ({ target: targetFolder, hint: document.getElementById('targetHint').textContent }));
+      ok('clicking another folder in the tree still changes the target', after.target === '20260901/' && after.hint === '已選定', JSON.stringify(after));
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN });
+}
+
+for (const [tag, ctx] of [['390', { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true }], ['1280', { viewport: { width: 1280, height: 900 } }]]) {
+  const m = adminMock();
+  await suite(`upload — 鎖定目標的版面 [${tag}]：沒有橫向捲動，目標列與拖放區都看得到`,
+    `${base}/upload.html?folder=${encodeURIComponent(`${PF_ROOT}/精修二/`)}&project=proj-new&lock=1`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('#targetDisplay', { timeout: 5000 });
+      await page.waitForTimeout(300);
+      const s = await page.evaluate(() => { const r = id => document.getElementById(id).getBoundingClientRect();
+        return { sw: document.documentElement.scrollWidth, iw: innerWidth, bar: r('targetBar'), drop: r('dropZone'), side: getComputedStyle(document.querySelector('.sidebar')).display }; });
+      ok('no horizontal scroll', s.sw <= s.iw, JSON.stringify(s));
+      ok('the target bar and the drop zone fit inside the screen', s.bar.left >= 0 && s.bar.right <= s.iw && s.drop.left >= 0 && s.drop.right <= s.iw && s.bar.width > 150, JSON.stringify(s));
+      ok('the tree is hidden', s.side === 'none', JSON.stringify(s));
+      if (process.env.SHOTS_A) await page.screenshot({ path: `${process.env.SHOTS_A}/upload-locked-${tag}.png`, fullPage: true });
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN, contextOptions: ctx });
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -9947,6 +10579,7 @@ await suite('upload — 沒有 ?project=（或空值）：返回鍵維持「← 
       const out = [];
       const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
       await page.waitForSelector('#pd-final-pick-btn', { timeout: 5000 });
+      await adminDropDefaultFinal(page, ok, 'shoot/精修二/');   // start from the empty draft this test was written for
       const err = () => page.$eval('#pd-deliver-err', e => e.textContent);
       const tryDeliver = async (enterPath, folders) => {
         await page.click('#pd-final-pick-btn');
@@ -13736,13 +14369,10 @@ const heartOn = (page, i) => page.locator('.photo-card').nth(i).locator('.pick-h
 }
 
 // ── create form ─────────────────────────────────────────────────────────
+// (the folders come from the project name + shoot date now, so "pick a folder" became "name the project")
 async function planPickFolder(page) {
   await page.waitForSelector('#admin-view', { state: 'visible', timeout: 5000 });
-  await page.click('#proj-pick-folders-btn');
-  await page.waitForSelector('[data-pick-folder]');
-  await page.click('[data-pick-folder]');
-  await page.click('[data-confirm-folders]');
-  await page.waitForSelector('#folder-picker', { state: 'hidden' });
+  await page.fill('#proj-title', '王小明');
 }
 const createPosts = m => m.requests.filter(r => r.method === 'POST' && r.path === '/api/admin/projects');
 
@@ -14555,7 +15185,7 @@ for (const [tag, ctx] of [['1280', DESKTOP], ['390', PHONE]]) {
       await page.waitForSelector('[data-project-row]', { timeout: 5000 });
       await page.fill('#proj-title', '王小明 & 陳小美 婚紗');
       await page.evaluate(() => { document.getElementById('proj-create-result').style.display = 'block'; document.getElementById('proj-link-output').value = 'https://imhoti.tw/studio/index.html?t=abc'; });
-      await page.evaluate(() => { document.getElementById('proj-create-err').textContent = '請至少選擇一個資料夾'; });
+      await page.evaluate(() => { document.getElementById('proj-create-err').textContent = '請輸入專案名稱'; });
       ok('the list row carries every badge (delivered, archived, modified, unnotified)',
         await page.evaluate(() => { const t = document.querySelector('[data-project-row]').textContent; return /已交件/.test(t) && /已封存/.test(t) && /已修改/.test(t) && /未寄信/.test(t); }));
       await tokenChecks(page, ok, 'admin 列表');

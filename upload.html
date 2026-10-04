@@ -214,6 +214,10 @@ input::placeholder { color: var(--ink-55); opacity: 1; }
 .sidebar-header-btns { display: flex; gap: 4px; }
 .sidebar-add-root { font-size: 0.9rem; }
 .sidebar-new-root { display: none; padding: 6px 8px; border-bottom: 1px solid var(--rule); }
+/* locked target (?lock=1): no folder tree at all, the target bar carries the lock */
+body.folder-locked .sidebar { display: none; }
+.target-bar[data-locked="1"] { border-color: var(--accent); }
+.target-bar[data-locked="1"] .target-hint { color: var(--accent-ink); font-weight: 600; }
 .sb-new-row--root { padding-left: 4px; }
 
 /* ── Main panel ── */
@@ -453,6 +457,10 @@ const THUMB_QUALITY = 0.82;
 let queue = [];
 let activeCount = 0;
 let targetFolder = '';
+// ?folder=…&lock=1 (from a project page): the target is that folder and nothing else —
+// no folder tree, no new folders — so a photo cannot land in another project's folder.
+// Without lock=1 (or without a folder to lock) the page works exactly as it always did.
+let folderLocked = false;
 
 const $ = id => document.getElementById(id);
 
@@ -584,6 +592,7 @@ function makeSbNode(path, preloaded = false) {
 
 // ── Inline new-folder input ──
 function showNewFolderInput(container, parentPath, indentPx) {
+    if (folderLocked) return;
     // Only one input at a time
     container.querySelectorAll('.sb-new-row').forEach(el => el.remove());
 
@@ -618,6 +627,7 @@ function showNewFolderInput(container, parentPath, indentPx) {
 
 // Add a new virtual folder path into the sidebar tree and select it
 function addFolderToTree(fullPath) {
+    if (folderLocked) return;
     const parts = fullPath.split('/').filter(Boolean);
     let container = $('sidebarTree');
     let builtPath = '';
@@ -652,20 +662,24 @@ function addFolderToTree(fullPath) {
     selectFolder(fullPath);
 }
 
-function selectFolder(path) {
+// `initial`: the one call that sets a locked target (from ?folder=); nothing after
+// it may change a locked target.
+function selectFolder(path, { initial = false } = {}) {
+    if (folderLocked && !initial) return;
     targetFolder = path.endsWith('/') ? path : path + '/';
     const display = $('targetDisplay');
     display.textContent = targetFolder;
     display.classList.remove('empty');
-    $('targetHint').textContent = '已選定';
+    $('targetHint').textContent = folderLocked ? '🔒 已鎖定' : '已選定';
     $('dropZone').classList.remove('no-target');
-    toast('📁 已選擇：' + targetFolder);
+    if (!folderLocked) toast('📁 已選擇：' + targetFolder);
 }
 
 $('sidebarRefreshBtn').addEventListener('click', initSidebar);
 
 // Root-level new folder
 $('sidebarAddRootBtn').addEventListener('click', () => {
+    if (folderLocked) return;
     const wrap = $('sidebarNewRoot');
     const input = $('sidebarNewRootInput');
     if (wrap.style.display !== 'block') {
@@ -677,6 +691,7 @@ $('sidebarAddRootBtn').addEventListener('click', () => {
     }
 });
 $('sidebarNewRootInput').addEventListener('keydown', e => {
+    if (folderLocked) return;
     if (e.key === 'Enter') {
         const raw = e.target.value.trim().replace(/^\/+|\/+$/g, '');
         if (raw) addFolderToTree(raw + '/');
@@ -1049,7 +1064,12 @@ $('clearDoneBtn').addEventListener('click', () => {
 // ── Pre-fill from URL ──
 const params = new URLSearchParams(location.search);
 const pre = params.get('folder');
-if (pre) selectFolder(pre.endsWith('/') ? pre : pre + '/');
+if (pre && params.get('lock') === '1') {
+    folderLocked = true;
+    document.body.classList.add('folder-locked');
+    $('targetBar').dataset.locked = '1';
+}
+if (pre) selectFolder(pre.endsWith('/') ? pre : pre + '/', { initial: true });
 
 // ── Back link: arriving from a project (?project=<id>), go back to it rather
 // than to the picker — uploading is not picking. No param: index.html as before.
@@ -1063,7 +1083,8 @@ if (fromProject) {
 // ── Init sidebar after auth is ready ──
 document.addEventListener('DOMContentLoaded', () => {
     // Wait a tick for auth.js to set the token
-    setTimeout(initSidebar, 100);
+    // a locked target needs no folder tree, so it is not even read
+    if (!folderLocked) setTimeout(initSidebar, 100);
 });
 </script>
 </body>
