@@ -178,6 +178,34 @@
   .proj-folder-note[data-state="existing"] { color: var(--accent-ink); font-weight: 600; }
   /* nothing to create yet: muted but still AA-legible (the generic .btn:disabled opacity would not be) */
   #proj-create-btn:disabled { opacity: 1; background: var(--card-hi); color: var(--ink-70); }
+  /* Project detail sections: a title row (title + one-line summary + ▾/▸) that opens and
+     closes its body. Closed = display:none on the body container. Everything inside keeps its id. */
+  .pd-sec { border: 1px solid var(--rule); border-radius: 12px; background: var(--surface); margin: 10px 0 0; }
+  .pd-sec.pd-sec-off { display: none; }
+  #project-detail-panel .pd-sec-h { display: block; margin: 0; font-size: 14px; }
+  .pd-sec-head { display: flex; flex-wrap: wrap; align-items: center; gap: 0 8px; }
+  .pd-sec-head .pd-sec-h { flex: 1 1 220px; min-width: 0; }
+  .pd-sec-btn { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; width: 100%; min-height: 40px;
+    padding: 9px 14px; background: transparent; border: 0; border-radius: 12px; text-align: left; cursor: pointer;
+    font: inherit; color: var(--ink-90); }
+  .pd-sec-btn:hover { background: var(--card); }
+  .pd-sec-btn:focus-visible { outline: 2px solid var(--ink-90); outline-offset: -2px; }
+  .pd-sec-caret { width: 14px; flex: none; color: var(--ink-55); font-size: 12px; }
+  .pd-sec-title { font-weight: 600; font-size: 14px; }
+  .pd-sec-sum { flex: 1 1 140px; min-width: 0; color: var(--ink-70); font-size: 12px; font-weight: 400; overflow-wrap: anywhere; }
+  .pd-sec-head a.pd-link { flex: none; margin: 0 14px 6px 38px; font-size: 12px; color: var(--accent-ink); text-decoration: none; }
+  .pd-sec-head a.pd-link:hover { text-decoration: underline; }
+  .pd-sec.is-collapsed > .pd-sec-body { display: none; }
+  .pd-sec-body { padding: 2px 14px 12px; }
+  /* the blocks used to be boxes of their own; inside a section they are just its content */
+  .pd-sec .pd-block { border: 0; border-radius: 0; padding: 0; margin: 0; }
+  .pd-sec .pd-block + .pd-block { border-top: 1px solid var(--rule); margin-top: 12px; padding-top: 12px; }
+  #project-detail-panel .pd-sec-body h4 { margin: 2px 0 8px; }
+  #project-detail-panel .pd-sec-body > .pd-block:first-child > h4:first-child, #project-detail-panel .pd-sec-body > h4:first-child { margin-top: 0; }
+  /* leftover blank space: an empty message line, a roomy empty state and the card margin take no room here */
+  #project-detail-panel .err:empty, #project-detail-panel .ok-msg:empty { display: none; }
+  #project-detail-panel .empty { padding: 8px 0; text-align: left; }
+  #project-detail-panel.panel { margin-bottom: 12px; }
   .pd-head { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
   .pd-owner { color: var(--ink-55); font-size: 13px; margin-bottom: 14px; }
   .pd-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; }
@@ -1020,6 +1048,139 @@
 
   const TOKEN_STATUS_LABEL = { live: '有效', revoked: '已撤銷', expired: '已過期' };
 
+  // ── Project detail sections ────────────────────────────────────────────────
+  // Each block below the header has a title row — title, a one-line summary, ▾/▸ —
+  // that opens and closes its body (display:none on the body container; every id
+  // inside stays in the DOM). Open or closed is: what the photographer chose on
+  // this page (secChoice), else what this browser remembers (localStorage — a
+  // per-browser convenience, so every access is guarded and nothing depends on it),
+  // else the section's default. Keyed by section name, not by project.
+  const SEC_TITLE = { delivery: '交件', settings: '設定', selections: '目前選取', orders: '訂單', submissions: '送出紀錄', people: '挑選人與連結' };
+  const SEC_KEY = 'pd_sec_';
+  let secProject = null;       // the project being drawn (the defaults depend on it)
+  let secData = null;          // what the summaries count: selections, submissions, pickers, links, owner
+  const secChoice = {};        // name -> boolean, set by a click on a title row (kept even when storage is not)
+  const secAuto = {};          // name -> boolean, 訂單 opened (or not) by itself on what its orders say; not a choice
+
+  function secStored(name) {
+    try {
+      const v = localStorage.getItem(SEC_KEY + name);
+      return v === '1' ? true : v === '0' ? false : null;
+    } catch (e) { return null; }
+  }
+  function secStore(name, open) {
+    try { localStorage.setItem(SEC_KEY + name, open ? '1' : '0'); } catch (e) { /* storage unavailable: the choice lives in secChoice */ }
+  }
+  // 交件 is open whenever it is there (retouching or delivered); 目前選取 once the guest
+  // has submitted; 訂單 opens by itself when its orders arrive with something waiting;
+  // the rest start closed.
+  function secDefault(name) {
+    if (name === 'delivery') return true;
+    if (name === 'selections') return !!secProject && secProject.phase === 'submitted';
+    return false;
+  }
+  function secIsOpen(name) {
+    if (name in secChoice) return secChoice[name];
+    const stored = secStored(name);
+    if (stored !== null) return stored;
+    return name in secAuto ? secAuto[name] : secDefault(name);
+  }
+  function secHtml(name, inner, headExtra) {
+    const open = secIsOpen(name);
+    return `<section class="pd-sec${open ? '' : ' is-collapsed'}" id="pd-sec-${name}" data-sec="${name}">
+      <div class="pd-sec-head">
+        <h4 class="pd-sec-h"><button type="button" class="pd-sec-btn" id="pd-sec-${name}-btn" aria-expanded="${open}" aria-controls="pd-sec-${name}-body">
+          <span class="pd-sec-caret" aria-hidden="true">${open ? '▾' : '▸'}</span><span class="pd-sec-title">${SEC_TITLE[name]}</span><span class="pd-sec-sum" id="pd-sec-${name}-sum"></span></button></h4>
+        ${headExtra || ''}
+      </div>
+      <div class="pd-sec-body" id="pd-sec-${name}-body" role="region" aria-labelledby="pd-sec-${name}-btn">${inner}</div>
+    </section>`;
+  }
+  function secApply(name, open) {
+    const sec = document.getElementById('pd-sec-' + name);
+    const btn = document.getElementById(`pd-sec-${name}-btn`);
+    if (!sec || !btn) return;
+    sec.classList.toggle('is-collapsed', !open);
+    btn.setAttribute('aria-expanded', String(open));
+    btn.querySelector('.pd-sec-caret').textContent = open ? '▾' : '▸';
+  }
+  document.getElementById('project-detail-body')?.addEventListener('click', e => {
+    const btn = e.target.closest && e.target.closest('.pd-sec-btn');
+    if (!btn) return;
+    const name = btn.closest('.pd-sec').dataset.sec;
+    // flip what is on screen, whatever put it there (default, auto-open, memory, an earlier click)
+    const open = btn.getAttribute('aria-expanded') !== 'true';
+    secChoice[name] = open;
+    secStore(name, open);
+    secApply(name, open);
+  });
+  // 交件 is not there at all until the project is being retouched (or is delivered)
+  function secDeliveryShown(shown) {
+    document.getElementById('pd-sec-delivery')?.classList.toggle('pd-sec-off', !shown);
+  }
+
+  // 'M/D' in Taipei time, for the one-line summaries
+  function fmtDay(iso) {
+    const d = iso ? new Date(iso) : null;
+    if (!d || isNaN(d.getTime())) return '';
+    return new Intl.DateTimeFormat('zh-TW', { timeZone: 'Asia/Taipei', month: 'numeric', day: 'numeric' }).format(d);
+  }
+
+  function secSummaries() {
+    const p = currentProject || {}, d = secData || {};
+    const out = {};
+    // 交件
+    if (!p.delivered_at) out.delivery = '尚未交件';
+    else {
+      const finals = Array.isArray(p.final_folders) ? p.final_folders : [];
+      const leaf = finals.length ? (String(finals[0]).split('/').filter(Boolean).pop() || '') + '/' : '';
+      const open = currentRevisions.filter(r => !r.resolved_at).length;
+      const confirm = p.client_confirmed_at
+        ? (p.client_confirmed_by === 'photographer' ? '已標記完成' : '客戶已確認')
+        : (open > 0 ? `待修改 ${open}` : '客戶尚未確認');
+      out.delivery = [`已交件 ${fmtDay(p.delivered_at)}`.trim(),
+        leaf ? leaf + (finals.length > 1 ? ` 等 ${finals.length} 個` : '') : '', confirm].filter(Boolean).join(' · ');
+    }
+    // 設定: the plan and the proofs download switch
+    const plan = [];
+    plan.push(p.pick_limit == null ? '不限張數' : `${p.pick_limit} 張` + (p.extra_max != null ? ` + 加選 ${p.extra_max}` : ''));
+    if (p.extra_price != null) plan.push(`加選 ${O.money(p.extra_price)}`);
+    plan.push(`毛片下載：${p.allow_proof_download ? '開' : '關'}`);
+    out.settings = plan.join(' · ');
+    out.selections = `${d.selectedCount || 0} 張`;
+    out.orders = ordersSummary();
+    const subs = d.submissions || [];
+    out.submissions = subs.length ? `${subs.length} 次，最近 ${fmtDay(subs[0].created_at)}` : '尚無送出';
+    const live = (d.tokens || []).filter(t => t.status === 'live').length;
+    const people = (d.pickers || []).length;
+    out.people = `${d.ownerName || '尚無人認領'}${people > 1 ? `（共 ${people} 人）` : ''} · 連結有效 ${live} 條`;
+    return out;
+  }
+  function ordersSummary() {
+    if (!oc || oc.projectId !== currentProjectId || (!oc.loaded && !oc.failed)) return '載入中…';
+    if (oc.failed) return '讀取失敗';
+    const live = oc.orders.filter(o => o.status !== 'cancelled');
+    const cancelled = oc.orders.length - live.length;
+    const tail = cancelled ? `（另有 ${cancelled} 筆已取消）` : '';
+    if (!live.length) return cancelled ? `尚無有效訂單（${cancelled} 筆已取消）` : '尚無訂單';
+    const requested = live.filter(o => o.status === 'requested').length;
+    const owed = live.reduce((n, o) => n + (Number(o.outstanding) || 0), 0);
+    return `${live.length} 筆` + (requested ? ` · 待確認 ${requested}` : '') + (owed > 0 ? ` · 未收 ${O.money(owed)}` : ' · 已收齊') + tail;
+  }
+  // 訂單 opens by itself when something is waiting — unless the photographer
+  // (or this browser's memory) already decided
+  function ordersWaiting() {
+    return !!oc && oc.orders.some(o => o.status !== 'cancelled' && (o.status === 'requested' || (Number(o.outstanding) || 0) > 0));
+  }
+
+  function refreshSecSummaries() {
+    const sums = secSummaries();   // put in with textContent: a name stays text
+    for (const name of Object.keys(SEC_TITLE)) {
+      const el = document.getElementById(`pd-sec-${name}-sum`);
+      if (el) el.textContent = sums[name] || '';
+    }
+  }
+
   function renderProjectDetail(data) {
     const body = document.getElementById('project-detail-body');
     const project = data.project || {};
@@ -1029,6 +1190,7 @@
     const selected = (data.selections || []).filter(s => s.rating > 0);
     const ownerName = data.owner ? data.owner.name : null;
 
+    secProject = project;
     body.innerHTML = `
       <div class="pd-head">
         <h3>${escHtml(project.title || '（未命名）')}</h3>
@@ -1055,24 +1217,19 @@
       </div>
       <div id="pd-action-err" class="err"></div>
 
-      <div id="pd-delivery" class="pd-block"></div>
-      <div id="pd-proofdl" class="pd-block"></div>
-      <div id="pd-plan" class="pd-block"></div>
+      ${secHtml('delivery', '<div id="pd-delivery" class="pd-block"></div>')}
+      ${secHtml('settings', '<div id="pd-proofdl" class="pd-block"></div><div id="pd-plan" class="pd-block"></div>')}
 
-      <details id="pd-selections-details">
-        <summary>目前選取（${selected.length} 張） <a class="pd-link" href="index.html?project=${encodeURIComponent(project.id)}">看照片 →</a></summary>
-        <div class="table-wrap"><table><thead><tr><th>照片</th><th>♥</th><th>備註</th><th>選片人</th><th>更新時間</th></tr></thead>
+      ${secHtml('selections', `<div id="pd-selections-details"><div class="table-wrap"><table><thead><tr><th>照片</th><th>♥</th><th>備註</th><th>選片人</th><th>更新時間</th></tr></thead>
           <tbody>${selected.length ? selected.map(s => `<tr>
             <td class="folder-raw"><a class="pd-link" href="index.html?project=${encodeURIComponent(project.id)}&amp;photo=${encodeURIComponent(s.photo_key)}">${escHtml(s.photo_key)}</a></td><td>♥</td><td>${escHtml(s.note || '')}</td>
             <td>${escHtml(pickerNameOf(pickers, s.updated_by))}</td><td>${escHtml(fmtTime(s.updated_at))}</td>
-          </tr>`).join('') : '<tr><td colspan="5" class="empty">尚無選取</td></tr>'}</tbody></table></div>
-      </details>
+          </tr>`).join('') : '<tr><td colspan="5" class="empty">尚無選取</td></tr>'}</tbody></table></div></div>`,
+        `<a class="pd-link" href="index.html?project=${encodeURIComponent(project.id)}">看照片 →</a>`)}
 
-      <h4>訂單</h4>
-      <div id="pd-orders"><div class="empty">載入中…</div></div>
+      ${secHtml('orders', '<div id="pd-orders"><div class="empty">載入中…</div></div>')}
 
-      <h4>送出紀錄（新到舊）</h4>
-      <div id="pd-submissions">${submissions.length ? submissions.map((s, i) => {
+      ${secHtml('submissions', `<div id="pd-submissions">${submissions.length ? submissions.map((s, i) => {
         const prev = submissions[i + 1];
         const diff = prev ? projectDiff(s.photo_keys, prev.photo_keys) : null;
         const pinKeys = prev ? marksChangedKeys(s.marks, prev.marks) : [];
@@ -1091,9 +1248,9 @@
             ${!s.notified ? '<span class="badge badge-pending">未寄信</span>' : ''}</div>
           ${diffHtml}
         </div>`;
-      }).join('') : '<div class="empty">尚無送出紀錄</div>'}</div>
+      }).join('') : '<div class="empty">尚無送出紀錄</div>'}</div>`)}
 
-      <h4>挑選人</h4>
+      ${secHtml('people', `<h4>挑選人</h4>
       <div id="pd-pickers">${pickers.length ? pickers.map(p => `<div>${escHtml(p.name)}${p.relationship ? `（${escHtml(p.relationship)}）` : ''}${p.email ? ' · ' + escHtml(p.email) : ''}${data.owner && data.owner.id === p.id ? ' <span class="badge badge-approved">目前選片中</span>' : ''}</div>`).join('') : '<div class="empty">尚無挑選人</div>'}</div>
 
       <h4>挑選連結</h4>
@@ -1110,8 +1267,9 @@
           </div>
         </div>`).join('') : '<div class="empty">尚無連結</div>'}</div>
       ${project.archived_at ? '' : '<button id="pd-new-link-btn" class="btn btn-outline" type="button" style="margin-top:8px;">產生新連結</button>'}
-      <div id="pd-link-err" class="err"></div>
+      <div id="pd-link-err" class="err"></div>`)}
     `;
+    secData = { selectedCount: selected.length, submissions, pickers, tokens, ownerName };
 
     document.getElementById('pd-reset-seat-btn').addEventListener('click', async () => {
       if (!confirm('確定要重設選片人嗎？選取結果與送出紀錄都會保留。\n新的主人會接手目前所有選片，並可修改或刪除')) return;
@@ -1209,6 +1367,7 @@
     document.getElementById('pd-download-btn').addEventListener('click', () => downloadSelectedKeys(project, selected));
     document.getElementById('pd-download-csv-btn').addEventListener('click', () => downloadSelectionCsv(project, selected));
     initOrders(project, selected.map(x => x.photo_key));
+    refreshSecSummaries();
   }
 
   // ── 交件 (docs/delivery.md) ────────────────────────────────────────────────
@@ -1399,8 +1558,9 @@
     if (!box || !project) return;
     const delivered = !!project.delivered_at;
     const finals = Array.isArray(project.final_folders) ? project.final_folders : [];
-    if (!delivered && project.phase !== 'retouching') { box.style.display = 'none'; box.innerHTML = ''; return; }
+    if (!delivered && project.phase !== 'retouching') { box.style.display = 'none'; box.innerHTML = ''; secDeliveryShown(false); refreshSecSummaries(); return; }
     box.style.display = '';
+    secDeliveryShown(true);
 
     const last = lastFinalFolders(project);
     const showLastHint = last.length > 0 && finalDraft.length === last.length && last.every((f, i) => f === finalDraft[i]);
@@ -1428,10 +1588,10 @@
     }
 
     if (!delivered) {
-      box.innerHTML = `<h4>交件</h4>${chooser}<div id="pd-deliver-err" class="err"></div>`;
+      box.innerHTML = `${chooser}<div id="pd-deliver-err" class="err"></div>`;
     } else {
       box.innerHTML = `
-        <h4>交件 <span class="badge badge-approved" data-delivered-status>已交件</span>
+        <h4><span class="badge badge-approved" data-delivered-status>已交件</span>
           <span class="folder-none">${escHtml(fmtTime(project.delivered_at))}</span></h4>
         <div id="pd-delivered-folders">${finals.length ? chipsHtml(finals, false)
           : '<span class="folder-none">（舊資料：沒有指定精修資料夾，客人仍看到選片畫面）</span>'}</div>
@@ -1444,6 +1604,7 @@
       fillRevisionList(box);
     }
 
+    refreshSecSummaries();
     box.querySelector('#pd-final-pick-btn')?.addEventListener('click', openFinalFolderPicker);
     box.querySelectorAll('[data-remove-final]').forEach(btn => {
       btn.addEventListener('click', () => {
@@ -1523,6 +1684,7 @@
         }
         project.allow_proof_download = data.allow_proof_download === true;
         input.checked = project.allow_proof_download;
+        refreshSecSummaries();
       } catch (e) {
         input.checked = !want;
         if (errEl) errEl.textContent = '無法連線到 Worker';
@@ -1655,15 +1817,27 @@
   }
 
   async function initOrders(project, picks) {
-    oc = { projectId: project.id, picks, orders: [], extra: null, catalogue: null, editing: null, paying: null, draft: null, msg: {} };
+    oc = { projectId: project.id, picks, orders: [], loaded: false, failed: false, extra: null, catalogue: null, editing: null, paying: null, draft: null, msg: {} };
     const box = document.getElementById('pd-orders');
     if (!box) return;
     const mine = oc;
     const r = await ordersApi(`/api/admin/projects/${encodeURIComponent(project.id)}/orders`);
     if (oc !== mine) return; // another project was opened meanwhile
-    if (!r.ok) { box.innerHTML = `<div class="empty">讀取訂單失敗：${escHtml(O.errorText(r.data, r.status))}</div>`; return; }
+    if (!r.ok) {
+      box.innerHTML = `<div class="empty">讀取訂單失敗：${escHtml(O.errorText(r.data, r.status))}</div>`;
+      oc.failed = true;
+      refreshSecSummaries();
+      return;
+    }
     oc.orders = r.data.orders || [];
+    oc.loaded = true;
     oc.extra = r.data.extra_pick || null;
+    // the first read decides whether 訂單 opens by itself: only if something is waiting
+    // and nobody (this page, this browser) has chosen either way
+    if (!('orders' in secChoice) && secStored('orders') === null) {
+      secAuto.orders = ordersWaiting();
+      secApply('orders', secAuto.orders);
+    }
     renderOrders();
   }
 
@@ -1754,6 +1928,7 @@
       ${editingNew ? editorHtml(null) : ''}
       ${oc.editing ? '' : '<button type="button" id="pd-order-add-btn" class="btn btn-outline" style="margin-top:6px;">＋ 新增訂單</button>'}
       <div class="ord-err" id="pd-order-err">${escHtml(oc.msg._ || '')}</div>`;
+    refreshSecSummaries();
   }
 
   // ── editor (new order, or the lines/discount/note of an existing one) ──
