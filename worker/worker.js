@@ -1334,7 +1334,9 @@ async function sendClientNotification(env, project, pickerName, message) {
     console.warn('client notification skipped: NOTIFY_EMAIL or PHOTOGRAPHER_EMAIL is not configured');
     return false;
   }
-  const oneLine = v => String(v ?? '').replace(PICK_CONTROL_ALL, ' ');
+  // control characters, and the bidirectional marks / overrides / isolates
+  // that could make a name reorder how the subject line reads
+  const oneLine = v => String(v ?? '').replace(PICK_CONTROL_ALL, ' ').replace(/[\u200E\u200F\u202A-\u202E\u2066-\u2069]/g, ' ');
   const title = oneLine(project.title || '未命名專案');
   const name = oneLine(pickerName || '客人');
   const link = `${STUDIO_ADMIN_URL}#project=${encodeURIComponent(project.id)}`;
@@ -3240,9 +3242,11 @@ export default {
         // ([] once delivered unless the switch is on), `final_folders` the
         // finals ([] until delivered); the page lists each through ?list=.
         const scope = pickReadScope(s);
-        // client confirmation (docs/delivery.md): only once delivered, the
-        // same for owner and viewers — the time it was confirmed (never who),
-        // and the latest open 要求修改's text (never the list, never another's)
+        // client confirmation (docs/delivery.md): only once delivered. Owner
+        // and viewers alike see when it was confirmed (never who) and whether
+        // changes are being asked for; the latest open 要求修改's text is the
+        // owner's own words (body, skin…), so like notes and pins only the
+        // seat holder reads it back (never the list, never another's)
         const delivered = scope.mode === 'delivered';
         const revision = delivered ? await openRevision(env, project.id) : null;
         return jsonOk({
@@ -3260,7 +3264,7 @@ export default {
           delivered_at: scope.mode === 'delivered' ? project.delivered_at : null,
           confirmed_at: delivered ? project.client_confirmed_at ?? null : null,
           revision_open: !!revision,
-          revision_message: revision ? revision.message : null,
+          revision_message: revision && isOwner ? revision.message : null,
           owner: await pickOwnerName(env, project.id),
           is_owner: isOwner,
           phase: project.phase,

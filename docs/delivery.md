@@ -184,7 +184,9 @@ Versions are folders: there is no version table.
 - Email (same binding and rules as the submit mail; never throttled — the
   caps bound it to ≤ 50 requests per project): on a request (subject
   `[要求修改] <title> — <name>`) and on the guest's first confirm (`[客人確認完成] …`).
-  Subject on one line (control characters → space); the guest's text only in
+  Subject on one line (control characters and the bidirectional marks /
+  overrides / isolates U+200E, U+200F, U+202A–U+202E, U+2066–U+2069 → space,
+  so a name cannot reorder how the subject reads); the guest's text only in
   the body — raw in the text part, HTML-escaped (`white-space:pre-wrap`) in the
   HTML part; a link to `https://imhoti.tw/studio/admin.html#project=<id>`. A
   mail that fails or is not configured never fails the request (background,
@@ -214,10 +216,14 @@ body) → body (413 / 400) → message (400) → migration (500) → confirmed
 to say why (401 archived, 403 seat moved, 409 not delivered, confirmed, then
 the caps: open first).
 
-- `GET /api/pick/state` adds, the same for owner and viewers: `confirmed_at`
-  (string|null), `revision_open` (boolean), `revision_message` (the latest
-  **open** request's text, else null). Outside delivered mode always `null /
-  false / null`. Never `client_confirmed_by`, never the list.
+- `GET /api/pick/state` adds `confirmed_at` (string|null) and
+  `revision_open` (boolean) for owner and viewers alike, and
+  `revision_message`: the latest **open** request's text **for the seat
+  holder only** — a viewer (no key, a wrong key, another project's key, a key
+  from before a seat reset) always gets `null`. The text is the guest's own
+  words and may be about body or skin, so it follows the notes / pins rule
+  (security review 2026-10-04). Outside delivered mode always `null / false /
+  null`. Never `client_confirmed_by`, never the list.
 - `GET /api/admin/projects` rows and `GET /api/admin/projects/:id`'s `project`
   add `client_confirmed_at`, `client_confirmed_by`, `open_revision_count`;
   the detail adds `revision_requests` (newest first, ≤ 50: `{id, message,
@@ -261,10 +267,17 @@ says which photo; pins stay a picking feature), a version table (versions
 are folders). Also not done: emailing the guest when 精修二 is up; the stale
 page case below.
 
-**Known limit:** a guest whose page still shows version 1 can confirm after
-the photographer already put version 2 up (the confirm lands on what is up
-now). The page should re-read `/api/pick/state` before sending a confirm and
-say so if `final_folders` changed.
+**Known limits** (security review 2026-10-04, accepted for now):
+
+- A guest whose page still shows version 1 can confirm after the photographer
+  already put version 2 up (the confirm lands on what is up now). The
+  mitigation is on the page and **not built yet**: pick.js should re-read
+  `/api/pick/state` before sending a confirm and say so if `final_folders`
+  changed. Binding the confirm to a version server-side would
+  only catch a renamed folder, not new files uploaded over the same folder,
+  so it is not done.
+- Revision-request emails have no time throttle: flooding needs the owner's
+  picker key, and the 50-per-project cap bounds it to 50 emails.
 
 ## Out of scope for this step
 

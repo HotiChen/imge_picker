@@ -329,7 +329,7 @@ test('confirm body: anything but nothing or a JSON object is 400; over the cap i
 
 // ─── guest revision request ──────────────────────────────────────────────────
 
-test('revision: stored with the picker, the gallery stays open, owner and viewers see it is open; admin sees the request', async () => {
+test('revision: stored with the picker, the gallery stays open, owner and viewers see it is open (only the owner reads the text); admin sees the request', async () => {
   const env = setup();
   const p = await delivered(env);
   const res = await revise(env, p.token, p.key, '  第 3 張請把背景的路人修掉  ');
@@ -346,12 +346,14 @@ test('revision: stored with the picker, the gallery stays open, owner and viewer
   assert.equal(r.resolved_at, null);
   assert.ok(r.id);
   assert.deepEqual(confirmation(env), { client_confirmed_at: null, client_confirmed_by: null });
-  for (const key of [p.key, undefined]) {
+  for (const key of [p.key, undefined, 'not-a-key']) {
     const s = await state(env, p.token, key);
     assert.equal(s.mode, 'delivered', 'the gallery stays open while changes are asked for');
     assert.deepEqual(s.final_folders, [FINAL]);
-    assert.equal(s.revision_open, true);
-    assert.equal(s.revision_message, '第 3 張請把背景的路人修掉');
+    assert.equal(s.revision_open, true, 'viewers see that changes were asked for');
+    // the text is the owner's own words (body, skin…): like notes and pins,
+    // only the seat holder reads it back; a viewer gets null
+    assert.equal(s.revision_message, key === p.key ? '第 3 張請把背景的路人修掉' : null);
     assert.equal(s.confirmed_at, null);
     assert.equal('revision_requests' in s, false);
   }
@@ -366,22 +368,34 @@ test('revision: stored with the picker, the gallery stays open, owner and viewer
   assert.equal(d.revision_requests[0].message, '第 3 張請把背景的路人修掉');
 });
 
-test('revision state: only the latest open message — never a resolved one, never another project\'s', async () => {
+test('revision state: only the latest open message, only to the owner — never a resolved one, never another project\'s, never to a viewer', async () => {
   const env = setup();
   const p = await delivered(env);
   const q = await delivered(env);
   assert.equal((await revise(env, q.token, q.key, 'Q 的訊息')).status, 200);
   assert.equal((await revise(env, p.token, p.key, '第一次')).status, 200);
   assert.equal((await revise(env, p.token, p.key, '第二次')).status, 200);
-  assert.equal((await state(env, p.token)).revision_message, '第二次');
+  assert.equal((await state(env, p.token, p.key)).revision_message, '第二次');
+  const viewer = await state(env, p.token);
+  assert.equal(viewer.revision_open, true);
+  assert.equal(viewer.revision_message, null, 'a viewer never reads the text');
+  // another project's owner key on this link is a viewer here
+  assert.equal((await state(env, p.token, q.key)).revision_message, null);
   // the newest one handled by hand: the next open one shows
   env.DB._db.prepare("UPDATE revision_requests SET resolved_at = 'x' WHERE message = '第二次'").run();
-  assert.equal((await state(env, p.token)).revision_message, '第一次');
+  assert.equal((await state(env, p.token, p.key)).revision_message, '第一次');
+  assert.equal((await state(env, p.token)).revision_message, null);
   env.DB._db.prepare("UPDATE revision_requests SET resolved_at = 'x' WHERE message = '第一次'").run();
-  const s = await state(env, p.token);
+  const s = await state(env, p.token, p.key);
   assert.equal(s.revision_open, false);
   assert.equal(s.revision_message, null);
-  assert.equal((await state(env, q.token)).revision_message, 'Q 的訊息');
+  assert.equal((await state(env, q.token, q.key)).revision_message, 'Q 的訊息');
+  // a seat reset: the old owner's key reads as a viewer
+  assert.equal((await revise(env, p.token, p.key, '第三次')).status, 200);
+  assert.equal((await admin(env, p.id, 'reset-seat')).status, 200);
+  const reset = await state(env, p.token, p.key);
+  assert.equal(reset.revision_open, true);
+  assert.equal(reset.revision_message, null);
 });
 
 test('revision message: trimmed, 1–1000 characters, line breaks kept, other control characters dropped; else 400 invalid_message', async () => {
@@ -684,7 +698,7 @@ test('admin detail lists at most 50 requests, newest first; the dashboard counts
 test('email: a revision request mails the photographer — title, name, the message as text, escaped in HTML, a link back to the project', async () => {
   const env = setup();
   const p = await delivered(env);
-  env.DB._db.prepare("UPDATE pickers SET name = 'Eve\r\nBcc: x@evil.test'").run();
+  env.DB._db.prepare("UPDATE pickers SET name = ?").run('Eve\r\nBcc: x@evil.test\u202Egpj.exe\u200E\u200F\u202A\u202B\u202C\u202D\u2066\u2067\u2068\u2069');
   const msg = '<script>alert(1)</script> & 第 3 張\n請修';
   assert.equal((await revise(env, p.token, p.key, msg)).status, 200);
   const sent = env.NOTIFY_EMAIL.sent;
@@ -693,6 +707,9 @@ test('email: a revision request mails the photographer — title, name, the mess
   assert.equal(m.to, 'studio@example.com');
   assert.equal(m.from, 'notify@imhoti.tw');
   assert.ok(!/[\r\n]/.test(m.subject), m.subject);
+  // no bidirectional override can reorder what the subject line shows
+  assert.ok(!/[\u200E\u200F\u202A-\u202E\u2066-\u2069]/.test(m.subject), JSON.stringify(m.subject));
+  assert.ok(m.subject.includes('gpj.exe'), 'the rest of the name stays');
   assert.match(m.subject, /要求修改/);
   assert.match(m.subject, /王先生 婚紗/);
   assert.ok(!m.subject.includes('<script>'), 'the message is never in the subject');
