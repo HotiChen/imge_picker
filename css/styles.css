@@ -2209,6 +2209,29 @@ span.pick-heart-btn { cursor: default; }
 }
 #previewDownloadBtn { justify-content: center; }
 
+/* Client confirmation under the delivery bar (js/pick.js _renderDone): status
+   text, the guest's own revision request, and 確認完成 / 需要修改 for the seat
+   holder only. Dark page: tokens only, never a new :root. */
+.delivery-done {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px;
+  padding: 10px 20px; background: var(--surface); border-bottom: 1px solid var(--border);
+  color: var(--ink); font-size: 14px;
+}
+.delivery-done[data-state="confirmed"] .delivery-done-status { color: var(--success, #2ed573); font-weight: 600; }
+.delivery-done-status { font-weight: 500; }
+.delivery-done-msg {
+  flex-basis: 100%; order: 3; color: var(--ink-70); font-size: 13px;
+  white-space: pre-wrap; overflow-wrap: anywhere; max-height: 7.5em; overflow-y: auto;
+  border-left: 2px solid var(--border); padding-left: 10px;
+}
+.delivery-done-actions { display: flex; gap: 8px; margin-left: auto; }
+.delivery-done-actions .btn { min-height: 40px; }
+.done-textarea { width: 100%; font-family: inherit; font-size: 16px; line-height: 1.5; resize: vertical; min-height: 110px; max-height: 40dvh; }
+.done-count { text-align: right; color: var(--ink-55); font-size: 12px; margin-top: 4px; font-family: var(--font-mono); }
+.done-err .done-reload { margin-left: 10px; padding: 4px 12px; font-size: 12px; min-height: 32px; }
+.done-modal .pick-over-content .pick-submit-actions .btn,
+.done-modal .pick-submit-actions .btn { min-height: 44px; }
+
 /* The project-view banner's "← 回專案" and "複製選片連結" — real controls
    (an <a href>, a <button>), styled as ordinary .btn so they read as
    clickable, not stray underlined words (task: 專案選片 — banner button
@@ -2225,6 +2248,13 @@ span.pick-heart-btn { cursor: default; }
   .pick-filter-btn { min-height: 44px; }
   #submitJobBtn, #pickSubmitConfirmBtn, #pickSubmitCancelBtn { min-height: 44px; }
   .pv-banner-btn { min-height: 44px; padding: 10px 16px; }
+  /* 確認完成 / 需要修改: full-width halves; the modal sits at the top so the
+     keyboard (which shrinks dvh) does not cover the textarea */
+  .delivery-done { padding: 10px 12px; font-size: 13px; }
+  .delivery-done-actions { flex-basis: 100%; margin-left: 0; }
+  .delivery-done-actions .btn { flex: 1; min-height: 44px; }
+  .done-modal { align-items: flex-start; padding-top: 12px; }
+  .done-modal .pick-over-content { max-height: calc(100dvh - 24px); }
   .pick-card-dl, #modalDownloadBtn, #previewDownloadBtn { min-height: 44px; display: inline-flex; align-items: center; justify-content: center; }
   /* The preview's − / + / ⟲ (reset to fit) in the bottom bar. The bar gives
      up its dividers and side padding, and the file name shrinks (ellipsis),
