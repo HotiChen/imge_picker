@@ -1,6 +1,6 @@
 # Album preview: the layout engine
 
-Status: engine built (this doc); guest UI not built yet. Roadmap anchor:
+Status: engine built; stage 1 guest preview built (see "Stage 1: the guest preview" at the end). Roadmap anchor:
 `docs/backlog.md` THE ORDER #3 "Album chain" and `docs/guest-shop.md` S3.
 
 ## Goal
@@ -13,7 +13,7 @@ it as a purchase. Everything is local arithmetic on the `?w=400` thumbnails
 
 | Stage | What the client gets | Maps to `guest-shop.md` | Needs |
 |---|---|---|---|
-| 1 | Read-only preview, page flip, 「換風格 / 調整照片」 not yet | S3 minus the line/controls | this engine + a UI in `js/pick.js` |
+| 1 | Read-only preview, page flip, 「換風格 / 調整照片」 not yet | S3 minus the line/controls | this engine + `js/album-preview.js` with a hook in `js/pick.js` (built) |
 | 2 | Product info beside it: album options, price, page/photo counts | S1 (購買資訊) | S1 worker/UI |
 | 3 | 「加入購物車」 stores the layout on the order line; photographer checks and prints | S2 + S3 worker (`order_items.layout`, validator + parity test) | S2/S3 worker, security review |
 
@@ -142,3 +142,89 @@ Cost: n = 300 plans in ~0.1 s, n = 1000 in ~0.25 s on the main thread.
   portraits (a centred face with a busy background pulls the crop)?
 - Safari / LINE in-app browser: the `crossOrigin` image + canvas read, and
   speed with 200+ thumbnails on a phone.
+
+## Stage 1: the guest preview (built)
+
+Files: `js/album-preview.js` (new, loaded by `index.html` after `pick.js`; one
+global, `AlbumPreview`), a hook in `js/pick.js` (`_renderAlbumEntry`, called
+from `_applyView`), a block of new `.album-*` classes at the end of
+`css/styles.css`. No `:root` change, no `book_editor/` or `worker/` change.
+Browser suites: "album preview …" in `test/run.mjs`.
+
+**What the guest sees.** In the delivered gallery (`mode === 'delivered'` and
+the finals view, with at least one final folder) one row sits right under the
+確認完成 block: 「✨ 看看你的照片排成相本」 and 「這是系統自動排版的示意，實際相本可
+由攝影師調整」. Owner and viewers both get it (read-only). It is **removed from
+the DOM** while picking, after 取消交件 / 退回挑片 (the finals stay on the
+project but `delivered_at` is null, so the mode is `picking`) and in the
+下載毛片原檔 list. Pressing it opens a full-screen dark viewer: progress
+「正在為你排版… 23/120」 with 取消 → the cover (`封面`) and the inner pages
+(`n / 總頁`), flipped by ‹ ›, ← →, or a swipe. Esc / ✕ close it and give the
+focus back to the entry.
+
+**Loading.** Nothing of the engine is loaded before the press. The press loads
+`book_editor/js/layouts.js` then `auto_layout.js` (a script tag each, once per
+page life) with the **same `?v=` as `album-preview.js` itself**, read from its
+own `document.currentScript.src` (fallback: the `pick.js` tag) — no version
+string is written in the code. `book_editor.js` / `exporter.js` are never loaded.
+`layouts.js` adds 12 globals (it overrides none on this page; checked by grep).
+
+**Pipeline.** (1) list the finals: `GET /?list=<folder>` for each final folder
+and, recursively, every subfolder (never outside them, 4 at a time, at most
+`LIST_MAX_FOLDERS` = 200 folders); (2) natural-sort the ids
+(`AutoLayout.util.naturalCompare`, the engine's own shooting-order proxy — the
+duplicate window needs `IMG_9` before `IMG_10`, which the gallery's
+`localeCompare` would not give) and keep the first `MAX_PHOTOS` = 240, saying
+「已先用前 240 張排版」; (3) `AutoLayout.analyze` on `CHUNK` = 24 photos at a
+time (it has no progress callback; chunking gives real progress and the same
+result, since every photo is measured on its own), all with one
+`AbortController`; (4) `AutoLayout.plan(items, {style:'auto', pageAspect: 1,
+coverAspect: 1})`; (5) render. Order of the photos is not the gallery's
+per-folder name sort but the natural order above (the gallery has no order of
+its own beyond that sort).
+
+**pageAspect = 1: one square sheet at a time.** The editor's default book is
+20 x 20 cm for pages and cover, `view.html` shows one sheet at the book's own
+aspect, and a spread (2) would be about 195 px tall on a 390 px phone. The same
+constant goes to `plan` and to the renderer.
+
+**Rendering.** Built with DOM calls (no `innerHTML`; a photo key never becomes
+markup — `renderPageHTML` writes keys into HTML strings, adds the editor's
+x / right-click buttons and fixes the width at 1600). Each slot draws its photo
+with `fitCoverImage` from `layouts.js` (re-run on rotation / resize), so the
+crop is the one the exporter draws. Only the current page and its two
+neighbours exist in the DOM (at most 3 pages, ≤ 12 `<img>`), all
+`decoding="async"`; they slide by CSS (`--cur`, `--drag`), no timers.
+Photo widths: `?w=400` for analysis, then the bucket `driveManager.previewWidth`
+gives for the displayed size (400 / 1200 / 1600, the Worker's pre-generated
+thumbnails: `THUMB_BUCKETS`; a 390 px DPR 3 phone asks 1200). An original is
+never requested (no `?w=`-less URL, no `download=1`).
+
+**Notes line** (small, muted, only when non-empty): 「已略過 N 張相近的照片」,
+「已先用前 240 張排版」, 「N 張照片讀取失敗，未放入相本」.
+
+**States.** Fewer than 2 usable photos (after dropping repeats) → 「至少需要 2
+張不同的照片，才能排成相本」, no album. Listing / engine load failure, or every
+photo failing → an error with 重試 (a new run). Cancel aborts the analysis
+(`signal`), the in-flight loads are cancelled and nothing is left: no request,
+no timer, no listener on `window` / `document` (tested over repeated
+open / close).
+
+**Touch.** One finger only; a drag turns horizontal after 10 px if clearly
+more sideways than down; it flips at max(40 px, 12% of the width). A touch that
+starts within 24 px of a screen edge is ignored (the system's back gesture);
+`touch-action: pan-y` and `overscroll-behavior: none` keep it from fighting
+the page, and the page behind is locked (`html.album-open`).
+
+**No writes, no storage.** No POST / PUT, nothing in `localStorage` /
+`sessionStorage`; every open recomputes (the plan is deterministic).
+
+**Known limits / not done.** Not on the phone yet (needs a real device): the
+crossOrigin canvas read in iOS Safari / the LINE in-app browser (if it fails,
+the engine lays photos out by shape only: no duplicate detection, no focus
+crop); swipe vs. the browser's own gestures; speed and memory at 100+ photos
+(each open re-analyses; there is no cache between opens); the bottom bar of
+the browser (the viewer uses `100dvh` and `env(safe-area-inset-*)`). No pinch
+zoom in the viewer (`touch-action: pan-y`). No style change, no photo swap, no
+saving, no purchase button, no price (stages 2 and 3). `analyze` has no
+`onProgress`; adding one would let the chunking go.

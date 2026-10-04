@@ -2503,3 +2503,105 @@ body.pv-active #modalPhotoName {
   body.pv-active .modal-photo-info .info-group { flex: 1 0 100%; justify-content: center; min-width: 0; }
   body.pv-active #modalPhotoName { max-width: calc(100% - 64px); }
 }
+
+/* ══════════════════════════════════════════════════════
+   Album preview, stage 1 (js/album-preview.js, docs/album-preview.md).
+   New classes only; dark client theme from the existing tokens.
+   ══════════════════════════════════════════════════════ */
+
+/* The entry: one row under the 確認完成 block on the delivered finish page. */
+.album-entry { padding: 10px 20px; background: var(--bg-soft); border-bottom: 1px solid var(--border); }
+.album-entry-btn {
+  display: flex; align-items: center; gap: 12px; width: 100%; min-height: 48px;
+  padding: 10px 14px; background: var(--card); border: 1px solid var(--border);
+  color: var(--ink); font: inherit; text-align: left; cursor: pointer;
+  -webkit-tap-highlight-color: transparent;   /* the grey flash stayed visible over the viewer it opens */
+}
+.album-entry-btn:active { background: var(--card-hi); }
+.album-entry-btn:hover { border-color: var(--accent); background: var(--card-hi); }
+.album-entry-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.album-entry-text { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
+.album-entry-title { font-size: 15px; font-weight: 600; color: var(--ink); }
+.album-entry-sub { font-size: 12px; line-height: 1.4; color: var(--ink-70); }
+.album-entry-chev { flex-shrink: 0; font-size: 24px; line-height: 1; color: var(--accent); }
+
+/* The viewer: the whole window, dvh so a phone's bottom bar never covers the footer. */
+html.album-open, html.album-open body { overflow: hidden; }
+.album-viewer {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 4000;
+  height: 100vh; height: 100dvh;
+  display: flex; flex-direction: column;
+  background: var(--bg-deep); color: var(--ink);
+  overscroll-behavior: none; outline: none;
+}
+.album-viewer-bar {
+  flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  height: calc(52px + env(safe-area-inset-top, 0px)); padding: env(safe-area-inset-top, 0px) 8px 0 16px;
+  background: var(--surface); border-bottom: 1px solid var(--border);
+}
+.album-viewer-title { font-size: 15px; font-weight: 600; letter-spacing: .04em; }
+.album-stage {
+  position: relative; flex: 1 1 auto; min-height: 0; overflow: hidden;
+  touch-action: pan-y; --cur: 0; --drag: 0px;
+}
+.album-viewer-foot {
+  flex: 0 0 auto; padding: 8px 12px calc(10px + env(safe-area-inset-bottom, 0px));
+  background: var(--surface); border-top: 1px solid var(--border);
+}
+.album-viewer-foot:empty { display: none; }
+
+/* Pages slide by CSS alone: a slide sits at (its index - the current one) page
+   widths, plus the finger's drag while one is down. */
+.album-slide {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  transform: translateX(calc((var(--i, 0) - var(--cur, 0)) * 100% + var(--drag, 0px)));
+  transition: transform .25s ease;
+}
+.album-stage.dragging .album-slide { transition: none; }
+.album-page { position: relative; flex: 0 0 auto; overflow: hidden; background: #fff; box-shadow: 0 8px 32px rgba(0,0,0,.55); }
+.album-slot { position: absolute; overflow: hidden; background: #ece8de; }
+.album-slot-crop { position: absolute; inset: 0; overflow: hidden; }
+.album-img {
+  position: absolute; left: 0; top: 0; width: 100%; height: 100%; max-width: none;
+  object-fit: cover; display: block; pointer-events: none; user-select: none; -webkit-user-drag: none;
+}
+
+.album-panel {
+  position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 14px; padding: 24px 20px; text-align: center;
+}
+.album-progress-text { font-size: 16px; font-weight: 500; font-variant-numeric: tabular-nums; }
+.album-progress-bar { width: min(280px, 70%); height: 4px; background: var(--ink-15); }
+.album-progress-bar span { display: block; width: 0; height: 100%; background: var(--accent); transition: width .2s ease; }
+.album-panel-title { text-wrap: balance; max-width: 22em; font-size: 17px; font-weight: 600; line-height: 1.5; }
+.album-panel-sub { text-wrap: balance; max-width: 24em; font-size: 13px; line-height: 1.5; color: var(--ink-70); }
+.album-panel-actions { display: flex; gap: 10px; }
+.album-btn { min-height: 44px; padding: 10px 22px; font-size: 14px; }
+
+.album-nav { display: flex; align-items: center; justify-content: center; gap: 16px; }
+.album-nav-btn, .album-icon-btn {
+  width: 48px; height: 48px; padding: 0; display: inline-flex; align-items: center; justify-content: center;
+  background: var(--card); border: 1px solid var(--border); color: var(--ink);
+  font-size: 26px; line-height: 1; cursor: pointer; -webkit-tap-highlight-color: transparent;
+}
+.album-icon-btn { width: 44px; height: 44px; font-size: 18px; background: transparent; border-color: transparent; }
+.album-nav-btn:hover:not(:disabled), .album-icon-btn:hover { border-color: var(--ink-55); }
+.album-nav-btn:disabled { opacity: .3; cursor: default; }
+.album-nav-btn:focus-visible, .album-icon-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.album-label { min-width: 96px; text-align: center; font-family: var(--font-mono); font-size: 14px; color: var(--ink-70); }
+.album-note { margin-bottom: 6px; text-align: center; font-size: 12px; line-height: 1.4; color: var(--ink-55); }
+.album-note[hidden] { display: none; }
+
+@media (max-width: 768px) {
+  .album-entry { padding: 8px 12px; }
+}
+/* A phone on its side (390px tall): bar and footer shrink and the footer is one row, so the page keeps its room. */
+@media (max-height: 500px) {
+  .album-viewer-bar { height: calc(44px + env(safe-area-inset-top, 0px)); }
+  .album-viewer-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 4px 12px calc(4px + env(safe-area-inset-bottom, 0px)); }
+  .album-viewer-foot:empty { display: none; }
+  .album-note { margin: 0; flex: 1; text-align: left; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .album-slide, .album-progress-bar span { transition: none; }
+}

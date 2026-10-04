@@ -240,6 +240,7 @@
             }
             this._renderDeliveryBar();
             this._renderDone();
+            this._renderAlbumEntry();
             const noteGroup = document.getElementById('noteInputGroup');
             if (noteGroup) noteGroup.hidden = gallery;
         },
@@ -262,6 +263,21 @@
                 }
             }
             el.hidden = false;
+        },
+
+        // The album preview entry (docs/album-preview.md, stage 1): delivered
+        // mode and the finals view only, right under the confirmation block —
+        // removed from the DOM in picking, after 取消交件 / 開放修改 (the finals
+        // stay on the project but delivered_at is null, so mode is 'picking')
+        // and in the proofs list. Owner and viewers alike: it is read-only.
+        // js/album-preview.js does the rest; a page without it just has no entry.
+        _renderAlbumEntry() {
+            if (!window.AlbumPreview) return;
+            AlbumPreview.syncEntry({
+                show: this.mode === 'delivered' && this.view === 'finals' && this.finalFolders.length > 0,
+                after: document.getElementById('deliveryDone'),
+                folders: this.finalFolders,
+            });
         },
 
         // ── client confirmation: 確認完成 / 需要修改 (docs/delivery.md) ─────
