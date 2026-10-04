@@ -2396,21 +2396,52 @@ span.pick-heart-btn { cursor: default; }
   font-size: 12px;
   line-height: 18px;
 }
+/* The client's pins list is a section of the preview's side column
+   (#modalSidebar) — never over the photo. Desktop: the right-hand column next
+   to the photo. <= 1024px: below the photo (see body.pv-active below). */
+.pv-pin-section { margin: 0 0 12px; }
 .pv-pin-list {
-  position: absolute;
-  left: 8px; right: 8px; bottom: 8px;
-  z-index: 8;
-  margin: 0; padding: 8px 10px;
-  max-height: 38%;
-  overflow-y: auto;
+  margin: 0; padding: 0;
   list-style: none;
-  background: rgba(14,12,8,.82);
-  border-radius: 8px;
-  color: #fff;
-  font-size: 14px;
-  display: flex; flex-direction: column; gap: 6px;
+  color: var(--ink);
+  font-size: 15px;
+  line-height: 1.45;
+  display: flex; flex-direction: column; gap: 8px;
   touch-action: pan-y;
 }
 .pv-pin-list li { display: flex; align-items: flex-start; gap: 8px; }
-.pv-pin-list .pv-pin-num { min-width: 22px; height: 22px; font-size: 12px; }
-.pv-pin-text { unicode-bidi: isolate; overflow-wrap: anywhere; min-width: 0; }
+.pv-pin-list .pv-pin-num { min-width: 24px; height: 24px; font-size: 13px; }
+.pv-pin-text { unicode-bidi: isolate; overflow-wrap: anywhere; min-width: 0; padding-top: 1px; }
+
+/* Photographer review preview (js/project-view.js _trimModal): the file name
+   is what tells you which photo you are looking at, so it is big. The full
+   name is also its title (tooltip) for when the bar has to ellipsise it. */
+body.pv-active #modalPhotoName {
+  font-size: 16px;
+  font-weight: 600;
+  max-width: min(60vw, 520px);
+}
+@media (max-width: 1024px) {
+  /* phone / tablet: the column becomes a strip below the photo, in normal
+     flow (the drawer behaviour belonged to the tools that are gone) */
+  body.pv-active .modal-body { flex-direction: column; }
+  body.pv-active .modal-sidebar {
+    position: static;
+    transform: none;
+    transition: none;
+    order: 2;
+    flex: 0 1 auto;
+    width: 100%;
+    max-height: 30vh;
+    padding: 10px 14px;
+    border-left: none;
+    border-top: 1px solid var(--border);
+    z-index: auto;
+  }
+  body.pv-active .modal-sidebar .annotation-tools { margin-bottom: 8px; padding-bottom: 8px; }
+  body.pv-active .modal-sidebar .note-input-group { margin-bottom: 8px; }
+  body.pv-active .modal-sidebar .note-textarea { min-height: 44px; height: 56px; }
+  body.pv-active .modal-photo-info { flex-wrap: wrap; row-gap: 2px; }
+  body.pv-active .modal-photo-info .info-group { flex: 1 0 100%; justify-content: center; min-width: 0; }
+  body.pv-active #modalPhotoName { max-width: calc(100% - 64px); }
+}

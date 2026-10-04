@@ -11522,7 +11522,7 @@ const pinPoint = async (page, fx, fy) => {
         r.texts[1] === NOTES[1] && r.texts[2] === NOTES[2] && r.imgs === 0 && dialogs.length === 0 &&
         r.dir.every(d => d === 'auto') && r.bidi.every(x => x === 'isolate'), JSON.stringify(r));
       ok('3 pins on the canvas, and no editing control anywhere', r.marks === 3 && r.editors === 0, JSON.stringify(r));
-      ok('the photographer\'s own orange toggle is unchanged', r.toggle === true);
+      ok('review mode: the orange tools toggle is removed from the DOM (it covered the ♥)', r.toggle === false);
       const f = await page.evaluate(PIN_FIT);
       const px = await page.evaluate(CANVAS_PX, [f.left + f.w * 0.25 - 8, f.top + f.h * 0.4]);
       ok('pin ① is drawn at its fraction of the photo', isPinPx(px), JSON.stringify(px));
@@ -11549,6 +11549,198 @@ const pinPoint = async (page, fx, fy) => {
       return out;
     },
     { before: m.attach, initScript: ADMIN, contextOptions: MOBILE });
+}
+
+// ── Photographer Review preview (index.html?project=): no client tools, pins
+// beside/below the photo, a readable file name ─────────────────────────────
+const PV_LONG = 'DSC_20260819_0456_final_retouch_candidate_version_2_with_a_very_long_name_indeed.jpg';
+const PV_REVIEW_FIXTURE = (projectId) => {
+  const m = pickFakeWorker({ ownerName: 'Rev', projectId, image: BIG_PHOTO });
+  const NOTES = ['這裡痘痘', '<img src=x onerror=alert(1)>', '髮絲幫我順一下，這句話故意寫得很長很長很長很長很長很長很長很長很長很長很長很長很長'];
+  m.state.selections.set('20260819/a.jpg', PIN_SEL(NOTES.map((note, i) => ({ x: 0.25 + i * 0.2, y: 0.4 + i * 0.1, note })), 5, '整體請調亮'));
+  m.state.selections.set('20260819/' + PV_LONG, PIN_SEL(null, 4));
+  return m;
+};
+// everything the preview must measure, in one evaluate
+const PV_MEASURE = () => {
+  const rect = el => { if (!el) return null; const r = el.getBoundingClientRect(); return { left: r.left, right: r.right, top: r.top, bottom: r.bottom, w: r.width, h: r.height }; };
+  const list = document.getElementById('pvPinList');
+  const name = document.getElementById('modalPhotoName');
+  const cs = list ? getComputedStyle(list) : null;
+  const lr = list ? list.getBoundingClientRect() : null;
+  const hit = lr && lr.width ? document.elementFromPoint(lr.left + lr.width / 2, lr.top + Math.min(lr.height / 2, 10)) : null;
+  return {
+    list: rect(list), canvas: rect(document.querySelector('.canvas-container')), photoCanvas: rect(document.getElementById('photoCanvas')),
+    info: rect(document.querySelector('.modal-photo-info')), sidebar: rect(document.getElementById('modalSidebar')),
+    inSidebar: !!list?.closest('#modalSidebar'), inCanvasBox: !!list?.closest('.canvas-container'),
+    listPos: cs?.position, listDisplay: cs?.display,
+    hitInList: !!hit?.closest('#pvPinList'),
+    nums: [...document.querySelectorAll('#pvPinList .pv-pin-num')].map(e => e.textContent),
+    texts: [...document.querySelectorAll('#pvPinList .pv-pin-text')].map(e => e.textContent),
+    imgs: document.querySelectorAll('#pvPinList img').length,
+    gone: ['mobileToolsToggle', 'drawCircleBtn', 'eraserBtn', 'selectBtn', 'panBtn', 'undoBtn', 'redoBtn', 'deleteSelectedBtn',
+      'brushSize', 'clearAnnotationBtn', 'closeMobileSidebar'].filter(id => document.getElementById(id)),
+    goneSel: ['.tool-buttons', '.tool-btn', '.color-picker', '.color-btn', '.slider-group', '.modal-actions', '.sidebar-header-mobile', '.mobile-tools-toggle']
+      .filter(sel => document.querySelector(sel)),
+    nameText: name.textContent, nameTitle: name.title, nameFont: parseFloat(getComputedStyle(name).fontSize),
+    nameBox: rect(name), nameClipped: name.scrollWidth > name.clientWidth,
+    modal: rect(document.querySelector('#photoModal .modal-content')),
+  };
+};
+const pvOverlap = (a, b) => a.left < b.right - 0.5 && b.left < a.right - 0.5 && a.top < b.bottom - 0.5 && b.top < a.bottom - 0.5;
+async function pvOpen(page, id) {
+  await page.waitForSelector('.photo-card', { timeout: 5000 });
+  await page.evaluate(i => app.openModal(app.filteredPhotos.findIndex(p => p.id === i)), id);
+  await page.waitForSelector('#photoModal.active', { timeout: 5000 });
+  await page.waitForFunction(PREVIEW_SETTLED, null, { timeout: 5000 });
+  await page.waitForFunction(() => document.querySelector('#photoModal .modal-content').getAnimations().length === 0, null, { timeout: 5000 });
+  await page.waitForTimeout(150);
+}
+
+{
+  const m = PV_REVIEW_FIXTURE('proj-rv1');
+  await suite('review preview (photographer 390px) — no client tools in the DOM; pins list sits below the photo, not over it; readable file name',
+    `${base}/index.html?project=proj-rv1`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      const dialogs = [];
+      page.on('dialog', d => { dialogs.push(d.message()); d.dismiss(); });
+      await pvOpen(page, '20260819/a.jpg');
+      const r = await page.evaluate(PV_MEASURE);
+      ok('positive: the modal is open and shows this photo', r.nameText === 'a.jpg' && r.modal.w > 300, JSON.stringify(r.nameText));
+      ok('annotation tools / toggle are removed from the DOM (ids)', r.gone.length === 0, r.gone.join());
+      ok('annotation tools / toggle are removed from the DOM (classes)', r.goneSel.length === 0, r.goneSel.join());
+      ok('positive: the read-only note is still there', await page.evaluate(() => document.getElementById('photoNote')?.value === '整體請調亮' && document.getElementById('photoNote').readOnly));
+      ok('positive: the pins list exists with 3 items numbered ①②③', !!r.list && r.nums.join('') === '①②③' && r.texts.length === 3, JSON.stringify(r.nums));
+      ok('the list is in the sidebar container, not inside the photo box', r.inSidebar && !r.inCanvasBox, JSON.stringify({ s: r.inSidebar, c: r.inCanvasBox }));
+      ok('the list is not absolutely positioned over anything', r.listPos !== 'absolute' && r.listPos !== 'fixed', r.listPos);
+      ok('the list is visible with a real size', r.list && r.list.w > 150 && r.list.h > 40, JSON.stringify(r.list));
+      ok('phone: the list is BELOW the photo box (no overlap)', r.list && r.canvas && r.list.top >= r.canvas.bottom - 1 && !pvOverlap(r.list, r.canvas), JSON.stringify({ l: r.list, c: r.canvas }));
+      ok('phone: the list does not overlap the photo itself nor the ♥ bar', !pvOverlap(r.list, r.photoCanvas) && !pvOverlap(r.list, r.info), JSON.stringify(r));
+      // the strip may scroll when note + pins are long (max 30vh), so the list's own box can run past it;
+      // what must hold: the strip is on screen and its first rows are visible inside it
+      ok('phone: the strip holding the list is fully on screen and the list starts inside it',
+        r.sidebar.left >= 0 && r.sidebar.right <= 390 && r.sidebar.bottom <= 844 && r.sidebar.h > 40
+        && r.list.left >= 0 && r.list.right <= 390 && r.list.top < r.sidebar.bottom - 20, JSON.stringify({ s: r.sidebar, l: r.list }));      ok('nothing covers the list (a tap there hits the list)', r.hitInList);
+      ok('the photo box is still big (>= 45% of the screen height)', r.canvas.h >= 844 * 0.45, JSON.stringify(r.canvas));
+      ok('hostile note stays text', r.imgs === 0 && dialogs.length === 0 && r.texts[1] === '<img src=x onerror=alert(1)>', JSON.stringify(r.texts));
+      ok('file name is larger than the old 12px', r.nameFont >= 15, String(r.nameFont));
+      ok('file name is shown in full (not clipped) and carries a title', !r.nameClipped && r.nameTitle === 'a.jpg', JSON.stringify({ c: r.nameClipped, t: r.nameTitle }));
+      ok('the bar still fits on screen', r.info.left >= 0 && r.info.right <= 390 && r.info.bottom <= 844, JSON.stringify(r.info));
+      // the ♥ must be visible and not under anything
+      const heart = await page.evaluate(() => {
+        const e = document.querySelector('#modalPhotoRating .pick-heart-btn'); if (!e) return null;
+        const b = e.getBoundingClientRect();
+        const hit = document.elementFromPoint((b.left + b.right) / 2, (b.top + b.bottom) / 2);
+        return { ok: e === hit || e.contains(hit), top: b.top, bottom: b.bottom, right: b.right };
+      });
+      ok('the read-only ♥ is on screen and nothing sits on top of it', !!heart && heart.ok && heart.bottom <= 844 && heart.right <= 390, JSON.stringify(heart));
+
+      // the very long name: ellipsis allowed, but it must stay readable and the title must be the full name
+      await page.evaluate(i => app.openModal(app.filteredPhotos.findIndex(p => p.id === i)), '20260819/' + PV_LONG);
+      await page.waitForTimeout(250);
+      const l = await page.evaluate(PV_MEASURE);
+      ok('long name: title is the full file name', l.nameTitle === PV_LONG && l.nameText === PV_LONG, l.nameTitle);
+      ok('long name: still >= 15px, and wide enough to read (>= 200px)', l.nameFont >= 15 && l.nameBox.w >= 200, JSON.stringify({ f: l.nameFont, w: l.nameBox.w }));
+      ok('long name: the bar stays on screen', l.info.left >= 0 && l.info.right <= 390, JSON.stringify(l.info));
+      // no pins, no note: no empty shell
+      ok('a photo without pins: no list element at all', l.list === null);
+      const shell = await page.evaluate(() => {
+        const s = document.getElementById('modalSidebar'); const b = s.getBoundingClientRect();
+        return { display: getComputedStyle(s).display, h: b.height, text: s.textContent.trim() };
+      });
+      ok('a photo without pins or note leaves no empty sidebar shell', shell.display === 'none' || shell.h < 2, JSON.stringify(shell));
+      ok('and the photo box grows back (>= 55% of the screen height)', l.canvas.h >= 844 * 0.55, JSON.stringify(l.canvas));
+      // back to the pinned photo: the list returns
+      await page.evaluate(() => app.openModal(app.filteredPhotos.findIndex(p => p.id === '20260819/a.jpg')));
+      await page.waitForTimeout(250);
+      const back = await page.evaluate(PV_MEASURE);
+      ok('back on the pinned photo the list is back (exactly one)', back.nums.length === 3 && (await page.evaluate(() => document.querySelectorAll('#pvPinList').length)) === 1);
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN, contextOptions: MOBILE });
+}
+
+{
+  const m = PV_REVIEW_FIXTURE('proj-rv2');
+  await suite('review preview (photographer desktop) — pins list is the right-hand column next to the photo, never over it',
+    `${base}/index.html?project=proj-rv2`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await pvOpen(page, '20260819/a.jpg');
+      const r = await page.evaluate(PV_MEASURE);
+      ok('positive: modal open on a.jpg, list has 3 numbered items', r.nameText === 'a.jpg' && r.nums.join('') === '①②③', JSON.stringify(r.nums));
+      ok('tools and toggle are not in the DOM', r.gone.length === 0 && r.goneSel.length === 0, JSON.stringify([r.gone, r.goneSel]));
+      ok('the list is in the sidebar column, not inside the photo box', r.inSidebar && !r.inCanvasBox);
+      ok('desktop: the list is to the RIGHT of the photo box', r.list && r.canvas && r.list.left >= r.canvas.right - 1, JSON.stringify({ l: r.list, c: r.canvas }));
+      ok('desktop: no overlap with the photo box, the photo or the bar', !pvOverlap(r.list, r.canvas) && !pvOverlap(r.list, r.photoCanvas) && !pvOverlap(r.list, r.info), JSON.stringify(r));
+      ok('the list is on screen, with a readable width', r.list.right <= 1500 && r.list.w >= 200 && r.list.top >= 0 && r.list.bottom <= 950, JSON.stringify(r.list));
+      ok('nothing covers it', r.hitInList);
+      ok('file name >= 15px with the full name as title', r.nameFont >= 15 && r.nameTitle === 'a.jpg' && !r.nameClipped, JSON.stringify({ f: r.nameFont, t: r.nameTitle }));
+      const f = await page.evaluate(PIN_FIT);
+      const px = await page.evaluate(CANVAS_PX, [f.left + f.w * 0.25 - 8, f.top + f.h * 0.4]);
+      ok('pins are still drawn on the photo (read-only canvas)', isPinPx(px), JSON.stringify(px));
+      // the editing shortcuts are dead in review mode (spies, so a no-op undo can't pass for "blocked")
+      await page.evaluate(() => {
+        window.__kb = [];
+        for (const k of ['undo', 'redo', 'deleteSelected']) annotationManager[k] = () => window.__kb.push(k);
+      });
+      await page.keyboard.press('Control+z'); await page.keyboard.press('Control+Shift+z');
+      await page.keyboard.press('Control+y'); await page.keyboard.press('Delete');
+      ok('Ctrl+Z / Ctrl+Y / Delete call nothing in review mode', (await page.evaluate(() => window.__kb)).length === 0, JSON.stringify(await page.evaluate(() => window.__kb)));
+      await page.keyboard.press('ArrowRight');
+      await page.waitForTimeout(150);
+      ok('positive: the keyboard still works (→ goes to the next photo)', (await page.evaluate(() => app.currentPhotoIndex)) === 1);
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN });
+}
+
+{
+  // the normal index.html (and so the tools) must be untouched on a phone too
+  await suite('review preview — the photographer\'s normal index.html on 390px keeps the tools and the orange toggle (no review trimming leaks)',
+    `${base}/index.html`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForFunction(() => !!window.app, null, { timeout: 5000 });
+      // 390px hides the drawer that holds LOAD, so drive it from the page
+      await page.evaluate(() => { document.getElementById('driveUrl').value = '20260819/'; document.getElementById('loadPhotosBtn').click(); });
+      await page.waitForSelector('.photo-card', { timeout: 5000 });
+      await page.locator('.photo-card').first().tap();
+      await page.waitForSelector('#photoModal.active', { timeout: 5000 });
+      await page.waitForTimeout(300);
+      const r = await page.evaluate(() => ({
+        ids: ['mobileToolsToggle', 'drawCircleBtn', 'eraserBtn', 'selectBtn', 'panBtn', 'undoBtn', 'redoBtn', 'brushSize', 'clearAnnotationBtn', 'closeMobileSidebar']
+          .filter(id => !document.getElementById(id)),
+        sels: ['.tool-buttons', '.color-picker', '.slider-group', '.modal-actions', '.sidebar-header-mobile'].filter(s => !document.querySelector(s)),
+        toggleDisplay: getComputedStyle(document.getElementById('mobileToolsToggle')).display,
+        pvActive: document.body.classList.contains('pv-active'),
+        list: !!document.getElementById('pvPinList'),
+        h4: document.querySelector('.annotation-tools > h4')?.textContent,
+        noteGroupHidden: document.getElementById('noteInputGroup').hidden,
+        noteLabel: document.querySelector('#noteInputGroup label')?.textContent,
+        small: !!document.querySelector('#noteInputGroup small'),
+        sidebarClassHidden: document.getElementById('modalSidebar').classList.contains('hidden'),
+      }));
+      ok('positive: the modal is open', await page.evaluate(() => document.getElementById('photoModal').classList.contains('active')));
+      ok('every tool element is still in the DOM', r.ids.length === 0 && r.sels.length === 0, JSON.stringify(r));
+      ok('the orange toggle is displayed on a phone', r.toggleDisplay === 'flex', r.toggleDisplay);
+      ok('no review-mode artefacts (no body.pv-active, no pin list)', !r.pvActive && !r.list);
+      ok('panel title / note group unchanged', r.h4 === '標注工具' && !r.noteGroupHidden && r.noteLabel === '照片備註' && r.small && !r.sidebarClassHidden, JSON.stringify(r));
+      // outside review mode the editing shortcuts still reach the annotation manager
+      await page.evaluate(() => {
+        window.__kb = [];
+        for (const k of ['undo', 'redo', 'deleteSelected']) annotationManager[k] = () => window.__kb.push(k);
+      });
+      await page.keyboard.press('Control+z'); await page.keyboard.press('Control+y'); await page.keyboard.press('Delete');
+      const kb = await page.evaluate(() => window.__kb);
+      ok('Ctrl+Z / Ctrl+Y / Delete still reach undo / redo / deleteSelected', kb.join() === 'undo,redo,deleteSelected', kb.join());
+      return out;
+    },
+    { initScript: ADMIN, before: pickFakeWorker().attach, contextOptions: MOBILE });
 }
 
 {

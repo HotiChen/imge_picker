@@ -32,6 +32,7 @@
             this.app = app;
             this._trimSidebar();
             this._trimBulkBar();
+            this._trimModal();
             this._wireViewToggle();
             this._wireDownloads();
             this._wireCopyLinkBtn();
@@ -97,15 +98,34 @@
 
         // Preview: the guest's pins are drawn over the photo by
         // annotationManager (read-only, following zoom/pan); this lists their
-        // notes under it — 「① 這裡痘痘」. A note is guest text: textContent
+        // notes beside/below it — 「① 這裡痘痘」. A note is guest text: textContent
         // only, isolated (dir=auto + unicode-bidi: isolate in CSS) so bidi
         // characters cannot reorder anything around it.
+        //
+        // The list is NOT drawn over the photo: it is a section of the modal's
+        // side column (#modalSidebar) — beside the photo on a desktop, below it
+        // on a phone (css/styles.css body.pv-active) — so the photo stays the
+        // main thing and the retouch requests are metadata next to it. With
+        // neither pins nor a note there is nothing to put there, so the whole
+        // column is dropped for that photo rather than left as an empty shell.
         syncPinUI(photo) {
-            const cc = document.querySelector('.canvas-container');
-            if (!cc) return;
-            document.getElementById('pvPinList')?.remove();
+            const sidebar = document.getElementById('modalSidebar');
+            if (!sidebar) return;
+            document.getElementById('pvPinSection')?.remove();
             const marks = photo && Array.isArray(photo.marks) ? photo.marks : [];
+            const hasNote = !!(photo && photo.note);
+            // the read-only note of this photo (js/app.js openModal fills it)
+            const noteGroup = document.getElementById('noteInputGroup');
+            if (noteGroup) noteGroup.hidden = !hasNote;
+            const tools = sidebar.querySelector('.annotation-tools');
+            if (tools) tools.hidden = !hasNote;
+            sidebar.classList.toggle('hidden', !marks.length && !hasNote);
             if (!marks.length) return;
+            const section = document.createElement('section');
+            section.id = 'pvPinSection';
+            section.className = 'pv-pin-section';
+            const head = document.createElement('h4');
+            head.textContent = `客戶標示 · ${marks.length} 處`;
             const list = document.createElement('ol');
             list.id = 'pvPinList';
             list.className = 'pv-pin-list';
@@ -121,7 +141,30 @@
                 li.append(num, text);
                 list.appendChild(li);
             });
-            cc.appendChild(list);
+            section.append(head, list);
+            sidebar.appendChild(section);
+        },
+
+        // ── preview modal trim: this is a review, not a pick ────────────────
+        // The client's drawing tools (select/pan/circle/eraser/undo/redo,
+        // colours, brush size, 清除全部) and the orange #mobileToolsToggle that
+        // opens them have no job here — and the toggle covered the ♥ on a
+        // phone. Removed outright, not hidden (.btn/.tool-btn carry
+        // display:inline-flex, which beats [hidden]; same reason as
+        // _trimSidebar and js/pick.js _setupGuestModal). What stays: the
+        // read-only note textarea (#noteInputGroup, shown only when the
+        // photo has a note — see syncPinUI) and the pins list. body.pv-active
+        // switches on the side-column layout in css/styles.css.
+        _trimModal() {
+            document.body.classList.add('pv-active');
+            document.getElementById('mobileToolsToggle')?.remove();
+            ['.sidebar-header-mobile', '.annotation-tools > h4', '.tool-buttons',
+                '.color-picker', '.slider-group', '.modal-actions']
+                .forEach(sel => document.querySelector(sel)?.remove());
+            // what is left of the note box is read-only text from the client
+            const label = document.querySelector('#noteInputGroup label');
+            if (label) label.textContent = '客戶備註';
+            document.querySelector('#noteInputGroup small')?.remove();
         },
 
         // ── sidebar trim: this view is read-only and has no one folder ──────

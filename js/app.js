@@ -419,20 +419,23 @@ class App {
             if (e.target.tagName === 'TEXTAREA' || e.target.tagName === 'INPUT') return;
             const modal = document.getElementById('photoModal');
             if (modal && modal.classList.contains('active')) {
+                // Photographer review (?project=) has no drawing tools any more
+                // (js/project-view.js _trimModal), so no editing shortcut either.
+                const review = !!(window.ProjectViewController && ProjectViewController.active);
                 // Ctrl/Cmd + Z (Undo)
-                if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
+                if (!review && (e.ctrlKey || e.metaKey) && e.key === 'z') {
                     if (e.shiftKey) annotationManager.redo();
                     else annotationManager.undo();
                     e.preventDefault();
                 }
                 // Ctrl/Cmd + Y (Redo)
-                if ((e.ctrlKey || e.metaKey) && e.key === 'y') {
+                if (!review && (e.ctrlKey || e.metaKey) && e.key === 'y') {
                     annotationManager.redo();
                     e.preventDefault();
                 }
 
                 // Delete / Backspace (刪除選中)
-                if (e.key === 'Delete' || e.key === 'Backspace') {
+                if (!review && (e.key === 'Delete' || e.key === 'Backspace')) {
                     annotationManager.deleteSelected();
                 }
 
@@ -1040,7 +1043,9 @@ class App {
         this.updatePreviewPane(photo);
 
         document.getElementById('photoModal').classList.add('active');
-        document.getElementById('modalPhotoName').textContent = photo.name;
+        const nameEl = document.getElementById('modalPhotoName');
+        nameEl.textContent = photo.name;
+        nameEl.title = photo.name; // the full name when the bar has to ellipsise it
         const noteEl = document.getElementById('photoNote');
         noteEl.value = photo.note || '';
 
