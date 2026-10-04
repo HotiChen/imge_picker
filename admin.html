@@ -157,6 +157,7 @@
   .pd-block { border: 1px solid var(--rule); border-radius: 6px; padding: 12px 14px; margin: 14px 0; }
   .pd-block h4 { margin: 0 0 8px; }
   .pd-block .pd-note { color: var(--ink-55); font-size: 12px; margin: 6px 0 10px; line-height: 1.6; }
+  .pd-block .pd-row a.btn { text-decoration: none; }
   .pd-block .pd-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
   .pd-switch { display: flex; align-items: center; gap: 8px; font-size: 14px; cursor: pointer; }
   #project-detail-panel h4 { font-size: 13px; margin: 18px 0 8px; color: var(--ink-90); }
@@ -322,6 +323,7 @@
 <script src="js/build-version.js?v=20260930e"></script>
 <script src="js/side-nav.js?v=20260930e"></script>
 <script src="js/orders-common.js?v=20260930e"></script>
+<script src="js/selection-export.js?v=20260930e"></script>
 <script>
 (function() {
   const WORKER_URL = 'https://imagepicker.hotichen.workers.dev';
@@ -938,6 +940,7 @@
         <button id="pd-start-retouch-btn" class="btn btn-accent" type="button">開始精修</button>
         <button id="pd-reopen-btn" class="btn btn-ghost" type="button">開放修改</button>
         <button id="pd-download-btn" class="btn btn-outline" type="button">下載選片</button>
+        <button id="pd-download-csv-btn" class="btn btn-outline" type="button" title="檔名、客人備註、標示（給修圖師）">下載需求表 (CSV)</button>
         ${project.archived_at
           ? '<button id="pd-unarchive-btn" class="btn btn-ghost" type="button">取消封存</button>'
           : '<button id="pd-archive-btn" class="btn btn-ghost" type="button">封存</button>'}
@@ -1011,7 +1014,10 @@
     document.getElementById('pd-reopen-btn').addEventListener('click', () => projectAction('reopen'));
     // 交件 / 毛片下載 have their own blocks (docs/delivery.md).
     currentProject = project;
-    finalDraft = [];
+    // Delivery state is delivered_at alone. After 取消交件 the Worker keeps
+    // final_folders, so an undelivered project can still carry them: they
+    // pre-fill the chooser (editable; nothing is sent until 交件 is pressed).
+    finalDraft = lastFinalFolders(project);
     finalEditing = false;
     renderDeliveryBlock();
     renderProofDownloadBlock();
@@ -1092,6 +1098,7 @@
       }
     });
     document.getElementById('pd-download-btn').addEventListener('click', () => downloadSelectedKeys(project, selected));
+    document.getElementById('pd-download-csv-btn').addEventListener('click', () => downloadSelectionCsv(project, selected));
     initOrders(project, selected.map(x => x.photo_key));
   }
 
@@ -1114,6 +1121,28 @@
       removable ? `<button type="button" data-remove-final="${escHtml(f)}" title="移除">×</button>` : ''}</span>`).join('');
   }
 
+  // The finals the Worker still holds for a project that is NOT delivered
+  // (it keeps them across 取消交件); [] when delivered or none.
+  function lastFinalFolders(project) {
+    if (project.delivered_at || !Array.isArray(project.final_folders)) return [];
+    return project.final_folders.slice();
+  }
+
+  // ＋上傳精修: upload.html with the finals folder preselected, side by side
+  // with the proofs (docs/delivery.md: <shoot>/毛片/ and <shoot>/精修/). The
+  // shoot is the parent of the first proof folder that has one; a proof
+  // folder with a single segment gives no shoot, so then only ?project= goes.
+  function finalsUploadHref(project) {
+    const proj = `project=${encodeURIComponent(project.id)}`;
+    for (const f of Array.isArray(project.folders) ? project.folders : []) {
+      const segs = String(f).split('/').filter(Boolean);
+      if (segs.length >= 2) {
+        return `upload.html?folder=${encodeURIComponent(segs.slice(0, -1).join('/') + '/精修/')}&${proj}`;
+      }
+    }
+    return `upload.html?${proj}`;
+  }
+
   function renderDeliveryBlock() {
     const box = document.getElementById('pd-delivery');
     const project = currentProject;
@@ -1123,11 +1152,15 @@
     if (!delivered && project.phase !== 'retouching') { box.style.display = 'none'; box.innerHTML = ''; return; }
     box.style.display = '';
 
+    const last = lastFinalFolders(project);
+    const showLastHint = last.length > 0 && finalDraft.length === last.length && last.every((f, i) => f === finalDraft[i]);
     const chooser = `
       <div class="pd-note">精修成品必須放在<strong>獨立的資料夾</strong>（例如毛片旁邊的「精修」），不能放在毛片（選片用）資料夾裡面，否則會被拒絕。</div>
+      ${showLastHint ? '<div class="pd-note" data-final-last-hint>上次選的精修資料夾（可修改，按「交件」才會生效）：</div>' : ''}
       <div id="pd-final-chips">${draftChips()}</div>
       <div class="pd-row">
         <button id="pd-final-pick-btn" class="btn btn-outline" type="button">選擇精修資料夾</button>
+        <a id="pd-upload-final-btn" class="btn btn-outline" href="${escHtml(finalsUploadHref(project))}">＋上傳精修</a>
         <button id="pd-deliver-btn" class="btn btn-accent" type="button"${finalDraft.length ? '' : ' disabled'}>${delivered ? '確定更換' : '交件'}</button>
         ${delivered ? '<button id="pd-final-cancel-btn" class="btn btn-ghost" type="button">取消</button>' : ''}
       </div>`;
@@ -1685,11 +1718,22 @@
   function downloadSelectedKeys(project, selected) {
     const keys = selected.map(s => s.photo_key);
     const askRetouch = confirm(`共 ${keys.length} 張。要同時標記為開始精修嗎？`);
-    const blob = new Blob([keys.join('\n') + (keys.length ? '\n' : '')], { type: 'text/plain' });
+    saveBlobAs(new Blob([keys.join('\n') + (keys.length ? '\n' : '')], { type: 'text/plain' }), project, 'txt');
+    if (askRetouch) projectAction('start-retouch');
+  }
+
+  // 下載需求表: filename, the client's note and the pins, for the retoucher.
+  // UTF-8 with a BOM (built in js/selection-export.js) so Excel reads 繁中.
+  // No start-retouch question: that stays with 下載選片.
+  function downloadSelectionCsv(project, selected) {
+    saveBlobAs(new Blob([window.SelectionExport.selectionsToCsv(selected)], { type: 'text/csv;charset=utf-8' }), project, 'csv');
+  }
+
+  function saveBlobAs(blob, project, ext) {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `${(project.title || 'project').replace(/[\\/:*?"<>|]/g, '_')}-selected.txt`;
+    a.download = `${(project.title || 'project').replace(/[\\/:*?"<>|]/g, '_')}-selected.${ext}`;
     // attached, and the URL outlives the click by a beat — revoking it (or an
     // unattached anchor) immediately can lose the download's filename in some
     // engines, since the click only schedules the download asynchronously
@@ -1697,7 +1741,6 @@
     a.click();
     a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 2000);
-    if (askRetouch) projectAction('start-retouch');
   }
 
   function renderClients(clients) {

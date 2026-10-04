@@ -1035,6 +1035,15 @@ const params = new URLSearchParams(location.search);
 const pre = params.get('folder');
 if (pre) selectFolder(pre.endsWith('/') ? pre : pre + '/');
 
+// ── Back link: arriving from a project (?project=<id>), go back to it rather
+// than to the picker — uploading is not picking. No param: index.html as before.
+const fromProject = params.get('project');
+if (fromProject) {
+    const back = document.querySelector('.header .btn-back');
+    back.textContent = '← 回專案';
+    back.setAttribute('href', 'admin.html#project=' + encodeURIComponent(fromProject));
+}
+
 // ── Init sidebar after auth is ready ──
 document.addEventListener('DOMContentLoaded', () => {
     // Wait a tick for auth.js to set the token
