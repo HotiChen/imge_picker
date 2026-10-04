@@ -4002,8 +4002,9 @@ function pickFakeWorker(opts = {}) {
       if (/\/api\/admin\/projects\/[^/]+\/reopen$/.test(u.pathname) && method === 'POST') {
         state.project.phase = 'picking';
         state.project.modified_after_submit = 0;
-        state.project.delivered_at = null; // reopen always implies retouching's stamp is gone too
-        state.project.final_folders = null;
+        // clears the stamp, keeps the finals snapshot as the last choice, like
+        // undeliver (worker.js reopen); pickScopeFake reads it as not delivered
+        state.project.delivered_at = null;
         return json({ ok: true, phase: 'picking' });
       }
       // Delivered projects (docs/dashboard-settings.md) — a stamp, not a
@@ -8679,6 +8680,52 @@ const chipTexts = (page, sel) => page.$$eval(sel, els => els.map(e => e.dataset.
       await page.click('#pd-deliver-btn');
       await page.waitForSelector('[data-delivered-status]', { timeout: 3000 });
       ok('pressing 交件 again re-delivers the same folders', deliverBodies(m).length === before + 1 &&
+        JSON.stringify(deliverBodies(m)[before]) === '{"final_folders":["shoot/精修/"]}', JSON.stringify(deliverBodies(m)));
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN });
+}
+
+{
+  const m = pickFakeWorker({ projectId: 'proj-reopen-keep', phase: 'retouching', folders: ['shoot/毛片/'], bucketFolders: ADMIN_BUCKET });
+  await suite('admin 交件 — 開放修改（reopen）後（真實流程）：交件→開放修改→交件區塊收起→再開始精修→預填上次資料夾',
+    `${base}/admin.html#project=proj-reopen-keep`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('#pd-final-pick-btn', { timeout: 5000 });
+      await page.click('#pd-final-pick-btn');
+      await adminPickFinals(page, ['shoot/'], ['shoot/精修/']);
+      await page.waitForSelector('#pd-final-chips [data-final-chip]', { timeout: 3000 });
+      await page.click('#pd-deliver-btn');
+      await page.waitForSelector('[data-delivered-status]', { timeout: 3000 });
+      ok('delivered first (positive case)', m.state.project.delivered_at !== null && (await page.$('.pd-head [data-delivered-badge]')) !== null);
+      await page.click('#pd-reopen-btn');
+      // the detail re-rendered in picking (載入中… in between has no #pd-delivery)
+      await page.waitForFunction(() => document.querySelector('.pd-head .badge')?.textContent === '選片中' &&
+        !!document.getElementById('pd-delivery'), null, { timeout: 3000 });
+      ok('reopen answered like the Worker: picking, no stamp, the finals kept',
+        m.state.project.phase === 'picking' && m.state.project.delivered_at === null &&
+        JSON.stringify(m.state.project.final_folders) === '["shoot/精修/"]', JSON.stringify(m.state.project));
+      ok('picking: the delivery block is hidden and empty (the kept finals are not shown as delivered)',
+        await page.$eval('#pd-delivery', e => getComputedStyle(e).display === 'none' && e.innerHTML === '') &&
+        (await page.$('[data-delivered-status]')) === null);
+      // the guest submits again (outside this page), then 開始精修
+      m.state.project.phase = 'submitted';
+      await page.click('#pd-start-retouch-btn');
+      await page.waitForFunction(() => document.querySelector('.pd-head .badge')?.textContent === '精修中' &&
+        !!document.querySelector('#pd-delivery #pd-final-pick-btn'), null, { timeout: 3000 });
+      ok('retouching again: the chooser comes back pre-filled with the last finals, with the hint',
+        JSON.stringify(await chipTexts(page, '#pd-final-chips [data-final-chip]')) === '["shoot/精修/"]' &&
+        /上次選的精修資料夾/.test(await page.$eval('#pd-delivery', e => e.textContent)));
+      ok('still not delivered (no status, 交件 not 確定更換)',
+        (await page.$('[data-delivered-status]')) === null && (await page.textContent('#pd-deliver-btn')) === '交件');
+      // nothing pre-filled → 交件 stays disabled; report the FAILs above, not a click timeout
+      if (await page.$eval('#pd-deliver-btn', b => b.disabled)) { ok('交件 is enabled by the prefill', false, 'disabled'); return out; }
+      const before = deliverBodies(m).length;
+      await page.click('#pd-deliver-btn');
+      await page.waitForSelector('[data-delivered-status]', { timeout: 3000 });
+      ok('交件 re-delivers the kept folders', deliverBodies(m).length === before + 1 &&
         JSON.stringify(deliverBodies(m)[before]) === '{"final_folders":["shoot/精修/"]}', JSON.stringify(deliverBodies(m)));
       return out;
     },

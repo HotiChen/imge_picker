@@ -1176,8 +1176,9 @@ function finalFolders(value) {
 // Delivered needs both the stamp and a readable snapshot: a stamp from before
 // this feature (no snapshot) or a snapshot that no longer parses is not a
 // delivery, and the link keeps the picking scope. A snapshot without the
-// stamp is normal (undeliver keeps the last choice) and is not a delivery
-// either: this check on delivered_at is the one thing between it and a link.
+// stamp is normal (undeliver and reopen keep the last choice) and is not a
+// delivery either: this check on delivered_at is the one thing between it
+// and a link.
 // Re-validated on every read, so a snapshot edited by hand in the console
 // cannot name `_` objects or `/`.
 function pickFinals(project) {
@@ -1229,8 +1230,8 @@ async function withoutMissingColumn(primary, fallback) {
 
 // The admin view of the two delivery columns: the snapshot parsed (null when
 // there is none) and the switch as a boolean. The snapshot is the last chosen
-// finals and may be there while not delivered (after undeliver): whether the
-// project is delivered is delivered_at, never this.
+// finals and may be there while not delivered (after undeliver or reopen):
+// whether the project is delivered is delivered_at, never this.
 function deliveryFields(row) {
   let finals = null;
   if (typeof row.final_folders === 'string') {
@@ -1962,6 +1963,8 @@ export default {
     // POST /api/admin/projects/:id/reopen — back to 'picking', from either
     // later phase, so the guest can change their picks again. Submissions stay,
     // and so do orders: the next start-retouch recomputes the extra-pick one.
+    // A delivery comes down with it (delivered_at cleared); the finals
+    // snapshot stays, as with undeliver.
     if (request.method === 'POST' && pathParts[0] === 'api' && pathParts[1] === 'admin' && pathParts[2] === 'projects' && pathParts[3] && !pathParts[5] &&
         (pathParts[4] === 'start-retouch' || pathParts[4] === 'reopen')) {
       if (!isAdminToken(request, env)) return jsonErr('Unauthorized', 401);
@@ -1978,11 +1981,14 @@ export default {
       // each is one conditional UPDATE, so it cannot interleave with a save
       // or a submit: those re-check the phase inside their own writes
       if (pathParts[4] === 'reopen') {
-        // the finals snapshot goes with the stamp (not before the migration)
-        const reopen = delivery => env.DB.prepare(
-          `UPDATE projects SET phase = 'picking', modified_after_submit = 0, delivered_at = NULL${delivery} WHERE id = ? AND photographer_id = ?`
+        // Takes a delivery down like undeliver: clears the stamp only. The
+        // finals snapshot stays as the last choice (admin.html prefills the
+        // next deliver with it); without the stamp pickFinals reads it as not
+        // delivered, so no link can reach it. Names no column the delivery
+        // migration adds, so it works before that migration too.
+        const moved = await env.DB.prepare(
+          "UPDATE projects SET phase = 'picking', modified_after_submit = 0, delivered_at = NULL WHERE id = ? AND photographer_id = ?"
         ).bind(id, DEFAULT_PHOTOGRAPHER_ID).run();
-        const moved = await withoutMissingColumn(() => reopen(', final_folders = NULL'), () => reopen(''));
         if (!moved.meta?.changes) return jsonErr('Not found', 404);
         return jsonOk({ ok: true, phase: 'picking' });
       }
@@ -2124,11 +2130,10 @@ export default {
     // repeat while delivered may change the finals and keeps the first stamp.
     // POST /api/admin/projects/:id/undeliver — takes the gallery down: clears
     // the stamp only. The snapshot stays as the photographer's last choice
-    // (so the page can prefill the next deliver with it; admin.html does not
-    // do that yet); without the stamp
+    // (admin.html prefills the next deliver with it); without the stamp
     // pickFinals reads it as not delivered, so no link can reach it. Reopen
-    // still clears both. Names no column the delivery migration adds, so it
-    // works before that migration too.
+    // does the same (and moves the phase back to picking). Names no column
+    // the delivery migration adds, so it works before that migration too.
     if (request.method === 'POST' && pathParts[0] === 'api' && pathParts[1] === 'admin' && pathParts[2] === 'projects' && pathParts[3] && !pathParts[5] &&
         (pathParts[4] === 'deliver' || pathParts[4] === 'undeliver')) {
       if (!isAdminToken(request, env)) return jsonErr('Unauthorized', 401);
@@ -2177,7 +2182,8 @@ export default {
         .bind(id, DEFAULT_PHOTOGRAPHER_ID).first();
       if (!row) return jsonErr('Not found', 404);
       // No change, or a reopen landed between the write and this read and
-      // cleared the stamp: either way the project is not delivered now.
+      // cleared the stamp (the snapshot just written stays, as the last
+      // choice): either way the project is not delivered now.
       if (!result.meta?.changes || !row.delivered_at) return notRetouching(row.phase);
       return jsonOk({ ok: true, delivered_at: row.delivered_at, final_folders: finals }, 200, ADMIN_ONLY_HEADERS);
     }

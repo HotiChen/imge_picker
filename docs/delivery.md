@@ -21,10 +21,11 @@ separated before he can run real shoots through the studio.
   project and stamps `delivered_at` (today's rule stays: only from
   `retouching`). 「取消交件」 (the existing undeliver) takes the gallery down
   again and the link goes back to the picking view's read-only state. It
-  only clears the stamp: the chosen final folders stay on the project so the
-  next 「交件」 can start from them (changed 2026-10-04; it used to clear
-  them). The admin page does not prefill from them yet — a separate
-  frontend change.
+  only clears the stamp: the chosen final folders stay on the project and
+  the admin page prefills the next 「交件」 with them (editable; nothing is
+  sent until 交件 is pressed). 「退回挑片」 (reopen) does the same to a
+  delivery — clears the stamp, keeps the folders — besides moving the phase
+  back to picking (both changed 2026-10-04; they used to clear them).
 - **Guests download full-resolution finals**, one photo at a time (download
   all as a zip is later: size limits). Through the Worker's token gate like
   every read; the r2.dev URL stays disabled.
@@ -85,10 +86,16 @@ undeliver and every pick link keep working (not delivered, switch off).
   `phase = 'retouching'` and the proof folders read), so a reopen racing it
   wins (409, nothing written).
 - **A repeat deliver while delivered replaces the finals** and keeps the
-  first `delivered_at`. A deliver after undeliver replaces the kept finals
-  and stamps a new `delivered_at`. Reopen (退回挑片) clears both columns.
-- **`final_folders` is not the delivered flag.** After undeliver a project
-  is `delivered_at = NULL` with `final_folders` still set — a normal state.
+  first `delivered_at`. A deliver after undeliver or reopen replaces the kept
+  finals and stamps a new `delivered_at` (the overlap check runs on the new
+  body as always).
+- **Reopen (退回挑片)** `POST /api/admin/projects/:id/reopen` → 200 `{ok,
+  phase: 'picking'}`: phase back to `picking`, `modified_after_submit = 0`,
+  `delivered_at = NULL`; **keeps** `final_folders`, like undeliver. 404 for
+  an unknown or another photographer's project.
+- **`final_folders` is not the delivered flag.** After undeliver or reopen a
+  project is `delivered_at = NULL` with `final_folders` still set — a normal
+  state.
   Delivered means `delivered_at` set **and** a valid snapshot (`pickFinals`);
   every guest read (pick state, listings, thumbnails, originals, downloads)
   goes through that check, so a kept snapshot is never readable through a
@@ -98,9 +105,9 @@ undeliver and every pick link keep working (not delivered, switch off).
   `1`, `"true"`, `null`, not an object) → 400 `invalid_body`.
 - `GET /api/admin/projects` rows and `GET /api/admin/projects/:id`'s
   `project` carry `final_folders` (array: the last chosen finals, which may
-  be there while not delivered — prefill the deliver picker with it; `null`
-  when none was ever chosen or after a reopen), `delivered_at` (the delivery
-  state) and `allow_proof_download` (boolean).
+  be there while not delivered — admin.html prefills the deliver picker with
+  it; `null` when none was ever chosen), `delivered_at` (the delivery state)
+  and `allow_proof_download` (boolean).
 
 **Guest** — `GET /api/pick/state` adds (same for owner and viewers):
 
@@ -109,8 +116,8 @@ undeliver and every pick link keep working (not delivered, switch off).
   feature) stays `'picking'` (the read-only view, as before).
 - `folders`: the proof folders the link can read now — as before while
   picking; `[]` once delivered unless the switch is on.
-- `final_folders`: `[]` until delivered (also after undeliver, though the
-  project keeps its snapshot). The page lists each folder (and its
+- `final_folders`: `[]` until delivered (also after undeliver or reopen,
+  though the project keeps its snapshot). The page lists each folder (and its
   subfolders) with the usual `?list=<folder>&t=<token>`.
 - `allow_proof_download` (boolean), `delivered_at` (`null` unless delivered).
 

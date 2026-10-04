@@ -258,7 +258,7 @@ ALTER TABLE share_tokens ADD COLUMN project_id TEXT;
 | `DELETE /api/admin/projects/:id` | admin | delete a project with no submissions → `{ok: true}`; 409 `{error, code: 'has_submissions'}` (also when a submit races it); 404 |
 | `POST /api/admin/projects/:id/reset-seat` | admin | free the seat (selections, phase, submissions kept) |
 | `POST /api/admin/projects/:id/start-retouch` | admin | `submitted` → `retouching`; 409 `not_submitted` from `picking` |
-| `POST /api/admin/projects/:id/reopen` | admin | `submitted`/`retouching` → `picking`, flag and `delivered_at` cleared |
+| `POST /api/admin/projects/:id/reopen` | admin | `submitted`/`retouching` → `picking`, flag and `delivered_at` cleared (`final_folders` kept, see `docs/delivery.md`) |
 | `POST /api/admin/projects/:id/deliver` / `undeliver` | admin | stamp / clear `delivered_at` (deliver only from `retouching`, else 409 `not_retouching`) — see `docs/dashboard-settings.md` |
 | `GET /api/pick/state` | pick token (+ key) | owner name, am-I-owner, `project: {id, title, pick_limit, extra_price, extra_max, max_picks}` (`max_picks` = `pick_limit + extra_max`, `null` when either is NULL; owner and viewers alike), selections, `phase`, `studio: {name, booking_url, has_logo}`; owner also gets `modified_after_submit`, `submitted_at` (latest submission) and each selection as `{photo_key, rating, note, marks}` (`marks`: `[{x, y, note}]` or `null`); viewers get `{photo_key, rating}` only — no `note`, no `marks` key |
 | `POST /api/pick/claim` `{name}` | pick token | atomic claim → `picker_key` |
