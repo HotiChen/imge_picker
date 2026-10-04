@@ -1175,8 +1175,11 @@ function finalFolders(value) {
 // The finals a project is delivered with, or null when it is not delivered.
 // Delivered needs both the stamp and a readable snapshot: a stamp from before
 // this feature (no snapshot) or a snapshot that no longer parses is not a
-// delivery, and the link keeps the picking scope. Re-validated on every read,
-// so a snapshot edited by hand in the console cannot name `_` objects or `/`.
+// delivery, and the link keeps the picking scope. A snapshot without the
+// stamp is normal (undeliver keeps the last choice) and is not a delivery
+// either: this check on delivered_at is the one thing between it and a link.
+// Re-validated on every read, so a snapshot edited by hand in the console
+// cannot name `_` objects or `/`.
 function pickFinals(project) {
   if (!project || !project.delivered_at || typeof project.final_folders !== 'string') return null;
   let raw;
@@ -1225,7 +1228,9 @@ async function withoutMissingColumn(primary, fallback) {
 }
 
 // The admin view of the two delivery columns: the snapshot parsed (null when
-// there is none) and the switch as a boolean.
+// there is none) and the switch as a boolean. The snapshot is the last chosen
+// finals and may be there while not delivered (after undeliver): whether the
+// project is delivered is delivered_at, never this.
 function deliveryFields(row) {
   let finals = null;
   if (typeof row.final_folders === 'string') {
@@ -2118,16 +2123,20 @@ export default {
     // delivery. The snapshot and the stamp are one conditional UPDATE. A
     // repeat while delivered may change the finals and keeps the first stamp.
     // POST /api/admin/projects/:id/undeliver — takes the gallery down: clears
-    // the stamp and the snapshot (reopen clears them too).
+    // the stamp only. The snapshot stays as the photographer's last choice
+    // (so the page can prefill the next deliver with it; admin.html does not
+    // do that yet); without the stamp
+    // pickFinals reads it as not delivered, so no link can reach it. Reopen
+    // still clears both. Names no column the delivery migration adds, so it
+    // works before that migration too.
     if (request.method === 'POST' && pathParts[0] === 'api' && pathParts[1] === 'admin' && pathParts[2] === 'projects' && pathParts[3] && !pathParts[5] &&
         (pathParts[4] === 'deliver' || pathParts[4] === 'undeliver')) {
       if (!isAdminToken(request, env)) return jsonErr('Unauthorized', 401);
       if (!env.DB) return jsonErr('DB not configured', 500);
       const id = pathParts[3];
       if (pathParts[4] === 'undeliver') {
-        const undeliver = delivery => env.DB.prepare(`UPDATE projects SET delivered_at = NULL${delivery} WHERE id = ? AND photographer_id = ?`)
+        const result = await env.DB.prepare('UPDATE projects SET delivered_at = NULL WHERE id = ? AND photographer_id = ?')
           .bind(id, DEFAULT_PHOTOGRAPHER_ID).run();
-        const result = await withoutMissingColumn(() => undeliver(', final_folders = NULL'), () => undeliver(''));
         if (!result.meta?.changes) return jsonErr('Not found', 404);
         return jsonOk({ ok: true, delivered_at: null }, 200, ADMIN_ONLY_HEADERS);
       }

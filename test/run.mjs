@@ -4025,8 +4025,9 @@ function pickFakeWorker(opts = {}) {
         return json({ ok: true, delivered_at: state.project.delivered_at, final_folders: finals });
       }
       if (/\/api\/admin\/projects\/[^/]+\/undeliver$/.test(u.pathname) && method === 'POST') {
+        // clears the stamp only: the snapshot stays as the last chosen finals
+        // (worker.js undeliver); pickScopeFake still reads it as not delivered
         state.project.delivered_at = null;
-        state.project.final_folders = null; // clears the snapshot too
         return json({ ok: true, delivered_at: null });
       }
       if (/^\/api\/admin\/projects\/[^/]+$/.test(u.pathname) && method === 'PATCH') {
@@ -8378,7 +8379,9 @@ const chipTexts = (page, sel) => page.$$eval(sel, els => els.map(e => e.dataset.
       ok('accepting it undelivers: the chooser is back, no 已交件',
         m.requests.some(r => r.path.endsWith('/undeliver')) && (await page.$('[data-delivered-status]')) === null &&
         (await page.$('.pd-head [data-delivered-badge]')) === null);
-      ok('and the snapshot is gone on the server side too', m.state.project.final_folders === null);
+      ok('the server keeps the last chosen finals (only the stamp is cleared)',
+        m.state.project.delivered_at === null && JSON.stringify(m.state.project.final_folders) === '["shoot/精修二/"]',
+        JSON.stringify(m.state.project.final_folders));
       return out;
     },
     { before: m.attach, initScript: ADMIN });

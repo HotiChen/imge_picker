@@ -20,7 +20,11 @@ separated before he can run real shoots through the studio.
   detail and presses 「交件」. It stores the finals folder snapshot on the
   project and stamps `delivered_at` (today's rule stays: only from
   `retouching`). 「取消交件」 (the existing undeliver) takes the gallery down
-  again and the link goes back to the picking view's read-only state.
+  again and the link goes back to the picking view's read-only state. It
+  only clears the stamp: the chosen final folders stay on the project so the
+  next 「交件」 can start from them (changed 2026-10-04; it used to clear
+  them). The admin page does not prefill from them yet — a separate
+  frontend change.
 - **Guests download full-resolution finals**, one photo at a time (download
   all as a zip is later: size limits). Through the Worker's token gate like
   every read; the r2.dev URL stays disabled.
@@ -50,7 +54,7 @@ separated before he can run real shoots through the studio.
 ## Schema (append-only; Tim runs it in D1 before the merge)
 
 ```sql
-ALTER TABLE projects ADD COLUMN final_folders TEXT;            -- JSON array, NULL = not delivered yet
+ALTER TABLE projects ADD COLUMN final_folders TEXT;            -- JSON array, the last chosen finals (see below)
 ALTER TABLE projects ADD COLUMN allow_proof_download INTEGER NOT NULL DEFAULT 0;
 ```
 
@@ -65,7 +69,7 @@ undeliver and every pick link keep working (not delivered, switch off).
 | Route | Body | Answer |
 |---|---|---|
 | `POST /api/admin/projects/:id/deliver` | `{final_folders: [...]}` | 200 `{ok, delivered_at, final_folders}` (canonical: trimmed, trailing `/`, deduped) |
-| `POST /api/admin/projects/:id/undeliver` | — | 200 `{ok, delivered_at: null}`; clears `final_folders` too |
+| `POST /api/admin/projects/:id/undeliver` | — | 200 `{ok, delivered_at: null}`; clears only `delivered_at`, **keeps** `final_folders` |
 | `PATCH /api/admin/projects/:id` | `{allow_proof_download: true\|false}` | 200 `{ok, allow_proof_download}` |
 
 - Deliver checks, in order: 404; phase ≠ `retouching` → 409 `not_retouching`
@@ -81,12 +85,22 @@ undeliver and every pick link keep working (not delivered, switch off).
   `phase = 'retouching'` and the proof folders read), so a reopen racing it
   wins (409, nothing written).
 - **A repeat deliver while delivered replaces the finals** and keeps the
-  first `delivered_at`. Reopen clears both columns, like undeliver.
+  first `delivered_at`. A deliver after undeliver replaces the kept finals
+  and stamps a new `delivered_at`. Reopen (退回挑片) clears both columns.
+- **`final_folders` is not the delivered flag.** After undeliver a project
+  is `delivered_at = NULL` with `final_folders` still set — a normal state.
+  Delivered means `delivered_at` set **and** a valid snapshot (`pickFinals`);
+  every guest read (pick state, listings, thumbnails, originals, downloads)
+  goes through that check, so a kept snapshot is never readable through a
+  link. Code (worker or page) must read delivery from `delivered_at`, never
+  from `final_folders` being non-null.
 - The PATCH body takes only that one boolean key; anything else (other keys,
   `1`, `"true"`, `null`, not an object) → 400 `invalid_body`.
 - `GET /api/admin/projects` rows and `GET /api/admin/projects/:id`'s
-  `project` carry `final_folders` (array, or `null` when not delivered) and
-  `allow_proof_download` (boolean).
+  `project` carry `final_folders` (array: the last chosen finals, which may
+  be there while not delivered — prefill the deliver picker with it; `null`
+  when none was ever chosen or after a reopen), `delivered_at` (the delivery
+  state) and `allow_proof_download` (boolean).
 
 **Guest** — `GET /api/pick/state` adds (same for owner and viewers):
 
@@ -95,7 +109,8 @@ undeliver and every pick link keep working (not delivered, switch off).
   feature) stays `'picking'` (the read-only view, as before).
 - `folders`: the proof folders the link can read now — as before while
   picking; `[]` once delivered unless the switch is on.
-- `final_folders`: `[]` until delivered. The page lists each folder (and its
+- `final_folders`: `[]` until delivered (also after undeliver, though the
+  project keeps its snapshot). The page lists each folder (and its
   subfolders) with the usual `?list=<folder>&t=<token>`.
 - `allow_proof_download` (boolean), `delivered_at` (`null` unless delivered).
 
