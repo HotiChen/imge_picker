@@ -84,7 +84,9 @@ Known false-pass shapes — assert the positive case too:
 - test fake diverging from the real API (the 206 bug) — fakes mirror real responses
 
 Known flaky: book_editor "no token is minted for an empty folder set" fails under load.
-Also seen once under load, green alone: admin "plan 編輯方案…".
+Also seen under load, green alone (3/3 on HEAD): admin "plan 編輯方案…" and admin
+"the list row picks up 精修中 too, not just the detail panel". When the full suite shows
+only these, re-run the failing suite alone with `ONLY=` before calling it a regression.
 
 Visual/contrast tests need a floor on how many elements were scanned, or an
 empty scan passes.
