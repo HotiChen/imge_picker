@@ -2549,6 +2549,19 @@ html.album-open, html.album-open body { overflow: hidden; }
   background: var(--surface); border-top: 1px solid var(--border);
 }
 .album-viewer-foot:empty { display: none; }
+/* Once the album is up the stage takes every touch itself (swipe, pan, pinch, double tap): the page
+   behind is locked and nothing under it should scroll, zoom or start a back gesture. */
+.album-stage[data-zoomable] { touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+.album-stage.zoomed { cursor: grab; }
+.album-stage.zoomed:active { cursor: grabbing; }
+/* The one-line zoom hint, phone width only; it fades by itself (js/album-preview.js removes it). */
+.album-hint {
+  position: absolute; z-index: 5; left: 50%; bottom: 10px; transform: translateX(-50%);
+  max-width: calc(100% - 24px); padding: 6px 14px; border-radius: 999px; white-space: nowrap;
+  font-size: 13px; line-height: 18px; color: var(--ink); background: rgba(0,0,0,.62);
+  pointer-events: none; opacity: 1; transition: opacity .35s ease;
+}
+.album-hint.gone { opacity: 0; }
 
 /* Pages slide by CSS alone: a slide sits at (its index - the current one) page
    widths, plus the finger's drag while one is down. */
@@ -2558,7 +2571,15 @@ html.album-open, html.album-open body { overflow: hidden; }
   transition: transform .25s ease;
 }
 .album-stage.dragging .album-slide { transition: none; }
-.album-page { position: relative; flex: 0 0 auto; overflow: hidden; background: #fff; box-shadow: 0 8px 32px rgba(0,0,0,.55); }
+.album-page { position: relative; flex: 0 0 auto; overflow: hidden; background: #fff; box-shadow: 0 8px 32px rgba(0,0,0,.55); transform-origin: 50% 50%; }
+.album-slide[data-current="true"] .album-page { will-change: transform; }
+.album-page.zoom-anim { transition: transform .22s ease; }
+/* A spread is two A4 pages: a soft shade down the middle shows where the fold is (over the photos, never under them). */
+.album-page[data-kind="spread"]::after {
+  content: ''; position: absolute; z-index: 2; top: 0; bottom: 0; left: 50%; width: 5%; transform: translateX(-50%);
+  background: linear-gradient(90deg, rgba(0,0,0,0) 0%, rgba(0,0,0,.14) 44%, rgba(0,0,0,.22) 50%, rgba(0,0,0,.14) 56%, rgba(0,0,0,0) 100%);
+  pointer-events: none;
+}
 .album-slot { position: absolute; overflow: hidden; background: #ece8de; }
 .album-slot-crop { position: absolute; inset: 0; overflow: hidden; }
 .album-img {
@@ -2603,5 +2624,5 @@ html.album-open, html.album-open body { overflow: hidden; }
   .album-note { margin: 0; flex: 1; text-align: left; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .album-slide, .album-progress-bar span { transition: none; }
+  .album-slide, .album-progress-bar span, .album-page.zoom-anim, .album-hint { transition: none; }
 }

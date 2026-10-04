@@ -1,18 +1,22 @@
-// Album preview, stage 1 (docs/album-preview.md): after delivery the guest can
-// see their own finals laid out as an album — a cover and inner pages they flip
-// through. Read-only and local: nothing is stored, nothing is ordered, nothing
-// is written (no POST/PUT, no localStorage / sessionStorage), and only
-// thumbnails are ever requested (`?w=` + `?t=`, never an original).
+// Album preview (docs/album-preview.md): after delivery the guest can see
+// their own finals laid out as an A4 portrait album — a single-page cover, then
+// spreads (two A4 pages side by side, up to four photos a page), then a back
+// cover if the plan has one. Read-only and local: nothing is stored, nothing is
+// ordered, nothing is written (no POST/PUT, no localStorage / sessionStorage),
+// and only thumbnails are ever requested (`?w=` + `?t=`, never an original).
 //
 // js/pick.js owns when the entry shows (delivered mode, finals view only) and
 // calls AlbumPreview.syncEntry(); this file owns everything after the press:
-//   1. load book_editor/js/layouts.js + auto_layout.js (only now, with the same
-//      ?v= stamp as this very script — nothing is hard-coded here),
+//   1. load book_editor/js/layouts.js + spread_templates.js + auto_layout.js
+//      (only now, with the same ?v= stamp as this very script — nothing is
+//      hard-coded here),
 //   2. list the finals (the final folders and every subfolder),
 //   3. AutoLayout.analyze in chunks of CHUNK (so there is real progress; it has
-//      no progress callback) and AutoLayout.plan,
-//   4. a full-screen dark viewer: cover + inner pages, flip by button, ← / →
-//      or a swipe; only the current page and its two neighbours exist in the DOM.
+//      no progress callback) and AutoLayout.planSpreads,
+//   4. a full-screen dark viewer: cover + spreads, flip by button, ← / → or a
+//      swipe; only the current page and its two neighbours exist in the DOM;
+//      double tap / double click zooms 2.5x, pinch and the wheel zoom 1x-4x,
+//      and a zoomed page is dragged to pan (the swipe is off while zoomed).
 //
 // Every string that came from outside (photo keys) only ever reaches
 // img.src as a property — no innerHTML anywhere in this file, so a file name
@@ -22,20 +26,30 @@
 
     const SCRIPT_SRC = (document.currentScript && document.currentScript.src) || '';
 
-    // One square sheet at a time, like the book editor's default book
-    // (settings 20 x 20 cm, coverSettings 20 x 20) and the client viewer
-    // (view.html shows one sheet at the book's own aspect). A spread (aspect 2)
-    // would be 195px tall on a 390px phone. The same value goes to plan() and
-    // to the renderer, so a crop is drawn on the shape it was made for.
-    const PAGE_ASPECT = 1;
-    const COVER_ASPECT = 1;
+    // A4 portrait pages. The cover and back are one page (210 x 297); the inside
+    // is spreads, two pages side by side (420 x 297). The same values go to
+    // planSpreads() and to the renderer, so a crop is drawn on the shape it was
+    // made for.
+    const COVER_ASPECT = 210 / 297;
+    const SPREAD_ASPECT = 420 / 297;
 
     const EDGE = 24;          // a touch starting this close to a screen edge is the browser's back gesture
     const SWIPE_MIN = 40;     // px, or SWIPE_FRAC of the page width, whichever is larger
     const SWIPE_FRAC = 0.12;
-    const GUTTER_DESKTOP = 24;
-    const GUTTER_PHONE = 12;
+    const PHONE_W = 600;      // window this narrow (or less) is a phone held upright
+    const SHORT_H = 500;      // window this short (or less) is a phone on its side
 
+    const ZOOM_DOUBLE = 2.5;  // what a double tap / double click zooms to
+    const ZOOM_MAX = 4;
+    const ZOOM_SNAP = 1.02;   // a pinch that ends below this lands on exactly 1x
+    const TAP_MS = 350;       // a touch shorter than this, and still, is a tap
+    const TAP_SLOP = 10;      // px a finger may drift and still be a tap
+    const DOUBLE_TAP_MS = 300;
+    const DOUBLE_TAP_DIST = 40;
+    const HINT_MS = 4500;     // the zoom hint stays this long (or until the first touch)
+    const HINT_FADE_MS = 400;
+
+    const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
     const text = (tag, cls, t, id) => {
         const e = document.createElement(tag);
         if (cls) e.className = cls;
@@ -83,11 +97,13 @@
     }
     let enginePromise = null;
     function ensureEngine() {
-        const have = () => typeof LAYOUTS !== 'undefined' && typeof AutoLayout !== 'undefined' && typeof fitCoverImage === 'function';
+        const have = () => typeof LAYOUTS !== 'undefined' && typeof SpreadTemplates !== 'undefined'
+            && typeof AutoLayout !== 'undefined' && typeof fitCoverImage === 'function';
         if (have()) return Promise.resolve();
         if (!enginePromise) {
             enginePromise = (async () => {
                 if (typeof LAYOUTS === 'undefined') await loadScript(engineUrl('layouts.js'));
+                if (typeof SpreadTemplates === 'undefined') await loadScript(engineUrl('spread_templates.js'));
                 if (typeof AutoLayout === 'undefined') await loadScript(engineUrl('auto_layout.js'));
             })().catch(e => { enginePromise = null; throw e; });
         }
@@ -172,9 +188,9 @@
         const failed = items.length - ok;
         if (ok === 0 || (ok < 2 && failed > 0)) { const e = new Error('photos failed'); e.kind = 'photos'; throw e; }
 
-        const plan = AutoLayout.plan(items, { style: 'auto', pageAspect: cfg.PAGE_ASPECT, coverAspect: cfg.COVER_ASPECT });
+        const plan = AutoLayout.planSpreads(items, { ...cfg.PLAN_OPTS, coverAspect: cfg.COVER_ASPECT, spreadAspect: cfg.SPREAD_ASPECT });
         const dup = plan.dropped.filter(d => d.reason === 'duplicate').length;
-        if (ok - dup < 2 || !plan.cover || plan.pages.length === 0) return { kind: 'few' };
+        if (ok - dup < 2 || !plan.cover || plan.spreads.length === 0) return { kind: 'few' };
         const notes = [];
         if (dup > 0) notes.push(`已略過 ${dup} 張相近的照片`);
         if (capped) notes.push(`已先用前 ${cfg.MAX_PHOTOS} 張排版`);
@@ -185,7 +201,11 @@
     // ── the viewer ────────────────────────────────────────────────────────
     const Viewer = {
         el: null, stage: null, ctl: null, runId: 0, off: [], opener: null,
-        pages: [], index: 0, touch: null,
+        pages: [], index: 0,
+        g: null,                              // the gesture in progress: swipe | pan | pinch
+        zoom: { s: 1, x: 0, y: 0 },           // the current page's zoom: scale and pan (px from centre)
+        lastTap: null, touchAt: 0, mouse: null,
+        hint: null, hintTimer: null, hintFade: null,
 
         isOpen() { return !!this.el; },
 
@@ -213,10 +233,17 @@
             document.addEventListener('keydown', onKey);
             window.addEventListener('resize', onResize);
             this.off.push(() => document.removeEventListener('keydown', onKey), () => window.removeEventListener('resize', onResize));
+            // everything below sits on elements that go with the viewer: nothing is left on window / document
             stage.addEventListener('touchstart', e => this.onTouchStart(e), { passive: true });
             stage.addEventListener('touchmove', e => this.onTouchMove(e), { passive: true });
             stage.addEventListener('touchend', e => this.onTouchEnd(e), { passive: true });
-            stage.addEventListener('touchcancel', () => this.snapBack(), { passive: true });
+            stage.addEventListener('touchcancel', e => this.onTouchCancel(e), { passive: true });
+            stage.addEventListener('wheel', e => this.onWheel(e), { passive: false });
+            stage.addEventListener('dblclick', e => this.onDblClick(e));
+            stage.addEventListener('pointerdown', e => this.onPointerDown(e));
+            stage.addEventListener('pointermove', e => this.onPointerMove(e));
+            stage.addEventListener('pointerup', e => this.onPointerEnd(e));
+            stage.addEventListener('pointercancel', e => this.onPointerEnd(e));
 
             this.folders = folders;
             this.run();
@@ -227,10 +254,12 @@
             this.runId++;
             if (this.ctl) { this.ctl.abort(); this.ctl = null; }
             this.off.splice(0).forEach(f => f());
+            this.clearHintTimers();
             this.el.querySelectorAll('.album-slide').forEach(s => this.dropSlide(s));
             this.el.remove();
             this.el = this.stage = this.foot = null;
-            this.pages = []; this.touch = null; this.index = 0;
+            this.pages = []; this.g = null; this.index = 0; this.mouse = null; this.lastTap = null; this.hint = null;
+            this.zoom = { s: 1, x: 0, y: 0 };
             document.documentElement.classList.remove('album-open');
             const btn = document.getElementById('albumPreviewBtn');
             const back = btn || this.opener;
@@ -263,12 +292,18 @@
 
         setState(state) {
             this.el.dataset.state = state;
+            this.clearHintTimers();
+            this.hint = null;
             this.stage.replaceChildren();
             this.foot.replaceChildren();
             this.stage.style.removeProperty('--cur');
             this.stage.style.removeProperty('--drag');
-            this.stage.classList.remove('dragging');
+            this.stage.classList.remove('dragging', 'zoomed');
+            delete this.stage.dataset.zoom;
+            delete this.stage.dataset.zoomable;
             this.pages = [];
+            this.g = null; this.mouse = null; this.lastTap = null;
+            this.zoom = { s: 1, x: 0, y: 0 };
             // the control that had the focus is gone with the old state
             if (!this.el.contains(document.activeElement) || document.activeElement === document.body) this.el.focus();
         },
@@ -318,10 +353,17 @@
 
         showAlbum(plan, notes) {
             this.setState('ready');
+            this.stage.dataset.zoomable = 'true';       // CSS: the stage takes the touches itself (touch-action: none)
             this.pages = [
-                { aspect: COVER_ASPECT, layout: 'full-bleed', bg: '#ffffff', slots: [{ photoId: plan.cover.photoId, crop: plan.cover.crop }] },
-                ...plan.pages.map(p => ({ aspect: PAGE_ASPECT, layout: p.layout, bg: p.bg, slots: p.slots })),
+                { kind: 'cover', aspect: COVER_ASPECT, layout: 'cover',
+                  slots: [{ photoId: plan.cover.photoId, crop: plan.cover.crop, slot: { x: 0, y: 0, w: 1, h: 1 } }] },
+                ...plan.spreads.map(sp => ({ kind: 'spread', aspect: SPREAD_ASPECT, layout: sp.template, slots: sp.slots })),
             ];
+            if (plan.back) {
+                const b = plan.back;
+                this.pages.push({ kind: 'back', aspect: COVER_ASPECT, layout: 'back',
+                    slots: b.photoId ? [{ photoId: b.photoId, crop: b.crop || { x: 0, y: 0, scale: 1 }, slot: { x: 0, y: 0, w: 1, h: 1 } }] : [] });
+            }
             const note = text('div', 'album-note', notes.join('・'), 'albumNote');
             note.hidden = notes.length === 0;
             const prev = button('albumPrev', 'album-nav-btn', '‹', '上一頁');
@@ -335,18 +377,21 @@
             this.index = 0;
             this.show(0);
             next.focus();
+            this.showHint();
         },
 
         // ── pages ──
-        total() { return this.pages.length - 1; },   // inner pages (the cover is not counted)
+        total() { return this.pages.filter(p => p.kind === 'spread').length; },   // spreads (the cover and back are not counted)
 
         go(delta) {
+            this.hideHint();
             const to = Math.min(this.pages.length - 1, Math.max(0, this.index + delta));
             if (to === this.index) { this.snapBack(); return; }
             this.show(to);
         },
 
         show(index) {
+            this.resetZoom(false);          // a new page always starts at 1x
             this.index = index;
             this.stage.classList.remove('dragging');
             this.stage.style.removeProperty('--drag');
@@ -365,7 +410,8 @@
                 s.querySelectorAll('img').forEach(im => { im.fetchPriority = cur ? 'high' : 'low'; });
             }
             const label = document.getElementById('albumLabel');
-            if (label) label.textContent = index === 0 ? '封面' : `${index} / ${this.total()}`;
+            const kind = this.pages[index].kind;
+            if (label) label.textContent = kind === 'cover' ? '封面' : kind === 'back' ? '封底' : `${index} / ${this.total()}`;
             const prev = document.getElementById('albumPrev'), next = document.getElementById('albumNext');
             if (prev) prev.disabled = index === 0;
             if (next) next.disabled = index === this.pages.length - 1;
@@ -388,7 +434,7 @@
             const page = this.renderPage(pageData);
             slide.appendChild(page);
             this.stage.appendChild(slide);
-            this.sizePage(page, pageData.aspect);
+            this.sizePage(page, pageData);
             // sources last: the frames have their size when the first load event fires
             const w = this.imageWidth(page);
             page.querySelectorAll('img').forEach(im => { im.src = window.driveManager.getImageUrl({ id: im.dataset.photoId }, w); });
@@ -397,17 +443,19 @@
         // The cover-fit drawing layouts.js uses (fitCoverImage: the whole photo
         // scaled to cover its slot, positioned by crop), built with DOM calls —
         // renderPageHTML would put a photo key into an HTML string, and brings
-        // the editor's x / right-click buttons and a fixed 1600px width.
+        // the editor's x / right-click buttons and a fixed 1600px width. A slot's
+        // box is the template's own fractions of the page (or spread).
         renderPage(pageData) {
-            const def = LAYOUTS[pageData.layout] || LAYOUTS.blank;
             const page = text('div', 'album-page');
+            page.dataset.kind = pageData.kind;
             page.dataset.layout = pageData.layout;
-            page.style.background = pageData.bg || '#ffffff';
-            def.slots.forEach((sd, idx) => {
-                const slot = pageData.slots[idx];
-                if (!slot || !slot.photoId) return;
+            page.style.background = '#ffffff';
+            const pct = v => `${+(v * 100).toFixed(3)}%`;
+            pageData.slots.forEach(slot => {
+                if (!slot || !slot.photoId || !slot.slot) return;
+                const sd = slot.slot;
                 const box = text('div', 'album-slot');
-                box.style.cssText = `left:${sd.x}%;top:${sd.y}%;width:${sd.w}%;height:${sd.h}%;`;
+                box.style.cssText = `left:${pct(sd.x)};top:${pct(sd.y)};width:${pct(sd.w)};height:${pct(sd.h)};`;
                 const wrap = text('div', 'album-slot-crop');
                 const crop = slot.crop || {};
                 const img = new Image();
@@ -430,34 +478,99 @@
             return page;
         },
 
-        // largest page of this aspect that fits the stage, with a gutter
-        pageSize(aspect) {
-            const gutter = window.innerWidth <= 600 ? GUTTER_PHONE : GUTTER_DESKTOP;
-            const aw = Math.max(80, this.stage.clientWidth - 2 * gutter);
-            const ah = Math.max(80, this.stage.clientHeight - 2 * gutter);
-            const w = Math.min(aw, ah * aspect);
-            return { w: Math.floor(w), h: Math.floor(w / aspect) };
+        // largest page of this shape that fits the stage, with a gutter: none at
+        // the sides for a spread on an upright phone (it takes the whole width)
+        pageSize(pageData) {
+            let gx = 24, gy = 24;
+            if (window.innerWidth <= PHONE_W) { gx = pageData.kind === 'spread' ? 0 : 16; gy = 12; }
+            else if (window.innerHeight <= SHORT_H) { gx = 12; gy = 8; }
+            const aw = Math.max(80, this.stage.clientWidth - 2 * gx);
+            const ah = Math.max(80, this.stage.clientHeight - 2 * gy);
+            const w = Math.min(aw, ah * pageData.aspect);
+            return { w: Math.floor(w), h: Math.floor(w / pageData.aspect) };
         },
-        sizePage(page, aspect) {
-            const { w, h } = this.pageSize(aspect);
+        sizePage(page, pageData) {
+            const { w, h } = this.pageSize(pageData);
             page.style.width = `${w}px`;
             page.style.height = `${h}px`;
         },
         // the pre-generated bucket (400 / 1200 / 1600) for the size this page is shown at,
-        // by the rule the gallery's preview uses
+        // by the rule the gallery's preview uses (offsetWidth: not the zoomed size)
         imageWidth(page) {
-            const w = page.getBoundingClientRect().width || this.pageSize(PAGE_ASPECT).w;
+            const w = page.offsetWidth || this.pageSize(this.pages[this.index] || { kind: 'spread', aspect: SPREAD_ASPECT }).w;
             const dm = window.driveManager;
             return dm && typeof dm.previewWidth === 'function' ? dm.previewWidth(w, window.devicePixelRatio || 1) : 1200;
         },
-        // rotation / window resize: new frame sizes, so the crop is fitted again
+        // rotation / window resize: new frame sizes, so the crop is fitted again (at 1x)
         refit() {
-            if (!this.el || !this.stage) return;
+            if (!this.el || !this.stage || !this.pages.length) return;
+            this.resetZoom(false);
             for (const slide of this.stage.querySelectorAll('.album-slide')) {
                 const page = slide.firstElementChild;
-                this.sizePage(page, this.pages[+slide.dataset.index].aspect);
+                this.sizePage(page, this.pages[+slide.dataset.index]);
                 page.querySelectorAll('img').forEach(im => { if (im.naturalWidth) fitCoverImage(im); });
             }
+        },
+
+        // ── zoom ──
+        currentPage() { return this.stage ? this.stage.querySelector('.album-slide[data-current="true"] .album-page') : null; },
+        isZoomed() { return this.zoom.s > 1.001; },
+
+        // Scale `s` and pan (x, y) from the stage's centre, with the pan held inside what keeps
+        // the page covering the window on every side it is bigger than (never a blank edge).
+        setZoom(s, x, y, animate) {
+            const pg = this.currentPage();
+            if (!pg) return;
+            s = clamp(s, 1, ZOOM_MAX);
+            if (s < 1.001) { s = 1; x = 0; y = 0; }
+            else {
+                const mx = Math.max(0, (pg.offsetWidth * s - this.stage.clientWidth) / 2);
+                const my = Math.max(0, (pg.offsetHeight * s - this.stage.clientHeight) / 2);
+                x = clamp(x, -mx, mx); y = clamp(y, -my, my);
+            }
+            this.zoom = { s, x, y };
+            pg.classList.toggle('zoom-anim', !!animate);
+            pg.style.transform = s === 1 ? '' : `translate(${x}px, ${y}px) scale(${s})`;
+            this.stage.dataset.zoom = s.toFixed(2);
+            this.stage.classList.toggle('zoomed', s > 1.001);
+        },
+        resetZoom(animate) {
+            if (this.stage && (this.zoom.s !== 1 || this.zoom.x !== 0 || this.zoom.y !== 0 || !this.stage.dataset.zoom)) this.setZoom(1, 0, 0, animate);
+        },
+        // zoom to `s`, keeping the content under the screen point (cx, cy) where it is
+        zoomAt(s, cx, cy, animate) {
+            const r = this.stage.getBoundingClientRect();
+            const px = cx - (r.left + r.width / 2), py = cy - (r.top + r.height / 2);
+            const z = this.zoom;
+            const qx = (px - z.x) / z.s, qy = (py - z.y) / z.s;
+            s = clamp(s, 1, ZOOM_MAX);
+            this.setZoom(s, px - qx * s, py - qy * s, animate);
+        },
+        toggleZoom(cx, cy) {
+            if (this.isZoomed()) this.setZoom(1, 0, 0, true);
+            else this.zoomAt(ZOOM_DOUBLE, cx, cy, true);
+        },
+
+        // ── the hint (phone width only): one line, gone after a few seconds or at the first touch ──
+        showHint() {
+            if (window.innerWidth > PHONE_W || !this.stage) return;
+            const h = text('div', 'album-hint', '雙擊放大・橫放手機看更大', 'albumHint');
+            h.setAttribute('aria-hidden', 'true');
+            this.stage.appendChild(h);
+            this.hint = h;
+            this.hintTimer = setTimeout(() => { this.hintTimer = null; this.hideHint(); }, HINT_MS);
+        },
+        hideHint() {
+            if (this.hintTimer) { clearTimeout(this.hintTimer); this.hintTimer = null; }
+            const h = this.hint;
+            if (!h) return;
+            this.hint = null;
+            h.classList.add('gone');
+            this.hintFade = setTimeout(() => { this.hintFade = null; h.remove(); }, HINT_FADE_MS);
+        },
+        clearHintTimers() {
+            if (this.hintTimer) { clearTimeout(this.hintTimer); this.hintTimer = null; }
+            if (this.hintFade) { clearTimeout(this.hintFade); this.hintFade = null; }
         },
 
         // ── input ──
@@ -481,47 +594,137 @@
             }
         },
 
+        // One finger: a swipe flips (at 1x), a drag pans (zoomed), two taps in a row zoom.
+        // Two fingers: pinch. A touch starting within EDGE px of a screen edge is the
+        // browser's back gesture and is ignored.
         onTouchStart(e) {
-            this.touch = null;
-            if (!this.pages.length || e.touches.length !== 1) return;
+            this.hideHint();
+            if (!this.pages.length) return;
+            if (e.touches.length >= 2) { this.startPinch(e); return; }
             const t = e.touches[0];
-            if (t.clientX < EDGE || t.clientX > window.innerWidth - EDGE) return;   // the system's back gesture
-            this.touch = { x: t.clientX, y: t.clientY, dx: 0, dy: 0, mode: null };
+            this.g = null;
+            if (t.clientX < EDGE || t.clientX > window.innerWidth - EDGE) { this.lastTap = null; return; }
+            this.g = { mode: this.isZoomed() ? 'pan' : 'swipe', x: t.clientX, y: t.clientY, lx: t.clientX, ly: t.clientY,
+                dx: 0, dy: 0, dir: null, moved: false, t0: e.timeStamp };
         },
         onTouchMove(e) {
-            const s = this.touch;
-            if (!s) return;
-            if (e.touches.length !== 1) { this.touch = null; this.snapBack(); return; }
+            const g = this.g;
+            if (!g) return;
+            if (g.mode === 'pinch') { if (e.touches.length >= 2) this.movePinch(e); return; }
+            if (e.touches.length !== 1) { this.g = null; this.snapBack(); return; }
             const t = e.touches[0];
-            s.dx = t.clientX - s.x; s.dy = t.clientY - s.y;
-            if (!s.mode && Math.hypot(s.dx, s.dy) > 10) s.mode = Math.abs(s.dx) > Math.abs(s.dy) * 1.2 ? 'h' : 'v';
-            if (s.mode !== 'h') return;
+            g.dx = t.clientX - g.x; g.dy = t.clientY - g.y;
+            if (!g.moved && Math.hypot(g.dx, g.dy) > TAP_SLOP) g.moved = true;
+            if (g.mode === 'pan') {
+                const z = this.zoom;
+                this.setZoom(z.s, z.x + (t.clientX - g.lx), z.y + (t.clientY - g.ly), false);
+                g.lx = t.clientX; g.ly = t.clientY;
+                return;
+            }
+            if (!g.dir && Math.hypot(g.dx, g.dy) > 10) g.dir = Math.abs(g.dx) > Math.abs(g.dy) * 1.2 ? 'h' : 'v';
+            if (g.dir !== 'h') return;
             // the first / last page gives way less, so it feels like an end
-            const atEnd = (s.dx > 0 && this.index === 0) || (s.dx < 0 && this.index === this.pages.length - 1);
+            const atEnd = (g.dx > 0 && this.index === 0) || (g.dx < 0 && this.index === this.pages.length - 1);
             this.stage.classList.add('dragging');
-            this.stage.style.setProperty('--drag', `${atEnd ? s.dx * 0.25 : s.dx}px`);
+            this.stage.style.setProperty('--drag', `${atEnd ? g.dx * 0.25 : g.dx}px`);
         },
-        onTouchEnd() {
-            const s = this.touch;
-            this.touch = null;
-            if (!s || s.mode !== 'h') { this.snapBack(); return; }
+        onTouchEnd(e) {
+            this.touchAt = performance.now();
+            const g = this.g;
+            if (!g) return;
+            if (g.mode === 'pinch') {
+                this.lastTap = null;
+                if (e.touches.length >= 2) return;
+                if (this.zoom.s <= ZOOM_SNAP) { this.g = null; this.resetZoom(true); return; }
+                if (e.touches.length === 1) {       // a finger is left: keep dragging with it
+                    const t = e.touches[0];
+                    this.g = { mode: 'pan', x: t.clientX, y: t.clientY, lx: t.clientX, ly: t.clientY, dx: 0, dy: 0, dir: null, moved: true, t0: e.timeStamp };
+                } else this.g = null;
+                return;
+            }
+            this.g = null;
+            if (!g.moved && e.timeStamp - g.t0 <= TAP_MS) { this.onTap(g.x, g.y, e.timeStamp); this.snapBack(); return; }
+            if (g.mode === 'pan') return;
             const min = Math.max(SWIPE_MIN, this.stage.clientWidth * SWIPE_FRAC);
-            if (Math.abs(s.dx) >= min && Math.abs(s.dx) > Math.abs(s.dy) * 1.5) this.go(s.dx < 0 ? 1 : -1);
+            if (g.dir === 'h' && Math.abs(g.dx) >= min && Math.abs(g.dx) > Math.abs(g.dy) * 1.5) this.go(g.dx < 0 ? 1 : -1);
             else this.snapBack();
+        },
+        onTouchCancel() {
+            const wasPinch = this.g && this.g.mode === 'pinch';
+            this.g = null; this.lastTap = null;
+            this.snapBack();
+            if (wasPinch && this.zoom.s <= ZOOM_SNAP) this.resetZoom(true);
+        },
+        onTap(x, y, time) {
+            const last = this.lastTap;
+            if (last && time - last.t <= DOUBLE_TAP_MS && Math.hypot(x - last.x, y - last.y) <= DOUBLE_TAP_DIST) {
+                this.lastTap = null;
+                this.toggleZoom(x, y);
+            } else this.lastTap = { x, y, t: time };
+        },
+        startPinch(e) {
+            const a = e.touches[0], b = e.touches[1];
+            this.snapBack();
+            this.lastTap = null;
+            const r = this.stage.getBoundingClientRect(), z = this.zoom;
+            const mx = (a.clientX + b.clientX) / 2 - (r.left + r.width / 2), my = (a.clientY + b.clientY) / 2 - (r.top + r.height / 2);
+            this.g = { mode: 'pinch', d0: Math.max(1, Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY)), s0: z.s,
+                qx: (mx - z.x) / z.s, qy: (my - z.y) / z.s };      // the picture point between the fingers
+        },
+        // the scale follows the spread of the fingers; the picture point that was between them follows their middle
+        movePinch(e) {
+            const g = this.g, a = e.touches[0], b = e.touches[1];
+            const r = this.stage.getBoundingClientRect();
+            const mx = (a.clientX + b.clientX) / 2 - (r.left + r.width / 2), my = (a.clientY + b.clientY) / 2 - (r.top + r.height / 2);
+            const s = clamp(g.s0 * Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY) / g.d0, 1, ZOOM_MAX);
+            this.setZoom(s, mx - g.qx * s, my - g.qy * s, false);
         },
         snapBack() {
             if (!this.stage) return;
             this.stage.classList.remove('dragging');
             this.stage.style.setProperty('--drag', '0px');
         },
+
+        // desktop: the wheel zooms about the cursor, a double click toggles 2.5x, a mouse drag pans
+        onWheel(e) {
+            if (!this.pages.length) return;
+            e.preventDefault();             // no page scroll, no browser zoom under the cursor
+            this.hideHint();
+            const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 400 : 1;
+            this.zoomAt(this.zoom.s * Math.exp(-e.deltaY * unit * (e.ctrlKey ? 0.01 : 0.002)), e.clientX, e.clientY, false);
+        },
+        onDblClick(e) {
+            if (!this.pages.length) return;
+            if (performance.now() - this.touchAt < 700) return;      // a touch double tap already did it
+            this.hideHint();
+            this.toggleZoom(e.clientX, e.clientY);
+        },
+        onPointerDown(e) {
+            if (e.pointerType !== 'mouse' || e.button !== 0 || !this.isZoomed()) return;
+            this.mouse = { x: e.clientX, y: e.clientY };
+            try { this.stage.setPointerCapture(e.pointerId); } catch (err) { /* no capture: the drag still works inside the stage */ }
+        },
+        onPointerMove(e) {
+            const m = this.mouse;
+            if (!m || !(e.buttons & 1)) return;
+            const z = this.zoom;
+            this.setZoom(z.s, z.x + (e.clientX - m.x), z.y + (e.clientY - m.y), false);
+            m.x = e.clientX; m.y = e.clientY;
+        },
+        onPointerEnd(e) {
+            if (!this.mouse) return;
+            this.mouse = null;
+            try { this.stage.releasePointerCapture(e.pointerId); } catch (err) { /* already released */ }
+        },
     };
 
     // ── the public face js/pick.js talks to ───────────────────────────────
     const AlbumPreview = {
-        PAGE_ASPECT, COVER_ASPECT,
+        COVER_ASPECT, SPREAD_ASPECT,
         MAX_PHOTOS: 240,          // more than this: the first 240 in shooting order, and it says so
         CHUNK: 24,                // photos analysed per call: the progress granularity
         LIST_MAX_FOLDERS: 200,    // the listing never walks more folders than this
+        PLAN_OPTS: {},            // extra options for AutoLayout.planSpreads (e.g. { back: true }); the shapes above always win
         folders: [],
 
         // Show the entry right after `after` (a delivered finals view with at

@@ -14976,12 +14976,12 @@ const albCur = s => s.slides.find(x => x.cur);
 const albReady = page => page.waitForFunction(() => document.getElementById('albumViewer')?.dataset.state === 'ready', null, { timeout: 20000 });
 const albExpected = (page, ids) => page.evaluate(async ids => {
   const items = await AutoLayout.analyze(ids, { urlFor: id => driveManager.getImageUrl({ id }, 400) });
-  const p = AutoLayout.plan(items, { pageAspect: 1, coverAspect: 1 });
-  return { cover: p.cover && p.cover.photoId, pages: p.pages.map(x => ({ layout: x.layout, ids: x.slots.map(s => s.photoId) })), dropped: p.dropped };
+  const p = AutoLayout.planSpreads(items, { coverAspect: 210 / 297, spreadAspect: 420 / 297 });
+  return { cover: p.cover && p.cover.photoId, pages: p.spreads.map(x => ({ layout: x.template, ids: x.slots.map(s => s.photoId) })), dropped: p.dropped };
 }, ids);
 const albShot = async (page, name) => { if (process.env.SHOTS_ALBUM) await page.screenshot({ path: `${process.env.SHOTS_ALBUM}/${name}.png` }); };
 const albPending = (page, since) => page.evaluate(s => [...window.__timers.values()].filter(t => t.s > s).map(t => `${t.kind}${t.d}`), since);
-const albEngineLoads = world => world.assets.filter(p => /\/book_editor\/js\/(layouts|auto_layout)\.js/.test(p));
+const albEngineLoads = world => world.assets.filter(p => /\/book_editor\/js\/(layouts|spread_templates|auto_layout)\.js/.test(p));
 
 // ── 1. the entry: delivered only, beside (never over) the confirmation block
 for (const [label, co, init] of [['owner 1280px', ALB_DESK, ALB_OWNER], ['viewer 390px', MOBILE, ALB_VIEWER]]) {
@@ -15019,8 +15019,8 @@ for (const [label, co, init] of [['owner 1280px', ALB_DESK, ALB_OWNER], ['viewer
         return { body: L(cs('body').backgroundColor), entry: L(cs('#albumPreviewBtn').backgroundColor), text: L(cs('#albumPreviewBtn .album-entry-title').color) }; })()`);
       ok('still the dark client theme (dark entry, light text)', dark.body < 0.2 && dark.entry < 0.3 && dark.text > 0.6, JSON.stringify(dark));
       // nothing loaded, nothing requested for it
-      const pre = await page.evaluate(() => ({ layouts: typeof LAYOUTS, auto: typeof AutoLayout, fn: typeof renderPageHTML }));
-      ok('before the press: no layouts.js / auto_layout.js requested, no globals', albEngineLoads(w).length === 0 && pre.layouts === 'undefined' && pre.auto === 'undefined' && pre.fn === 'undefined', JSON.stringify([albEngineLoads(w), pre]));
+      const pre = await page.evaluate(() => ({ layouts: typeof LAYOUTS, auto: typeof AutoLayout, fn: typeof renderPageHTML, tpl: typeof SpreadTemplates }));
+      ok('before the press: no layouts.js / spread_templates.js / auto_layout.js requested, no globals', albEngineLoads(w).length === 0 && pre.layouts === 'undefined' && pre.auto === 'undefined' && pre.fn === 'undefined' && pre.tpl === 'undefined', JSON.stringify([albEngineLoads(w), pre]));
       ok('control: the page did ask for its own scripts (the request log works)', w.assets.some(p => /\/js\/pick\.js/.test(p)) && w.assets.some(p => /\/js\/album-preview\.js/.test(p)), w.assets.slice(0, 4).join());
       ok('before the press: only the gallery\'s own reads — the final folder listing and 400 thumbnails',
         w.log.every(r => r.method === 'GET' && (r.path === '/api/pick/state' || r.list === 'shoot/精修/' || (r.w === '400' && r.key.startsWith('shoot/精修/')))),
@@ -15096,8 +15096,8 @@ for (const [name, opts] of [
       ok('a cancel button is there and is what a tap hits', /取消/.test(prog.cancel) && prog.cancelHit);
       ok('the page behind does not scroll; focus moved into the dialog', prog.overflow === 'hidden' && prog.focusIn, JSON.stringify([prog.overflow, prog.focusIn]));
       const eng = albEngineLoads(w);
-      ok('layouts.js then auto_layout.js, once each, only now, with the page\'s own ?v= stamp',
-        eng.length === 2 && /layouts\.js\?v=/.test(eng[0]) && /auto_layout\.js\?v=/.test(eng[1]) && eng.every(p => p.endsWith(`?v=${ALB_STAMP}`)), JSON.stringify(eng));
+      ok('layouts.js, spread_templates.js, auto_layout.js, once each, only now, with the page\'s own ?v= stamp',
+        eng.length === 3 && /layouts\.js\?v=/.test(eng[0]) && /spread_templates\.js\?v=/.test(eng[1]) && /auto_layout\.js\?v=/.test(eng[2]) && eng.every(p => p.endsWith(`?v=${ALB_STAMP}`)), JSON.stringify(eng));
       await page.waitForTimeout(350);
       await albShot(page, 'progress-1280');
       // Tab / Shift+Tab never leave the dialog (it is modal)
@@ -15109,10 +15109,11 @@ for (const [name, opts] of [
       await albReady(page);
 
       // ── the audit window ends here: what the page asked for, and wrote, while building and viewing
+      await page.waitForFunction(() => { const im = document.querySelector('.album-slide[data-current="true"] img'); return im && im.complete && im.naturalWidth > 0; }, null, { timeout: 5000 });
       const snapReady = await albSnap(page);
       const cover = albCur(snapReady);
       ok('ready: on the cover, labelled 封面, one slide current', snapReady.label === '封面' && snapReady.slides.filter(s => s.cur).length === 1 && cover.i === 0, JSON.stringify(snapReady));
-      ok('the cover shows one photo', cover.ids.length === 1 && cover.layout === 'full-bleed', JSON.stringify(cover));
+      ok('the cover shows one photo, on the single-page cover (not a spread)', cover.ids.length === 1 && cover.layout === 'cover', JSON.stringify(cover));
       ok('on the cover 上一頁 is disabled, 下一頁 is not', snapReady.prevDis === true && snapReady.nextDis === false);
       const shown = await page.evaluate(() => {
         const v = document.getElementById('albumViewer'), cur = v.querySelector('.album-slide[data-current="true"] .album-page'), r = cur.getBoundingClientRect();
@@ -15123,7 +15124,8 @@ for (const [name, opts] of [
           loaded: im.complete && im.naturalWidth > 0, dec: im.decoding, bg: getComputedStyle(v).backgroundColor, color: getComputedStyle(v).color,
           dpr: devicePixelRatio, w: r.width, src: im.src };
       });
-      ok('the page is square (pageAspect 1: one square sheet at a time, like the editor\'s default book)', Math.abs(shown.w - shown.h) < 1.5 && shown.w > 300, `${shown.w}x${shown.h}`);
+      ok('the cover is one A4 portrait page (210 x 297, 0.7071)', Math.abs(shown.w / shown.h - 210 / 297) < 0.01 && shown.h > 500, `${shown.w}x${shown.h}`);
+      ok('and it sits in the middle of the window (single page, centred)', Math.abs((shown.l + shown.w / 2) - shown.iw / 2) < 2, JSON.stringify(shown));
       ok('it sits between the bar and the footer, inside the window', shown.t >= shown.barB - 0.5 && shown.t + shown.h <= shown.footT + 0.5 && shown.l >= 0 && shown.l + shown.w <= shown.iw, JSON.stringify(shown));
       ok('the cover photo is loaded and fills its frame (no gap)', shown.loaded && shown.covers && shown.dec === 'async', JSON.stringify(shown));
       ok('dark ground, light text', await page.evaluate(`(() => { const L = ${LUM}; const v = getComputedStyle(document.getElementById('albumViewer')); return L(v.backgroundColor) < 0.2 && L(v.color) > 0.6; })()`));
@@ -15145,7 +15147,7 @@ for (const [name, opts] of [
       ok('labels: 封面, then n / total', walked.every((s, i) => s.label === (i === 0 ? '封面' : `${i} / ${total}`)), JSON.stringify(walked.map(s => s.label)));
       ok('only the current page and its two neighbours exist, at every stop',
         walked.every((s, i) => JSON.stringify(s.slides.map(x => x.i)) === JSON.stringify([i - 1, i, i + 1].filter(x => x >= 0 && x <= total))), JSON.stringify(walked.map(s => s.slides.map(x => x.i))));
-      ok('and exactly their photos are in the DOM (no other photo has an <img>)', walked.every(s => s.imgs === s.slides.reduce((a, x) => a + x.ids.length, 0)) && Math.max(...walked.map(s => s.imgs)) <= 12,
+      ok('and exactly their photos are in the DOM (no other photo has an <img>; a spread holds up to 8, so three pages at most 24)', walked.every(s => s.imgs === s.slides.reduce((a, x) => a + x.ids.length, 0)) && Math.max(...walked.map(s => s.imgs)) <= 24,
         JSON.stringify(walked.map(s => s.imgs)));
       await page.waitForTimeout(400);           // the slide transition
       ok('the neighbours are out of sight (clipped beside the page), the current one is not',
@@ -15176,8 +15178,11 @@ for (const [name, opts] of [
       ok('no proof folder was read', during.every(r => !(r.key || '').startsWith('shoot/毛片/') && r.list !== 'shoot/毛片/'));
       ok('no POST / PUT / PATCH / DELETE at all', during.every(r => r.method === 'GET'), JSON.stringify(during.filter(r => r.method !== 'GET')));
       ok('each photo was analysed once (400 thumbnails = the photo count), none twice', during.filter(r => r.w === '400').length === 48 && new Set(during.filter(r => r.w === '400').map(r => r.key)).size === 48);
-      ok('the pages use one width, the bucket for this window, never the 1600 default of renderPageHTML', await page.evaluate(w => driveManager.previewWidth(document.querySelector('.album-page').getBoundingClientRect().width, devicePixelRatio) === w, Number([...new Set(during.filter(r => r.w !== '400' && w.keys.has(r.key)).map(r => r.w))][0])),
-        JSON.stringify([...new Set(during.filter(r => r.w !== '400' && w.keys.has(r.key)).map(r => r.w))]));
+      // the cover and a spread are different widths, so each gets the bucket for its own displayed size
+      const seenW = [...new Set(during.filter(r => r.w !== '400' && w.keys.has(r.key)).map(r => r.w))];
+      const wantW = await page.evaluate(() => [...new Set([...document.querySelectorAll('.album-page')].map(p => String(driveManager.previewWidth(p.offsetWidth, devicePixelRatio))))]);
+      ok('each page asks for the bucket of its own displayed size (cover and spread), never the 1600 default of renderPageHTML',
+        seenW.length >= 1 && seenW.every(x => ['400', '1200', '1600'].includes(x)) && seenW.every(x => wantW.includes(x)), JSON.stringify([seenW, wantW]));
       ok('nothing was stored: localStorage / sessionStorage untouched', (await page.evaluate(() => window.__storageWrites.length)) === storageStart, JSON.stringify(await page.evaluate(() => window.__storageWrites.slice(-3))));
 
       // ── what the page shows is what plan() makes of the same photos
@@ -15236,9 +15241,10 @@ for (const [name, opts] of [
         await page.waitForFunction(() => !document.getElementById('albumViewer'), null, { timeout: 3000 });
       }
       const end = await page.evaluate(() => ({ alive: window.__alive.length, focus: document.activeElement?.id,
-        layoutsTags: document.querySelectorAll('script[src*="layouts.js"]').length, autoTags: document.querySelectorAll('script[src*="auto_layout.js"]').length, viewers: document.querySelectorAll('#albumViewer').length }));
+        layoutsTags: document.querySelectorAll('script[src*="layouts.js"]').length, autoTags: document.querySelectorAll('script[src*="auto_layout.js"]').length,
+        tplTags: document.querySelectorAll('script[src*="spread_templates.js"]').length, viewers: document.querySelectorAll('#albumViewer').length }));
       ok('×3: listeners back to the start, one viewer at most, focus on the entry', end.alive === aliveStart && end.viewers === 0 && end.focus === 'albumPreviewBtn', JSON.stringify(end));
-      ok('×3: the engine scripts were loaded once in all, one tag each', albEngineLoads(w).length === engineBefore && end.layoutsTags === 1 && end.autoTags === 1, JSON.stringify([albEngineLoads(w), end]));
+      ok('×3: the engine scripts were loaded once in all, one tag each', albEngineLoads(w).length === engineBefore && end.layoutsTags === 1 && end.autoTags === 1 && end.tplTags === 1, JSON.stringify([albEngineLoads(w), end]));
       await page.waitForTimeout(500);
       ok('×3: still no timers left over', (await albPending(page, timerStart)).length === 0, JSON.stringify(await albPending(page, timerStart)));
       ok('×3: the whole session wrote nothing to storage and sent no write request', (await page.evaluate(() => window.__storageWrites.length)) === storageStart && w.log.slice(logStart).every(r => r.method === 'GET'));
@@ -15426,7 +15432,7 @@ for (const [name, n, dup, expectRe] of [
       });
       const g = await geo();
       ok('the viewer is exactly the window, nothing scrolls sideways', g.vr[0] === 0 && g.vr[2] === g.iw && g.vr[3] === g.ih && g.sw <= g.iw && g.vsw <= g.iw, JSON.stringify(g));
-      ok('the page is square and inside the window with a side gutter', Math.abs(g.page[2] - g.page[3]) < 1.5 && g.page[0] >= 8 && g.page[0] + g.page[2] <= g.iw - 8, JSON.stringify(g.page));
+      ok('the cover is one A4 portrait page (0.7071), centred, inside the window with a side gutter', Math.abs(g.page[2] / g.page[3] - 210 / 297) < 0.01 && g.page[0] >= 8 && g.page[0] + g.page[2] <= g.iw - 8 && Math.abs(g.page[0] + g.page[2] / 2 - g.iw / 2) < 2, JSON.stringify(g.page));
       ok('the page sits between the bar and the footer; the footer ends inside the window (the bottom bar of a browser cannot cover it: dvh)', g.page[1] >= g.barB - 0.5 && g.page[1] + g.page[3] <= g.footT + 0.5 && g.footB <= g.ih + 0.5, JSON.stringify(g));
       ok('every control is at least 44px', g.btns.every(b => b[0] >= 44 && b[1] >= 44 && b[2] >= 0 && b[3] <= g.iw), JSON.stringify(g.btns));
       ok('the photo fills its frame (no gap)', g.covered);
@@ -15436,6 +15442,9 @@ for (const [name, n, dup, expectRe] of [
       ok('swipe left (finger moves left) goes to the next page', (await cur()).startsWith('1 /'), await cur());
       await page.waitForTimeout(350);
       await albShot(page, 'page-1-390');
+      const gs = await geo();
+      ok('a spread on a 390px phone is the whole width and about 390 x 276 (A4 pages side by side, 1.4142)', gs.page[2] >= 388 && gs.page[2] <= 390.5 && Math.abs(gs.page[2] / gs.page[3] - 420 / 297) < 0.01 && Math.abs(gs.page[3] - 276) <= 2, JSON.stringify(gs.page));
+      ok('...between the bar and the footer, no sideways scroll, photos fill their frames', gs.page[1] >= gs.barB - 0.5 && gs.page[1] + gs.page[3] <= gs.footT + 0.5 && gs.sw <= gs.iw && gs.covered, JSON.stringify(gs));
       await swipeTouch(page, '#albumStage', 100, 400, 300, 400);
       ok('swipe right goes back, to the cover', (await cur()) === '封面');
       await swipeTouch(page, '#albumStage', 100, 400, 300, 400);
@@ -15470,13 +15479,13 @@ for (const [name, n, dup, expectRe] of [
       await page.setViewportSize({ width: 844, height: 390 });
       await page.waitForTimeout(400);
       const land = await geo();
-      ok('landscape phone: viewer fills the window, the page is still square and fits between bar and footer, photos still cover their frames',
-        land.vr[2] === land.iw && land.vr[3] === land.ih && Math.abs(land.page[2] - land.page[3]) < 1.5 && land.page[1] >= land.barB - 0.5 && land.page[1] + land.page[3] <= land.footT + 0.5 && land.covered && land.sw <= land.iw && land.page[3] >= 240, JSON.stringify(land));
+      ok('landscape phone: viewer fills the window, the spread keeps its 1.4142 shape and fits between bar and footer, photos still cover their frames',
+        land.vr[2] === land.iw && land.vr[3] === land.ih && Math.abs(land.page[2] / land.page[3] - 420 / 297) < 0.01 && land.page[1] >= land.barB - 0.5 && land.page[1] + land.page[3] <= land.footT + 0.5 && land.covered && land.sw <= land.iw && land.page[3] >= 240, JSON.stringify(land));
       await albShot(page, 'landscape-390');
       await page.setViewportSize({ width: 390, height: 844 });
       await page.waitForTimeout(300);
       const port = await geo();
-      ok('and back to portrait', port.vr[2] === port.iw && port.covered && port.page[2] <= port.iw - 16 + 0.5, JSON.stringify(port));
+      ok('and back to portrait: the spread is the whole width again', port.vr[2] === port.iw && port.covered && port.page[2] <= port.iw + 0.5 && port.page[2] >= port.iw - 2 && Math.abs(port.page[2] / port.page[3] - 420 / 297) < 0.01, JSON.stringify(port));
       return out;
     },
     { before: w.before, initScript: ALB_OWNER, contextOptions: MOBILE });
@@ -15513,6 +15522,435 @@ for (const [name, n, dup, expectRe] of [
       ok('no handler ran, no stray <img src=x>, no script element, no on* attribute', r.xss === null && !r.strayImg && r.onerr === 0 && r.scripts === 0, JSON.stringify(r));
       ok('every <img> points at the Worker', r.imgsOk);
       ok('no file name is printed in the viewer at all', !/IMG_0|onerror|精修/.test(r.text), r.text);
+      return out;
+    },
+    { before: w.before, initScript: ALB_OWNER, contextOptions: ALB_DESK });
+}
+
+// ── 7. the A4 album: a single-page cover, spreads of two A4 pages, at most four photos a page,
+//      only a through-spread crosses the fold — measured on real pixels, desktop and phone
+const albGoTo = async (page, label) => {
+  for (let i = 0; i < 80; i++) {
+    if ((await albSnap(page)).label === label) return true;
+    const s = await albSnap(page);
+    if (s.nextDis) return false;
+    await page.click('#albumNext');
+    await page.waitForTimeout(30);
+  }
+  return false;
+};
+// what the current page looks like: its box, every slot as 0..1 fractions of it, the template it claims
+const albPageGeo = page => page.evaluate(() => {
+  const cur = document.querySelector('.album-slide[data-current="true"] .album-page');
+  const pr = cur.getBoundingClientRect();
+  const slots = [...cur.querySelectorAll('.album-slot')].map(b => {
+    const r = b.getBoundingClientRect();
+    return { l: (r.left - pr.left) / pr.width, r: (r.right - pr.left) / pr.width, t: (r.top - pr.top) / pr.height, b: (r.bottom - pr.top) / pr.height, w: r.width, h: r.height,
+      img: !!b.querySelector('img') };
+  });
+  const tpl = typeof SpreadTemplates !== 'undefined' ? SpreadTemplates.byId(cur.dataset.layout) : null;
+  return { kind: cur.dataset.kind, layout: cur.dataset.layout, w: pr.width, h: pr.height, slots,
+    hero: !!tpl && tpl.tags.includes('hero'), tplSlots: tpl ? tpl.slots.length : null,
+    foldAfter: getComputedStyle(cur, '::after').content, label: document.getElementById('albumLabel').textContent };
+});
+for (const [label, co, init] of [['desktop 1280', ALB_DESK, ALB_OWNER], ['phone 390', MOBILE, ALB_VIEWER]]) {
+  const w = albumWorld({ n: 44, dup: { 4: 3 } });
+  await suite(`album preview spreads ${label} — A4 cover page, 1.4142 spreads, at most 4 photos a page, only a hero crosses the fold`,
+    `${base}/index.html?t=TOK`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('#albumPreviewBtn', { timeout: 5000 });
+      await page.waitForSelector('.photo-card', { timeout: 5000 });
+      if (label.startsWith('phone')) await page.tap('#albumPreviewBtn'); else await page.click('#albumPreviewBtn');
+      await albReady(page);
+      const geos = [];
+      let guard = 0;
+      for (;;) {
+        await page.waitForTimeout(40);
+        geos.push(await albPageGeo(page));
+        if ((await albSnap(page)).nextDis || guard++ > 60) break;
+        await page.click('#albumNext');
+        await page.waitForFunction(n => document.querySelector('.album-slide[data-current="true"]')?.dataset.index === String(n), geos.length, { timeout: 4000 });
+        await page.waitForTimeout(280);
+      }
+      const cover = geos[0], spreads = geos.slice(1);
+      ok('control: a real book — a cover and at least 6 spreads', cover.kind === 'cover' && spreads.length >= 6 && spreads.every(g => g.kind === 'spread'), `${spreads.length} spreads`);
+      ok('the cover is one A4 portrait page with exactly one photo, and no fold', Math.abs(cover.w / cover.h - 210 / 297) < 0.008 && cover.slots.length === 1 && cover.slots[0].img && cover.foldAfter === 'none', JSON.stringify([cover.w, cover.h, cover.slots.length, cover.foldAfter]));
+      ok('every spread is two A4 pages side by side (420 : 297 = 1.4142)', spreads.every(g => Math.abs(g.w / g.h - 420 / 297) < 0.01), JSON.stringify(spreads.map(g => +(g.w / g.h).toFixed(3))));
+      ok('and a spread shows the fold (the shade down its middle)', spreads.every(g => g.foldAfter !== 'none'), spreads.map(g => g.foldAfter).join());
+      ok('every slot of a spread carries a photo and matches its template (the count, not just the shape)', spreads.every(g => g.tplSlots === g.slots.length && g.slots.every(s => s.img)), JSON.stringify(spreads.map(g => [g.layout, g.tplSlots, g.slots.length])));
+      const eps = 0.004;
+      const face = g => ({ left: g.slots.filter(s => s.r <= 0.5 + eps).length, right: g.slots.filter(s => s.l >= 0.5 - eps).length, span: g.slots.filter(s => s.l < 0.5 - eps && s.r > 0.5 + eps).length });
+      ok('at most 4 photos on each page of every spread', spreads.every(g => { const f = face(g); return f.left <= 4 && f.right <= 4; }), JSON.stringify(spreads.map(g => face(g))));
+      ok('control: the counting is real — some page holds 3 or more photos and some spread holds 5 or more', spreads.some(g => { const f = face(g); return f.left >= 3 || f.right >= 3; }) && Math.max(...spreads.map(g => g.slots.length)) >= 5, JSON.stringify(spreads.map(g => g.slots.length)));
+      ok('only a through-spread (hero template) has a photo across the fold, and it has just one', spreads.every(g => { const f = face(g); return f.span === 0 || (g.hero && f.span === 1); }), JSON.stringify(spreads.map(g => [g.layout, g.hero, face(g).span])));
+      ok('every photo is on one page or the other, or across the fold: nothing is cut by it', spreads.every(g => { const f = face(g); return f.left + f.right + f.span === g.slots.length; }));
+      const overlap = spreads.filter(g => g.slots.some((a, i) => g.slots.some((b, j) => j > i && Math.min(a.r, b.r) - Math.max(a.l, b.l) > 0.003 && Math.min(a.b, b.b) - Math.max(a.t, b.t) > 0.003)));
+      ok('no two photos overlap, and none leaves the page', overlap.length === 0 && spreads.every(g => g.slots.every(s => s.l >= -0.002 && s.r <= 1.002 && s.t >= -0.002 && s.b <= 1.002)), overlap.map(g => g.layout).join());
+      ok('no slot is under 25 mm at A4 (420 mm across the spread): the shapes stay legible', spreads.every(g => g.slots.every(s => (s.r - s.l) * 420 >= 24.5 && (s.b - s.t) * 297 >= 24.5)));
+      ok('variety on screen: at least 6 different templates in the book', new Set(spreads.map(g => g.layout)).size >= 6, JSON.stringify(spreads.map(g => g.layout)));
+      ok('never the same template on two spreads running', spreads.every((g, i) => i === 0 || g.layout !== spreads[i - 1].layout));
+      const phone = label.startsWith('phone');
+      const sp = spreads[1];
+      if (phone) ok('on a 390px phone a spread is the whole width and about 390 x 276', sp.w >= 388 && sp.w <= 390.5 && Math.abs(sp.h - 276) <= 2, `${sp.w}x${sp.h}`);
+      else ok('on a desktop the spread is large (over 900px wide) and inside the window', sp.w > 900 && sp.w <= 1280 - 40, `${sp.w}`);
+      const sw = await page.evaluate(() => ({ sw: document.documentElement.scrollWidth, iw: innerWidth }));
+      ok('no sideways scroll', sw.sw <= sw.iw, JSON.stringify(sw));
+      await albGoTo(page, '2 / ' + spreads.length);
+      await page.waitForTimeout(350);
+      await albShot(page, `spread-${label.replace(' ', '-')}`);
+      return out;
+    },
+    { before: w.before, initScript: init, contextOptions: co });
+}
+
+// ── 8. zoom on a phone: double tap, pinch, pan, and the swipe that must not flip while zoomed
+const albZ = page => page.evaluate(() => {
+  const st = document.getElementById('albumStage');
+  const pg = document.querySelector('.album-slide[data-current="true"] .album-page');
+  const m = new DOMMatrix(getComputedStyle(pg).transform);
+  const r = pg.getBoundingClientRect(), sr = st.getBoundingClientRect();
+  return { s: m.a, x: m.e, y: m.f, attr: st.dataset.zoom ?? null, label: document.getElementById('albumLabel')?.textContent ?? '',
+    page: { l: r.left, r: r.right, t: r.top, b: r.bottom, w: r.width, h: r.height }, stage: { l: sr.left, r: sr.right, t: sr.top, b: sr.bottom, w: sr.width, h: sr.height },
+    touchAction: getComputedStyle(st).touchAction, scrollY: window.scrollY, scrollX: window.scrollX, docScroll: document.documentElement.scrollTop };
+});
+const near = (a, b, tol) => Math.abs(a - b) <= tol;
+{
+  const w = albumWorld({ n: 40 });
+  await suite('album preview zoom 390px — double tap 2.5x and back, pinch 1x-4x, pan inside the edges, no flip while zoomed, flip again after',
+    `${base}/index.html?t=TOK`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('#albumPreviewBtn', { timeout: 5000 });
+      await page.waitForSelector('.photo-card', { timeout: 5000 });
+      const logStart = w.log.length;
+      await page.tap('#albumPreviewBtn');
+      await albReady(page);
+      await page.tap('#albumNext');
+      await page.waitForFunction(() => document.querySelector('.album-slide[data-current="true"]')?.dataset.index === '1', null, { timeout: 4000 });
+      await page.waitForTimeout(350);
+      const z0 = await albZ(page);
+      const lab = z0.label;
+      ok('start: a spread at 1x, nothing moved, the stage takes the touches itself (touch-action none)', z0.s === 1 && near(z0.x, 0, 0.5) && near(z0.y, 0, 0.5) && z0.touchAction === 'none' && z0.attr === '1.00', JSON.stringify(z0));
+      ok('control: this is a spread of 390 px (the whole width)', z0.page.w >= 388, JSON.stringify(z0.page));
+
+      // double tap off-centre: 2.5x, and the spot you tapped stays under the finger
+      const tapX = z0.stage.l + z0.stage.w / 2 + 70, tapY = z0.stage.t + z0.stage.h / 2 - 20;
+      const u = (tapX - z0.page.l) / z0.page.w, v = (tapY - z0.page.t) / z0.page.h;
+      await doubleTapTouch(page, '#albumStage', tapX, tapY, 100);
+      await page.waitForTimeout(450);
+      const z1 = await albZ(page);
+      ok('a double tap zooms to 2.5x', near(z1.s, 2.5, 0.02) && z1.attr === '2.50', JSON.stringify([z1.s, z1.attr]));
+      // sideways the page is wider than the window, so the tapped spot can stay put; vertically the 2.5x
+      // spread (about 690px) is still shorter than the stage, so it stays centred rather than leaving a gap
+      ok('the tapped spot is still under the finger (sideways), and the page stays centred up and down while it is shorter than the window',
+        near(z1.page.l + u * z1.page.w, tapX, 3) && (z1.page.h > z1.stage.h + 1 ? near(z1.page.t + v * z1.page.h, tapY, 3) : near((z1.page.t + z1.page.b) / 2, (z1.stage.t + z1.stage.b) / 2, 1)), JSON.stringify([z1.page, z1.stage, u, v, tapX, tapY]));
+      ok('the page is bigger than the window now, and the label did not change (no flip)', z1.page.w > z1.stage.w * 2 && z1.label === lab, JSON.stringify([z1.page.w, z1.label, lab]));
+      ok('control: the zoomed page still covers the window (no blank edge) on the sides it is wider than', z1.page.l <= z1.stage.l + 0.6 && z1.page.r >= z1.stage.r - 0.6, JSON.stringify([z1.page, z1.stage]));
+      await albShot(page, 'zoom-2.5-390');
+
+      // a swipe while zoomed pans, never flips
+      await swipeTouch(page, '#albumStage', 300, 400, 180, 400);
+      await page.waitForTimeout(100);
+      const z2 = await albZ(page);
+      ok('a swipe while zoomed does not flip the page', z2.label === lab, z2.label);
+      ok('...it moves the picture by about the finger (120px left)', z2.x < z1.x - 90 && z2.x > z1.x - 130, JSON.stringify([z1.x, z2.x]));
+      await swipeTouch(page, '#albumStage', 180, 400, 330, 430);
+      const z3 = await albZ(page);
+      ok('...and back (150px right, 30px down: the picture follows, still inside its edges)', z3.label === lab && z3.x > z2.x + 100 && z3.page.l <= z3.stage.l + 0.6, JSON.stringify([z2.x, z3.x]));
+      for (let i = 0; i < 6; i++) await swipeTouch(page, '#albumStage', 40, 400, 360, 400);
+      const zl = await albZ(page);
+      ok('dragged far right: stops with the left edge of the page at the window edge, no blank beyond', near(zl.page.l, zl.stage.l, 0.8) && zl.label === lab, JSON.stringify([zl.page, zl.stage, zl.label]));
+      for (let i = 0; i < 8; i++) await swipeTouch(page, '#albumStage', 360, 400, 40, 400);
+      const zr = await albZ(page);
+      ok('dragged far left: stops with the right edge at the window edge', near(zr.page.r, zr.stage.r, 0.8) && zr.label === lab, JSON.stringify([zr.page, zr.stage]));
+      ok('control: the two stops are really different places (the page is bigger than the window)', zr.x < zl.x - 300, JSON.stringify([zl.x, zr.x]));
+      // a touch at the screen edge (the browser's back gesture) is left alone, zoomed or not
+      await swipeTouch(page, '#albumStage', 6, 400, 200, 400);
+      await swipeTouch(page, '#albumStage', 384, 400, 150, 400);
+      const ze = await albZ(page);
+      ok('a drag that starts at the screen edge is ignored while zoomed too', near(ze.x, zr.x, 0.5) && ze.label === lab, JSON.stringify([zr.x, ze.x]));
+      const sc = await albZ(page);
+      ok('the page behind never scrolled (not at any point)', sc.scrollY === 0 && sc.scrollX === 0 && sc.docScroll === 0);
+
+      // double tap again: back to 1x, centred
+      await doubleTapTouch(page, '#albumStage', 200, 380, 100);
+      await page.waitForTimeout(450);
+      const z4 = await albZ(page);
+      ok('a second double tap restores 1x, centred', z4.s === 1 && near(z4.x, 0, 0.5) && near(z4.y, 0, 0.5) && z4.attr === '1.00', JSON.stringify([z4.s, z4.x, z4.y, z4.attr]));
+      await swipeTouch(page, '#albumStage', 300, 400, 100, 400);
+      await page.waitForTimeout(350);
+      ok('and the swipe flips again once back at 1x', (await albZ(page)).label !== lab, (await albZ(page)).label);
+
+      // slow or far apart taps are not a double tap (positive control above: 100 ms did zoom)
+      const lab2 = (await albZ(page)).label;
+      await doubleTapTouch(page, '#albumStage', 200, 380, 600);
+      await page.waitForTimeout(300);
+      ok('two taps 600 ms apart do not zoom', (await albZ(page)).s === 1);
+      await tapTouch(page, '#albumStage', 100, 300);
+      await page.waitForTimeout(100);
+      await tapTouch(page, '#albumStage', 300, 500);
+      await page.waitForTimeout(300);
+      ok('two taps far apart do not zoom', (await albZ(page)).s === 1);
+      await tapTouch(page, '#albumStage', 200, 400);
+      await page.waitForTimeout(300);
+      ok('a single tap does not zoom, and does not flip', (await albZ(page)).s === 1 && (await albZ(page)).label === lab2);
+
+      // pinch
+      await pinchTouch(page, '#albumStage', 195, 400, 80, 240);
+      await page.waitForTimeout(150);
+      const p1 = await albZ(page);
+      ok('pinching out 3x zooms to 3x (and does not flip)', near(p1.s, 3, 0.03) && p1.label === lab2, JSON.stringify([p1.s, p1.label]));
+      await pinchTouch(page, '#albumStage', 195, 400, 100, 700);
+      const p2 = await albZ(page);
+      ok('pinching further stops at 4x', near(p2.s, 4, 0.01), String(p2.s));
+      ok('...and the page still covers the window', p2.page.l <= p2.stage.l + 0.8 && p2.page.r >= p2.stage.r - 0.8, JSON.stringify([p2.page, p2.stage]));
+      await pinchTouch(page, '#albumStage', 195, 400, 300, 150);
+      const p3 = await albZ(page);
+      ok('pinching in lowers it (4x -> 2x) and is anchored, not jumping off the page', near(p3.s, 2, 0.05) && p3.page.l <= p3.stage.l + 0.8, JSON.stringify([p3.s, p3.page]));
+      await pinchTouch(page, '#albumStage', 195, 400, 300, 20);
+      const p4 = await albZ(page);
+      ok('pinching in past 1x lands on exactly 1x and recentres', p4.s === 1 && near(p4.x, 0, 0.5) && near(p4.y, 0, 0.5), JSON.stringify([p4.s, p4.x, p4.y]));
+      await swipeTouch(page, '#albumStage', 300, 400, 100, 400);
+      await page.waitForTimeout(350);
+      ok('after a pinch back to 1x the swipe flips', (await albZ(page)).label !== lab2);
+
+      // flipping by the buttons while zoomed lands on a page at 1x
+      await doubleTapTouch(page, '#albumStage', 200, 380, 100);
+      await page.waitForTimeout(450);
+      ok('zoomed again', near((await albZ(page)).s, 2.5, 0.02));
+      const lab3 = (await albZ(page)).label;
+      await page.tap('#albumNext');
+      await page.waitForTimeout(350);
+      const nx = await albZ(page);
+      ok('下一頁 works while zoomed and the next page is at 1x', nx.label !== lab3 && nx.s === 1 && near(nx.x, 0, 0.5), JSON.stringify([lab3, nx.label, nx.s]));
+
+      // only thumbnails, nothing written, however much it was zoomed
+      const during = w.log.slice(logStart);
+      const reads = during.filter(r => r.key && w.keys.has(r.key));
+      ok('every photo read is a thumbnail bucket, zoom asked for nothing else', reads.length > 0 && reads.every(r => ['400', '1200', '1600'].includes(r.w) && r.download === null), JSON.stringify(reads.filter(r => !['400', '1200', '1600'].includes(r.w)).slice(0, 3)));
+      ok('no write request', during.every(r => r.method === 'GET'));
+      return out;
+    },
+    { before: w.before, initScript: ALB_VIEWER, contextOptions: MOBILE });
+}
+
+// real touches through the browser (CDP): the double tap and the pinch the page really receives
+{
+  const w = albumWorld({ n: 30 });
+  await suite('album preview zoom 390px — real touch (CDP): double tap, drag and pinch work through the browser',
+    `${base}/index.html?t=TOK`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('#albumPreviewBtn', { timeout: 5000 });
+      await page.waitForSelector('.photo-card', { timeout: 5000 });
+      await page.tap('#albumPreviewBtn');
+      await albReady(page);
+      await page.tap('#albumNext');
+      await page.waitForFunction(() => document.querySelector('.album-slide[data-current="true"]')?.dataset.index === '1', null, { timeout: 4000 });
+      await page.waitForTimeout(350);
+      const rt = await realTouch(page);
+      const lab = (await albZ(page)).label;
+      await rt.doubleTap(195, 380);
+      await page.waitForTimeout(450);
+      const a = await albZ(page);
+      ok('a real double tap zooms to 2.5x', near(a.s, 2.5, 0.03), JSON.stringify([a.s, a.label]));
+      await rt.drag(300, 420, 200, 420);
+      const b = await albZ(page);
+      ok('a real drag pans it (no flip, no page scroll)', b.label === lab && b.x < a.x - 60 && b.scrollY === 0, JSON.stringify([a.x, b.x, b.label, b.scrollY]));
+      await rt.doubleTap(200, 380);
+      await page.waitForTimeout(450);
+      ok('a real double tap restores', (await albZ(page)).s === 1);
+      await rt.pinch(195, 400, 80, 240);
+      await page.waitForTimeout(200);
+      const c = await albZ(page);
+      ok('a real two-finger pinch zooms (about 3x) and does not flip', near(c.s, 3, 0.2) && c.label === lab, JSON.stringify([c.s, c.label]));
+      await rt.drag(300, 420, 100, 420);
+      ok('a real drag at 3x pans, still no flip', (await albZ(page)).label === lab);
+      await rt.pinch(195, 400, 300, 20);
+      const d = await albZ(page);
+      ok('a real pinch in returns to 1x', d.s === 1 && near(d.x, 0, 0.5), JSON.stringify([d.s, d.x]));
+      await rt.drag(300, 420, 90, 425);
+      await page.waitForTimeout(350);
+      ok('and a real swipe flips again', (await albZ(page)).label !== lab);
+      return out;
+    },
+    { before: w.before, initScript: ALB_VIEWER, contextOptions: MOBILE });
+}
+
+// ── 9. zoom on a desktop: double click, wheel, mouse drag
+{
+  const w = albumWorld({ n: 36 });
+  await suite('album preview zoom 1280px — double click, wheel and drag; arrow keys and the buttons still flip',
+    `${base}/index.html?t=TOK`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('#albumPreviewBtn', { timeout: 5000 });
+      await page.waitForSelector('.photo-card', { timeout: 5000 });
+      const aliveStart = await page.evaluate(() => window.__alive.length);
+      await page.click('#albumPreviewBtn');
+      await albReady(page);
+      await page.click('#albumNext');
+      await page.waitForFunction(() => document.querySelector('.album-slide[data-current="true"]')?.dataset.index === '1', null, { timeout: 4000 });
+      await page.waitForTimeout(350);
+      const z0 = await albZ(page);
+      const cx = z0.stage.l + z0.stage.w / 2, cy = z0.stage.t + z0.stage.h / 2;
+      await page.mouse.dblclick(cx + 120, cy - 30);
+      await page.waitForTimeout(450);
+      const z1 = await albZ(page);
+      ok('a double click zooms to 2.5x about the cursor', near(z1.s, 2.5, 0.02) && z1.attr === '2.50', JSON.stringify([z1.s, z1.attr]));
+      const u = (cx + 120 - z0.page.l) / z0.page.w;
+      ok('the spot under the cursor stays there', near(z1.page.l + u * z1.page.w, cx + 120, 3), JSON.stringify([u, z1.page, cx]));
+      await page.mouse.move(cx, cy);
+      await page.mouse.down();
+      await page.mouse.move(cx - 60, cy - 20, { steps: 5 });
+      await page.mouse.move(cx - 160, cy - 40, { steps: 5 });
+      await page.mouse.up();
+      const z2 = await albZ(page);
+      ok('dragging with the mouse pans (about 160px), without flipping', z2.x < z1.x - 120 && z2.label === z1.label, JSON.stringify([z1.x, z2.x]));
+      ok('the cursor says it can be dragged while zoomed', await page.evaluate(() => /grab|move/.test(getComputedStyle(document.getElementById('albumStage')).cursor)));
+      await page.mouse.dblclick(cx, cy);
+      await page.waitForTimeout(450);
+      const z3 = await albZ(page);
+      ok('a second double click restores 1x, centred', z3.s === 1 && near(z3.x, 0, 0.5) && near(z3.y, 0, 0.5), JSON.stringify([z3.s, z3.x, z3.y]));
+      await page.mouse.move(cx, cy);
+      await page.mouse.wheel(0, -400);
+      await page.waitForTimeout(80);
+      const w1 = await albZ(page);
+      ok('the wheel zooms in (up) about the cursor', w1.s > 1.4 && w1.s < 4, String(w1.s));
+      await page.mouse.wheel(0, -3000);
+      await page.waitForTimeout(80);
+      ok('and stops at 4x', near((await albZ(page)).s, 4, 0.01));
+      await page.mouse.wheel(0, 3000);
+      await page.waitForTimeout(80);
+      const w2 = await albZ(page);
+      ok('the wheel the other way returns to exactly 1x, centred', w2.s === 1 && near(w2.x, 0, 0.5) && near(w2.y, 0, 0.5), JSON.stringify([w2.s, w2.x, w2.y]));
+      // a flip with the keyboard or the buttons from a zoomed page lands on a page at 1x
+      await page.mouse.dblclick(cx, cy);
+      await page.waitForTimeout(450);
+      const lab = (await albZ(page)).label;
+      await page.keyboard.press('ArrowRight');
+      await page.waitForTimeout(350);
+      const k = await albZ(page);
+      ok('→ while zoomed flips one page, and that page is at 1x', k.label !== lab && k.s === 1, JSON.stringify([lab, k.label, k.s]));
+      await page.mouse.dblclick(cx, cy);
+      await page.waitForTimeout(450);
+      await page.click('#albumPrev');
+      await page.waitForTimeout(350);
+      ok('‹ while zoomed too', (await albZ(page)).s === 1 && (await albZ(page)).label === lab);
+      // the cover zooms too
+      await page.keyboard.press('ArrowLeft');
+      await page.waitForTimeout(350);
+      await page.mouse.dblclick(cx, cy);
+      await page.waitForTimeout(450);
+      const c = await albZ(page);
+      ok('the single-page cover zooms and pans the same way', c.label === '封面' && near(c.s, 2.5, 0.02), JSON.stringify([c.label, c.s]));
+      await page.keyboard.press('Escape');
+      await page.waitForFunction(() => !document.getElementById('albumViewer'), null, { timeout: 3000 });
+      const after = await page.evaluate(() => ({ alive: window.__alive.length, focus: document.activeElement?.id }));
+      ok('closing from a zoomed page: no listener left on window / document, focus back on the entry', after.alive === aliveStart && after.focus === 'albumPreviewBtn', JSON.stringify([after, aliveStart]));
+      await page.click('#albumPreviewBtn');
+      await albReady(page);
+      ok('opening again starts at the cover, 1x', (await albZ(page)).label === '封面' && (await albZ(page)).s === 1);
+      return out;
+    },
+    { before: w.before, initScript: ALB_OWNER, contextOptions: ALB_DESK });
+}
+
+// ── 10. the hint: phone width only, fades by itself or at the first touch, leaves no timer behind
+{
+  const w = albumWorld({ n: 20 });
+  await suite('album preview hint 390px — one line 雙擊放大・橫放手機看更大, fades by itself; the first touch also clears it; no timer left',
+    `${base}/index.html?t=TOK`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('#albumPreviewBtn', { timeout: 5000 });
+      await page.waitForSelector('.photo-card', { timeout: 5000 });
+      const timerStart = await page.evaluate(() => window.__timerSeq());
+      await page.tap('#albumPreviewBtn');
+      await albReady(page);
+      const h = await page.evaluate(() => { const e = document.getElementById('albumHint'); if (!e) return null; const r = e.getBoundingClientRect(), s = document.getElementById('albumStage').getBoundingClientRect();
+        return { text: e.textContent, op: parseFloat(getComputedStyle(e).opacity), inside: r.left >= s.left && r.right <= s.right && r.top >= s.top && r.bottom <= s.bottom, w: r.width, h: r.height, lines: Math.round((r.height - parseFloat(getComputedStyle(e).paddingTop) - parseFloat(getComputedStyle(e).paddingBottom)) / parseFloat(getComputedStyle(e).lineHeight)), pe: getComputedStyle(e).pointerEvents }; });
+      ok('the hint is there on a phone, in one line, with the wording', h && h.text === '雙擊放大・橫放手機看更大' && h.lines <= 1 && h.w > 100, JSON.stringify(h));
+      ok('...visible, inside the stage, and it does not catch touches', h && h.op > 0.8 && h.inside && h.pe === 'none', JSON.stringify(h));
+      await albShot(page, 'hint-390');
+      await page.waitForFunction(() => !document.getElementById('albumHint'), null, { timeout: 9000 });
+      ok('it fades away by itself after a few seconds', (await page.$('#albumHint')) === null);
+      await page.tap('#albumClose');
+      await page.waitForFunction(() => !document.getElementById('albumViewer'), null, { timeout: 3000 });
+      // open again: the first touch clears it before the timer would
+      await page.tap('#albumPreviewBtn');
+      await albReady(page);
+      ok('opening again shows it again', (await page.$('#albumHint')) !== null);
+      const tSwipe = Date.now();
+      await swipeTouch(page, '#albumStage', 300, 400, 100, 400);
+      await page.waitForFunction(() => { const e = document.getElementById('albumHint'); return !e || parseFloat(getComputedStyle(e).opacity) < 0.05; }, null, { timeout: 2500 });
+      ok('the first swipe clears it within 2.5 s (the timer alone takes 4.5 s)', Date.now() - tSwipe < 2500, String(Date.now() - tSwipe));
+      await page.tap('#albumClose');
+      await page.waitForFunction(() => !document.getElementById('albumViewer'), null, { timeout: 3000 });
+      await page.tap('#albumPreviewBtn');
+      await albReady(page);
+      await page.tap('#albumClose');
+      await page.waitForFunction(() => !document.getElementById('albumViewer'), null, { timeout: 3000 });
+      await page.waitForTimeout(800);
+      ok('closed while the hint was up: no timer of the album is left running', (await albPending(page, timerStart)).length === 0, JSON.stringify(await albPending(page, timerStart)));
+      return out;
+    },
+    { before: w.before, initScript: ALB_VIEWER, contextOptions: MOBILE });
+}
+{
+  const w = albumWorld({ n: 20 });
+  await suite('album preview hint 1280px — no hint on a desktop, and a short window (landscape phone) has none either',
+    `${base}/index.html?t=TOK`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('#albumPreviewBtn', { timeout: 5000 });
+      await page.waitForSelector('.photo-card', { timeout: 5000 });
+      await page.click('#albumPreviewBtn');
+      await albReady(page);
+      await page.waitForTimeout(300);
+      ok('control: the viewer is up and showing a page', (await albSnap(page)).label === '封面');
+      ok('no hint on a desktop', (await page.$('#albumHint')) === null);
+      await page.setViewportSize({ width: 844, height: 390 });
+      await page.waitForTimeout(300);
+      ok('the hint does not appear because the window got smaller later either', (await page.$('#albumHint')) === null);
+      return out;
+    },
+    { before: w.before, initScript: ALB_OWNER, contextOptions: ALB_DESK });
+}
+
+// ── 11. the back cover: none unless the plan asks for one; a blank A4 page when it does
+for (const [name, planOpts, expectBack] of [['no back cover by default', null, false], ['a back cover when asked (PLAN_OPTS.back)', { back: true }, true]]) {
+  const w = albumWorld({ n: 12 });
+  await suite(`album preview — ${name}`,
+    `${base}/index.html?t=TOK`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('#albumPreviewBtn', { timeout: 5000 });
+      await page.waitForSelector('.photo-card', { timeout: 5000 });
+      if (planOpts) await page.evaluate(o => { AlbumPreview.PLAN_OPTS = o; }, planOpts);
+      await page.click('#albumPreviewBtn');
+      await albReady(page);
+      let guard = 0;
+      while (!(await albSnap(page)).nextDis && guard++ < 40) { await page.keyboard.press('ArrowRight'); await page.waitForTimeout(40); }
+      await page.waitForTimeout(350);
+      const g = await albPageGeo(page);
+      const snap = await albSnap(page);
+      if (expectBack) {
+        ok('the last page is the 封底: a blank A4 portrait page, no photo', g.kind === 'back' && snap.label === '封底' && g.slots.length === 0 && Math.abs(g.w / g.h - 210 / 297) < 0.008, JSON.stringify([g.kind, snap.label, g.slots.length, g.w, g.h]));
+        ok('control: the page before it is a spread (the back comes after the inside)', await page.evaluate(() => { document.getElementById('albumPrev').click(); return true; }));
+        await page.waitForTimeout(350);
+        ok('...labelled n / total, a spread', (await albPageGeo(page)).kind === 'spread' && /^\d+ \/ \d+$/.test((await albSnap(page)).label));
+      } else {
+        ok('the last page is a spread (no back cover unless asked)', g.kind === 'spread' && /^\d+ \/ \d+$/.test(snap.label), JSON.stringify([g.kind, snap.label]));
+      }
       return out;
     },
     { before: w.before, initScript: ALB_OWNER, contextOptions: ALB_DESK });
