@@ -342,11 +342,11 @@
   </div>
 </div>
 
-<script src="js/shoot-types.js?v=20261004a"></script>
-<script src="js/build-version.js?v=20261004a"></script>
-<script src="js/side-nav.js?v=20261004a"></script>
-<script src="js/orders-common.js?v=20261004a"></script>
-<script src="js/selection-export.js?v=20261004a"></script>
+<script src="js/shoot-types.js?v=20261004b"></script>
+<script src="js/build-version.js?v=20261004b"></script>
+<script src="js/side-nav.js?v=20261004b"></script>
+<script src="js/orders-common.js?v=20261004b"></script>
+<script src="js/selection-export.js?v=20261004b"></script>
 <script>
 (function() {
   const WORKER_URL = 'https://imagepicker.hotichen.workers.dev';
@@ -1037,7 +1037,7 @@
     document.getElementById('pd-reopen-btn').addEventListener('click', () => projectAction('reopen'));
     // 交件 / 毛片下載 have their own blocks (docs/delivery.md).
     currentProject = project;
-    // Delivery state is delivered_at alone. After 取消交件 the Worker keeps
+    // Delivery state is delivered_at alone. After 取消交件 or 開放修改 the Worker keeps
     // final_folders, so an undelivered project can still carry them: they
     // pre-fill the chooser (editable; nothing is sent until 交件 is pressed).
     finalDraft = lastFinalFolders(project);
@@ -1145,7 +1145,7 @@
   }
 
   // The finals the Worker still holds for a project that is NOT delivered
-  // (it keeps them across 取消交件); [] when delivered or none.
+  // (it keeps them across 取消交件 and 開放修改); [] when delivered or none.
   function lastFinalFolders(project) {
     if (project.delivered_at || !Array.isArray(project.final_folders)) return [];
     return project.final_folders.slice();
