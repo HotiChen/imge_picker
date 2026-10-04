@@ -7383,7 +7383,7 @@ await suite('index.html — 專案選片：沒有 ?project= 時，攝影師模�
 {
   const m = pickFakeWorker({ ownerName: 'Oscar', projectId: 'proj-trim' });
   m.state.selections.set('20260819/a.jpg', { rating: 5, note: '', updated_by: 'picker-0', updated_at: '2026-01-01T00:00:00Z' });
-  await suite('index.html — 專案選片：側邊欄移除來源/星級/FLAGS/標註過濾，保留排序與備份（不含重設此資料夾）',
+  await suite('index.html — 專案選片：側邊欄移除來源輸入/星級/FLAGS/標註過濾/排序/DATA（只剩 01 / SOURCE 標題）',
     `${base}/index.html?project=proj-trim`,
     async page => {
       const out = [];
@@ -7400,6 +7400,7 @@ await suite('index.html — 專案選片：沒有 ?project= 時，攝影師模�
         backupBtn: !!document.getElementById('backupDataBtn'),
         resetCurrentBtn: !!document.getElementById('resetCurrentDataBtn'),
         resetAllBtn: !!document.getElementById('resetAllDataBtn'),
+        sourceTitle: [...document.querySelectorAll('aside.sidebar .side-title')].some(e => e.textContent.trim() === '01 / SOURCE'),
         bulkStars: !!document.getElementById('bulkStars'),
         clearRatingBtn: !!document.querySelector('#bulkActionBar button[onclick="app.setBulkRating(0)"]'),
       }));
@@ -7409,15 +7410,245 @@ await suite('index.html — 專案選片：沒有 ?project= 時，攝影師模�
       ok('只看選取 removed', r.filterSelectedBtn === false);
       ok('FLAGS section removed', r.flagsGrid === false);
       ok('ANNOTATION filter removed', r.toggleGroup === false);
-      ok('sort is kept', r.sortSelect === true);
-      ok('匯出備份 JSON is kept', r.backupBtn === true);
+      ok('positive: 01 / SOURCE title is still there', r.sourceTitle === true);
+      ok('sort select removed (the sidebar keeps only 01 / SOURCE)', r.sortSelect === false);
+      ok('匯出備份 JSON removed', r.backupBtn === false);
       ok('重設此資料夾 removed (dangerous here)', r.resetCurrentBtn === false);
-      ok('清除所有快取 is kept', r.resetAllBtn === true);
+      ok('清除所有快取 removed', r.resetAllBtn === false);
       ok('bulk-star buttons removed (would write ratings)', r.bulkStars === false);
       ok('清空評分 removed too', r.clearRatingBtn === false);
       return out;
     },
     { before: m.attach, initScript: ADMIN });
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// index.html?project= — chrome trim (task: 只留 01 / SOURCE，頂部不要 預約拍攝 /
+// 上傳 / 相本書). Removed from the DOM, never hidden (.btn{display:inline-flex}
+// beats [hidden]); every other mode keeps all of it.
+// ═══════════════════════════════════════════════════════════════════════════
+
+const RV_GONE_IDS = ['clearFiltersBtn', 'filterSelectedBtn', 'selectedCountBadge', 'starsAll', 'stars0', 'stars1', 'stars2',
+  'stars3', 'stars4', 'stars5', 'sortBy', 'backupDataBtn', 'resetCurrentDataBtn', 'resetAllDataBtn', 'syncSidebarSection',
+  'pickFilterBar', 'flagCountPick', 'flagCountReview', 'flagCountReject',
+  'studioBookingLink', 'uploadPageBtn', 'openBookEditorBtn'];
+const RV_GONE_SEL = ['.star-filter', '.star-filter-btn', '.toggle-group', '.toggle-btn', '.flags-grid',
+  'aside.sidebar select', 'aside.sidebar button', 'a[href*="upload.html"]', 'a[href*="book_editor"]'];
+// the words Tim named, searched in the text of the part of the page they lived in
+const RV_GONE_SIDEBAR_TEXT = ['02 / RATING', '03 / FLAGS', '04 / ANNOTATION', '05 / DATA', '排序', '清除', '匯出備份 JSON', '清除所有快取', '重設此資料夾'];
+const RV_GONE_HEADER_TEXT = ['預約拍攝', '上傳', '相本書'];
+// everything the trim must measure, in one evaluate
+const RV_CHROME = ({ ids, sels }) => {
+  const vis = el => {
+    if (!el) return false;
+    const cs = getComputedStyle(el), r = el.getBoundingClientRect();
+    return cs.display !== 'none' && cs.visibility !== 'hidden' && r.width > 0 && r.height > 0;
+  };
+  const sb = document.querySelector('aside.sidebar');
+  const hdr = document.querySelector('header.header');
+  const hr = document.querySelector('.header-right');
+  const txt = el => (el ? el.textContent : '');
+  const byId = id => document.getElementById(id);
+  return {
+    pv: !!(window.ProjectViewController && ProjectViewController.active) && document.body.classList.contains('pv-active'),
+    cards: document.querySelectorAll('.photo-card, .pv-list-row').length,
+    goneIds: ids.filter(id => byId(id)),
+    goneSels: sels.filter(s => document.querySelector(s)),
+    titles: sb ? [...sb.querySelectorAll('.side-title')].map(e => e.textContent.trim()) : null,
+    sections: sb ? sb.querySelectorAll(':scope > .sidebar-section').length : -1,
+    sbChildren: sb ? sb.children.length : -1,
+    sbText: txt(sb),
+    hdrText: txt(hdr),
+    hrVisible: hr ? [...hr.children].filter(vis).map(e => e.id || e.className) : null,
+    kept: {
+      sortPill: vis(byId('headerSortBtn')), sortPillText: txt(byId('headerSortBtn')),
+      viewBtn: vis(byId('headerViewBtn')), viewBtnText: txt(byId('headerViewBtn')),
+      avatar: vis(byId('userAvatarStudio')), avatarText: txt(byId('userAvatarStudio')),
+      logout: vis(byId('studio-logout')), logoutText: txt(byId('studio-logout')),
+      back: vis(byId('pvBackLink')), backText: txt(byId('pvBackLink')),
+      copy: vis(byId('pvCopyLinkBtn')), copyText: txt(byId('pvCopyLinkBtn')),
+      count: vis(byId('pvBannerText')), countText: txt(byId('pvBannerText')),
+      preview: vis(byId('previewPane')),
+      sidebarVisible: vis(sb),
+      sidebarToggle: !!byId('sidebarToggle'),
+    },
+    docW: document.documentElement.scrollWidth, winW: window.innerWidth,
+  };
+};
+const rvArgs = { ids: RV_GONE_IDS, sels: RV_GONE_SEL };
+// SHOTS_DIR=<dir> saves a screenshot per suite (visual review only; not part of the checks)
+async function rvShot(page, name) {
+  if (process.env.SHOTS_DIR) await page.screenshot({ path: `${process.env.SHOTS_DIR}/${name}.png` });
+}
+function rvFixture(projectId) {
+  const m = pickFakeWorker({ ownerName: 'Zed', projectId });
+  for (const k of ['a', 'b', 'c']) {
+    m.state.selections.set(`20260819/${k}.jpg`, { rating: 5, note: k === 'a' ? '請保留' : '', marks: null, updated_by: 'picker-0', updated_at: '2026-09-27T14:52:00.000Z' });
+  }
+  return m;
+}
+// console.error is part of the contract here (page errors are caught by suite()). The
+// browser's own "Failed to load resource" lines are network noise from the fake worker.
+function rvWatchConsole(m, errs) {
+  return async page => {
+    await m.attach(page);
+    page.on('console', msg => { if (msg.type() === 'error' && !/Failed to load resource/.test(msg.text())) errs.push(msg.text()); });
+  };
+}
+async function rvAssertChrome(page, ok) {
+  await page.waitForSelector('.photo-card', { timeout: 5000 });
+  await page.waitForSelector('#projectViewBanner:not([hidden])', { timeout: 5000 });
+  await page.waitForSelector('#studio-logout', { timeout: 5000 });
+  const r = await page.evaluate(RV_CHROME, rvArgs);
+  ok('positive: review mode really started (pv-active) and the grid has its 3 picks', r.pv && r.cards === 3, JSON.stringify({ pv: r.pv, cards: r.cards }));
+  ok('positive: the sidebar is rendered and holds the 01 / SOURCE title', !!r.titles && r.titles.includes('01 / SOURCE'), JSON.stringify(r.titles));
+  ok('the sidebar holds only that one section and title (no RATING / FLAGS / ANNOTATION / DATA, no leftover heading)',
+    r.sections === 1 && r.sbChildren === 1 && r.titles.length === 1 && r.titles[0] === '01 / SOURCE', JSON.stringify({ s: r.sections, c: r.sbChildren, t: r.titles }));
+  ok('none of the removed controls exist in the DOM (ids)', r.goneIds.length === 0, r.goneIds.join());
+  ok('none of the removed controls exist in the DOM (classes / tags)', r.goneSels.length === 0, r.goneSels.join());
+  ok('the sidebar text has none of 02 / RATING, 04 / ANNOTATION, 排序, 05 / DATA, 清除, 匯出備份 JSON, 清除所有快取',
+    RV_GONE_SIDEBAR_TEXT.every(t => !r.sbText.includes(t)), RV_GONE_SIDEBAR_TEXT.filter(t => r.sbText.includes(t)).join());
+  ok('the top bar has no 預約拍攝 / 上傳 / 相本書 text', RV_GONE_HEADER_TEXT.every(t => !r.hdrText.includes(t)),
+    RV_GONE_HEADER_TEXT.filter(t => r.hdrText.includes(t)).join());
+  ok('the right side of the top bar shows only the avatar and 登出 (no empty group or placeholder left)',
+    JSON.stringify(r.hrVisible) === JSON.stringify(['userAvatarStudio', 'studio-logout']), JSON.stringify(r.hrVisible));
+  ok('kept: 回專案 / 複製選片連結 / 張數列 are visible', r.kept.back && r.kept.copy && r.kept.count
+    && r.kept.backText.includes('回專案') && r.kept.copyText === '複製選片連結' && r.kept.countText.includes('Zed') && r.kept.countText.includes('3 張'), JSON.stringify(r.kept));
+  ok('kept: avatar and 登出 are visible', r.kept.avatar && r.kept.avatarText === 'HC' && r.kept.logout && r.kept.logoutText === '登出', JSON.stringify(r.kept));
+  ok('no horizontal page scroll', r.docW <= r.winW, `${r.docW}/${r.winW}`);
+  return r;
+}
+async function rvInteract(page, ok, errs) {
+  // use only what review mode keeps: open / next / close a photo, grid ↔ list, copy link
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+  await page.evaluate(() => document.querySelector('.photo-card').click());
+  await page.waitForSelector('#photoModal.active', { timeout: 5000 });
+  const n1 = await page.evaluate(() => document.getElementById('modalPhotoName').textContent);
+  await page.evaluate(() => document.getElementById('nextPhotoBtn').click());
+  await page.waitForTimeout(150);
+  const n2 = await page.evaluate(() => document.getElementById('modalPhotoName').textContent);
+  ok('positive: the preview opens and next moves to another photo', !!n1 && !!n2 && n1 !== n2, `${n1} -> ${n2}`);
+  await page.evaluate(() => document.getElementById('closeModal').click());
+  await page.waitForSelector('#photoModal', { state: 'hidden', timeout: 5000 });
+  // the same toggle a click on the header's 網格 button runs (driven from the page so a
+  // phone, which may hide the header centre, is covered the same way)
+  await page.evaluate(() => document.getElementById('headerViewBtn').click());
+  const list = await page.evaluate(() => ({ rows: document.querySelectorAll('.pv-list-row').length, label: document.getElementById('headerViewBtn').textContent }));
+  ok('positive: the 列表 toggle renders 3 rows', list.rows === 3 && list.label === '列表', JSON.stringify(list));
+  await page.evaluate(() => document.getElementById('headerViewBtn').click());
+  const grid = await page.evaluate(() => document.querySelectorAll('.photo-card').length);
+  ok('and back to the grid with 3 cards', grid === 3, String(grid));
+  await page.evaluate(() => document.getElementById('headerSortBtn').click());
+  await page.evaluate(() => document.getElementById('pvCopyLinkBtn').click());
+  await page.waitForTimeout(250);
+  const toastShown = await page.evaluate(() => document.querySelector('.toast-message')?.textContent);
+  ok('positive: 複製選片連結 answered (toast shown)', toastShown === '已複製選片連結', toastShown);
+  // app code that used to read the removed nodes must be a no-op, not a TypeError
+  const probe = await page.evaluate(() => {
+    try { app.updateStats(); app.applyFilters(); app.renderPhotoGrid(); return 'ok'; } catch (e) { return String(e); }
+  });
+  ok('updateStats / applyFilters / renderPhotoGrid run without the removed nodes', probe === 'ok', probe);
+  ok('zero console.error during load, open / next / close, grid ↔ list and copy link', errs.length === 0, errs.join(' | '));
+}
+
+{
+  const m = rvFixture('proj-chrome'); const errs = [];
+  await suite('review chrome (desktop 1280) — sidebar keeps only 01 / SOURCE; no 預約拍攝 / 上傳 / 相本書; everything else stays; zero errors',
+    `${base}/index.html?project=proj-chrome`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      const r = await rvAssertChrome(page, ok);
+      ok('kept: 排序 · 評分 ↓ and 網格 are visible in the top bar', r.kept.sortPill && r.kept.sortPillText === '排序 · 評分 ↓' && r.kept.viewBtn && r.kept.viewBtnText === '網格', JSON.stringify(r.kept));
+      ok('kept: the right PREVIEW column is still there', r.kept.preview === true);
+      ok('the sidebar column is still shown on a desktop', r.kept.sidebarVisible === true);
+      await rvShot(page, 'after-review-1280');
+      await rvInteract(page, ok, errs);
+      return out;
+    },
+    { before: rvWatchConsole(m, errs), initScript: ADMIN, contextOptions: { viewport: { width: 1280, height: 800 } } });
+}
+
+{
+  const m = rvFixture('proj-chrome-m'); const errs = [];
+  await suite('review chrome (phone 390) — same trim; the ☰ drawer would only hold the SOURCE title, so no empty drawer; zero errors',
+    `${base}/index.html?project=proj-chrome-m`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      const r = await rvAssertChrome(page, ok);
+      ok('no ☰ button (its drawer would hold nothing but a title), no backdrop', r.kept.sidebarToggle === false
+        && await page.evaluate(() => !document.getElementById('sidebarBackdrop')), JSON.stringify(r.kept));
+      ok('the sidebar is not on screen (drawer closed, off-canvas)', await page.evaluate(() => document.querySelector('aside.sidebar').getBoundingClientRect().right <= 0));
+      ok('the grid is readable: first card sits inside the 390px viewport', await page.evaluate(() => {
+        const b = document.querySelector('.photo-card').getBoundingClientRect(); return b.left >= 0 && b.right <= 390 && b.width > 60;
+      }));
+      await rvShot(page, 'after-review-390');
+      await rvInteract(page, ok, errs);
+      return out;
+    },
+    { before: rvWatchConsole(m, errs), initScript: ADMIN, contextOptions: MOBILE });
+}
+
+{
+  const m = pickFakeWorker(); const errs = [];
+  await suite('review chrome — the ordinary photographer index.html (no ?project=) keeps every sidebar section and top-bar link',
+    `${base}/index.html`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForFunction(() => !!window.app, null, { timeout: 5000 });
+      await page.waitForSelector('#studio-logout', { timeout: 5000 });
+      const r = await page.evaluate(RV_CHROME, rvArgs);
+      ok('positive: this is not review mode', r.pv === false);
+      ok('every sidebar title is there (SOURCE, RATING, FLAGS, ANNOTATION, 排序, DATA)', JSON.stringify(r.titles) === JSON.stringify(['01 / SOURCE', '02 / RATING', '03 / FLAGS', '04 / ANNOTATION', '排序', '05 / DATA']), JSON.stringify(r.titles));
+      // every id review mode removes is still in the DOM, except #pickFilterBar (guest-only: pick.js fills it)
+      const missing = await page.evaluate(ids => ids.filter(id => !document.getElementById(id)), RV_GONE_IDS);
+      ok('every removed control is still in the DOM in the ordinary mode', missing.length === 0, missing.join());
+      ok('and the selectors', await page.evaluate(s => s.every(q => !!document.querySelector(q)), ['.star-filter', '.toggle-group', '.flags-grid', 'aside.sidebar select', 'a[href*="upload.html"]']));
+      ok('排序 select, 匯出備份 JSON, 清除所有快取 are displayed',
+        await page.evaluate(() => ['sortBy', 'backupDataBtn', 'resetAllDataBtn'].every(id => { const e = document.getElementById(id); return e && getComputedStyle(e).display !== 'none' && e.getBoundingClientRect().width > 0; })));
+      ok('上傳 and 相本書 are displayed in the top bar', await page.evaluate(() => ['uploadPageBtn', 'openBookEditorBtn'].every(id => {
+        const e = document.getElementById(id); return e && getComputedStyle(e).display !== 'none' && e.getBoundingClientRect().width > 0 && !!e.closest('.header-right'); })));
+      ok('the top bar text names 上傳 and 相本書', r.hdrText.includes('上傳') && r.hdrText.includes('相本書'));
+      ok('排序 · 評分 ↓, 網格, avatar and 登出 are displayed too', r.kept.sortPill && r.kept.viewBtn && r.kept.avatar && r.kept.logout, JSON.stringify(r.kept));
+      ok('the ☰ toggle is still in the DOM', r.kept.sidebarToggle === true);
+      ok('zero console.error', errs.length === 0, errs.join(' | '));
+      await rvShot(page, 'normal-1280');
+      return out;
+    },
+    { before: rvWatchConsole(m, errs), initScript: ADMIN, contextOptions: { viewport: { width: 1280, height: 800 } } });
+}
+
+{
+  const m = pickFakeWorker(); const errs = [];
+  await suite('review chrome — the guest page (?t=) is untouched: its own trim and dark theme, no review trim leaked in',
+    `${base}/index.html?t=TOK`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('#pickClaimOverlay:not([hidden])', { timeout: 5000 });
+      await page.fill('#pickNameInput', 'Alice');
+      await page.click('#pickClaimBtn');
+      await page.waitForSelector('.photo-card', { timeout: 5000 });
+      const r = await page.evaluate(() => ({
+        pv: document.body.classList.contains('pv-active') || !!(window.ProjectViewController && ProjectViewController.active),
+        filterBar: !!document.querySelector('aside.sidebar #pickFilterBar') && getComputedStyle(document.getElementById('pickFilterBar')).display !== 'none',
+        titles: [...document.querySelectorAll('aside.sidebar .side-title')].length,
+        sections: document.querySelectorAll('aside.sidebar > .sidebar-section').length,
+        gone: ['uploadPageBtn', 'openBookEditorBtn', 'headerSortBtn', 'sortBy', 'backupDataBtn', 'resetAllDataBtn'].filter(id => document.getElementById(id)),
+        bg: getComputedStyle(document.body).backgroundColor,
+      }));
+      const [rr, gg, bb] = r.bg.match(/\d+/g).map(Number);
+      ok('positive: the guest page loaded its grid and filter bar', r.filterBar === true);
+      ok('not in review mode', r.pv === false);
+      ok('the guest sidebar is still just the folder section and the filter section, no titles', r.titles === 0 && r.sections === 2, JSON.stringify(r));
+      ok('its own removals still hold', r.gone.length === 0, r.gone.join());
+      ok('still dark', rr < 60 && gg < 60 && bb < 60, r.bg);
+      ok('zero console.error', errs.length === 0, errs.join(' | '));
+      return out;
+    },
+    { before: rvWatchConsole(m, errs), contextOptions: { viewport: { width: 1280, height: 800 } } });
 }
 
 {

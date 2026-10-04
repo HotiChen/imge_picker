@@ -31,6 +31,7 @@
         async start(app) {
             this.app = app;
             this._trimSidebar();
+            this._trimHeader();
             this._trimBulkBar();
             this._trimModal();
             this._wireViewToggle();
@@ -172,27 +173,40 @@
         // carry display:inline-flex/flex, which beats the UA's [hidden]
         // { display: none }, the same reason js/pick.js removes rather than
         // hides its own studio-only controls.
+        //
+        // Only 01 / SOURCE stays. Everything after it is a studio tool with no
+        // job when reviewing someone's picks: 02 / RATING (every card here is
+        // already a pick, and no control may re-rate one) with 清除 and the
+        // 只看選取 button, 03 / FLAGS (placeholder), 04 / ANNOTATION with the
+        // 排序 select (the order is the default, by name), 05 / DATA (匯出備份
+        // JSON / 清除所有快取 act on this browser's cache, not on the project;
+        // 重設此資料夾 would wipe someone else's picks). Whole sections go, so no
+        // heading or divider is left over. app.js reaches those nodes only
+        // through addListener (a no-op for a missing id) or querySelectorAll
+        // (an empty list), and updateStats() null-checks every counter.
         _trimSidebar() {
             // 01/SOURCE — nothing to type a path into; every photo already
             // comes from the project's own picks (this.photos), across every
             // folder it spans.
             document.querySelector('.sidebar-section:first-child .input-group')?.remove();
-            // 02/RATING — every card here is already a pick (rating > 0) and
-            // no control may re-rate one, so filtering by star or by 已選 is
-            // meaningless.
-            document.querySelector('.star-filter')?.remove();
-            document.getElementById('filterSelectedBtn')?.remove();
-            // 03/FLAGS — placeholder unrelated to picks.
-            document.querySelector('.flags-grid')?.closest('.sidebar-section')?.remove();
-            // 04/ANNOTATION filter — annotation state isn't part of a guest's
-            // pick. 排序 (sort), underneath it in the same section, stays: it
-            // still orders the picks shown here.
-            document.querySelector('.toggle-group')?.remove();
-            // 05/DATA — 重設此資料夾 wipes a folder's ratings/notes; this view
-            // has no single folder to reset (this.photos spans every folder
-            // the project touched), and it would be wiping someone else's
-            // picks. 匯出備份 JSON / 清除所有快取 still make sense as-is.
-            document.getElementById('resetCurrentDataBtn')?.remove();
+            document.querySelectorAll('aside.sidebar > .sidebar-section:not(:first-child)')
+                .forEach(sec => sec.remove());
+            // What is left of the sidebar is the SOURCE title alone, so the
+            // ☰ that opens it as a drawer on a phone (<= 1024px) would open
+            // an empty drawer: no button, no backdrop. A desktop shows the
+            // sidebar as a column and never used the button.
+            document.getElementById('sidebarToggle')?.remove();
+            document.getElementById('sidebarBackdrop')?.remove();
+        },
+
+        // ── top bar trim: 預約拍攝 / 上傳 / 相本書 are studio links ────────────
+        // 預約拍攝 is the guest page's own link (filled by js/pick.js, never in
+        // this view), 上傳 and 相本書 lead away from a review. Removed, not
+        // hidden, for the same display:inline-flex reason as above. app.js binds
+        // 上傳 / 相本書 with addListener, which skips a missing id.
+        _trimHeader() {
+            ['studioBookingLink', 'uploadPageBtn', 'openBookEditorBtn']
+                .forEach(id => document.getElementById(id)?.remove());
         },
 
         // The bulk-action bar's own star buttons + 清空評分 write ratings —
