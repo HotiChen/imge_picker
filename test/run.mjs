@@ -15668,10 +15668,17 @@ const near = (a, b, tol) => Math.abs(a - b) <= tol;
       ok('dragged far left: stops with the right edge at the window edge', near(zr.page.r, zr.stage.r, 0.8) && zr.label === lab, JSON.stringify([zr.page, zr.stage]));
       ok('control: the two stops are really different places (the page is bigger than the window)', zr.x < zl.x - 300, JSON.stringify([zl.x, zr.x]));
       // a touch at the screen edge (the browser's back gesture) is left alone, zoomed or not
+      // (checked one at a time: the page sits at its left limit here, so a drag from the left edge moves it
+      // and a drag from the right edge would move it straight back — together they would cancel out)
       await swipeTouch(page, '#albumStage', 6, 400, 200, 400);
+      const ze1 = await albZ(page);
+      ok('a drag that starts at the left screen edge is ignored while zoomed too', near(ze1.x, zr.x, 0.5) && ze1.label === lab, JSON.stringify([zr.x, ze1.x]));
+      await swipeTouch(page, '#albumStage', 40, 400, 360, 400);        // positive control: from inside the edge it does pan
+      const zc = await albZ(page);
+      ok('control: the same drag from inside the edge does pan', zc.x > zr.x + 100, JSON.stringify([zr.x, zc.x]));
       await swipeTouch(page, '#albumStage', 384, 400, 150, 400);
-      const ze = await albZ(page);
-      ok('a drag that starts at the screen edge is ignored while zoomed too', near(ze.x, zr.x, 0.5) && ze.label === lab, JSON.stringify([zr.x, ze.x]));
+      const ze2 = await albZ(page);
+      ok('a drag that starts at the right screen edge is ignored too', near(ze2.x, zc.x, 0.5) && ze2.label === lab, JSON.stringify([zc.x, ze2.x]));
       const sc = await albZ(page);
       ok('the page behind never scrolled (not at any point)', sc.scrollY === 0 && sc.scrollX === 0 && sc.docScroll === 0);
 
