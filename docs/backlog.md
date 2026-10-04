@@ -246,6 +246,13 @@ Replaces the seat-passing proposal in docs/pick-handover.md §3+ (kept only as h
 - Cap the number of photo keys listed in the change-notification email.
 
 ## Technical debt / security
+- `book_editor/js/layouts.js` `renderPageHTML` writes `src="${src}"` unescaped and
+  `_thumbUrl` / `drive.js` `objectUrl` do not encode the photo key (`#`, `?`, quotes
+  break the URL or the attribute). Only the editor and `view.html` use it today, and
+  keys come from the photographer's own uploads, so the risk is low; the guest album
+  preview (`js/album-preview.js`) deliberately builds its DOM without it. Fix before
+  anyone else's file names can reach it (multi-photographer) or before the guest
+  preview switches to it.
 - `node --check <file>.js` does not catch syntax errors on our Node (v22): there
   is no package.json, so the file is not treated as a module and an unbalanced
   paren still exits 0. Use `node --input-type=module --check < worker/worker.js`
