@@ -3622,6 +3622,16 @@ function settingsShapeFake(st) {
     has_logo: false, ...st, default_extra_max: x,
     effective_default_extra_max: isExtraMaxFake(x) ? x : EXTRA_MAX_DEFAULT_FAKE };
 }
+// Mirrors worker.js revisionMessage (docs/delivery.md, client confirmation):
+// CRLF/CR -> LF, tab -> space, every other control / line-separator character
+// dropped, trimmed, 1-1000 characters (code points); null when it does not fit.
+function revisionMessageFake(v) {
+  if (typeof v !== 'string') return null;
+  const t = v.replace(/\r\n?/g, '\n').replace(/\t/g, ' ')
+    .replace(/[\u0000-\u001F\u007F-\u009F\u2028\u2029]/g, c => (c === '\n' ? c : '')).trim();
+  if (!t || [...t].length > 1000) return null;
+  return t;
+}
 function pickFakeWorker(opts = {}) {
   const settings = { ...(opts.settings || {}) };
   const state = {
@@ -3643,7 +3653,17 @@ function pickFakeWorker(opts = {}) {
       // shape — never 0/1)
       final_folders: opts.finalFolders || null,
       allow_proof_download: !!opts.allowProofDownload,
+      // docs/delivery.md client confirmation: null until confirmed;
+      // 'guest' | 'photographer' says who
+      client_confirmed_at: opts.confirmedAt || null,
+      client_confirmed_by: opts.confirmedAt ? (opts.confirmedBy || 'guest') : null,
     },
+    // revision_requests rows, oldest first internally (served newest first):
+    // {id, picker_id, message, created_at, resolved_at}
+    revisions: (opts.revisions || []).map((r, i) => ({
+      id: r.id || `rev-${i + 1}`, picker_id: r.picker_id ?? null, message: r.message,
+      created_at: r.created_at || new Date(Date.UTC(2026, 8, 21, 0, i)).toISOString(), resolved_at: r.resolved_at || null,
+    })),
     // GET /api/pick/state's studio.{name, booking_url, has_logo}
     // (docs/dashboard-settings.md) — omitted from the response unless a test
     // opts in, so every pre-existing suite's fixture is unaffected.
@@ -3676,6 +3696,9 @@ function pickFakeWorker(opts = {}) {
   function liveToken() {
     return state.tokens.find(t => pickTokenStatusFake(t) === 'live') || null;
   }
+  const openRevisions = () => state.revisions.filter(r => !r.resolved_at);
+  // a confirmation resolves every open request (worker.js resolveRevisionsIfConfirmed)
+  const resolveOpen = at => openRevisions().forEach(r => { r.resolved_at = at; });
 
   const attach = async page => {
     await page.route('**/imagepicker.hotichen.workers.dev/**', async route => {
@@ -3710,6 +3733,14 @@ function pickFakeWorker(opts = {}) {
           final_folders: scope.finals,
           allow_proof_download: state.project.allow_proof_download,
           delivered_at: scope.mode === 'delivered' ? state.project.delivered_at : null,
+          // docs/delivery.md: the same for owner and viewers; null / false /
+          // null outside the delivered mode, never who confirmed
+          confirmed_at: scope.mode === 'delivered' ? state.project.client_confirmed_at : null,
+          revision_open: scope.mode === 'delivered' && openRevisions().length > 0,
+          // the text goes to the seat owner only; a viewer always gets null
+          // (opts.leakViewerMessage: a misbehaving Worker, to prove the page itself never shows it)
+          revision_message: (isOwner || opts.leakViewerMessage) && scope.mode === 'delivered' && openRevisions().length
+            ? openRevisions()[openRevisions().length - 1].message : null,
           owner: ownerPicker ? ownerPicker.name : null,
           is_owner: isOwner,
           phase: state.project.phase,
@@ -3889,6 +3920,50 @@ function pickFakeWorker(opts = {}) {
         });
       }
 
+      // POST /api/pick/confirm and /api/pick/revision (worker.js): link (401)
+      // -> seat (403) -> delivered now (409, before the body) -> body (413 /
+      // 400) -> message (400) -> migration (500) -> confirmed (repeat 200 /
+      // 409) -> caps. opts.failNextPick: FIFO of injected answers for the
+      // paths a browser cannot reach.
+      if ((u.pathname === '/api/pick/confirm' || u.pathname === '/api/pick/revision') && method === 'POST') {
+        const confirming = u.pathname === '/api/pick/confirm';
+        if (opts.pickDelay) await new Promise(r => setTimeout(r, opts.pickDelay));
+        if (opts.failNextPick && opts.failNextPick.length) {
+          const f = opts.failNextPick.shift();
+          if (f === 'net') return route.abort('failed');
+          if (f.effect) f.effect(); // e.g. the photographer confirmed in the meantime
+          return json(f.body, f.status);
+        }
+        if (state.project.archived_at) return json({ error: 'Unauthorized' }, 401);
+        const picker = pickerKey ? findByKey(pickerKey) : null;
+        const isOwner = !!picker && state.project.owner_picker_id === picker.id;
+        if (!isOwner) return json({ error: confirming ? '只有挑選人可以確認完成' : '只有挑選人可以要求修改' }, 403);
+        if (pickScopeFake(state.project).mode !== 'delivered') return json({ error: '尚未交件', code: 'not_delivered' }, 409);
+        const raw = req.postData() || '';
+        if (Buffer.byteLength(raw) > 16384) return json({ error: '資料太大', code: 'too_large', max: 16384 }, 413);
+        let parsed = {};
+        if (raw.trim()) { try { parsed = JSON.parse(raw); } catch (e) { return json({ error: 'Invalid JSON' }, 400); } }
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return json({ error: 'Invalid body', code: 'invalid_body' }, 400);
+        const message = confirming ? null : revisionMessageFake(parsed.message);
+        if (!confirming && !message) return json({ error: '請輸入 1–1000 字的修改說明', code: 'invalid_message', max: 1000 }, 400);
+        if (opts.confirmUnavailable) return json({ error: '確認完成功能尚未啟用', code: 'confirm_unavailable' }, 500);
+        if (state.project.client_confirmed_at) {
+          return confirming ? json({ ok: true, confirmed_at: state.project.client_confirmed_at })
+            : json({ error: '已確認完成，無法再要求修改', code: 'already_confirmed' }, 409);
+        }
+        const at = new Date().toISOString();
+        if (confirming) {
+          state.project.client_confirmed_at = at;
+          state.project.client_confirmed_by = 'guest';
+          resolveOpen(at);
+          return json({ ok: true, confirmed_at: at });
+        }
+        if (openRevisions().length >= 10) return json({ error: '尚未處理的修改需求已有 10 則，請等攝影師回覆', code: 'revision_open_cap', max: 10 }, 409);
+        if (state.revisions.length >= 50) return json({ error: '修改需求已達上限（50 則），請直接聯絡攝影師', code: 'revision_cap', max: 50 }, 409);
+        state.revisions.push({ id: 'rev-' + (state.revisions.length + 1), picker_id: picker.id, message, created_at: at, resolved_at: null });
+        return json({ ok: true, message, created_at: at });
+      }
+
       if (u.pathname === '/api/admin/projects' && method === 'GET') {
         const owner = state.project.owner_picker_id ? state.pickers.get(state.project.owner_picker_id) : null;
         const subs = state.submissions;
@@ -3908,6 +3983,9 @@ function pickFakeWorker(opts = {}) {
           delivered_at: state.project.delivered_at,
           final_folders: state.project.final_folders,
           allow_proof_download: state.project.allow_proof_download,
+          client_confirmed_at: state.project.client_confirmed_at,
+          client_confirmed_by: state.project.client_confirmed_by,
+          open_revision_count: openRevisions().length,
           submission_count: subs.length,
           last_submitted_at: subs.length ? subs[subs.length - 1].created_at : null,
           unnotified_submissions: unnotifiedCountFake(subs),
@@ -3945,11 +4023,18 @@ function pickFakeWorker(opts = {}) {
           .map(sub => ({ ...sub, marks: opts.marksUnavailable ? null : (sub.marks || null) }));
         const owner = state.project.owner_picker_id ? state.pickers.get(state.project.owner_picker_id) : null;
         const tokens = state.tokens.slice().reverse().map(t => ({ ...t, status: pickTokenStatusFake(t) }));
+        // newest first, at most 50: {id, message, created_at, resolved_at,
+        // picker_id, picker_name} (picker_name null when the picker is gone)
+        const revision_requests = state.revisions.slice().reverse().slice(0, 50).map(r => ({
+          id: r.id, message: r.message, created_at: r.created_at, resolved_at: r.resolved_at,
+          picker_id: r.picker_id, picker_name: state.pickers.get(r.picker_id)?.name ?? null,
+        }));
         return json({
-          project: { ...state.project },
+          project: { ...state.project, open_revision_count: openRevisions().length },
           owner: owner ? { id: owner.id, name: owner.name } : null,
           pickers, selections, tokens, submissions,
           unnotified_submissions: unnotifiedCountFake(state.submissions),
+          revision_requests,
         });
       }
       if (/^\/api\/admin\/projects\/[^/]+$/.test(u.pathname) && method === 'DELETE') {
@@ -3999,7 +4084,22 @@ function pickFakeWorker(opts = {}) {
         state.project.phase = 'retouching';
         return json({ ok: true, phase: 'retouching' });
       }
+      // POST /api/admin/projects/:id/confirm (worker.js): 標記完成
+      if (/^\/api\/admin\/projects\/[^/]+\/confirm$/.test(u.pathname) && method === 'POST') {
+        if (u.pathname.split('/')[4] !== state.project.id) return json({ error: 'Not found' }, 404);
+        if (opts.confirmUnavailable) return json({ error: '確認完成功能尚未啟用', code: 'confirm_unavailable' }, 500);
+        if (!state.project.delivered_at) return json({ error: '尚未交件，無法標記完成', code: 'not_delivered' }, 409);
+        if (!state.project.client_confirmed_at) {
+          const at = new Date().toISOString();
+          state.project.client_confirmed_at = at;
+          state.project.client_confirmed_by = 'photographer';
+          resolveOpen(at);
+        }
+        return json({ ok: true, client_confirmed_at: state.project.client_confirmed_at, client_confirmed_by: state.project.client_confirmed_by });
+      }
       if (/\/api\/admin\/projects\/[^/]+\/reopen$/.test(u.pathname) && method === 'POST') {
+        state.project.client_confirmed_at = null;
+        state.project.client_confirmed_by = null;
         state.project.phase = 'picking';
         state.project.modified_after_submit = 0;
         // clears the stamp, keeps the finals snapshot as the last choice, like
@@ -4024,12 +4124,19 @@ function pickFakeWorker(opts = {}) {
         // a repeat deliver replaces the finals and keeps the first stamp
         if (!state.project.delivered_at) state.project.delivered_at = new Date().toISOString();
         state.project.final_folders = finals;
+        // every deliver puts a new version up: it clears the confirmation and
+        // resolves the open requests (docs/delivery.md)
+        state.project.client_confirmed_at = null;
+        state.project.client_confirmed_by = null;
+        resolveOpen(new Date().toISOString());
         return json({ ok: true, delivered_at: state.project.delivered_at, final_folders: finals });
       }
       if (/\/api\/admin\/projects\/[^/]+\/undeliver$/.test(u.pathname) && method === 'POST') {
         // clears the stamp only: the snapshot stays as the last chosen finals
         // (worker.js undeliver); pickScopeFake still reads it as not delivered
         state.project.delivered_at = null;
+        state.project.client_confirmed_at = null;
+        state.project.client_confirmed_by = null;
         return json({ ok: true, delivered_at: null });
       }
       if (/^\/api\/admin\/projects\/[^/]+$/.test(u.pathname) && method === 'PATCH') {
@@ -8377,6 +8484,506 @@ for (const [label, co] of [['1500px', undefined], ['390px', MOBILE]]) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// Client confirmation (docs/delivery.md) — the guest's 確認完成 / 需要修改
+// ═══════════════════════════════════════════════════════════════════════════
+
+const DONE_FILES = ['shoot/毛片/a.jpg', 'shoot/精修/f1.jpg', 'shoot/精修/f2.jpg', 'shoot/精修二/g1.jpg'];
+const doneOpts = (o = {}) => ({
+  ownerName: 'Zoe', ownerKey: 'ZOE-KEY', phase: 'retouching', folders: ['shoot/毛片/'], finalFolders: ['shoot/精修/'],
+  deliveredAt: '2026-09-20T00:00:00.000Z', pickFiles: DONE_FILES, title: 'D 專案', ...o });
+const AS_OWNER = () => localStorage.setItem('pick_key:TOK', 'ZOE-KEY');
+const donePosts = (m, what) => m.requests.filter(r => r.method === 'POST' && r.path === `/api/pick/${what}`);
+const stateGets = m => m.requests.filter(r => r.method === 'GET' && r.path === '/api/pick/state').length;
+const doneBlock = page => page.evaluate(() => {
+  const el = document.getElementById('deliveryDone');
+  if (!el) return null;
+  return { state: el.dataset.state, status: document.getElementById('deliveryDoneStatus')?.textContent ?? null,
+    msg: document.getElementById('deliveryDoneMsg')?.textContent ?? null,
+    msgEl: !!document.getElementById('deliveryDoneMsg'),
+    buttons: [...el.querySelectorAll('button')].map(b => b.textContent) };
+});
+// the luminance of a computed rgb()/rgba() colour, 0..1
+const LUM = `(c => { const m = c.match(/[\\d.]+/g).map(Number); return (0.2126 * m[0] + 0.7152 * m[1] + 0.0722 * m[2]) / 255; })`;
+const modalShown = (page, id) => page.evaluate(i => {
+  const el = document.getElementById(i);
+  return !!el && el.classList.contains('active') && getComputedStyle(el).display !== 'none' && el.getClientRects().length > 0;
+}, id);
+
+// ── owner: block, buttons, confirm modal, confirmed state — desktop and phone
+for (const [label, co] of [['1280px', { viewport: { width: 1280, height: 900 } }], ['390px', MOBILE]]) {
+  const m = pickFakeWorker(doneOpts());
+  await suite(`guest 確認完成 ${label} — owner: block + two buttons, confirm modal, then ✓ 已確認完成 with no buttons`,
+    `${base}/index.html?t=TOK`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      const narrow = label === '390px';
+      await page.waitForSelector('#deliveryDone .btn', { timeout: 5000 });
+      ok('fixture: delivered, not confirmed, owner seat', m.state.project.delivered_at !== null && m.state.project.client_confirmed_at === null);
+      const b0 = await doneBlock(page);
+      ok('the block shows in the open state with 確認完成 and 需要修改', b0.state === 'open' && JSON.stringify(b0.buttons) === '["確認完成","需要修改"]', JSON.stringify(b0));
+      ok('the status line tells what the buttons are for', /確認完成/.test(b0.status) && /需要修改/.test(b0.status), b0.status);
+      ok('block sits right under the delivery bar, in the page (not hidden, inside the viewport width)',
+        await page.evaluate(() => {
+          const bar = document.getElementById('deliveryBar'), el = document.getElementById('deliveryDone');
+          const r = el.getBoundingClientRect();
+          return bar.nextElementSibling === el && r.height > 20 && r.left >= 0 && r.right <= innerWidth + 0.5;
+        }));
+      const geo = await page.evaluate(() => [...document.querySelectorAll('#deliveryDone button')].map(b => {
+        const r = b.getBoundingClientRect(); return { w: r.width, h: r.height, d: getComputedStyle(b).display };
+      }));
+      ok('both buttons are rendered, tappable size', geo.length === 2 && geo.every(g => g.d !== 'none' && g.w > 60 && g.h >= (narrow ? 44 : 38)), JSON.stringify(geo));
+      ok('the page is still the dark client theme: dark body, dark block, light text',
+        await page.evaluate(`(() => { const L = ${LUM}; const cs = s => getComputedStyle(document.querySelector(s));
+          return L(cs('body').backgroundColor) < 0.2 && L(cs('#deliveryDone').backgroundColor) < 0.25 && L(cs('#deliveryDoneStatus').color) > 0.6; })()`));
+      ok('the confirm modal is closed to begin with', !(await modalShown(page, 'doneConfirmModal')));
+      if (narrow) ok('no horizontal scroll', await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+
+      await page.click('#doneConfirmBtn');
+      ok('确認 modal opens', await modalShown(page, 'doneConfirmModal'));
+      const mt = await page.textContent('#doneConfirmModal');
+      ok('it says the photographer is notified and later changes go through the photographer', /攝影師會收到通知/.test(mt) && /聯絡攝影師/.test(mt), mt);
+      if (narrow) {
+        const r = await page.$eval('#doneConfirmModal .modal-content', e => { const b = e.getBoundingClientRect(); return { t: b.top, b: b.bottom, l: b.left, r: b.right, w: innerWidth, h: innerHeight }; });
+        ok('on a phone the modal is fully inside the viewport', r.t >= 0 && r.b <= r.h && r.l >= 0 && r.r <= r.w, JSON.stringify(r));
+      }
+      await page.click('#doneConfirmCancel');
+      ok('取消 closes it and sends nothing', !(await modalShown(page, 'doneConfirmModal')) && donePosts(m, 'confirm').length === 0);
+
+      await page.click('#doneConfirmBtn');
+      await page.click('#doneConfirmSubmit');
+      await page.waitForFunction(() => document.getElementById('deliveryDone')?.dataset.state === 'confirmed', null, { timeout: 5000 });
+      const posts = donePosts(m, 'confirm');
+      ok('exactly one POST /api/pick/confirm, with this link\'s token and seat key, body {}',
+        posts.length === 1 && posts[0].t === 'TOK' && posts[0].key === 'ZOE-KEY' && JSON.stringify(posts[0].body) === '{}', JSON.stringify(posts));
+      const b1 = await doneBlock(page);
+      ok('the status reads ✓ 已確認完成（date）', /^✓ 已確認完成（\d{4}\/\d{1,2}\/\d{1,2}）$/.test(b1.status), b1.status);
+      ok('no button is left in the block, and the button ids are gone from the DOM', b1.buttons.length === 0 &&
+        (await page.$('#doneConfirmBtn')) === null && (await page.$('#doneReviseBtn')) === null);
+      ok('the modals are removed from the DOM, not just closed', (await page.$('#doneConfirmModal')) === null && (await page.$('#doneReviseModal')) === null);
+      ok('the Worker recorded it as the guest\'s', m.state.project.client_confirmed_by === 'guest');
+      await page.reload({ waitUntil: 'load' });
+      await page.waitForSelector('#deliveryDone', { timeout: 5000 });
+      const b2 = await doneBlock(page);
+      ok('after a reload the confirmed state comes from the Worker: ✓ and still no buttons', b2.state === 'confirmed' && b2.buttons.length === 0 && /^✓ 已確認完成/.test(b2.status), JSON.stringify(b2));
+      if (process.env.SHOTS_DONE) await page.screenshot({ path: `${process.env.SHOTS_DONE}/guest-confirmed-${label}.png` });
+      return out;
+    },
+    { before: m.attach, initScript: AS_OWNER, contextOptions: co });
+}
+
+// ── the screenshots of the other states (only when asked for)
+if (process.env.SHOTS_DONE) {
+  for (const [label, co] of [['1280px', { viewport: { width: 1280, height: 900 } }], ['390px', MOBILE]]) {
+    const m = pickFakeWorker(doneOpts());
+    await suite(`guest 確認完成 ${label} — screenshots`,
+      `${base}/index.html?t=TOK`,
+      async page => {
+        const dir = process.env.SHOTS_DONE;
+        await page.waitForSelector('#deliveryDone .btn', { timeout: 5000 });
+        await page.screenshot({ path: `${dir}/guest-initial-${label}.png` });
+        await page.click('#doneConfirmBtn');
+        await page.waitForTimeout(400);
+        await page.screenshot({ path: `${dir}/guest-confirm-modal-${label}.png` });
+        await page.click('#doneConfirmCancel');
+        await page.click('#doneReviseBtn');
+        await page.fill('#doneReviseText', 'f1.jpg 膚色偏黃，想再自然一點\n第二張的背景請把路人修掉');
+        await page.waitForTimeout(400);
+        await page.screenshot({ path: `${dir}/guest-revise-modal-${label}.png` });
+        await page.click('#doneReviseSubmit');
+        await page.waitForFunction(() => document.getElementById('deliveryDone')?.dataset.state === 'revising');
+        await page.waitForTimeout(300);
+        await page.screenshot({ path: `${dir}/guest-revising-${label}.png` });
+        return [];
+      },
+      { before: m.attach, initScript: AS_OWNER, contextOptions: co });
+  }
+}
+
+// ── viewer: status text only, never buttons, never the guest's words
+for (const [name, extra, expectState, statusRe] of [
+  ['open', {}, 'open', /尚待選片人確認完成/],
+  ['revising', { revisions: [{ message: '小明的修改要求 SECRET-TEXT', picker_id: 'picker-0' }] }, 'revising', /^攝影師修改中$/],
+  ['confirmed', { confirmedAt: '2026-09-21T03:00:00.000Z' }, 'confirmed', /^✓ 已確認完成（2026\/9\/21）$/],
+]) {
+  const m = pickFakeWorker(doneOpts(extra));
+  await suite(`guest 確認完成 — viewer (${name}): status text, no buttons, no modal, no guest message`,
+    `${base}/index.html?t=TOK`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('#deliveryDone', { timeout: 5000 });
+      await page.waitForSelector('.photo-card', { timeout: 5000 });
+      const b = await doneBlock(page);
+      ok(`block in state ${expectState} with the status text`, b.state === expectState && statusRe.test(b.status), JSON.stringify(b));
+      ok('a viewer has no button at all, and no modal in the DOM', b.buttons.length === 0 && (await page.$('#doneConfirmBtn')) === null &&
+        (await page.$('#doneReviseBtn')) === null && (await page.$('#doneConfirmModal')) === null && (await page.$('#doneReviseModal')) === null);
+      ok('no message element is reserved, and the guest\'s text is nowhere on the page',
+        b.msgEl === false && !(await page.evaluate(() => document.body.innerText.includes('SECRET-TEXT'))));
+      ok('the fixture is a viewer (no seat key)', m.requests.some(r => r.path === '/api/pick/state' && r.key === ''));
+      return out;
+    },
+    { before: m.attach });
+}
+
+// ── defence in depth: even if a Worker sent a viewer the text, the page does not show it
+{
+  const m = pickFakeWorker(doneOpts({ leakViewerMessage: true, revisions: [{ message: '洩漏的訊息 LEAK-TEXT', picker_id: 'picker-0' }] }));
+  await suite('guest 確認完成 — viewer: a (misbehaving) state that carries revision_message is still not shown',
+    `${base}/index.html?t=TOK`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('#deliveryDone', { timeout: 5000 });
+      ok('fixture: the state a viewer gets does carry the text', await page.evaluate(async () =>
+        (await (await fetch(`${CONFIG.WORKER_URL}/api/pick/state`, { headers: { 'X-Share-Token': 'TOK' } })).json()).revision_message === '洩漏的訊息 LEAK-TEXT'));
+      const b = await doneBlock(page);
+      ok('the viewer still sees 攝影師修改中 only, with no message block and no text on the page',
+        b.status === '攝影師修改中' && b.msgEl === false && !(await page.evaluate(() => document.body.innerText.includes('LEAK-TEXT'))), JSON.stringify(b));
+      return out;
+    },
+    { before: m.attach });
+}
+
+// ── the contract the viewer relies on: owner gets the text, a viewer never does
+{
+  const m = pickFakeWorker(doneOpts({ revisions: [{ message: '請把 f1.jpg 修亮一點 OWNER-TEXT', picker_id: 'picker-0' }] }));
+  await suite('guest 確認完成 — owner sees their own revision text; the same state read by a viewer has none',
+    `${base}/index.html?t=TOK`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('#deliveryDone', { timeout: 5000 });
+      const b = await doneBlock(page);
+      ok('owner: 已通知攝影師，修改中 and the text', b.state === 'revising' && b.status === '已通知攝影師，修改中' && b.msg === '請把 f1.jpg 修亮一點 OWNER-TEXT', JSON.stringify(b));
+      ok('owner still has both buttons (算了這樣就好 / ask again)', JSON.stringify(b.buttons) === '["確認完成","需要修改"]');
+      const asViewer = await page.evaluate(async () => {
+        const r = await fetch(`${CONFIG.WORKER_URL}/api/pick/state`, { headers: { 'X-Share-Token': 'TOK' } });
+        const d = await r.json();
+        return { open: d.revision_open, msg: d.revision_message, confirmed: d.confirmed_at };
+      });
+      ok('the fake answers a viewer revision_open true, revision_message null (the Worker\'s contract)', asViewer.open === true && asViewer.msg === null && asViewer.confirmed === null, JSON.stringify(asViewer));
+      return out;
+    },
+    { before: m.attach, initScript: AS_OWNER });
+}
+
+// ── not delivered: the block and its modals do not exist at all
+for (const [name, o] of [
+  ['picking (submitted)', { phase: 'submitted', deliveredAt: null, finalFolders: null }],
+  ['undelivered, finals kept (delivered_at null, final_folders set)', { deliveredAt: null, finalFolders: ['shoot/精修/'], confirmedAt: '2026-09-21T03:00:00.000Z' }],
+]) {
+  const m = pickFakeWorker(doneOpts(o));
+  await suite(`guest 確認完成 — ${name}: no block, no modals, no confirm UI in the DOM`,
+    `${base}/index.html?t=TOK`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('.photo-card', { timeout: 5000 });
+      ok('fixture: the guard under test runs (Worker answers mode picking)', await page.evaluate(async () => {
+        const d = await (await fetch(`${CONFIG.WORKER_URL}/api/pick/state`, { headers: { 'X-Share-Token': 'TOK', 'X-Picker-Key': 'ZOE-KEY' } })).json();
+        return d.mode === 'picking' && d.confirmed_at === null && d.revision_open === false && d.revision_message === null;
+      }));
+      if (name.startsWith('undelivered')) ok('fixture: the project row still carries final_folders and a confirmation stamp', m.state.project.final_folders !== null && m.state.project.client_confirmed_at !== null);
+      ok('picking page is really up (hearts, filter)', (await page.$$('.pick-heart-btn')).length > 0 && (await page.$('#pickFilterBar')) !== null);
+      ok('#deliveryDone is not in the DOM', (await page.$('#deliveryDone')) === null);
+      ok('no confirm/revise button or modal is in the DOM', (await page.$$('#doneConfirmBtn, #doneReviseBtn, #doneConfirmModal, #doneReviseModal, .delivery-done')).length === 0);
+      return out;
+    },
+    { before: m.attach, initScript: AS_OWNER });
+}
+
+// ── 需要修改: textarea rules, the body, 修改中, then 確認完成 after asking
+for (const [label, co] of [['1280px', { viewport: { width: 1280, height: 900 } }], ['390px', MOBILE]]) {
+  const m = pickFakeWorker(doneOpts());
+  await suite(`guest 需要修改 ${label} — textarea limits, request body, 修改中 state, then 確認完成 resolves it`,
+    `${base}/index.html?t=TOK`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      const narrow = label === '390px';
+      await page.waitForSelector('#doneReviseBtn', { timeout: 5000 });
+      await page.click('#doneReviseBtn');
+      ok('the revise modal opens', await modalShown(page, 'doneReviseModal'));
+      const ta = await page.$eval('#doneReviseText', e => ({ max: e.getAttribute('maxlength'), fs: getComputedStyle(e).fontSize, focused: false }));
+      ta.focused = await page.waitForFunction(() => document.activeElement?.id === 'doneReviseText', null, { timeout: 2000 }).then(() => true, () => false);
+      ok('textarea: maxlength 1000, font-size 16px (no iOS zoom)', ta.max === '1000' && ta.fs === '16px', JSON.stringify(ta));
+      ok('textarea is focused on open', ta.focused);
+      ok('the counter starts at 0 / 1000, 送出 is disabled', (await page.textContent('#doneReviseCount')) === '0 / 1000' && await page.$eval('#doneReviseSubmit', b => b.disabled));
+      await page.fill('#doneReviseText', '   \n  ');
+      ok('whitespace only: still disabled, and a forced click sends nothing',
+        await page.$eval('#doneReviseSubmit', b => { b.click(); return b.disabled; }) && donePosts(m, 'revision').length === 0);
+      const msg = 'f1.jpg 膚色偏黃\n第二行';
+      await page.fill('#doneReviseText', msg);
+      ok('typing enables 送出 and updates the counter', !(await page.$eval('#doneReviseSubmit', b => b.disabled)) &&
+        (await page.textContent('#doneReviseCount')) === `${msg.length} / 1000`, await page.textContent('#doneReviseCount'));
+      await page.fill('#doneReviseText', 'x'.repeat(1200));
+      ok('1200 typed characters are cut at 1000 by the textarea', (await page.$eval('#doneReviseText', e => e.value.length)) === 1000 &&
+        (await page.textContent('#doneReviseCount')) === '1000 / 1000');
+      if (narrow) {
+        // a soft keyboard leaves ~40% of the height: the modal must still fit and 送出 must be reachable
+        await page.setViewportSize({ width: 390, height: 420 });
+        await page.waitForTimeout(150);
+        const g = await page.evaluate(() => {
+          const c = document.querySelector('#doneReviseModal .modal-content'), r = c.getBoundingClientRect();
+          const s = document.getElementById('doneReviseSubmit'); s.scrollIntoView({ block: 'nearest' });
+          const sr = s.getBoundingClientRect();
+          const hit = document.elementFromPoint(sr.left + sr.width / 2, sr.top + sr.height / 2);
+          return { top: r.top, bottom: r.bottom, h: innerHeight, hit: hit === s || s.contains(hit), submitTop: sr.top, submitBottom: sr.bottom };
+        });
+        ok('short viewport (keyboard up): the modal stays inside it and 送出 is not covered by anything',
+          g.top >= 0 && g.bottom <= g.h + 1 && g.hit && g.submitTop >= 0 && g.submitBottom <= g.h + 1, JSON.stringify(g));
+        await page.setViewportSize({ width: 390, height: 844 });
+      }
+      await page.fill('#doneReviseText', msg);
+      await page.click('#doneReviseSubmit');
+      await page.waitForFunction(() => document.getElementById('deliveryDone')?.dataset.state === 'revising', null, { timeout: 5000 });
+      const posts = donePosts(m, 'revision');
+      ok('one POST /api/pick/revision with exactly {message}, this link\'s token and seat key',
+        posts.length === 1 && JSON.stringify(posts[0].body) === JSON.stringify({ message: msg }) && posts[0].t === 'TOK' && posts[0].key === 'ZOE-KEY', JSON.stringify(posts));
+      ok('the modal closed; the textarea is empty again', !(await modalShown(page, 'doneReviseModal')) && (await page.$eval('#doneReviseText', e => e.value)) === '');
+      const b = await doneBlock(page);
+      ok('state 修改中: 已通知攝影師，修改中 with the stored text', b.status === '已通知攝影師，修改中' && b.msg === msg, JSON.stringify(b));
+      ok('the owner may still 確認完成 or ask again', JSON.stringify(b.buttons) === '["確認完成","需要修改"]');
+      ok('the Worker has one open request', m.state.revisions.length === 1 && m.state.revisions[0].resolved_at === null);
+      ok('the message block keeps the line break (pre-wrap) and wraps', await page.$eval('#deliveryDoneMsg', e => getComputedStyle(e).whiteSpace === 'pre-wrap'));
+      await page.reload({ waitUntil: 'load' });
+      await page.waitForSelector('#deliveryDone', { timeout: 5000 });
+      const b2 = await doneBlock(page);
+      ok('after a reload the 修改中 state and the text come back from the Worker', b2.state === 'revising' && b2.msg === msg, JSON.stringify(b2));
+
+      // 算了，這樣就好
+      await page.click('#doneConfirmBtn');
+      await page.click('#doneConfirmSubmit');
+      await page.waitForFunction(() => document.getElementById('deliveryDone')?.dataset.state === 'confirmed', null, { timeout: 5000 });
+      const b3 = await doneBlock(page);
+      ok('confirming after asking: ✓ 已確認完成, the request text is gone, no buttons', /^✓ 已確認完成/.test(b3.status) && b3.msgEl === false && b3.buttons.length === 0, JSON.stringify(b3));
+      ok('the Worker resolved the request', m.state.revisions.every(r => r.resolved_at));
+      return out;
+    },
+    { before: m.attach, initScript: AS_OWNER, contextOptions: co });
+}
+
+// ── the guest's text is shown as text only
+{
+  const evil = '<img src=x onerror="window.__pwned=1"><b>bold</b> & <script>window.__pwned=2</script>';
+  const m = pickFakeWorker(doneOpts({ revisions: [{ message: evil, picker_id: 'picker-0' }] }));
+  await suite('guest 確認完成 — a revision text with markup is plain text (seeded by the Worker, and typed and echoed back)',
+    `${base}/index.html?t=TOK`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('#deliveryDoneMsg', { timeout: 5000 });
+      const probe = () => page.evaluate(() => ({
+        msg: document.getElementById('deliveryDoneMsg')?.textContent, kids: document.querySelectorAll('#deliveryDone img, #deliveryDone b, #deliveryDone script').length,
+        pwned: window.__pwned ?? null,
+      }));
+      let r = await probe();
+      ok('the seeded text is shown literally', r.msg === evil, r.msg);
+      ok('no <img>/<b>/<script> element was parsed out of it, nothing ran', r.kids === 0 && r.pwned === null, JSON.stringify(r));
+      // type another one: the echo from the Worker goes through the same path
+      const typed = '<b>second</b><img src=y onerror="window.__pwned=3">';
+      await page.click('#doneReviseBtn');
+      await page.fill('#doneReviseText', typed);
+      await page.click('#doneReviseSubmit');
+      await page.waitForFunction(t => document.getElementById('deliveryDoneMsg')?.textContent === t, typed, { timeout: 5000 });
+      r = await probe();
+      ok('the echo of a typed text is literal too, nothing parsed or run', r.kids === 0 && r.pwned === null, JSON.stringify(r));
+      return out;
+    },
+    { before: m.attach, initScript: AS_OWNER });
+}
+
+// ── errors: friendly text, modal stays open, button usable again
+{
+  const o = doneOpts();
+  const m = pickFakeWorker(o);
+  const cases = [
+    ['confirm', { status: 403, body: { error: '只有挑選人可以確認完成' } }, /只有選片人/],
+    ['confirm', { status: 401, body: { error: 'Unauthorized' } }, /連結已失效/],
+    ['confirm', { status: 409, body: { error: '尚未交件', code: 'not_delivered' } }, /重新整理/, true],
+    ['confirm', { status: 500, body: { error: '確認完成功能尚未啟用', code: 'confirm_unavailable' } }, /稍後再試/],
+    ['confirm', { status: 400, body: { error: 'Invalid body', code: 'invalid_body' } }, /稍後再試/],
+    ['confirm', 'net', /網路/],
+    ['revision', { status: 409, body: { error: '尚未處理的修改需求已有 10 則，請等攝影師回覆', code: 'revision_open_cap', max: 10 } }, /已達上限.*聯絡攝影師/],
+    ['revision', { status: 409, body: { error: '修改需求已達上限（50 則），請直接聯絡攝影師', code: 'revision_cap', max: 50 } }, /已達上限.*聯絡攝影師/],
+    ['revision', { status: 400, body: { error: '請輸入 1–1000 字的修改說明', code: 'invalid_message', max: 1000 } }, /1–1000/],
+    ['revision', { status: 413, body: { error: '資料太大', code: 'too_large', max: 16384 } }, /太長/],
+    ['revision', { status: 403, body: { error: '只有挑選人可以要求修改' } }, /只有選片人/],
+    ['revision', { status: 500, body: { error: '確認完成功能尚未啟用', code: 'confirm_unavailable' } }, /稍後再試/],
+  ];
+  await suite('guest 確認完成 — every error code maps to a friendly line; the modal stays open and 送出 works again',
+    `${base}/index.html?t=TOK`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('#doneConfirmBtn', { timeout: 5000 });
+      for (const [kind, inj, re, reload] of cases) {
+        const rev = kind === 'revision';
+        o.failNextPick = [inj];
+        await page.click(rev ? '#doneReviseBtn' : '#doneConfirmBtn');
+        if (rev) await page.fill('#doneReviseText', '請修一下');
+        await page.click(rev ? '#doneReviseSubmit' : '#doneConfirmSubmit');
+        const errSel = rev ? '#doneReviseErr' : '#doneConfirmErr';
+        await page.waitForFunction(s => document.querySelector(s).textContent.trim() !== '', errSel, { timeout: 5000 });
+        const t = await page.textContent(errSel);
+        const tag = `${kind} ${inj === 'net' ? 'network failure' : (inj.body.code || inj.status)}`;
+        ok(`${tag}: "${t.trim()}"`, re.test(t), t);
+        ok(`${tag}: the modal stays open, 送出 is usable again, nothing changed on the page`,
+          await modalShown(page, rev ? 'doneReviseModal' : 'doneConfirmModal') && !(await page.$eval(rev ? '#doneReviseSubmit' : '#doneConfirmSubmit', b => b.disabled)) &&
+          (await doneBlock(page)).state === 'open');
+        if (reload) ok(`${tag}: a 重新載入 button is offered`, (await page.$(`${errSel} .done-reload`)) !== null);
+        if (rev) ok(`${tag}: the typed text is kept`, (await page.$eval('#doneReviseText', e => e.value)) === '請修一下');
+        await page.click(rev ? '#doneReviseCancel' : '#doneConfirmCancel');
+      }
+      ok('after all that, nothing was ever recorded', m.state.revisions.length === 0 && m.state.project.client_confirmed_at === null);
+      ok('and a success afterwards still goes through', await (async () => {
+        await page.click('#doneConfirmBtn'); await page.click('#doneConfirmSubmit');
+        await page.waitForFunction(() => document.getElementById('deliveryDone')?.dataset.state === 'confirmed', null, { timeout: 5000 });
+        return m.state.project.client_confirmed_at !== null;
+      })());
+      return out;
+    },
+    { before: m.attach, initScript: AS_OWNER });
+}
+
+// ── already_confirmed (it happened in between), and a state read that fails
+{
+  const o = doneOpts();
+  const m = pickFakeWorker(o);
+  await suite('guest 確認完成 — 409 already_confirmed turns the page to ✓; a failing state re-read sends nothing',
+    `${base}/index.html?t=TOK`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('#doneReviseBtn', { timeout: 5000 });
+      // the state re-read fails: nothing is sent
+      await page.route('**/api/pick/state', r => r.fulfill({ status: 401, contentType: 'application/json', body: JSON.stringify({ error: 'Unauthorized' }) }));
+      await page.click('#doneReviseBtn');
+      await page.fill('#doneReviseText', '請修一下');
+      await page.click('#doneReviseSubmit');
+      await page.waitForFunction(() => document.getElementById('doneReviseErr').textContent.trim() !== '', null, { timeout: 5000 });
+      ok('a dead link on the re-read: 連結已失效, no request sent', /連結已失效/.test(await page.textContent('#doneReviseErr')) && donePosts(m, 'revision').length === 0);
+      await page.unroute('**/api/pick/state');
+      await page.click('#doneReviseCancel');
+
+      // the photographer confirmed between the re-read and the POST
+      o.failNextPick = [{ status: 409, body: { error: '已確認完成，無法再要求修改', code: 'already_confirmed' },
+        effect: () => { m.state.project.client_confirmed_at = '2026-09-22T01:00:00.000Z'; m.state.project.client_confirmed_by = 'photographer'; } }];
+      await page.click('#doneReviseBtn');
+      await page.click('#doneReviseSubmit');
+      await page.waitForFunction(() => document.getElementById('deliveryDone')?.dataset.state === 'confirmed', null, { timeout: 5000 });
+      const b = await doneBlock(page);
+      ok('the page shows ✓ 已確認完成（2026/9/22）, no buttons, modals gone', b.status === '✓ 已確認完成（2026/9/22）' && b.buttons.length === 0 && (await page.$('#doneReviseModal')) === null, JSON.stringify(b));
+      ok('a toast says so', await page.evaluate(() => [...document.querySelectorAll('.toast')].some(t => t.textContent.includes('已確認完成'))));
+      return out;
+    },
+    { before: m.attach, initScript: AS_OWNER });
+}
+
+// ── a double click sends one request; the button is disabled while it is in flight
+{
+  const m = pickFakeWorker(doneOpts({ pickDelay: 700 }));
+  await suite('guest 確認完成 — while the request is in flight 送出 is disabled; a double click sends once; 取消 does not close it',
+    `${base}/index.html?t=TOK`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('#doneConfirmBtn', { timeout: 5000 });
+      await page.click('#doneConfirmBtn');
+      const r = await page.evaluate(() => {
+        const b = document.getElementById('doneConfirmSubmit');
+        b.click(); const afterFirst = b.disabled; b.click(); b.click();
+        return { afterFirst };
+      });
+      ok('the button is disabled right after the first click', r.afterFirst === true);
+      await page.waitForTimeout(150);
+      await page.evaluate(() => document.getElementById('doneConfirmCancel').click());
+      ok('取消 while sending does not close the modal', await modalShown(page, 'doneConfirmModal'));
+      await page.waitForFunction(() => document.getElementById('deliveryDone')?.dataset.state === 'confirmed', null, { timeout: 5000 });
+      ok('exactly one POST for three clicks', donePosts(m, 'confirm').length === 1, String(donePosts(m, 'confirm').length));
+      return out;
+    },
+    { before: m.attach, initScript: AS_OWNER });
+}
+
+// ── the page shows an old version: re-read first, say so, send nothing
+for (const [name, mutate, seed] of [
+  ['the finals folder changed', m => { m.state.project.final_folders = ['shoot/精修二/']; }, {}],
+  ['delivered_at changed (undelivered and delivered again)', m => { m.state.project.delivered_at = '2026-09-25T00:00:00.000Z'; }, {}],
+  ['the photographer replaced the finals and the open request was resolved', m => { m.state.revisions.forEach(r => { r.resolved_at = '2026-09-25T00:00:00.000Z'; }); },
+    { revisions: [{ message: '舊版的要求', picker_id: 'picker-0' }] }],
+]) {
+  for (const kind of ['confirm', 'revision']) {
+    const m = pickFakeWorker(doneOpts(seed));
+    await suite(`guest 確認完成 — stale page (${name}), ${kind}: re-reads the state, shows 攝影師剛更新了照片 + 重新載入, sends nothing`,
+      `${base}/index.html?t=TOK`,
+      async page => {
+        const out = [];
+        const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+        await page.waitForSelector('#doneConfirmBtn', { timeout: 5000 });
+        const before = stateGets(m);
+        mutate(m);
+        const rev = kind === 'revision';
+        await page.click(rev ? '#doneReviseBtn' : '#doneConfirmBtn');
+        if (rev) await page.fill('#doneReviseText', '請修一下');
+        await page.click(rev ? '#doneReviseSubmit' : '#doneConfirmSubmit');
+        await page.waitForSelector(`${rev ? '#doneReviseErr' : '#doneConfirmErr'} .done-reload`, { timeout: 5000 });
+        const t = await page.textContent(rev ? '#doneReviseErr' : '#doneConfirmErr');
+        ok('the page re-read /api/pick/state before sending', stateGets(m) === before + 1, `${before} -> ${stateGets(m)}`);
+        ok('the line says 攝影師剛更新了照片，請重新整理後再確認', t.includes('攝影師剛更新了照片，請重新整理後再確認'), t);
+        ok('nothing was sent', donePosts(m, 'confirm').length === 0 && donePosts(m, 'revision').length === 0);
+        ok('the modal stays open (the guest decides) and the block is unchanged', await modalShown(page, rev ? 'doneReviseModal' : 'doneConfirmModal') && (await doneBlock(page)).state !== 'confirmed');
+        if (name.startsWith('the finals') && !rev) {
+          await Promise.all([page.waitForNavigation({ waitUntil: 'load' }), page.click(`#doneConfirmErr .done-reload`)]);
+          await page.waitForSelector('.photo-card', { timeout: 5000 });
+          ok('重新載入 reloads the page: the new finals folder is what is listed', (await guiIds(page)).every(id => id.startsWith('shoot/精修二/')) && (await guiIds(page)).length > 0, JSON.stringify(await guiIds(page)));
+          ok('and the block is back in its open state', (await doneBlock(page)).state === 'open');
+        }
+        return out;
+      },
+      { before: m.attach, initScript: AS_OWNER });
+  }
+}
+
+// ── confirmed by the photographer while the guest has the page open
+{
+  const m = pickFakeWorker(doneOpts());
+  await suite('guest 確認完成 — the photographer marked it complete meanwhile: nothing is sent, the page turns to ✓',
+    `${base}/index.html?t=TOK`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('#doneConfirmBtn', { timeout: 5000 });
+      m.state.project.client_confirmed_at = '2026-09-22T01:00:00.000Z';
+      m.state.project.client_confirmed_by = 'photographer';
+      await page.click('#doneConfirmBtn');
+      await page.click('#doneConfirmSubmit');
+      await page.waitForFunction(() => document.getElementById('deliveryDone')?.dataset.state === 'confirmed', null, { timeout: 5000 });
+      const b = await doneBlock(page);
+      ok('✓ 已確認完成（2026/9/22）, no buttons', b.status === '✓ 已確認完成（2026/9/22）' && b.buttons.length === 0, JSON.stringify(b));
+      ok('no confirm POST was sent', donePosts(m, 'confirm').length === 0);
+      return out;
+    },
+    { before: m.attach, initScript: AS_OWNER });
+}
+
+// ── the fake mirrors the Worker: what the guest page can rely on
+{
+  const m = pickFakeWorker(doneOpts({ phase: 'submitted', deliveredAt: null, finalFolders: null, confirmedAt: '2026-09-21T03:00:00.000Z',
+    revisions: [{ message: 'x', picker_id: 'picker-0' }] }));
+  await suite('fake worker — outside the delivered mode the state is always confirmed_at null / revision_open false / revision_message null',
+    `${base}/index.html?t=TOK`,
+    async page => {
+      await page.waitForSelector('.photo-card', { timeout: 5000 });
+      const d = await page.evaluate(async () => (await fetch(`${CONFIG.WORKER_URL}/api/pick/state`, { headers: { 'X-Share-Token': 'TOK', 'X-Picker-Key': 'ZOE-KEY' } })).json());
+      return [d.mode === 'picking' && d.confirmed_at === null && d.revision_open === false && d.revision_message === null
+        ? 'ok    null / false / null' : `FAIL  ${JSON.stringify(d)}`];
+    },
+    { before: m.attach, initScript: AS_OWNER });
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // Delivered projects (docs/dashboard-settings.md) — admin.html project detail
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -8727,6 +9334,229 @@ const chipTexts = (page, sel) => page.$$eval(sel, els => els.map(e => e.dataset.
       await page.waitForSelector('[data-delivered-status]', { timeout: 3000 });
       ok('交件 re-delivers the kept folders', deliverBodies(m).length === before + 1 &&
         JSON.stringify(deliverBodies(m)[before]) === '{"final_folders":["shoot/精修/"]}', JSON.stringify(deliverBodies(m)));
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN });
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Client confirmation (docs/delivery.md) — admin.html: list badge, the 交件
+// block's confirmation state, the revision requests, 標記完成
+// ═══════════════════════════════════════════════════════════════════════════
+
+const ADM_REVS = () => [
+  { message: '最舊：已處理的要求', picker_id: 'picker-0', created_at: '2026-09-20T02:00:00.000Z', resolved_at: '2026-09-21T01:00:00.000Z' },
+  { message: '第二點 f1.jpg 偏黃', picker_id: 'picker-0', created_at: '2026-09-21T03:00:00.000Z' },
+  { message: '最新：背景路人', picker_id: 'picker-0', created_at: '2026-09-22T04:00:00.000Z' },
+];
+const admDelivered = (o = {}) => ({ projectId: 'proj-cf', title: '確認專案', phase: 'retouching', ownerName: 'Zoe', folders: ['shoot/毛片/'],
+  finalFolders: ['shoot/精修/'], deliveredAt: '2026-09-20T00:00:00.000Z', bucketFolders: ADMIN_BUCKET, ...o });
+const admConfirmPosts = m => m.requests.filter(r => r.method === 'POST' && /\/api\/admin\/projects\/[^/]+\/confirm$/.test(r.path));
+const admDetailGets = m => m.requests.filter(r => r.method === 'GET' && /^\/api\/admin\/projects\/[^/]+$/.test(r.path)).length;
+const admListBadges = page => page.$$eval('#proj-recent-list [data-project-row] .badge', els =>
+  els.map(e => ({ t: e.textContent.trim(), c: e.dataset.confirmBadge || null, d: e.hasAttribute('data-delivered-badge') })));
+const admRevItems = page => page.$$eval('#pd-revisions .pd-rev', els => els.map(e => ({
+  msg: e.querySelector('.pd-rev-msg')?.textContent, meta: e.querySelector('.pd-rev-meta')?.textContent,
+  resolved: e.classList.contains('resolved'), tag: e.querySelector('.pd-rev-done')?.textContent ?? null,
+  color: getComputedStyle(e.querySelector('.pd-rev-msg')).color, bg: getComputedStyle(e).backgroundColor, dashed: getComputedStyle(e).borderStyle === 'dashed' })));
+
+// ── list badge: 客戶已確認 / 已標記完成 / 待修改 N, in addition to 已交件
+{
+  const m = pickFakeWorker(admDelivered());
+  const put = (revs, confirmed, by) => {
+    m.state.revisions = revs.map((r, i) => ({ id: `r${i}`, picker_id: 'picker-0', resolved_at: null, created_at: '2026-09-21T00:00:00.000Z', ...r }));
+    m.state.project.client_confirmed_at = confirmed || null;
+    m.state.project.client_confirmed_by = confirmed ? by : null;
+  };
+  await suite('admin 列表 — delivered project badges: 已交件 stays; plus 客戶已確認 / 已標記完成 / 待修改 N; nothing for an undelivered one',
+    `${base}/admin.html#projects`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      const reload = async () => { await page.reload({ waitUntil: 'load' }); await page.waitForSelector('#proj-recent-list [data-project-row]', { timeout: 5000 }); return admListBadges(page); };
+      await page.waitForSelector('#proj-recent-list [data-project-row]', { timeout: 5000 });
+      let b = await admListBadges(page);
+      ok('delivered, nothing asked, not confirmed: the 已交件 badge and no confirmation badge', b.some(x => x.d && x.t === '已交件') && !b.some(x => x.c), JSON.stringify(b));
+      put([{ message: 'a' }, { message: 'b' }, { message: 'c', resolved_at: '2026-09-22T00:00:00.000Z' }]);
+      ok('fixture: the list row says 2 open (the resolved one does not count)', m.state.revisions.filter(r => !r.resolved_at).length === 2);
+      b = await reload();
+      ok('2 open requests: 待修改 2 (data-confirm-badge=revising), 已交件 still there', b.some(x => x.c === 'revising' && x.t === '待修改 2') && b.some(x => x.d && x.t === '已交件'), JSON.stringify(b));
+      put([{ message: 'a' }], '2026-09-23T00:00:00.000Z', 'guest');
+      b = await reload();
+      ok('confirmed by the guest: 客戶已確認 — and it wins over an open request; no 待修改', b.some(x => x.c === 'confirmed' && x.t === '客戶已確認') && !b.some(x => x.c === 'revising') && b.some(x => x.d), JSON.stringify(b));
+      put([], '2026-09-23T00:00:00.000Z', 'photographer');
+      b = await reload();
+      ok('confirmed by the photographer: 已標記完成 (told apart from the guest\'s), not 客戶已確認', b.some(x => x.c === 'photographer' && x.t === '已標記完成') && !b.some(x => x.t === '客戶已確認') && b.some(x => x.d), JSON.stringify(b));
+      put([{ message: 'a' }, { message: 'b' }]);
+      m.state.project.delivered_at = null;
+      b = await reload();
+      ok('not delivered (取消交件 keeps the requests open): no 已交件 and no confirmation badge at all', !b.some(x => x.d) && !b.some(x => x.c) && !b.some(x => /待修改/.test(x.t)), JSON.stringify(b));
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN });
+}
+
+// ── detail: the 交件 block shows the state, the requests, 標記完成 (and it updates in place)
+{
+  const o = admDelivered({ revisions: ADM_REVS() });
+  const m = pickFakeWorker(o);
+  await suite('admin 交件 — 要求修改清單、尚未確認、標記完成（先確認對話框；成功後就地更新狀態、徽章、清單）',
+    `${base}/admin.html#project=proj-cf`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('#pd-delivery #pd-revisions .pd-rev', { timeout: 5000 });
+      ok('fixture: delivered, not confirmed, 2 open + 1 resolved', m.state.project.delivered_at !== null && m.state.project.client_confirmed_at === null && m.state.revisions.length === 3);
+      ok('the confirmation status says 尚未確認', /尚未確認/.test(await page.textContent('#pd-confirm-status')), await page.textContent('#pd-confirm-status'));
+      const items = await admRevItems(page);
+      ok('the list is newest first: 最新, 第二點, 最舊', JSON.stringify(items.map(i => i.msg)) === JSON.stringify(['最新：背景路人', '第二點 f1.jpg 偏黃', '最舊：已處理的要求']), JSON.stringify(items.map(i => i.msg)));
+      ok('each item names the picker and the time (Taipei)', items.every(i => /Zoe/.test(i.meta)) && /9\/22 12:00/.test(items[0].meta), JSON.stringify(items.map(i => i.meta)));
+      ok('only the resolved one is marked 已處理 and quieter (dashed, softer text)', JSON.stringify(items.map(i => i.resolved)) === '[false,false,true]' && items[2].tag === '已處理' && items[2].dashed && !items[0].dashed && items[2].color !== items[0].color && items[0].tag === null, JSON.stringify(items));
+      ok('with open requests a line explains the flow (上傳新版 → 更換精修資料夾 → 自動結案)',
+        /請上傳新版精修資料夾後按「更換精修資料夾」，會自動結案目前的要求/.test(await page.textContent('#pd-revision-hint')), await page.textContent('#pd-revision-hint').catch(() => 'absent'));
+      ok('the head and the list carry 待修改 2', (await page.$eval('.pd-head [data-confirm-badge]', e => e.textContent.trim())) === '待修改 2' &&
+        (await admListBadges(page)).some(x => x.c === 'revising' && x.t === '待修改 2'), JSON.stringify(await admListBadges(page)));
+      ok('the button is 標記完成', (await page.textContent('#pd-mark-done-btn')).trim() === '標記完成');
+      ok('existing buttons are still there (更換精修資料夾, 取消交件)', !!(await page.$('#pd-replace-final-btn')) && !!(await page.$('#pd-undeliver-btn')));
+
+      let dialogText = '';
+      page.once('dialog', d => { dialogText = d.message(); d.dismiss(); });
+      await page.click('#pd-mark-done-btn');
+      await page.waitForTimeout(300);
+      ok('it asks first: 這是代客戶確認，客戶頁面會顯示已確認完成', /這是代客戶確認/.test(dialogText) && /客戶頁面會顯示已確認完成/.test(dialogText), dialogText);
+      ok('dismissing sends nothing', admConfirmPosts(m).length === 0 && m.state.project.client_confirmed_at === null);
+
+      const gets0 = admDetailGets(m);
+      page.once('dialog', d => d.accept());
+      await page.click('#pd-mark-done-btn');
+      await page.waitForFunction(() => document.getElementById('pd-mark-done-btn') === null, null, { timeout: 5000 });
+      ok('one POST to /confirm for this project, no body needed', admConfirmPosts(m).length === 1 && admConfirmPosts(m)[0].path === '/api/admin/projects/proj-cf/confirm');
+      ok('recorded as the photographer\'s', m.state.project.client_confirmed_by === 'photographer');
+      const st = await page.textContent('#pd-confirm-status');
+      ok('the status is now 已標記完成（攝影師代為確認）with the time', /已標記完成/.test(st) && /攝影師代為確認/.test(st) && /\d+\/\d+ \d{2}:\d{2}/.test(st), st);
+      ok('the button and the explaining line are gone', (await page.$('#pd-mark-done-btn')) === null && (await page.$('#pd-revision-hint')) === null);
+      const after = await admRevItems(page);
+      ok('the Worker resolved the requests: every item is now 已處理', after.length === 3 && after.every(i => i.resolved && i.tag === '已處理'), JSON.stringify(after));
+      ok('the head badge turned into 已標記完成, and 已交件 is still there', (await page.$eval('.pd-head [data-confirm-badge]', e => e.textContent.trim() + '|' + e.dataset.confirmBadge)) === '已標記完成|photographer' &&
+        (await page.$('.pd-head [data-delivered-badge]')) !== null);
+      await page.waitForFunction(() => document.querySelector('#proj-recent-list [data-confirm-badge="photographer"]'), null, { timeout: 5000 });
+      ok('the list row followed (已標記完成)', (await admListBadges(page)).some(x => x.c === 'photographer' && x.t === '已標記完成') && !(await admListBadges(page)).some(x => x.c === 'revising'));
+      ok('updated in place: the detail was not fetched again', admDetailGets(m) === gets0, `${gets0} -> ${admDetailGets(m)}`);
+      ok('更換精修資料夾 and 取消交件 are still offered', !!(await page.$('#pd-replace-final-btn')) && !!(await page.$('#pd-undeliver-btn')));
+      await page.reload({ waitUntil: 'load' });
+      await page.waitForSelector('#pd-confirm-status', { timeout: 5000 });
+      ok('after a reload the Worker still says it (no button, same status)', (await page.$('#pd-mark-done-btn')) === null && /已標記完成/.test(await page.textContent('#pd-confirm-status')));
+      if (process.env.SHOTS_DONE) await page.screenshot({ path: `${process.env.SHOTS_DONE}/admin-detail-marked.png`, fullPage: true });
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN });
+}
+
+// ── detail: confirmed by the guest, and the states with no 標記完成
+for (const [name, o, re, wantBtn, wantReqs] of [
+  ['confirmed by the guest', admDelivered({ confirmedAt: '2026-09-23T03:30:00.000Z', confirmedBy: 'guest', revisions: ADM_REVS().map(r => ({ ...r, resolved_at: '2026-09-23T03:30:00.000Z' })) }), /客戶已確認完成.*9\/23 11:30/, false, true],
+  ['delivered, no request, not confirmed', admDelivered(), /尚未確認/, true, false],
+  ['retouching, not delivered (the chooser only)', admDelivered({ deliveredAt: null, finalFolders: null, revisions: ADM_REVS() }), null, false, false],
+  ['picking, not delivered', admDelivered({ phase: 'submitted', deliveredAt: null, finalFolders: null }), null, false, false],
+]) {
+  const m = pickFakeWorker(o);
+  await suite(`admin 交件 — ${name}`,
+    `${base}/admin.html#project=proj-cf`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('.pd-head', { timeout: 5000 });
+      await page.waitForSelector('#pd-plan #pd-plan-save', { timeout: 5000 });
+      if (re) {
+        ok('the status line', re.test(await page.textContent('#pd-confirm-status')), await page.textContent('#pd-confirm-status'));
+        ok('the guest\'s confirmation is told apart from the photographer\'s', name.includes('guest') ? !/攝影師代為確認/.test(await page.textContent('#pd-confirm-status')) : true);
+      } else {
+        ok('no confirmation UI at all in the DOM (status, list, hint, button)', (await page.$$('#pd-confirm-status, #pd-revisions, #pd-revision-hint, #pd-mark-done-btn, [data-confirm-badge]')).length === 0);
+      }
+      ok(`標記完成 button ${wantBtn ? 'is' : 'is not'} there`, ((await page.$('#pd-mark-done-btn')) !== null) === wantBtn);
+      ok(`the request list ${wantReqs ? 'is' : 'is not'} shown`, ((await page.$('#pd-revisions .pd-rev')) !== null) === wantReqs);
+      if (name.includes('delivered, no request')) ok('with nothing asked there is no explaining line and no empty list box', (await page.$('#pd-revision-hint')) === null && (await page.$('#pd-revisions')) === null);
+      if (name.includes('guest')) {
+        const it = await admRevItems(page);
+        ok('all three items are 已處理, no explaining line', it.length === 3 && it.every(i => i.resolved) && (await page.$('#pd-revision-hint')) === null);
+      }
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN });
+}
+
+// ── the guest's text and name are never parsed as HTML
+{
+  const evil = '<img src=x onerror="window.__pwned=1"><b>bold</b><script>window.__pwned=2</script>';
+  const m = pickFakeWorker(admDelivered({ ownerName: '<i>Zoe</i><img src=y onerror="window.__pwned=3">', revisions: [{ message: evil, picker_id: 'picker-0' }] }));
+  await suite('admin 交件 — a revision text / picker name with markup is plain text (no element, nothing runs)',
+    `${base}/admin.html#project=proj-cf`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('#pd-revisions .pd-rev', { timeout: 5000 });
+      const r = await page.evaluate(() => ({ msg: document.querySelector('#pd-revisions .pd-rev-msg').textContent, meta: document.querySelector('#pd-revisions .pd-rev-meta').textContent,
+        kids: document.querySelectorAll('#pd-revisions img, #pd-revisions b, #pd-revisions i, #pd-revisions script').length, pwned: window.__pwned ?? null }));
+      ok('the text is literal', r.msg === evil, r.msg);
+      ok('the picker name is literal', r.meta.includes('<i>Zoe</i>'), r.meta);
+      ok('no img/b/i/script element exists in the list, and nothing ran', r.kids === 0 && r.pwned === null, JSON.stringify(r));
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN });
+}
+
+// ── errors of 標記完成
+for (const [name, setup, re, stillThere] of [
+  ['409 not_delivered (undelivered in another tab)', (m, o) => { m.state.project.delivered_at = null; }, /尚未交件/, true],
+  ['404 (the project is gone)', (m, o) => { m.state.project.id = 'someone-else'; }, /找不到專案/, true],
+  ['500 confirm_unavailable (migration not run)', (m, o) => { o.confirmUnavailable = true; }, /資料庫尚未升級.*migration/, true],
+]) {
+  const o = admDelivered({ revisions: ADM_REVS() });
+  const m = pickFakeWorker(o);
+  await suite(`admin 標記完成 — ${name}: a clear message, nothing changes on the page`,
+    `${base}/admin.html#project=proj-cf`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('#pd-mark-done-btn', { timeout: 5000 });
+      setup(m, o);
+      page.once('dialog', d => d.accept());
+      await page.click('#pd-mark-done-btn');
+      await page.waitForFunction(() => document.getElementById('pd-confirm-err')?.textContent.trim() !== '', null, { timeout: 5000 });
+      const t = await page.textContent('#pd-confirm-err');
+      ok(`message: "${t}"`, re.test(t), t);
+      ok('the request was made (so the error came from the Worker)', admConfirmPosts(m).length === 1);
+      ok('the status is unchanged (尚未確認), the list of requests is intact', /尚未確認/.test(await page.textContent('#pd-confirm-status')) && (await admRevItems(page)).length === 3);
+      ok('the button is usable again', stillThere && !(await page.$eval('#pd-mark-done-btn', b => b.disabled)));
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN });
+}
+
+// ── 更換精修資料夾 closes the requests (the Worker does it; the page shows it)
+{
+  const m = pickFakeWorker(admDelivered({ revisions: ADM_REVS(), confirmedAt: null }));
+  await suite('admin 交件 — 更換精修資料夾 (a repeat deliver) resolves the open requests: all 已處理, the 待修改 badge and the explaining line go',
+    `${base}/admin.html#project=proj-cf`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('#pd-revisions .pd-rev', { timeout: 5000 });
+      ok('before: 2 open, the line and the badge are there', (await admRevItems(page)).filter(i => !i.resolved).length === 2 && !!(await page.$('#pd-revision-hint')) &&
+        (await admListBadges(page)).some(x => x.c === 'revising'));
+      await page.click('#pd-replace-final-btn');
+      await adminPickFinals(page, ['shoot/'], ['shoot/精修二/']);
+      await page.waitForSelector('#pd-final-chips [data-final-chip]', { timeout: 3000 });
+      // the picker pre-ticked the old finals: drop them from the draft, keep 精修二
+      await page.evaluate(() => { document.querySelector('#pd-final-chips [data-remove-final="shoot/精修/"]')?.click(); });
+      await page.click('#pd-deliver-btn');
+      await page.waitForFunction(() => document.querySelector('#pd-delivered-folders [data-final-chip]')?.dataset.finalChip === 'shoot/精修二/', null, { timeout: 5000 });
+      const after = await admRevItems(page);
+      ok('every request is now 已處理', after.length === 3 && after.every(i => i.resolved), JSON.stringify(after));
+      ok('the explaining line and the 待修改 badge are gone (the head and the list)',
+        (await page.$('#pd-revision-hint')) === null && (await page.$('.pd-head [data-confirm-badge="revising"]')) === null &&
+        !(await admListBadges(page)).some(x => x.c === 'revising'), JSON.stringify(await admListBadges(page)));
+      ok('a new version is not confirmed: 尚未確認 and 標記完成 is offered again', /尚未確認/.test(await page.textContent('#pd-confirm-status')) && !!(await page.$('#pd-mark-done-btn')));
       return out;
     },
     { before: m.attach, initScript: ADMIN });
@@ -13404,6 +14234,40 @@ for (const [tag, ctx] of [['1280', DESKTOP], ['390', PHONE]]) {
       return out;
     },
     { before: m.attach, initScript: ADMIN, contextOptions: ctx });
+}
+
+// ── admin.html: client confirmation (docs/delivery.md) in the cream theme ──
+for (const [tag, ctx] of [['1280', DESKTOP], ['390', PHONE]]) {
+  for (const [state, o] of [
+    ['open requests', admDelivered({ revisions: ADM_REVS() })],
+    ['confirmed by the photographer', admDelivered({ confirmedAt: '2026-09-23T03:30:00.000Z', confirmedBy: 'photographer', revisions: ADM_REVS().map(r => ({ ...r, resolved_at: '2026-09-23T03:30:00.000Z' })) })],
+  ]) {
+    const m = pickFakeWorker(o);
+    await suite(`亮色主題 — admin 交件的確認狀態與要求修改清單（${state}）[${tag}]`,
+      `${base}/admin.html#project=proj-cf`,
+      async page => {
+        const out = [];
+        const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+        await page.waitForSelector('#pd-revisions .pd-rev', { timeout: 5000 });
+        await page.waitForSelector('#proj-recent-list [data-confirm-badge], .pd-head [data-confirm-badge]', { timeout: 5000 });
+        const open = state === 'open requests';
+        ok('the fixture reached the places under test (list of 3, one resolved, status line, a badge in the head)',
+          await page.evaluate(() => document.querySelectorAll('#pd-revisions .pd-rev').length === 3 && !!document.getElementById('pd-confirm-status') && !!document.querySelector('.pd-head [data-confirm-badge]')));
+        ok(open ? '標記完成 and the explaining line are on screen' : 'the status line is the confirmed (green) one',
+          open ? !!(await page.$('#pd-mark-done-btn')) && !!(await page.$('#pd-revision-hint')) : await page.$eval('#pd-confirm-status', e => e.classList.contains('done')));
+        await tokenChecks(page, ok, 'admin');
+        await brightChecks(page, ok, `admin 確認區 (${state})`, { minItems: 60,
+          named: ['#pd-confirm-status', '.pd-rev-meta', '.pd-rev-msg', '.pd-rev.resolved .pd-rev-msg', '.pd-rev-done', '.pd-head [data-confirm-badge]',
+            '#proj-recent-list [data-confirm-badge]', ...(open ? ['#pd-mark-done-btn', '#pd-revision-hint'] : [])] });
+        const card = await page.$eval('.pd-rev:not(.resolved), .pd-rev', e => { const c = getComputedStyle(e); return { bg: c.backgroundColor }; });
+        ok('a request is a light card (not a dark box)', /^rgb\(2[0-9]{2}, 2[0-9]{2}, 2[0-9]{2}\)$/.test(card.bg), JSON.stringify(card));
+        if (tag === '390') ok('no horizontal scroll', await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+        await shot(page, `admin-confirm-${state.split(' ')[0]}-${tag}`);
+        if (process.env.SHOTS_DONE) await page.screenshot({ path: `${process.env.SHOTS_DONE}/admin-detail-${state.split(' ')[0]}-${tag}.png`, fullPage: true });
+        return out;
+      },
+      { before: m.attach, initScript: ADMIN, contextOptions: ctx });
+  }
 }
 
 // ── admin.html: the 客戶 table ─────────────────────────────────────────────

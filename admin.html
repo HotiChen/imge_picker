@@ -181,6 +181,18 @@
   .pd-block .pd-note { color: var(--ink-55); font-size: 12px; margin: 6px 0 10px; line-height: 1.6; }
   .pd-block .pd-row a.btn { text-decoration: none; }
   .pd-block .pd-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
+  /* client confirmation (docs/delivery.md): status, the guest's 要求修改 list, 標記完成 */
+  .pd-confirm { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--rule); }
+  .pd-confirm-status { font-size: 13px; color: var(--ink-90); font-weight: 600; }
+  .pd-confirm-status.done { color: var(--success); }
+  #pd-revisions { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
+  .pd-rev { background: var(--card); border: 1px solid var(--rule); border-radius: 10px; padding: 8px 12px; font-size: 13px; }
+  /* a handled request is quieter (white, dashed, softer text), not translucent: it must stay AA-legible */
+  .pd-rev.resolved { background: var(--surface); border-style: dashed; }
+  .pd-rev.resolved .pd-rev-msg { color: var(--ink-70); }
+  .pd-rev-meta { color: var(--ink-70); font-size: 12px; font-family: 'IBM Plex Mono', monospace; margin-bottom: 3px; }
+  .pd-rev-msg { color: var(--ink-90); white-space: pre-wrap; overflow-wrap: anywhere; }
+  .pd-rev-done { display: inline-block; margin-left: 8px; padding: 1px 8px; border-radius: 999px; background: var(--mint); color: var(--success); font-size: 11px; }
   .pd-switch { display: flex; align-items: center; gap: 8px; font-size: 14px; cursor: pointer; }
   #project-detail-panel h4 { font-size: 13px; margin: 18px 0 8px; color: var(--ink-90); }
   #project-detail-panel h4 a.pd-link,
@@ -778,6 +790,19 @@
     }
   }
 
+  // Client confirmation badge (docs/delivery.md), only for a delivered project
+  // and only in addition to 已交件: confirmed (by whom) wins over open requests.
+  function confirmBadgeHtml(p) {
+    if (!p || !p.delivered_at) return '';
+    if (p.client_confirmed_at) {
+      return p.client_confirmed_by === 'photographer'
+        ? '<span class="badge badge-approved" data-confirm-badge="photographer">已標記完成</span>'
+        : '<span class="badge badge-approved" data-confirm-badge="confirmed">客戶已確認</span>';
+    }
+    const n = Number(p.open_revision_count) || 0;
+    return n > 0 ? `<span class="badge badge-pending" data-confirm-badge="revising">待修改 ${escHtml(n)}</span>` : '';
+  }
+
   function renderProjectList(projects) {
     const box = document.getElementById('proj-recent-list');
     if (!box) return;
@@ -788,6 +813,7 @@
           <span>${escHtml(p.title || '（未命名）')}</span>
           <span class="badge badge-approved">${escHtml(PHASE_LABEL[p.phase] || p.phase || '')}</span>
           ${p.delivered_at ? '<span class="badge badge-approved" data-delivered-badge>已交件</span>' : ''}
+          ${confirmBadgeHtml(p)}
           ${p.archived_at ? '<span class="badge badge-pending">已封存</span>' : ''}
           ${p.modified_after_submit ? '<span class="badge badge-pending">已修改</span>' : ''}
           ${p.unnotified_submissions ? `<span class="badge badge-pending">${escHtml(p.unnotified_submissions)} 次送出未寄信</span>` : ''}
@@ -953,6 +979,7 @@
         <h3>${escHtml(project.title || '（未命名）')}</h3>
         <span class="badge badge-approved">${escHtml(PHASE_LABEL[project.phase] || project.phase || '')}</span>
         ${project.delivered_at ? '<span class="badge badge-approved" data-delivered-badge>已交件</span>' : ''}
+        <span id="pd-confirm-badge-slot" style="display:contents">${confirmBadgeHtml(project)}</span>
         ${project.archived_at ? '<span class="badge badge-pending">已封存</span>' : ''}
         ${project.modified_after_submit ? '<span class="badge badge-pending">已修改，尚未重新送出</span>' : ''}
         ${data.unnotified_submissions ? `<span class="badge badge-pending">${escHtml(data.unnotified_submissions)} 次送出未寄信</span>` : ''}
@@ -1037,6 +1064,7 @@
     document.getElementById('pd-reopen-btn').addEventListener('click', () => projectAction('reopen'));
     // 交件 / 毛片下載 have their own blocks (docs/delivery.md).
     currentProject = project;
+    currentRevisions = Array.isArray(data.revision_requests) ? data.revision_requests : [];
     // Delivery state is delivered_at alone. After 取消交件 or 開放修改 the Worker keeps
     // final_folders, so an undelivered project can still carry them: they
     // pre-fill the chooser (editable; nothing is sent until 交件 is pressed).
@@ -1129,6 +1157,7 @@
   // finalDraft: the folders chosen in the picker but not delivered yet.
   // finalEditing: a delivered project's 更換精修資料夾 chooser is open.
   let currentProject = null;
+  let currentRevisions = [];   // the guest's 要求修改, newest first (detail.revision_requests)
   let finalDraft = [];
   let finalEditing = false;
 
@@ -1164,6 +1193,91 @@
       }
     }
     return `upload.html?${proj}`;
+  }
+
+  // ── 客戶確認 / 要求修改 (docs/delivery.md) ────────────────────────────────
+  // Only for a delivered project. The guest's text and name are raw in the
+  // JSON: they are put in with textContent (fillRevisionList), never HTML.
+  function confirmSectionHtml(project) {
+    const confirmed = !!project.client_confirmed_at;
+    const open = currentRevisions.filter(r => !r.resolved_at).length;
+    const status = confirmed
+      ? (project.client_confirmed_by === 'photographer'
+        ? `已標記完成（攝影師代為確認）· ${fmtTime(project.client_confirmed_at)}`
+        : `客戶已確認完成 · ${fmtTime(project.client_confirmed_at)}`)
+      : '客戶尚未確認';
+    return `
+      <div class="pd-confirm" id="pd-confirm">
+        <div id="pd-confirm-status" class="pd-confirm-status${confirmed ? ' done' : ''}">${escHtml(status)}</div>
+        ${open > 0 ? '<div class="pd-note" id="pd-revision-hint">請上傳新版精修資料夾後按「更換精修資料夾」，會自動結案目前的要求</div>' : ''}
+        ${currentRevisions.length ? '<div id="pd-revisions"></div>' : ''}
+        ${confirmed ? '' : '<div class="pd-row"><button id="pd-mark-done-btn" class="btn btn-outline" type="button">標記完成</button></div>'}
+        <div id="pd-confirm-err" class="err"></div>
+      </div>`;
+  }
+
+  function fillRevisionList(box) {
+    const list = box.querySelector('#pd-revisions');
+    if (!list) return;
+    list.replaceChildren(...currentRevisions.map(r => {
+      const item = document.createElement('div');
+      item.className = 'pd-rev' + (r.resolved_at ? ' resolved' : '');
+      const meta = document.createElement('div');
+      meta.className = 'pd-rev-meta';
+      meta.textContent = `${fmtTime(r.created_at)} · ${r.picker_name || '（客人）'}`;
+      if (r.resolved_at) {
+        const tag = document.createElement('span');
+        tag.className = 'pd-rev-done';
+        tag.textContent = '已處理';
+        meta.append(tag);
+      }
+      const msg = document.createElement('div');
+      msg.className = 'pd-rev-msg';
+      msg.textContent = r.message == null ? '' : String(r.message);
+      item.append(meta, msg);
+      return item;
+    }));
+  }
+
+  const MARK_DONE_ERRORS = {
+    not_delivered: () => '尚未交件，無法標記完成（頁面可能已過期，請重新整理）',
+    confirm_unavailable: () => '資料庫尚未升級（請先跑 migration）',
+  };
+
+  // 標記完成: the photographer confirms for a guest who never answers.
+  // Updates the page in place from the Worker's answer.
+  async function markDone() {
+    const btn = document.getElementById('pd-mark-done-btn');
+    const errEl = document.getElementById('pd-confirm-err');
+    if (errEl) errEl.textContent = '';
+    if (!confirm('這是代客戶確認：客戶頁面會顯示已確認完成，目前未處理的修改要求也會一併結案。確定要標記完成嗎？')) return;
+    if (btn) btn.disabled = true;
+    try {
+      const r = await fetch(`${WORKER_URL}/api/admin/projects/${encodeURIComponent(currentProjectId)}/confirm`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${getToken()}` },
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        const map = MARK_DONE_ERRORS[data.code];
+        if (errEl) errEl.textContent = map ? map(data) : (r.status === 404 ? '找不到專案（可能已被刪除）' : (data.error || `失敗（${r.status}）`));
+        if (btn) btn.disabled = false;
+        return;
+      }
+      const at = data.client_confirmed_at;
+      currentProject.client_confirmed_at = at;
+      currentProject.client_confirmed_by = data.client_confirmed_by;
+      currentProject.open_revision_count = 0;
+      // the Worker resolves the open requests with the confirmation
+      currentRevisions = currentRevisions.map(x => (x.resolved_at ? x : { ...x, resolved_at: at }));
+      renderDeliveryBlock();
+      const slot = document.getElementById('pd-confirm-badge-slot');
+      if (slot) slot.innerHTML = confirmBadgeHtml(currentProject);
+      await loadProjectList();
+    } catch (e) {
+      if (errEl) errEl.textContent = '無法連線到 Worker';
+      if (btn) btn.disabled = false;
+    }
   }
 
   function renderDeliveryBlock() {
@@ -1203,7 +1317,9 @@
           <button id="pd-replace-final-btn" class="btn btn-outline" type="button">更換精修資料夾</button>
           <button id="pd-undeliver-btn" class="btn btn-ghost" type="button">取消交件</button>
         </div>`}
-        <div id="pd-deliver-err" class="err"></div>`;
+        <div id="pd-deliver-err" class="err"></div>
+        ${confirmSectionHtml(project)}`;
+      fillRevisionList(box);
     }
 
     box.querySelector('#pd-final-pick-btn')?.addEventListener('click', openFinalFolderPicker);
@@ -1224,6 +1340,7 @@
       finalDraft = [];
       renderDeliveryBlock();
     });
+    box.querySelector('#pd-mark-done-btn')?.addEventListener('click', markDone);
     box.querySelector('#pd-undeliver-btn')?.addEventListener('click', async () => {
       if (!confirm('取消交件後，客人的連結會回到選片畫面（唯讀），精修成品不再顯示。確定要取消交件嗎？')) return;
       await projectAction('undeliver');
