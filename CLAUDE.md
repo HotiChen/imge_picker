@@ -4,6 +4,26 @@ Photographer's photo-picking studio at imhoti.tw/studio. Cloudflare Worker
 (`worker/worker.js`) + R2 bucket `imagepicker` + D1 `imagepicker-db`, vanilla
 JS frontend. Feature designs live in `docs/` (e.g. `docs/guest-picking.md`).
 
+**The roadmap is `docs/backlog.md` → "THE ORDER": the only main line.** Run real
+jobs end to end first; no new big feature outside that list.
+
+## Where things are (grep the names; line numbers drift)
+- `worker/worker.js` (one file, ~3.8k lines): `resolveShareToken` (every link/token
+  lookup), `pickReadScope` / `pickFinals` (what a guest link may read — the gate),
+  `/api/admin/projects…` (photographer routes, `isAdminToken`), `/api/pick/state`
+  and `?list=` / object reads (guest side), `withoutMissingColumn` (works before a
+  migration has run). `DEFAULT_PHOTOGRAPHER_ID` is the single-tenant placeholder.
+- `worker/test/*.test.mjs` (`fakes.mjs` = fake D1/R2, `pick-helpers.mjs`):
+  `delivery.test.mjs` = deliver / undeliver / reopen / finals gate,
+  `pick-marks.test.mjs` = pins, `pick-gate.test.mjs` = what a link may read.
+- `js/pick.js` guest page (picking, pins, delivery gallery); `js/project-view.js`
+  photographer review view (`index.html?project=<id>`); `js/app.js` shared photo
+  grid + preview modal; `js/annotation.js` pin drawing; `js/selection-export.js`
+  CSV for the retoucher; `js/auth.js` login overlay.
+- `admin.html` project list/detail (delivery block, orders, downloads);
+  `upload.html` upload; `book_editor/` album editor (own CSS `book_editor.css`,
+  not `css/styles.css`); `test/run.mjs` the whole browser suite.
+
 ## Talking with Tim
 - Reply in Traditional Chinese, short: what's wrong, how to fix it.
 - Evaluate fairly. Don't just agree — give your own view and the trade-off.
