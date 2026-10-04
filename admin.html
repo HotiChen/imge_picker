@@ -170,6 +170,42 @@
   .proj-recent-row { display: flex; align-items: center; justify-content: space-between;
     gap: 10px; padding: 10px 14px; background: var(--surface); border: 1px solid var(--rule);
     border-radius: 12px; margin-bottom: 6px; font-size: 13px; }
+  /* create form: which folder a project will use (js/project-folders.js) and whether it already holds photos */
+  .proj-folder-preview { color: var(--ink-70); font-size: 13px; line-height: 1.7; margin: 0 0 6px; overflow-wrap: anywhere; }
+  .proj-folder-preview code { font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: var(--ink-90); }
+  .proj-folder-preview .proj-folder-warn { color: var(--accent-ink); }
+  .proj-folder-note { color: var(--ink-70); font-size: 12px; line-height: 1.6; margin: 0 0 12px; }
+  .proj-folder-note[data-state="existing"] { color: var(--accent-ink); font-weight: 600; }
+  /* nothing to create yet: muted but still AA-legible (the generic .btn:disabled opacity would not be) */
+  #proj-create-btn:disabled { opacity: 1; background: var(--card-hi); color: var(--ink-70); }
+  /* Project detail sections: a title row (title + one-line summary + ▾/▸) that opens and
+     closes its body. Closed = display:none on the body container. Everything inside keeps its id. */
+  .pd-sec { border: 1px solid var(--rule); border-radius: 12px; background: var(--surface); margin: 10px 0 0; }
+  .pd-sec.pd-sec-off { display: none; }
+  #project-detail-panel .pd-sec-h { display: block; margin: 0; font-size: 14px; }
+  .pd-sec-head { display: flex; flex-wrap: wrap; align-items: center; gap: 0 8px; }
+  .pd-sec-head .pd-sec-h { flex: 1 1 220px; min-width: 0; }
+  .pd-sec-btn { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; width: 100%; min-height: 40px;
+    padding: 9px 14px; background: transparent; border: 0; border-radius: 12px; text-align: left; cursor: pointer;
+    font: inherit; color: var(--ink-90); }
+  .pd-sec-btn:hover { background: var(--card); }
+  .pd-sec-btn:focus-visible { outline: 2px solid var(--ink-90); outline-offset: -2px; }
+  .pd-sec-caret { width: 14px; flex: none; color: var(--ink-55); font-size: 12px; }
+  .pd-sec-title { font-weight: 600; font-size: 14px; }
+  .pd-sec-sum { flex: 1 1 140px; min-width: 0; color: var(--ink-70); font-size: 12px; font-weight: 400; overflow-wrap: anywhere; }
+  .pd-sec-head a.pd-link { flex: none; margin: 0 14px 6px 38px; font-size: 12px; color: var(--accent-ink); text-decoration: none; }
+  .pd-sec-head a.pd-link:hover { text-decoration: underline; }
+  .pd-sec.is-collapsed > .pd-sec-body { display: none; }
+  .pd-sec-body { padding: 2px 14px 12px; }
+  /* the blocks used to be boxes of their own; inside a section they are just its content */
+  .pd-sec .pd-block { border: 0; border-radius: 0; padding: 0; margin: 0; }
+  .pd-sec .pd-block + .pd-block { border-top: 1px solid var(--rule); margin-top: 12px; padding-top: 12px; }
+  #project-detail-panel .pd-sec-body h4 { margin: 2px 0 8px; }
+  #project-detail-panel .pd-sec-body > .pd-block:first-child > h4:first-child, #project-detail-panel .pd-sec-body > h4:first-child { margin-top: 0; }
+  /* leftover blank space: an empty message line, a roomy empty state and the card margin take no room here */
+  #project-detail-panel .err:empty, #project-detail-panel .ok-msg:empty { display: none; }
+  #project-detail-panel .empty { padding: 8px 0; text-align: left; }
+  #project-detail-panel.panel { margin-bottom: 12px; }
   .pd-head { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
   .pd-owner { color: var(--ink-55); font-size: 13px; margin-bottom: 14px; }
   .pd-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; }
@@ -179,7 +215,11 @@
   .pd-block { border: 1px solid var(--rule); border-radius: 12px; padding: 12px 14px; margin: 14px 0; }
   .pd-block h4 { margin: 0 0 8px; }
   .pd-block .pd-note { color: var(--ink-55); font-size: 12px; margin: 6px 0 10px; line-height: 1.6; }
-  .pd-block .pd-row a.btn { text-decoration: none; }
+  .pd-block .pd-row a.btn, .pd-actions a.btn { text-decoration: none; }
+  .pd-folder-line { color: var(--ink-55); font-size: 13px; margin: -6px 0 12px; overflow-wrap: anywhere; }
+  .pd-folder-line code { font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: var(--ink-70); }
+  .pd-target-hint { color: var(--ink-55); font-size: 12px; margin-top: 6px; overflow-wrap: anywhere; }
+  .pd-target-hint code { font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: var(--ink-70); }
   .pd-block .pd-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
   /* client confirmation (docs/delivery.md): status, the guest's 要求修改 list, 標記完成 */
   .pd-confirm { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--rule); }
@@ -281,14 +321,20 @@
     <h2>選片專案（Guest Picking）</h2>
     <div id="project-create-panel" class="panel">
       <div class="panel-body">
-        <div class="pick-admin-field">
-          <label for="proj-title">標題</label>
-          <input id="proj-title" class="field" type="text" placeholder="例如：王小明 &amp; 陳小美 婚紗">
+        <div class="pick-admin-row">
+          <div class="pick-admin-field">
+            <label for="proj-title">專案名稱</label>
+            <input id="proj-title" class="field" type="text" placeholder="例如：王小明 &amp; 陳小美 婚紗">
+          </div>
+          <div class="pick-admin-field">
+            <label for="proj-date">拍攝日期</label>
+            <input id="proj-date" class="field" type="date">
+          </div>
         </div>
-        <div class="pick-admin-field">
-          <label>資料夾</label>
-          <div id="proj-folders-cell" class="folder-cell"></div>
-        </div>
+        <!-- The folders are named by date + name (js/project-folders.js) and fixed once the
+             project exists; R2 only creates a folder when its first photo is uploaded. -->
+        <div id="proj-folder-preview" class="proj-folder-preview" aria-live="polite"></div>
+        <div id="proj-folder-note" class="proj-folder-note" aria-live="polite" hidden></div>
         <div class="pick-admin-row">
           <div class="pick-admin-field">
             <label for="proj-pick-limit">精修張數上限（留空 = 不限）</label>
@@ -355,6 +401,7 @@
 </div>
 
 <script src="js/shoot-types.js?v=20261004e"></script>
+<script src="js/project-folders.js?v=20261004e"></script>
 <script src="js/build-version.js?v=20261004e"></script>
 <script src="js/side-nav.js?v=20261004e"></script>
 <script src="js/orders-common.js?v=20261004e"></script>
@@ -432,7 +479,7 @@
       if (!loaded.projects) {
         loaded.projects = true;
         loadProjectDefaults();
-        renderProjectFolders();
+        initCreateForm();
         loadProjectList();
       }
       if (/^#project=(.+)$/.test(location.hash)) {
@@ -630,8 +677,8 @@
   // about which one is theirs. Held for as long as the picker is open.
   let pickerDate = '';
   let pickerMatch = null;
-  // 'client' (the row's folder_path) or 'project' (a new pick project's
-  // folders, guest-picking.md) — same overlay, different confirm target.
+  // 'client' (the row's folder_path) or 'final' (the finals folders of a
+  // delivery) — same overlay, different confirm target.
   let pickerMode = 'client';
 
   let pickerWired = false;
@@ -642,17 +689,6 @@
     pickerChosen = [];
     pickerDate = document.querySelector(`tr[data-id="${userId}"]`)?.dataset.clientShootDate || '';
     pickerMatch = shootDateFolderMatcher(pickerDate);
-    document.getElementById('folder-picker').style.display = 'flex';
-    await browseFolders('');
-  }
-
-  async function openProjectFolderPicker() {
-    if (!pickerWired) { wireFolderPicker(); pickerWired = true; }
-    pickerMode = 'project';
-    pickerFor = null;
-    pickerChosen = projectFolders.slice();
-    pickerDate = '';
-    pickerMatch = null;
     document.getElementById('folder-picker').style.display = 'flex';
     await browseFolders('');
   }
@@ -675,12 +711,6 @@
     const nav = e.target.closest('[data-browse]');
     if (nav) { browseFolders(nav.dataset.browse); return; }
     if (!e.target.closest('[data-confirm-folders]')) return;
-    if (pickerMode === 'project') {
-      projectFolders = pickerChosen.slice();
-      close();
-      renderProjectFolders();
-      return;
-    }
     if (pickerMode === 'final') {
       finalDraft = pickerChosen.slice();
       close();
@@ -745,24 +775,76 @@
   }
 
   // ── Guest picking — project admin (docs/guest-picking.md) ──────────────────
-  let projectFolders = [];
   let currentProjectId = null;
 
-  function renderProjectFolders() {
-    const cell = document.getElementById('proj-folders-cell');
-    if (!cell) return;
-    const chips = projectFolders.map(f => `
-      <span class="folder-chip" data-folder-chip="${escHtml(f)}">${escHtml(f)}<button type="button" data-remove-proj-folder="${escHtml(f)}" title="移除">×</button></span>`).join('');
-    cell.innerHTML = (chips || '<span class="folder-none">尚未選擇</span>') +
-      '<button id="proj-pick-folders-btn" class="btn btn-outline" type="button">選擇資料夾</button>';
-    cell.querySelector('#proj-pick-folders-btn').addEventListener('click', openProjectFolderPicker);
-    cell.querySelectorAll('[data-remove-proj-folder]').forEach(btn => {
-      btn.addEventListener('click', () => {
-        projectFolders = projectFolders.filter(f => f !== btn.dataset.removeProjFolder);
-        renderProjectFolders();
+  const PF = window.ProjectFolders;   // the folder naming rules, js/project-folders.js
+
+  // One listing of an R2 prefix through the Worker (admin token), the way
+  // browseFolders reads it: { files, folders }. null when it could not be read —
+  // callers decide what that means, none of them may guess.
+  async function listPrefix(prefix) {
+    try {
+      const r = await fetch(`${WORKER_URL}/?list=${encodeURIComponent(prefix)}`, {
+        headers: { 'Authorization': `Bearer ${getToken()}` },
       });
-    });
+      if (!r.ok) return null;
+      const data = await r.json();
+      return { files: Array.isArray(data.data) ? data.data : [], folders: Array.isArray(data.folders) ? data.folders : [] };
+    } catch (e) { return null; }
   }
+
+  // ── the create form: 專案名稱 + 拍攝日期 → the folders (js/project-folders.js) ──
+  let createCheckSeq = 0;     // a later edit makes an earlier check's answer stale
+  let createCheckTimer = null;
+
+  function initCreateForm() {
+    const date = document.getElementById('proj-date');
+    if (date && !date.value) date.value = todayTaipei();
+    updateCreateForm();
+  }
+
+  function updateCreateForm() {
+    const preview = document.getElementById('proj-folder-preview');
+    const note = document.getElementById('proj-folder-note');
+    const btn = document.getElementById('proj-create-btn');
+    const dateEl = document.getElementById('proj-date');
+    if (!preview || !note || !btn || !dateEl) return;
+    const plan = PF.plan(dateEl.value, document.getElementById('proj-title').value);
+    createCheckSeq++;
+    clearTimeout(createCheckTimer);
+    note.hidden = true; note.textContent = ''; delete note.dataset.state;
+    btn.disabled = !plan.ok;
+    if (!plan.ok) {
+      preview.textContent = plan.reason === 'name'
+        ? '請輸入專案名稱（資料夾名稱不能含 / \\ ? # % * : | " < >，這些字會被拿掉）' : '請選擇拍攝日期';
+      return;
+    }
+    preview.innerHTML = `資料夾：<code>${escHtml(plan.root)}/</code>　毛片放 <code>${escHtml(PF.PROOF_NAME)}/</code>，精修放 <code>${escHtml(PF.FINAL_NAME)}/</code>`
+      + `（第二版起 ${escHtml(PF.FINAL_NAME)}二、${escHtml(PF.FINAL_NAME)}三…）。資料夾名稱建立後不能改。`
+      + (plan.truncated ? ' <span class="proj-folder-warn">名稱過長，已截短。</span>' : '');
+    const seq = createCheckSeq, folder = plan.proofFolder;
+    createCheckTimer = setTimeout(() => checkProofFolder(folder, seq), 350);
+  }
+
+  // Not a gate: re-creating a project over the same folder picks its photos up
+  // again, and a listing that fails never stops the create.
+  async function checkProofFolder(folder, seq) {
+    const listed = await listPrefix(folder);
+    if (seq !== createCheckSeq) return;
+    const note = document.getElementById('proj-folder-note');
+    let state, text;
+    if (!listed) { state = 'unknown'; text = '無法確認這個資料夾是否已有照片（不影響建立）'; }
+    else if (listed.files.length) { state = 'existing'; text = `這個資料夾已有 ${listed.files.length} 張照片，會沿用`; }
+    else if (listed.folders.length) { state = 'existing'; text = `這個資料夾已有 ${listed.folders.length} 個子資料夾（照片在裡面），會沿用`; }
+    else { state = 'empty'; text = '目前沒有照片；上傳第一張時才會出現這個資料夾'; }
+    note.dataset.state = state;
+    note.textContent = text;
+    note.hidden = false;
+  }
+
+  document.getElementById('proj-title')?.addEventListener('input', updateCreateForm);
+  document.getElementById('proj-date')?.addEventListener('input', updateCreateForm);
+  document.getElementById('proj-date')?.addEventListener('change', updateCreateForm);
 
   // GET /api/admin/projects — this photographer's projects, newest first,
   // straight from the Worker (docs/guest-picking.md). Replaces the old
@@ -849,8 +931,8 @@
   document.getElementById('proj-create-btn')?.addEventListener('click', async function () {
     const errEl = document.getElementById('proj-create-err');
     errEl.textContent = '';
-    if (!projectFolders.length) { errEl.textContent = '請至少選擇一個資料夾'; return; }
-    const title = document.getElementById('proj-title').value.trim();
+    const folderPlan = PF.plan(document.getElementById('proj-date').value, document.getElementById('proj-title').value);
+    if (!folderPlan.ok) { errEl.textContent = folderPlan.reason === 'name' ? '請輸入專案名稱' : '請選擇拍攝日期'; return; }
     const limitRaw = document.getElementById('proj-pick-limit').value.trim();
     const priceRaw = document.getElementById('proj-extra-price').value.trim();
     const pick_limit = limitRaw === '' ? null : parseInt(limitRaw, 10);
@@ -869,7 +951,7 @@
     if (extraMaxNum !== undefined && (!Number.isInteger(extraMaxNum) || extraMaxNum < 0 || extraMaxNum > 500)) {
       errEl.textContent = '最多可加選需為 0–500 的整數'; return;
     }
-    const createBody = { title, folders: projectFolders, pick_limit, extra_price };
+    const createBody = { title: folderPlan.title, folders: [folderPlan.proofFolder], pick_limit, extra_price };
     if (extraMaxNum !== undefined) createBody.extra_max = extraMaxNum;
     this.disabled = true;
     try {
@@ -886,17 +968,18 @@
       document.getElementById('proj-create-result').style.display = 'block';
       await loadProjectList();
       document.getElementById('proj-title').value = '';
+      document.getElementById('proj-date').value = todayTaipei();
       document.getElementById('proj-pick-limit').value = '';
       document.getElementById('proj-extra-price').value = '';
       document.getElementById('proj-extra-max').value = '';
       loadProjectDefaults();
-      projectFolders = [];
-      renderProjectFolders();
+      updateCreateForm();
       await openProjectDetail(data.project.id);
     } catch (e) {
       errEl.textContent = '無法連線到 Worker';
     } finally {
-      this.disabled = false;
+      // back to what the form says now: still valid → on; emptied after a create → off
+      this.disabled = !PF.plan(document.getElementById('proj-date').value, document.getElementById('proj-title').value).ok;
     }
   });
 
@@ -965,6 +1048,139 @@
 
   const TOKEN_STATUS_LABEL = { live: '有效', revoked: '已撤銷', expired: '已過期' };
 
+  // ── Project detail sections ────────────────────────────────────────────────
+  // Each block below the header has a title row — title, a one-line summary, ▾/▸ —
+  // that opens and closes its body (display:none on the body container; every id
+  // inside stays in the DOM). Open or closed is: what the photographer chose on
+  // this page (secChoice), else what this browser remembers (localStorage — a
+  // per-browser convenience, so every access is guarded and nothing depends on it),
+  // else the section's default. Keyed by section name, not by project.
+  const SEC_TITLE = { delivery: '交件', settings: '設定', selections: '目前選取', orders: '訂單', submissions: '送出紀錄', people: '挑選人與連結' };
+  const SEC_KEY = 'pd_sec_';
+  let secProject = null;       // the project being drawn (the defaults depend on it)
+  let secData = null;          // what the summaries count: selections, submissions, pickers, links, owner
+  const secChoice = {};        // name -> boolean, set by a click on a title row (kept even when storage is not)
+  const secAuto = {};          // name -> boolean, 訂單 opened (or not) by itself on what its orders say; not a choice
+
+  function secStored(name) {
+    try {
+      const v = localStorage.getItem(SEC_KEY + name);
+      return v === '1' ? true : v === '0' ? false : null;
+    } catch (e) { return null; }
+  }
+  function secStore(name, open) {
+    try { localStorage.setItem(SEC_KEY + name, open ? '1' : '0'); } catch (e) { /* storage unavailable: the choice lives in secChoice */ }
+  }
+  // 交件 is open whenever it is there (retouching or delivered); 目前選取 once the guest
+  // has submitted; 訂單 opens by itself when its orders arrive with something waiting;
+  // the rest start closed.
+  function secDefault(name) {
+    if (name === 'delivery') return true;
+    if (name === 'selections') return !!secProject && secProject.phase === 'submitted';
+    return false;
+  }
+  function secIsOpen(name) {
+    if (name in secChoice) return secChoice[name];
+    const stored = secStored(name);
+    if (stored !== null) return stored;
+    return name in secAuto ? secAuto[name] : secDefault(name);
+  }
+  function secHtml(name, inner, headExtra) {
+    const open = secIsOpen(name);
+    return `<section class="pd-sec${open ? '' : ' is-collapsed'}" id="pd-sec-${name}" data-sec="${name}">
+      <div class="pd-sec-head">
+        <h4 class="pd-sec-h"><button type="button" class="pd-sec-btn" id="pd-sec-${name}-btn" aria-expanded="${open}" aria-controls="pd-sec-${name}-body">
+          <span class="pd-sec-caret" aria-hidden="true">${open ? '▾' : '▸'}</span><span class="pd-sec-title">${SEC_TITLE[name]}</span><span class="pd-sec-sum" id="pd-sec-${name}-sum"></span></button></h4>
+        ${headExtra || ''}
+      </div>
+      <div class="pd-sec-body" id="pd-sec-${name}-body" role="region" aria-labelledby="pd-sec-${name}-btn">${inner}</div>
+    </section>`;
+  }
+  function secApply(name, open) {
+    const sec = document.getElementById('pd-sec-' + name);
+    const btn = document.getElementById(`pd-sec-${name}-btn`);
+    if (!sec || !btn) return;
+    sec.classList.toggle('is-collapsed', !open);
+    btn.setAttribute('aria-expanded', String(open));
+    btn.querySelector('.pd-sec-caret').textContent = open ? '▾' : '▸';
+  }
+  document.getElementById('project-detail-body')?.addEventListener('click', e => {
+    const btn = e.target.closest && e.target.closest('.pd-sec-btn');
+    if (!btn) return;
+    const name = btn.closest('.pd-sec').dataset.sec;
+    // flip what is on screen, whatever put it there (default, auto-open, memory, an earlier click)
+    const open = btn.getAttribute('aria-expanded') !== 'true';
+    secChoice[name] = open;
+    secStore(name, open);
+    secApply(name, open);
+  });
+  // 交件 is not there at all until the project is being retouched (or is delivered)
+  function secDeliveryShown(shown) {
+    document.getElementById('pd-sec-delivery')?.classList.toggle('pd-sec-off', !shown);
+  }
+
+  // 'M/D' in Taipei time, for the one-line summaries
+  function fmtDay(iso) {
+    const d = iso ? new Date(iso) : null;
+    if (!d || isNaN(d.getTime())) return '';
+    return new Intl.DateTimeFormat('zh-TW', { timeZone: 'Asia/Taipei', month: 'numeric', day: 'numeric' }).format(d);
+  }
+
+  function secSummaries() {
+    const p = currentProject || {}, d = secData || {};
+    const out = {};
+    // 交件
+    if (!p.delivered_at) out.delivery = '尚未交件';
+    else {
+      const finals = Array.isArray(p.final_folders) ? p.final_folders : [];
+      const leaf = finals.length ? (String(finals[0]).split('/').filter(Boolean).pop() || '') + '/' : '';
+      const open = currentRevisions.filter(r => !r.resolved_at).length;
+      const confirm = p.client_confirmed_at
+        ? (p.client_confirmed_by === 'photographer' ? '已標記完成' : '客戶已確認')
+        : (open > 0 ? `待修改 ${open}` : '客戶尚未確認');
+      out.delivery = [`已交件 ${fmtDay(p.delivered_at)}`.trim(),
+        leaf ? leaf + (finals.length > 1 ? ` 等 ${finals.length} 個` : '') : '', confirm].filter(Boolean).join(' · ');
+    }
+    // 設定: the plan and the proofs download switch
+    const plan = [];
+    plan.push(p.pick_limit == null ? '不限張數' : `${p.pick_limit} 張` + (p.extra_max != null ? ` + 加選 ${p.extra_max}` : ''));
+    if (p.extra_price != null) plan.push(`加選 ${O.money(p.extra_price)}`);
+    plan.push(`毛片下載：${p.allow_proof_download ? '開' : '關'}`);
+    out.settings = plan.join(' · ');
+    out.selections = `${d.selectedCount || 0} 張`;
+    out.orders = ordersSummary();
+    const subs = d.submissions || [];
+    out.submissions = subs.length ? `${subs.length} 次，最近 ${fmtDay(subs[0].created_at)}` : '尚無送出';
+    const live = (d.tokens || []).filter(t => t.status === 'live').length;
+    const people = (d.pickers || []).length;
+    out.people = `${d.ownerName || '尚無人認領'}${people > 1 ? `（共 ${people} 人）` : ''} · 連結有效 ${live} 條`;
+    return out;
+  }
+  function ordersSummary() {
+    if (!oc || oc.projectId !== currentProjectId || (!oc.loaded && !oc.failed)) return '載入中…';
+    if (oc.failed) return '讀取失敗';
+    const live = oc.orders.filter(o => o.status !== 'cancelled');
+    const cancelled = oc.orders.length - live.length;
+    const tail = cancelled ? `（另有 ${cancelled} 筆已取消）` : '';
+    if (!live.length) return cancelled ? `尚無有效訂單（${cancelled} 筆已取消）` : '尚無訂單';
+    const requested = live.filter(o => o.status === 'requested').length;
+    const owed = live.reduce((n, o) => n + (Number(o.outstanding) || 0), 0);
+    return `${live.length} 筆` + (requested ? ` · 待確認 ${requested}` : '') + (owed > 0 ? ` · 未收 ${O.money(owed)}` : ' · 已收齊') + tail;
+  }
+  // 訂單 opens by itself when something is waiting — unless the photographer
+  // (or this browser's memory) already decided
+  function ordersWaiting() {
+    return !!oc && oc.orders.some(o => o.status !== 'cancelled' && (o.status === 'requested' || (Number(o.outstanding) || 0) > 0));
+  }
+
+  function refreshSecSummaries() {
+    const sums = secSummaries();   // put in with textContent: a name stays text
+    for (const name of Object.keys(SEC_TITLE)) {
+      const el = document.getElementById(`pd-sec-${name}-sum`);
+      if (el) el.textContent = sums[name] || '';
+    }
+  }
+
   function renderProjectDetail(data) {
     const body = document.getElementById('project-detail-body');
     const project = data.project || {};
@@ -974,6 +1190,7 @@
     const selected = (data.selections || []).filter(s => s.rating > 0);
     const ownerName = data.owner ? data.owner.name : null;
 
+    secProject = project;
     body.innerHTML = `
       <div class="pd-head">
         <h3>${escHtml(project.title || '（未命名）')}</h3>
@@ -985,7 +1202,9 @@
         ${data.unnotified_submissions ? `<span class="badge badge-pending">${escHtml(data.unnotified_submissions)} 次送出未寄信</span>` : ''}
       </div>
       <div class="pd-owner">目前挑選人：${ownerName ? escHtml(ownerName) : '<span class="folder-none">尚無人認領</span>'}</div>
+      ${projectFolderLineHtml(project)}
       <div class="pd-actions">
+        ${proofsUploadHtml(project)}
         <button id="pd-reset-seat-btn" class="btn btn-ghost" type="button">重設主人</button>
         <button id="pd-start-retouch-btn" class="btn btn-accent" type="button">開始精修</button>
         <button id="pd-reopen-btn" class="btn btn-ghost" type="button">開放修改</button>
@@ -998,24 +1217,19 @@
       </div>
       <div id="pd-action-err" class="err"></div>
 
-      <div id="pd-delivery" class="pd-block"></div>
-      <div id="pd-proofdl" class="pd-block"></div>
-      <div id="pd-plan" class="pd-block"></div>
+      ${secHtml('delivery', '<div id="pd-delivery" class="pd-block"></div>')}
+      ${secHtml('settings', '<div id="pd-proofdl" class="pd-block"></div><div id="pd-plan" class="pd-block"></div>')}
 
-      <details id="pd-selections-details">
-        <summary>目前選取（${selected.length} 張） <a class="pd-link" href="index.html?project=${encodeURIComponent(project.id)}">看照片 →</a></summary>
-        <div class="table-wrap"><table><thead><tr><th>照片</th><th>♥</th><th>備註</th><th>選片人</th><th>更新時間</th></tr></thead>
+      ${secHtml('selections', `<div id="pd-selections-details"><div class="table-wrap"><table><thead><tr><th>照片</th><th>♥</th><th>備註</th><th>選片人</th><th>更新時間</th></tr></thead>
           <tbody>${selected.length ? selected.map(s => `<tr>
             <td class="folder-raw"><a class="pd-link" href="index.html?project=${encodeURIComponent(project.id)}&amp;photo=${encodeURIComponent(s.photo_key)}">${escHtml(s.photo_key)}</a></td><td>♥</td><td>${escHtml(s.note || '')}</td>
             <td>${escHtml(pickerNameOf(pickers, s.updated_by))}</td><td>${escHtml(fmtTime(s.updated_at))}</td>
-          </tr>`).join('') : '<tr><td colspan="5" class="empty">尚無選取</td></tr>'}</tbody></table></div>
-      </details>
+          </tr>`).join('') : '<tr><td colspan="5" class="empty">尚無選取</td></tr>'}</tbody></table></div></div>`,
+        `<a class="pd-link" href="index.html?project=${encodeURIComponent(project.id)}">看照片 →</a>`)}
 
-      <h4>訂單</h4>
-      <div id="pd-orders"><div class="empty">載入中…</div></div>
+      ${secHtml('orders', '<div id="pd-orders"><div class="empty">載入中…</div></div>')}
 
-      <h4>送出紀錄（新到舊）</h4>
-      <div id="pd-submissions">${submissions.length ? submissions.map((s, i) => {
+      ${secHtml('submissions', `<div id="pd-submissions">${submissions.length ? submissions.map((s, i) => {
         const prev = submissions[i + 1];
         const diff = prev ? projectDiff(s.photo_keys, prev.photo_keys) : null;
         const pinKeys = prev ? marksChangedKeys(s.marks, prev.marks) : [];
@@ -1034,9 +1248,9 @@
             ${!s.notified ? '<span class="badge badge-pending">未寄信</span>' : ''}</div>
           ${diffHtml}
         </div>`;
-      }).join('') : '<div class="empty">尚無送出紀錄</div>'}</div>
+      }).join('') : '<div class="empty">尚無送出紀錄</div>'}</div>`)}
 
-      <h4>挑選人</h4>
+      ${secHtml('people', `<h4>挑選人</h4>
       <div id="pd-pickers">${pickers.length ? pickers.map(p => `<div>${escHtml(p.name)}${p.relationship ? `（${escHtml(p.relationship)}）` : ''}${p.email ? ' · ' + escHtml(p.email) : ''}${data.owner && data.owner.id === p.id ? ' <span class="badge badge-approved">目前選片中</span>' : ''}</div>`).join('') : '<div class="empty">尚無挑選人</div>'}</div>
 
       <h4>挑選連結</h4>
@@ -1053,8 +1267,9 @@
           </div>
         </div>`).join('') : '<div class="empty">尚無連結</div>'}</div>
       ${project.archived_at ? '' : '<button id="pd-new-link-btn" class="btn btn-outline" type="button" style="margin-top:8px;">產生新連結</button>'}
-      <div id="pd-link-err" class="err"></div>
+      <div id="pd-link-err" class="err"></div>`)}
     `;
+    secData = { selectedCount: selected.length, submissions, pickers, tokens, ownerName };
 
     document.getElementById('pd-reset-seat-btn').addEventListener('click', async () => {
       if (!confirm('確定要重設選片人嗎？選取結果與送出紀錄都會保留。\n新的主人會接手目前所有選片，並可修改或刪除')) return;
@@ -1070,6 +1285,7 @@
     // pre-fill the chooser (editable; nothing is sent until 交件 is pressed).
     finalDraft = lastFinalFolders(project);
     finalEditing = false;
+    startFinalsTarget(project);
     renderDeliveryBlock();
     renderProofDownloadBlock();
     renderPlanBlock();
@@ -1151,6 +1367,7 @@
     document.getElementById('pd-download-btn').addEventListener('click', () => downloadSelectedKeys(project, selected));
     document.getElementById('pd-download-csv-btn').addEventListener('click', () => downloadSelectionCsv(project, selected));
     initOrders(project, selected.map(x => x.photo_key));
+    refreshSecSummaries();
   }
 
   // ── 交件 (docs/delivery.md) ────────────────────────────────────────────────
@@ -1180,19 +1397,74 @@
     return project.final_folders.slice();
   }
 
-  // ＋上傳精修: upload.html with the finals folder preselected, side by side
-  // with the proofs (docs/delivery.md: <shoot>/毛片/ and <shoot>/精修/). The
-  // shoot is the parent of the first proof folder that has one; a proof
-  // folder with a single segment gives no shoot, so then only ?project= goes.
-  function finalsUploadHref(project) {
-    const proj = `project=${encodeURIComponent(project.id)}`;
-    for (const f of Array.isArray(project.folders) ? project.folders : []) {
-      const segs = String(f).split('/').filter(Boolean);
-      if (segs.length >= 2) {
-        return `upload.html?folder=${encodeURIComponent(segs.slice(0, -1).join('/') + '/精修/')}&${proj}`;
-      }
+  // 資料夾：<root>/ — the project's folders in one line. A project that follows the
+  // convention (proofs in <root>/毛片/) shows its root; an older one shows the
+  // folders its snapshot holds, as they are.
+  function projectFolderLineHtml(project) {
+    const info = PF.rootOfProject(project);
+    const folders = Array.isArray(project.folders) ? project.folders : [];
+    const list = info && info.proofShaped ? [info.root + '/'] : folders;
+    if (!list.length) return '';
+    return `<div class="pd-folder-line" id="pd-folder-line">資料夾：${list.map(f => `<code>${escHtml(f)}</code>`).join('、')}</div>`;
+  }
+
+  // ＋上傳毛片: upload.html on <root>/毛片/, locked there, so a photo cannot land
+  // in the wrong project's folder. Only for a project whose proofs follow the
+  // convention; an older project keeps uploading through the folder tree.
+  function proofsUploadHtml(project) {
+    const info = PF.rootOfProject(project);
+    if (!info || !info.proofShaped) return '';
+    return `<a id="pd-upload-proofs-btn" class="btn btn-outline" href="${escHtml(PF.uploadHref(project.id, info.proofFolder, true))}">＋上傳毛片</a>`;
+  }
+
+  // ＋上傳精修: upload.html on the next finals folder, locked there. The next one is
+  // one past the biggest 精修* that already exists under the project's root, so a
+  // second version never lands on (and overwrites) the first. What exists is read
+  // from R2, and until that is known — or when it cannot be read — the link names
+  // no folder at all and does not lock: choosing by hand is slower than guessing
+  // and cannot overwrite anything.
+  // An older project (proofs not in <root>/毛片/) keeps the old link, <parent>/精修/,
+  // unlocked, with no listing.
+  let finalsTarget = null;       // { projectId, state: 'checking' | 'ready' | 'failed', folder, locked }
+  let finalsDefaulted = null;    // the newest 精修 folder, once it filled an empty 交件 draft
+
+  function startFinalsTarget(project) {
+    finalsDefaulted = null;
+    const info = PF.rootOfProject(project);
+    if (!info || !info.proofShaped) {
+      finalsTarget = { projectId: project.id, state: 'ready', locked: false,
+        folder: info ? `${info.root}/${PF.FINAL_NAME}/` : null };
+      return;
     }
-    return `upload.html?${proj}`;
+    const mine = finalsTarget = { projectId: project.id, state: 'checking', folder: null, locked: false };
+    listPrefix(`${info.root}/`).then(listed => {
+      if (finalsTarget !== mine) return;     // another project was opened meanwhile
+      if (!listed) {
+        mine.state = 'failed';
+      } else {
+        mine.state = 'ready';
+        mine.locked = true;
+        mine.folder = PF.nextFinalFolder(info.root, listed.folders);
+        // 交件 starts on the newest 精修 — but never over a choice already made
+        // (a draft the photographer built meanwhile, the last delivery's folders,
+        // or a delivery that is up).
+        const latest = PF.latestFinalFolder(info.root, listed.folders);
+        const p = currentProject;
+        if (latest && p && p.id === project.id && !p.delivered_at && !finalEditing &&
+            !finalDraft.length && !lastFinalFolders(p).length) {
+          finalDraft = [latest];
+          finalsDefaulted = latest;
+        }
+      }
+      renderDeliveryBlock();
+    });
+  }
+
+  function finalsUploadHref(project) {
+    const t = finalsTarget && finalsTarget.projectId === project.id ? finalsTarget : null;
+    if (!t) return PF.uploadHref(project.id, null, false);
+    if (t.state !== 'ready') return PF.uploadHref(project.id, null, false);
+    return PF.uploadHref(project.id, t.folder, t.locked);
   }
 
   // ── 客戶確認 / 要求修改 (docs/delivery.md) ────────────────────────────────
@@ -1286,30 +1558,40 @@
     if (!box || !project) return;
     const delivered = !!project.delivered_at;
     const finals = Array.isArray(project.final_folders) ? project.final_folders : [];
-    if (!delivered && project.phase !== 'retouching') { box.style.display = 'none'; box.innerHTML = ''; return; }
+    if (!delivered && project.phase !== 'retouching') { box.style.display = 'none'; box.innerHTML = ''; secDeliveryShown(false); refreshSecSummaries(); return; }
     box.style.display = '';
+    secDeliveryShown(true);
 
     const last = lastFinalFolders(project);
     const showLastHint = last.length > 0 && finalDraft.length === last.length && last.every((f, i) => f === finalDraft[i]);
+    const showDefaultHint = !delivered && !!finalsDefaulted && finalDraft.length === 1 && finalDraft[0] === finalsDefaulted;
+    const target = finalsTarget && finalsTarget.projectId === project.id ? finalsTarget : null;
+    const targetNote = !target ? ''
+      : target.state === 'failed'
+        ? '<div class="pd-note" id="pd-upload-final-note">無法讀取既有的精修資料夾，所以不自動編號、也不鎖定資料夾；請在上傳頁自己選資料夾（小心不要蓋掉前一版）。</div>'
+        : (target.state === 'ready' && target.locked
+          ? `<div class="pd-target-hint" id="pd-upload-final-hint">＋上傳精修會放進 <code>${escHtml(target.folder)}</code></div>` : '');
     const chooser = `
       <div class="pd-note">精修成品必須放在<strong>獨立的資料夾</strong>（例如毛片旁邊的「精修」），不能放在毛片（選片用）資料夾裡面，否則會被拒絕。</div>
       ${showLastHint ? '<div class="pd-note" data-final-last-hint>上次選的精修資料夾（可修改，按「交件」才會生效）：</div>' : ''}
+      ${showDefaultHint ? '<div class="pd-note" data-final-default-hint>已預選最新的精修資料夾（可修改，按「交件」才會生效）：</div>' : ''}
       <div id="pd-final-chips">${draftChips()}</div>
       <div class="pd-row">
         <button id="pd-final-pick-btn" class="btn btn-outline" type="button">選擇精修資料夾</button>
-        <a id="pd-upload-final-btn" class="btn btn-outline" href="${escHtml(finalsUploadHref(project))}">＋上傳精修</a>
+        <a id="pd-upload-final-btn" class="btn btn-outline" data-target="${target ? target.state : 'ready'}" href="${escHtml(finalsUploadHref(project))}">＋上傳精修</a>
         <button id="pd-deliver-btn" class="btn btn-accent" type="button"${finalDraft.length ? '' : ' disabled'}>${delivered ? '確定更換' : '交件'}</button>
         ${delivered ? '<button id="pd-final-cancel-btn" class="btn btn-ghost" type="button">取消</button>' : ''}
-      </div>`;
+      </div>
+      ${targetNote}`;
     function draftChips() {
       return finalDraft.length ? chipsHtml(finalDraft, true) : '<span class="folder-none">尚未選擇</span>';
     }
 
     if (!delivered) {
-      box.innerHTML = `<h4>交件</h4>${chooser}<div id="pd-deliver-err" class="err"></div>`;
+      box.innerHTML = `${chooser}<div id="pd-deliver-err" class="err"></div>`;
     } else {
       box.innerHTML = `
-        <h4>交件 <span class="badge badge-approved" data-delivered-status>已交件</span>
+        <h4><span class="badge badge-approved" data-delivered-status>已交件</span>
           <span class="folder-none">${escHtml(fmtTime(project.delivered_at))}</span></h4>
         <div id="pd-delivered-folders">${finals.length ? chipsHtml(finals, false)
           : '<span class="folder-none">（舊資料：沒有指定精修資料夾，客人仍看到選片畫面）</span>'}</div>
@@ -1322,6 +1604,7 @@
       fillRevisionList(box);
     }
 
+    refreshSecSummaries();
     box.querySelector('#pd-final-pick-btn')?.addEventListener('click', openFinalFolderPicker);
     box.querySelectorAll('[data-remove-final]').forEach(btn => {
       btn.addEventListener('click', () => {
@@ -1401,6 +1684,7 @@
         }
         project.allow_proof_download = data.allow_proof_download === true;
         input.checked = project.allow_proof_download;
+        refreshSecSummaries();
       } catch (e) {
         input.checked = !want;
         if (errEl) errEl.textContent = '無法連線到 Worker';
@@ -1533,15 +1817,27 @@
   }
 
   async function initOrders(project, picks) {
-    oc = { projectId: project.id, picks, orders: [], extra: null, catalogue: null, editing: null, paying: null, draft: null, msg: {} };
+    oc = { projectId: project.id, picks, orders: [], loaded: false, failed: false, extra: null, catalogue: null, editing: null, paying: null, draft: null, msg: {} };
     const box = document.getElementById('pd-orders');
     if (!box) return;
     const mine = oc;
     const r = await ordersApi(`/api/admin/projects/${encodeURIComponent(project.id)}/orders`);
     if (oc !== mine) return; // another project was opened meanwhile
-    if (!r.ok) { box.innerHTML = `<div class="empty">讀取訂單失敗：${escHtml(O.errorText(r.data, r.status))}</div>`; return; }
+    if (!r.ok) {
+      box.innerHTML = `<div class="empty">讀取訂單失敗：${escHtml(O.errorText(r.data, r.status))}</div>`;
+      oc.failed = true;
+      refreshSecSummaries();
+      return;
+    }
     oc.orders = r.data.orders || [];
+    oc.loaded = true;
     oc.extra = r.data.extra_pick || null;
+    // the first read decides whether 訂單 opens by itself: only if something is waiting
+    // and nobody (this page, this browser) has chosen either way
+    if (!('orders' in secChoice) && secStored('orders') === null) {
+      secAuto.orders = ordersWaiting();
+      secApply('orders', secAuto.orders);
+    }
     renderOrders();
   }
 
@@ -1632,6 +1928,7 @@
       ${editingNew ? editorHtml(null) : ''}
       ${oc.editing ? '' : '<button type="button" id="pd-order-add-btn" class="btn btn-outline" style="margin-top:6px;">＋ 新增訂單</button>'}
       <div class="ord-err" id="pd-order-err">${escHtml(oc.msg._ || '')}</div>`;
+    refreshSecSummaries();
   }
 
   // ── editor (new order, or the lines/discount/note of an existing one) ──
@@ -2050,7 +2347,7 @@
   }
 
   // Runs last, now that every function and `let` above it is initialised —
-  // showAdmin() reaches into most of them (renderProjectFolders included).
+  // showAdmin() reaches into most of them (initCreateForm included).
   if (getToken()) {
     showAdmin();
   }
