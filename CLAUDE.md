@@ -30,6 +30,16 @@ jobs end to end first; no new big feature outside that list.
 - Don't guess Tim's local time.
 - Tim often can't verify from outside; say what still needs a real phone / prod check.
 - Discussion-only requests ("先不動 code") mean no code changes.
+- **After every merge to main, end the reply with 「合併後你要確認」**: a checklist
+  of what Tim must do or check, specific to this merge, not generic:
+  1. GitHub Actions deploy succeeded (the agent cannot see it).
+  2. D1 migrations: which ones this merge needs and whether they were confirmed
+     (say "none" if none).
+  3. Purge Everything needed or not (needed when static files or the Worker changed;
+     docs-only merges: not needed, say so).
+  4. Real phone / prod checks for what this merge changed (iPhone, LINE in-app
+     browser, Safari, Excel, etc.), with the expected result of each.
+  5. What was NOT verified, and any decision still waiting on him.
 
 ## Roles and models (pick by the cost of a mistake)
 | Role | Model | Used for |
