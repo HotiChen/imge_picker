@@ -389,6 +389,7 @@ class AnnotationManager {
     _placePinAt(clientX, clientY) {
         const pc = window.PickController;
         if (!this.pinMode || !pc || !pc.active || !this.currentPhoto || !this.fitW || !this.fitH) return;
+        pc.closePinEditor(); // a tap anywhere else on the photo ends the open note
         const p = this._toWorld(clientX, clientY);
         if (!this._onPhoto(p)) return;
         const frac = v => Math.round(Math.min(1, Math.max(0, v)) * 10000) / 10000;
@@ -397,7 +398,7 @@ class AnnotationManager {
 
     _onPinClick(e) {
         if (!this.pinMode) return;
-        if (e.target.closest?.('button, a, input, textarea, select, .pv-pin-list')) return;
+        if (e.target.closest?.('button, a, input, textarea, select, .pv-pin-list, .pick-pin-editor')) return;
         if (Date.now() - this._lastPinTouchAt < 700) return; // the touch already placed it
         if (this._mdX != null && Math.hypot(e.clientX - this._mdX, e.clientY - this._mdY) > GESTURE_TAP_TOLERANCE_PX) return;
         this._placePinAt(e.clientX, e.clientY);
@@ -606,7 +607,7 @@ class AnnotationManager {
     // now; startDrawing ignores a press off the photo, as before.)
     _ignoreTouch(e) {
         if (e.target === this.canvas) return false;
-        return this.currentTool !== 'pan' || !!e.target.closest?.('button, a, input, textarea, select, .pv-pin-list');
+        return this.currentTool !== 'pan' || !!e.target.closest?.('button, a, input, textarea, select, .pv-pin-list, .pick-pin-editor');
     }
 
     handleTouchStart(e) {
