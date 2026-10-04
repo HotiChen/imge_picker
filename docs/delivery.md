@@ -279,6 +279,59 @@ page case below.
 - Revision-request emails have no time throttle: flooding needs the owner's
   picker key, and the 50-per-project cap bounds it to 50 emails.
 
+## The finish page as a web album (built 2026-10-04)
+
+Only the delivered **finals** view (`mode === 'delivered'`, `view === 'finals'`)
+changed; picking, a delivery taken back (finals kept, `delivered_at` null) and
+the 下載毛片原檔 list keep the card grid and the sidebar. Files:
+`js/finals-gallery.js` (new, one global `FinalsGallery`, loaded after
+`album-preview.js`), `js/pick.js` (`_syncFinals`, `renderFinals`,
+`_finalsChips`, `shareLink`), a three-line hook in `js/app.js`
+`renderPhotoGrid`, a block of new `.fg-*` classes at the end of
+`css/styles.css`. No `:root` change, no worker / migration change.
+
+- **No cards in the DOM.** In the finals view `renderPhotoGrid` hands the photos
+  (`app.filteredPhotos`, the order the page already had: the name sort, never
+  re-sorted) to the gallery. `body.fg-mode` hides the sidebar, preview pane,
+  guest bar and the old grid and lets the page scroll as a document.
+- **Hero**: the first final in gallery order as the cover (`?w=` bucket for the
+  hero width x DPR: 400 / 1200 / 1600, never the original; it stays when the
+  guest switches folder), studio logo + name (the header's own data), the
+  project title, 「N 張照片」 and 分享. The box has its final height before the
+  picture arrives (dark placeholder, fade-in).
+- **Justified rows**: every row one height, 6px gaps, target 320px (rows
+  >= 1000px wide), 260px (>= 640px), 200px (phone). A row grows until it fits
+  the width at or under the target, then keeps or drops its last photo, whichever
+  is nearer the target. The last row is not stretched. Shapes come from the
+  thumbnails (`naturalWidth / naturalHeight` on load, 3:2 until then); a new
+  shape asks for a batched reflow (one animation frame, at most one per 120ms),
+  so 300 photos cost a few layouts, not 300. The guest's place on the page is
+  kept across a reflow. Resize reflows through a `ResizeObserver`; a width that
+  keeps flipping (scrollbar) stops being listened to for 1.5s. The first 36
+  tiles load eagerly, the rest lazily. Tile thumbnails ask 400 where that is
+  enough for the tile (about 480px wide) and 1200 on a retina screen / phone.
+- **Lightbox**: click a photo. ‹ ›, ← → Esc, swipe (a touch that starts within
+  24px of a screen edge is ignored: the browser's back gesture, same as
+  `album-preview.js`), `n / total`, the file name, 下載 (the same one-byte
+  probe + `?download=1&t=` as the old card button), the 1200 / 1600 bucket for
+  the screen, the neighbours preloaded. The page behind is locked
+  (`html.fg-open`); closing gives the focus back to the tile of the photo the
+  lightbox ended on. Listeners on `document` live only while it is open.
+- **Folder chips** under the hero when there is more than one place to be: the
+  finals folders, and (inside a folder with subfolders, or inside one) a chip per
+  subfolder plus 「‹ 上一層」. A single finals folder without subfolders shows none.
+- **確認完成 block** (`#deliveryDone`, all ids / text / flow unchanged) is a thin
+  strip above the hero; the proofs entry bar only takes room when the switch is on.
+- **相本預覽 entry** is the last thing on the page, right after the rows.
+- **分享**: Web Share API with `{title, url}`; without it (or when it fails for a
+  reason other than the guest cancelling) the link is copied (clipboard, else a
+  temporary textarea + `execCommand('copy')`) and a toast says 已複製連結. The url
+  is always `origin + pathname + ?t=<token>`: never `location.href`, never the
+  owner key (that lives in localStorage and the `X-Picker-Key` header, not in a
+  URL). Owner and viewers both have the button.
+- Not done: download all, duplicate-photo hiding (a copy file in the folder
+  shows like any other), a cover chosen by the photographer (needs a column).
+
 ## Out of scope for this step
 
 Zip download of everything; watermarks; a second link just for delivery;

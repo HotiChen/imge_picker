@@ -239,6 +239,7 @@
                 this._galleryUIRemoved = true;
             }
             this._renderDeliveryBar();
+            this._syncFinals();
             this._renderDone();
             this._renderAlbumEntry();
             const noteGroup = document.getElementById('noteInputGroup');
@@ -251,6 +252,9 @@
             const titleEl = document.getElementById('deliveryTitle');
             const btn = document.getElementById('deliveryProofsBtn');
             if (this.mode !== 'delivered') { el.hidden = true; return; }
+            // in the finals gallery the bar is a thin strip, and only there when it
+            // carries the 下載毛片原檔 entry (the hero already has the title)
+            el.classList.toggle('fg-bar-proofs', this.allowProofDownload);
             const t = this.projectTitle ? ` · ${this.projectTitle}` : '';
             if (titleEl) titleEl.textContent = this.view === 'finals' ? `精修成品${t}` : `毛片原檔（僅供下載）${t}`;
             if (btn) {
@@ -265,8 +269,115 @@
             el.hidden = false;
         },
 
+        // ── the finals gallery (js/finals-gallery.js, docs/delivery.md) ──────
+        // The delivered finish page as a web album: only in delivered mode and the
+        // finals view. Picking, an undelivered project (finals kept) and the
+        // 下載毛片原檔 list have none of it in the DOM. app.js's renderPhotoGrid
+        // hands the photos over (renderFinals) instead of building cards.
+        _finalsOn() {
+            return this.active && this.mode === 'delivered' && this.view === 'finals' &&
+                !!window.FinalsGallery && FinalsGallery.isMounted();
+        },
+
+        _syncFinals() {
+            if (!window.FinalsGallery) return;
+            const want = this.active && this.mode === 'delivered' && this.view === 'finals';
+            if (!want) { FinalsGallery.unmount(); return; }
+            const content = document.querySelector('main.main-content > .content');
+            if (!content) return;
+            const studio = this.studio || {};
+            FinalsGallery.mount(content, {
+                title: this.projectTitle,
+                studio: { name: studio.name || '', hasLogo: !!studio.has_logo, logoUrl: `${CONFIG.WORKER_URL}/api/studio/logo` },
+                drive: driveManager,
+                onShare: () => this.shareLink(),
+                onDownload: (e, photo) => this.download(e, photo),
+                onFolder: folder => this.app && this.app.handleLoadPhotos(folder),
+            });
+        },
+
+        // The finals folders as chips, plus (when the open folder has subfolders, or
+        // is one) a chip per subfolder and a way back. None for a single folder.
+        _finalsChips() {
+            const roots = this.finalFolders;
+            const cur = (typeof driveManager !== 'undefined' && driveManager.currentFolderId) || '';
+            const kids = (this.app && this.app.currentFolders) || [];
+            const activeRoot = roots.find(r => cur.startsWith(r)) || '';
+            const nested = !!cur && !roots.includes(cur);
+            if (roots.length < 2 && !kids.length && !nested) return [];
+            const name = f => f.replace(/\/$/, '').split('/').pop() || f;
+            const chips = roots.map(r => ({ folder: r, label: name(r), pressed: r === activeRoot }));
+            if (nested) {
+                const parent = cur.replace(/[^/]+\/$/, '');
+                chips.push({ folder: parent, label: '‹ 上一層', pressed: false, sub: true, back: true });
+            }
+            kids.forEach(k => chips.push({ folder: k.id, label: k.name || name(k.id), pressed: false, sub: true }));
+            return chips;
+        },
+
+        // app.js renderPhotoGrid: the photos of the open folder, in the order the
+        // page already had. Returns false when there is no gallery (build cards).
+        renderFinals(photos) {
+            if (!this._finalsOn()) return false;
+            FinalsGallery.setChips(this._finalsChips());
+            FinalsGallery.setPhotos(photos, driveManager.currentFolderId);
+            return true;
+        },
+
+        // The link that goes out is the link token and nothing else: origin + path
+        // + ?t=<token>. Never location.href (it may carry anything the guest's
+        // browser added) and never the owner key — that lives in localStorage and
+        // the X-Picker-Key header and has no business in a URL.
+        shareUrl() {
+            return `${window.location.origin}${window.location.pathname}?t=${encodeURIComponent(this.token)}`;
+        },
+
+        async shareLink() {
+            const url = this.shareUrl();
+            if (typeof navigator.share === 'function') {
+                try {
+                    await navigator.share({ title: this.projectTitle || '精修成品', url });
+                    return;
+                } catch (e) {
+                    if (e && e.name === 'AbortError') return;   // the guest closed the sheet
+                    // anything else: fall back to copying
+                }
+            }
+            const done = await this._copyText(url);
+            if (typeof toast === 'undefined') return;
+            if (done) toast.success('已複製連結'); else toast.error('無法複製連結');
+        },
+
+        async _copyText(text) {
+            try {
+                if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+                    await navigator.clipboard.writeText(text);
+                    return true;
+                }
+            } catch (e) { /* denied: try the old way */ }
+            const prev = document.activeElement;
+            const ta = document.createElement('textarea');
+            ta.value = text;
+            ta.dataset.fgCopy = '1';
+            ta.setAttribute('aria-hidden', 'true');
+            ta.style.cssText = 'position:fixed;left:-9999px;top:0;opacity:0';
+            document.body.appendChild(ta);
+            let ok = false;
+            try {
+                ta.focus();
+                ta.select();
+                ta.setSelectionRange(0, text.length);
+                ok = !!document.execCommand('copy');
+            } catch (e) { ok = false; }
+            ta.remove();
+            if (prev && typeof prev.focus === 'function') prev.focus({ preventScroll: true });
+            return ok;
+        },
+
         // The album preview entry (docs/album-preview.md, stage 1): delivered
-        // mode and the finals view only, right under the confirmation block —
+        // mode and the finals view only, the last thing in the finals gallery
+        // (right after its rows; without the gallery script: under the
+        // confirmation block, as before) —
         // removed from the DOM in picking, after 取消交件 / 開放修改 (the finals
         // stay on the project but delivered_at is null, so mode is 'picking')
         // and in the proofs list. Owner and viewers alike: it is read-only.
@@ -275,7 +386,8 @@
             if (!window.AlbumPreview) return;
             AlbumPreview.syncEntry({
                 show: this.mode === 'delivered' && this.view === 'finals' && this.finalFolders.length > 0,
-                after: document.getElementById('deliveryDone'),
+                // the gallery's last row: the entry is the last thing on the page
+                after: (this._finalsOn() && FinalsGallery.afterEl()) || document.getElementById('deliveryDone'),
                 folders: this.finalFolders,
             });
         },
@@ -1059,6 +1171,7 @@
         // it. ♥ 已選 is exempt: it reaches across every folder regardless of
         // what the current one holds, so it must never fall back to cards.
         _renderGrid() {
+            if (this.renderFinals(this.app.filteredPhotos)) return;
             if (this.filterMode !== 'selected' &&
                 this.app.currentFolders.length > 0 && this.app.photos.length === 0) {
                 this.app.renderFolderGrid();
