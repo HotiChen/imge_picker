@@ -30,15 +30,19 @@ JS frontend. Feature designs live in `docs/` (e.g. `docs/guest-picking.md`).
 ## TDD (always)
 1. Write the failing test first; confirm it fails for the right reason.
 2. Implement until green.
-3. Mutation-test the new code (`node --check` each mutant first). Every mutant
-   killed or explained as equivalent.
+3. Mutation-test the new code (syntax-check each mutant first — see the worker
+   command below). Every mutant killed or explained as equivalent.
 4. While developing run only related tests; **run everything before commit/merge.**
 
 Commands:
-- Worker (seconds): `node --test "worker/test/*.test.mjs"`, and `node --check worker/worker.js`
+- Worker (seconds): `node --test "worker/test/*.test.mjs"`, and
+  `node --input-type=module --check < worker/worker.js`.
+  **Plain `node --check worker/worker.js` is not enough**: there is no package.json,
+  so the file is read as CommonJS and a missing paren still exits 0 (verified).
 - Browser (minutes): `NODE_PATH=/tmp/pwinstall/node_modules node test/run.mjs`
   - Only matching suites: `ONLY=<text in suite name> ...` (a filter matching nothing fails)
-  - Playwright lives outside the repo; Chromium at /opt/pw-browsers.
+  - Playwright lives outside the repo; Chromium at /opt/pw-browsers. In the cloud
+    session `/tmp/pwinstall` does not exist: use `NODE_PATH=/opt/node-tools/node_modules`.
 - CI runs the worker suite only, not the browser suite.
 
 Known false-pass shapes — assert the positive case too:
@@ -50,6 +54,48 @@ Known false-pass shapes — assert the positive case too:
 - test fake diverging from the real API (the 206 bug) — fakes mirror real responses
 
 Known flaky: book_editor "no token is minted for an empty folder set" fails under load.
+Also seen once under load, green alone: admin "plan 編輯方案…".
+
+Visual/contrast tests need a floor on how many elements were scanned, or an
+empty scan passes.
+
+## Working with agents
+- Check the agent's base before it starts: its worktree can be created from an
+  older commit than the branch you are on (an opus worker once started on
+  03baff3 and lacked the commit it was meant to build on). Tell it to run
+  `git log` first and report a wrong base instead of resetting on its own.
+- One agent per file area; agents commit in their own worktree, never push, never
+  touch main, never bump `?v=`. The orchestrator merges, resolves conflicts,
+  bumps `?v=` once, runs everything, then pushes the `claude/<topic>` branch.
+- `test/run.mjs` is one very large file: agents adding suites in parallel
+  conflict there. Merge them one at a time, and syntax-check
+  (`node --check test/run.mjs`) after resolving.
+- Reports are not evidence: re-run the suites and read the diff yourself.
+- `.claude/worktrees/` holds the agents' worktrees; keep it out of commits
+  (`.git/info/exclude`).
+
+## Invariants (a mistake here leaks data)
+- A project is delivered **only** when `delivered_at` is set. `final_folders` being
+  non-null does not mean delivered: it is the last chosen finals folders and
+  stays after 取消交件 and 開放修改 (reopen). Both clear `delivered_at` only.
+- Every guest read of finals goes through `pickFinals` (needs `delivered_at`).
+  A new read path must not bypass it; admin routes may return `final_folders`,
+  guest routes must not.
+- Retouch pins are `selections.marks` = `[{x,y,note}]`, x/y as 0–1 fractions of
+  the photo. An empty note is allowed on purpose (a bare pin can be the message).
+- Photographer pages use home.html's cream theme (`--bg:#fff8ee`); client pages stay
+  dark. Never change `css/styles.css`'s global `:root`: `index.html` serves guests
+  and the photographer's review view.
+
+## Decided not to do (do not re-propose without new evidence)
+- Service / Package / Template, quotes, contracts, booking, CRM: scope creep.
+  The studio defaults copied into each project already are the minimal template.
+- Revision deadlines, round limits and auto-complete on expiry: wait for real jobs.
+  Auto-completing for a client who did nothing is a trust risk.
+- Renaming an R2 folder (every object copied and deleted; folders are snapshotted
+  into projects, share tokens and selections, so it breaks them). Rename the project.
+- Deleting a pin when its note is left empty.
+- Social auto-posting. Per-version retouch tables (use folders).
 
 ## Git / deploy
 - Work on a `claude/<topic>` branch. Push to main only when Tim says so —
