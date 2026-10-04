@@ -283,7 +283,7 @@ Pure and deterministic (no `Math.random`, clock or DOM), never mutates `items`.
 - **Variety**: the cheapest book leans on a few templates, so it is polished after the
   fact: each spread tries the other templates with the same number of slots and
   takes a swap when it lowers (cost + a charge for the same template again within 2,
-  3, 4 or more spreads, 0.5 / 0.35 / 0.2 / 0.1) — hard rules re-checked on each
+  3, 4 or more spreads, 0.9 / 0.6 / 0.35 / 0.15; raised from 0.5 / 0.35 / 0.2 / 0.1 after a 30-book check: no template carries more than 3 spreads of a 40-photo book instead of 4, and the mean share of each photo kept by its crop moves only from 0.869 to 0.864) — hard rules re-checked on each
   candidate.
 - **Trade-offs.** Photos keep their shooting order inside a spread and across the
   book, so a hero can only land where the group boundaries fall on a good photo; a

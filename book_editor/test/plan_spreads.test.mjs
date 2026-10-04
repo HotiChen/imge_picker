@@ -230,6 +230,26 @@ test('variety: all-landscape and all-portrait books of 40 are not one template r
   }
 });
 
+test('variety: over 30 mixed 40-photo books no template carries more than 3 spreads, and the crops stay good (mean kept share of a photo >= 0.83 on this harsh pool with panoramas)', () => {
+  let kept = 0, slots = 0, most = 0;
+  for (let seed = 1; seed <= 30; seed++) {
+    const items = randomItems(seed + 4000, 40);
+    const byId = new Map(items.map(i => [i.id, i]));
+    const p = AutoLayout.planSpreads(items);
+    const uses = {};
+    for (const sp of p.spreads) {
+      uses[sp.template] = (uses[sp.template] || 0) + 1;
+      for (const s of sp.slots) {
+        const a = byId.get(s.photoId).aspect, b = (s.slot.w / s.slot.h) * SPREAD;
+        kept += Math.min(a, b) / Math.max(a, b); slots++;
+      }
+    }
+    most = Math.max(most, ...Object.values(uses));
+  }
+  assert.ok(most <= 3, `a template carried ${most} spreads`);
+  assert.ok(kept / slots >= 0.83, `mean kept share ${(kept / slots).toFixed(3)}`);
+});
+
 test('variety: the same family never three spreads running — a family-heavy library is forced to rotate', () => {
   const only = ST.TEMPLATES.filter(t => ['quad-stacks', 'quad-columns', 'quad-stagger', 'grid-4-4', 'mosaic-4-4', 'trios', 'one-two-right', 'hero-bleed', 'pair-portraits'].includes(t.id));
   const items = uniform(36, 1.5);

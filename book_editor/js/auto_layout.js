@@ -775,7 +775,7 @@ const AutoLayout = (() => {
     }
 
     // charge for the same template on two spreads `d` apart (d = 1 is a hard rule, handled by `adj`)
-    const spNear = d => (d === 2 ? 0.5 : d === 3 ? 0.35 : d === 4 ? 0.2 : 0.1);
+    const spNear = d => (d === 2 ? 0.9 : d === 3 ? 0.6 : d === 4 ? 0.35 : 0.15);
     function polishVariety(groups, costs, cat, m, rules, cfg) {
         const T = cat.length, S = groups.length, H = cfg.heroGap, RUN = cfg.maxFamilyRun;
         const g = groups.slice();
