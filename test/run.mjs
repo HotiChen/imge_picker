@@ -10,6 +10,7 @@
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { extname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import zlib from 'node:zlib';
@@ -5261,6 +5262,111 @@ await suite('admin — escHtml(0): a project with zero submissions shows 送出 
     { before: m.attach, initScript: ADMIN });
 }
 
+// ── 下載需求表 CSV（檔名, 備註, 標示）— js/selection-export.js 的純函式 ──
+await suite('selection-export — 純函式：CSV 內容逐字、BOM、跳脫、公式注入、pins 串接',
+  'about:blank',
+  async () => {
+    const out = [];
+    const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+    let SE;
+    try { SE = createRequire(import.meta.url)('../js/selection-export.js'); } catch (e) { ok('module loads in node', false, e.message); return out; }
+    const csv = SE.selectionsToCsv;
+    const BOM = String.fromCharCode(0xFEFF);
+    const row = (key, note, marks) => ({ photo_key: key, rating: 5, note, marks });
+
+    ok('starts with a UTF-8 BOM (exactly one)', csv([]).startsWith(BOM) && !csv([]).startsWith(BOM + BOM));
+    ok('header only, CRLF-terminated, for an empty selection', csv([]) === BOM + '檔名,備註,標示\r\n', JSON.stringify(csv([])));
+    ok('a plain row, verbatim',
+      csv([row('20260819/p0.jpg', '請修膚色', [{ x: 0.1, y: 0.2, note: '去痘痘' }])]) ===
+      BOM + '檔名,備註,標示\r\n20260819/p0.jpg,請修膚色,①去痘痘\r\n');
+    ok('pins join as "①文字 ②文字" in order',
+      csv([row('a.jpg', '', [{ x: 0, y: 0, note: '眼袋' }, { x: 1, y: 1, note: '髮絲' }, { x: .5, y: .5, note: '背景' }])]) ===
+      BOM + '檔名,備註,標示\r\na.jpg,,①眼袋 ②髮絲 ③背景\r\n');
+    ok('a pin without text still numbers its position', csv([row('a.jpg', '', [{ x: 0, y: 0, note: '' }, { x: 1, y: 1, note: '腰' }])]) ===
+      BOM + '檔名,備註,標示\r\na.jpg,,① ②腰\r\n');
+    ok('no marks / null marks / missing note → empty cells (no "undefined"/"null")',
+      csv([row('a.jpg', null, null), { photo_key: 'b.jpg', marks: [] }]) === BOM + '檔名,備註,標示\r\na.jpg,,\r\nb.jpg,,\r\n',
+      JSON.stringify(csv([row('a.jpg', null, null), { photo_key: 'b.jpg', marks: [] }])));
+    const many = Array.from({ length: 21 }, (_, i) => ({ x: 0, y: 0, note: 'n' + (i + 1) }));
+    ok('pin 10 is ⑩, pin 20 is ⑳ and pin 21 falls back to (21)',
+      SE.pinsText(many).includes('⑩n10 ⑪n11') && SE.pinsText(many).endsWith('⑳n20 (21)n21'), SE.pinsText(many));
+
+    // escaping
+    ok('comma → quoted', csv([row('a.jpg', '紅色, 藍色', null)]).includes('\r\na.jpg,"紅色, 藍色",\r\n'));
+    ok('double quote → doubled and quoted', csv([row('a.jpg', '他說"好"', null)]).includes('\r\na.jpg,"他說""好""",\r\n'));
+    ok('newline inside a cell → quoted, newline kept', csv([row('a.jpg', '第一行\n第二行', null)]).includes('a.jpg,"第一行\n第二行",\r\n'));
+    ok('CR inside a cell → quoted', csv([row('a.jpg', 'x\ry', null)]).includes('"x\ry"'));
+    ok('a note with nothing special is NOT quoted', csv([row('a.jpg', '普通', null)]).includes('\r\na.jpg,普通,\r\n'));
+    ok('pins cell with a comma/quote is escaped too',
+      csv([row('a.jpg', '', [{ x: 0, y: 0, note: 'a,"b"' }])]).includes('a.jpg,,"①a,""b"""\r\n'));
+    ok('file name with a comma is quoted', csv([row('a,b.jpg', '', null)]).includes('\r\n"a,b.jpg",,\r\n'));
+
+    // formula injection
+    for (const lead of ['=', '+', '-', '@']) {
+      const t = csv([row('a.jpg', `${lead}SUM(A1)`, null)]);
+      ok(`a note starting with ${lead} gets a leading ' (neutralised)`, t.includes(`\r\na.jpg,'${lead}SUM(A1),\r\n`), JSON.stringify(t));
+    }
+    ok('tab / CR lead (Excel also treats them as formula starters)',
+      csv([row('a.jpg', '\t=1+1', null)]).includes(`'\t=1+1`) && csv([row('a.jpg', '\r=1', null)]).includes(`"'\r=1"`));
+    ok('injection check happens before quoting: =a,b → "\'=a,b"', csv([row('a.jpg', '=a,b', null)]).includes(`a.jpg,"'=a,b",`));
+    ok('a file name starting with = is neutralised too', csv([row('=cmd|x.jpg', '', null)]).includes(`\r\n'=cmd|x.jpg,,\r\n`));
+    ok('a safe cell with "=" in the middle is untouched', csv([row('a.jpg', 'a=b', null)]).includes('\r\na.jpg,a=b,\r\n'));
+    ok('a negative-number-looking note is still prefixed (conservative)', csv([row('a.jpg', '-1', null)]).includes(`a.jpg,'-1,`));
+    ok('csvCell handles non-strings', SE.csvCell(5) === '5' && SE.csvCell(null) === '' && SE.csvCell(undefined) === '');
+    return out;
+  });
+
+{
+  const m = pickFakeWorker({ ownerName: 'Henry', title: 'CSV 專案' });
+  m.state.selections.set('20260819/a.jpg', { rating: 5, note: '請修膚色, 要自然', marks: [{ x: .1, y: .2, note: '去痘痘' }, { x: .5, y: .5, note: '眼袋 "輕微"' }], updated_by: 'picker-0', updated_at: '2026-01-01T00:00:00Z' });
+  m.state.selections.set('20260819/b.jpg', { rating: 3, note: '=HYPERLINK("http://x")', marks: null, updated_by: 'picker-0', updated_at: '2026-01-01T00:00:00Z' });
+  m.state.selections.set('20260819/c.jpg', { rating: 0, note: '沒選的不要出現', marks: [{ x: 0, y: 0, note: '不要' }], updated_by: 'picker-0', updated_at: '2026-01-01T00:00:00Z' });
+  await suite('admin — 下載需求表(CSV)：只含已選照片、UTF-8 BOM、備註與標示逐字、不問「開始精修」；.txt 下載不變',
+    `${base}/admin.html`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('[data-open-project]', { timeout: 5000 });
+      await page.click('[data-open-project]');
+      await page.waitForSelector('#pd-download-csv-btn', { timeout: 5000 });
+      ok('the CSV button sits in the same action row as 下載選片',
+        await page.evaluate(() => document.getElementById('pd-download-csv-btn').parentElement === document.getElementById('pd-download-btn').parentElement));
+      ok('it is labelled with CSV', /CSV/.test(await page.textContent('#pd-download-csv-btn')), await page.textContent('#pd-download-csv-btn'));
+      await page.evaluate(() => {
+        window.__lastDownloadName = null;
+        const orig = document.body.appendChild.bind(document.body);
+        document.body.appendChild = (el) => { if (el.tagName === 'A' && el.download) window.__lastDownloadName = el.download; return orig(el); };
+      });
+      let dialogs = 0;
+      const onDialog = d => { dialogs++; d.dismiss(); };
+      page.on('dialog', onDialog);
+      const [download] = await Promise.all([page.waitForEvent('download'), page.click('#pd-download-csv-btn')]);
+      const name = await page.evaluate(() => window.__lastDownloadName);
+      ok('the file is named <title>-selected.csv', name === 'CSV 專案-selected.csv', name);
+      const buf = readFileSync(await download.path());
+      ok('the bytes start with EF BB BF (BOM) exactly once', buf[0] === 0xEF && buf[1] === 0xBB && buf[2] === 0xBF && !(buf[3] === 0xEF && buf[4] === 0xBB), [...buf.slice(0, 6)].join(','));
+      const expected = String.fromCharCode(0xFEFF) + '檔名,備註,標示\r\n' +
+        '20260819/a.jpg,"請修膚色, 要自然","①去痘痘 ②眼袋 ""輕微"""\r\n' +
+        `20260819/b.jpg,"'=HYPERLINK(""http://x"")",\r\n`;
+      ok('the content matches verbatim (only ♥ photos; a pin note, a comma, quotes, a formula neutralised)',
+        buf.toString('utf8') === expected, JSON.stringify(buf.toString('utf8')));
+      ok('the unselected photo is absent', !buf.toString('utf8').includes('c.jpg'));
+      await page.waitForTimeout(300);
+      ok('no start-retouch confirm and no start-retouch request', dialogs === 0 && !m.requests.some(r => r.path.endsWith('/start-retouch')),
+        `${dialogs} dialogs`);
+
+      // the existing .txt export is untouched
+      page.off('dialog', onDialog);
+      page.once('dialog', d => d.dismiss());
+      const [txt] = await Promise.all([page.waitForEvent('download'), page.click('#pd-download-btn')]);
+      ok('下載選片 still offers the .txt with just the keys',
+        (await page.evaluate(() => window.__lastDownloadName)).endsWith('.txt') &&
+        readFileSync(await txt.path(), 'utf8') === '20260819/a.jpg\n20260819/b.jpg\n');
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN });
+}
+
 {
   const m = pickFakeWorker({ ownerName: 'Henry' });
   m.state.selections.set('20260819/p0.jpg', { rating: 5, note: '', updated_by: 'picker-0', updated_at: '2026-01-01T00:00:00Z' });
@@ -8379,13 +8485,247 @@ const chipTexts = (page, sel) => page.$$eval(sel, els => els.map(e => e.dataset.
       ok('accepting it undelivers: the chooser is back, no 已交件',
         m.requests.some(r => r.path.endsWith('/undeliver')) && (await page.$('[data-delivered-status]')) === null &&
         (await page.$('.pd-head [data-delivered-badge]')) === null);
-      ok('the server keeps the last chosen finals (only the stamp is cleared)',
+      ok('and the server keeps the folders (final_folders stays, delivered_at is null)',
         m.state.project.delivered_at === null && JSON.stringify(m.state.project.final_folders) === '["shoot/精修二/"]',
-        JSON.stringify(m.state.project.final_folders));
+        JSON.stringify(m.state.project));
       return out;
     },
     { before: m.attach, initScript: ADMIN });
 }
+
+// ── 交件區塊：＋上傳精修 連到 upload.html?folder=<shoot>/精修/&project=<id> ──
+{
+  const m = pickFakeWorker({ projectId: 'proj-up', title: '上傳精修專案', phase: 'retouching', folders: ['20260819/shoot/毛片/'], bucketFolders: ADMIN_BUCKET });
+  await suite('admin 交件 — ＋上傳精修：與「選擇精修資料夾」並排，連到 upload.html（精修資料夾在毛片旁邊、帶 project）',
+    `${base}/admin.html#project=proj-up`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('#pd-delivery #pd-final-pick-btn', { timeout: 5000 });
+      const a = await page.$('#pd-delivery #pd-upload-final-btn');
+      ok('the 上傳精修 link exists inside the delivery block', !!a);
+      if (!a) return out;
+      ok('it is an <a> in the same row as 選擇精修資料夾 (not elsewhere)',
+        await page.evaluate(() => {
+          const l = document.getElementById('pd-upload-final-btn');
+          return l.tagName === 'A' && l.parentElement === document.getElementById('pd-final-pick-btn').parentElement;
+        }));
+      ok('its text says ＋上傳精修', (await a.textContent()).trim() === '＋上傳精修', await a.textContent());
+      const u = await page.evaluate(() => {
+        const l = document.getElementById('pd-upload-final-btn');
+        const url = new URL(l.href);
+        return { file: url.pathname.split('/').pop(), folder: url.searchParams.get('folder'), project: url.searchParams.get('project'),
+          display: getComputedStyle(l).display, w: l.getBoundingClientRect().width };
+      });
+      ok('it goes to upload.html', u.file === 'upload.html', JSON.stringify(u));
+      ok('folder is <shoot>/精修/ — the parent of the proof folder, side by side with 毛片', u.folder === '20260819/shoot/精修/', JSON.stringify(u));
+      ok('and carries the project id', u.project === 'proj-up', JSON.stringify(u));
+      ok('it is actually rendered (not hidden by CSS)', u.display !== 'none' && u.w > 20, JSON.stringify(u));
+      const look = await page.evaluate(() => {
+        const l = document.getElementById('pd-upload-final-btn'), b = document.getElementById('pd-final-pick-btn');
+        const lr = l.getBoundingClientRect(), br = b.getBoundingClientRect();
+        return { deco: getComputedStyle(l).textDecorationLine, dh: Math.abs(lr.height - br.height), sameRow: Math.abs(lr.top - br.top) < 4 };
+      });
+      ok('looks like its sibling button: no underline, same height, same row', look.deco === 'none' && look.dh <= 2 && look.sameRow, JSON.stringify(look));
+      // following it lands on upload.html with the back link pointing at the project
+      await page.goto(await page.$eval('#pd-upload-final-btn', l => l.href), { waitUntil: 'load' });
+      ok('upload.html then offers ← 回專案 to this project',
+        (await page.$eval('.btn-back', e => e.textContent.trim())) === '← 回專案' &&
+        (await page.$eval('.btn-back', e => e.getAttribute('href'))) === 'admin.html#project=proj-up');
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN });
+}
+
+{
+  // a project folder that is a single segment: no shoot to infer → only ?project=
+  const m = pickFakeWorker({ projectId: 'proj-up-flat', phase: 'retouching', folders: ['20260819/'], bucketFolders: ADMIN_BUCKET });
+  await suite('admin 交件 — ＋上傳精修：專案資料夾只有一層（推不出 shoot）→ 只帶 ?project=，不亂猜資料夾',
+    `${base}/admin.html#project=proj-up-flat`,
+    async page => {
+      await page.waitForSelector('#pd-delivery #pd-final-pick-btn', { timeout: 5000 });
+      const u = await page.evaluate(() => {
+        const l = document.getElementById('pd-upload-final-btn');
+        if (!l) return null;
+        const url = new URL(l.href);
+        return { file: url.pathname.split('/').pop(), folder: url.searchParams.get('folder'), project: url.searchParams.get('project') };
+      });
+      return [
+        u ? 'ok    link exists' : 'FAIL  link missing',
+        u && u.file === 'upload.html' && u.project === 'proj-up-flat' ? 'ok    goes to upload.html with the project' : `FAIL  ${JSON.stringify(u)}`,
+        u && u.folder === null ? 'ok    no guessed folder param' : `FAIL  folder guessed: ${JSON.stringify(u)}`,
+      ];
+    },
+    { before: m.attach, initScript: ADMIN });
+}
+
+{
+  // first proof folder too shallow, a later one is fine; ids needing encoding
+  const m = pickFakeWorker({ projectId: 'p&x=1 #2', phase: 'retouching', folders: ['2026/', '20260901/婚禮/毛片/'], bucketFolders: ADMIN_BUCKET });
+  await suite('admin 交件 — ＋上傳精修：用第一個推得出 shoot 的毛片資料夾；project id 有特殊字元時 URL 正確編碼',
+    `${base}/admin.html#project=${encodeURIComponent('p&x=1 #2')}`,
+    async page => {
+      await page.waitForSelector('#pd-delivery #pd-final-pick-btn', { timeout: 5000 });
+      const u = await page.evaluate(() => {
+        const url = new URL(document.getElementById('pd-upload-final-btn').href);
+        return { folder: url.searchParams.get('folder'), project: url.searchParams.get('project'), keys: [...url.searchParams.keys()] };
+      });
+      return [
+        u.folder === '20260901/婚禮/精修/' ? 'ok    folder from the second proof folder' : `FAIL  ${JSON.stringify(u)}`,
+        u.project === 'p&x=1 #2' && JSON.stringify(u.keys) === '["folder","project"]' ? 'ok    project id round-trips, no param injection' : `FAIL  ${JSON.stringify(u)}`,
+      ];
+    },
+    { before: m.attach, initScript: ADMIN });
+}
+
+{
+  const m = pickFakeWorker({ projectId: 'proj-up-hidden', phase: 'picking', folders: ['shoot/毛片/'], bucketFolders: ADMIN_BUCKET });
+  await suite('admin 交件 — 不在精修中、也沒交件：整個交件區塊（含＋上傳精修）是空的、display:none',
+    `${base}/admin.html#project=proj-up-hidden`,
+    async page => {
+      await page.waitForSelector('#pd-plan #pd-plan-save', { timeout: 5000 });
+      const r = await page.evaluate(() => ({
+        link: !!document.getElementById('pd-upload-final-btn'),
+        display: getComputedStyle(document.getElementById('pd-delivery')).display,
+        html: document.getElementById('pd-delivery').innerHTML,
+      }));
+      return [r.link === false && r.display === 'none' && r.html === '' ? 'ok    block hidden and empty' : `FAIL  ${JSON.stringify(r)}`];
+    },
+    { before: m.attach, initScript: ADMIN });
+}
+
+// ── 取消交件後保留 final_folders：交件狀態只看 delivered_at；預填上次的精修資料夾 ──
+{
+  const m = pickFakeWorker({ projectId: 'proj-prefill', phase: 'retouching', folders: ['shoot/毛片/'], bucketFolders: ADMIN_BUCKET,
+    finalFolders: ['shoot/精修/'] });   // delivered_at null, final_folders set — what the Worker now returns after 取消交件
+  await suite('admin 交件 — 未交件但 final_folders 有值：不當作已交件、預填上次的精修資料夾（明確按交件才送出）',
+    `${base}/admin.html#project=proj-prefill`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('#pd-delivery #pd-final-pick-btn', { timeout: 5000 });
+      ok('fixture mirrors the real response: delivered_at null, final_folders set',
+        m.state.project.delivered_at === null && JSON.stringify(m.state.project.final_folders) === '["shoot/精修/"]');
+      ok('NOT shown as delivered (no status, no replace/undeliver buttons, no header badge)',
+        (await page.$('[data-delivered-status]')) === null && (await page.$('#pd-replace-final-btn')) === null &&
+        (await page.$('#pd-undeliver-btn')) === null && (await page.$('.pd-head [data-delivered-badge]')) === null);
+      await page.waitForSelector('#proj-recent-list [data-project-row]', { timeout: 5000 });
+      ok('the project list row is rendered and has no 已交件 badge',
+        (await page.$('#proj-recent-list [data-project-row]')) !== null && (await page.$('#proj-recent-list [data-delivered-badge]')) === null);
+      ok('the last finals are pre-filled as chips in the delivery block',
+        JSON.stringify(await chipTexts(page, '#pd-delivery #pd-final-chips [data-final-chip]')) === '["shoot/精修/"]');
+      ok('and the block says they are the 上次選的精修資料夾',
+        /上次選的精修資料夾/.test(await page.$eval('#pd-delivery', e => e.textContent)), await page.$eval('#pd-delivery', e => e.textContent));
+      ok('交件 is enabled and labelled 交件 (not 確定更換)',
+        !(await page.$eval('#pd-deliver-btn', b => b.disabled)) && (await page.textContent('#pd-deliver-btn')) === '交件');
+      ok('nothing was sent: prefill alone does not deliver', deliverBodies(m).length === 0 && m.state.project.delivered_at === null);
+
+      // editable: drop the chip, pick another, deliver → only then a request goes out
+      await page.click('#pd-final-chips [data-remove-final="shoot/精修/"]');
+      ok('removing the prefilled chip empties the draft and disables 交件',
+        (await page.$('#pd-final-chips [data-final-chip]')) === null && await page.$eval('#pd-deliver-btn', b => b.disabled));
+      ok('the hint is gone once the draft no longer is the last selection',
+        !/上次選的精修資料夾/.test(await page.$eval('#pd-delivery', e => e.textContent)));
+      await page.click('#pd-final-pick-btn');
+      await adminPickFinals(page, ['shoot/'], ['shoot/精修二/']);
+      await page.waitForSelector('#pd-final-chips [data-final-chip]', { timeout: 3000 });
+      ok('still nothing sent', deliverBodies(m).length === 0);
+      await page.click('#pd-deliver-btn');
+      await page.waitForSelector('[data-delivered-status]', { timeout: 3000 });
+      ok('交件 sent exactly the edited folders', JSON.stringify(deliverBodies(m)) === '[{"final_folders":["shoot/精修二/"]}]', JSON.stringify(deliverBodies(m)));
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN });
+}
+
+{
+  const m = pickFakeWorker({ projectId: 'proj-prefill-send', phase: 'retouching', folders: ['shoot/毛片/'], bucketFolders: ADMIN_BUCKET });
+  await suite('admin 交件 — 取消交件後（真實流程）：交件→取消交件→預填上次資料夾→不改直接交件送出原資料夾',
+    `${base}/admin.html#project=proj-prefill-send`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('#pd-final-pick-btn', { timeout: 5000 });
+      await page.click('#pd-final-pick-btn');
+      await adminPickFinals(page, ['shoot/'], ['shoot/精修/']);
+      await page.waitForSelector('#pd-final-chips [data-final-chip]', { timeout: 3000 });
+      await page.click('#pd-deliver-btn');
+      await page.waitForSelector('[data-delivered-status]', { timeout: 3000 });
+      ok('delivered', m.state.project.delivered_at !== null);
+      ok('while delivered the finals are listed as delivered chips (no prefill hint)',
+        JSON.stringify(await chipTexts(page, '#pd-delivered-folders [data-final-chip]')) === '["shoot/精修/"]' &&
+        !/上次選的精修資料夾/.test(await page.$eval('#pd-delivery', e => e.textContent)));
+      // 更換精修資料夾 on a delivered project starts from the delivered finals —
+      // it is NOT the "last selection" prefill, so no such hint there
+      await page.click('#pd-replace-final-btn');
+      await page.waitForSelector('#pd-final-chips [data-final-chip]', { timeout: 3000 });
+      await page.click('#folder-picker-close');
+      ok('更換 chooser holds the delivered finals but shows no 上次選的 hint',
+        JSON.stringify(await chipTexts(page, '#pd-final-chips [data-final-chip]')) === '["shoot/精修/"]' &&
+        !/上次選的精修資料夾/.test(await page.$eval('#pd-delivery', e => e.textContent)));
+      await page.click('#pd-final-cancel-btn');
+      await page.waitForSelector('#pd-undeliver-btn', { timeout: 3000 });
+      page.once('dialog', d => d.accept());
+      await page.click('#pd-undeliver-btn');
+      await page.waitForSelector('#pd-final-pick-btn', { timeout: 3000 });
+      ok('after 取消交件 the Worker still has the finals but no delivered_at',
+        m.state.project.delivered_at === null && JSON.stringify(m.state.project.final_folders) === '["shoot/精修/"]');
+      ok('and the chooser comes back pre-filled with them, with the hint',
+        JSON.stringify(await chipTexts(page, '#pd-final-chips [data-final-chip]')) === '["shoot/精修/"]' &&
+        /上次選的精修資料夾/.test(await page.$eval('#pd-delivery', e => e.textContent)));
+      ok('no 已交件 badge on the header or the list after cancelling',
+        (await page.$('.pd-head [data-delivered-badge]')) === null && (await page.$('#proj-recent-list [data-delivered-badge]')) === null);
+      const before = deliverBodies(m).length;
+      await page.click('#pd-deliver-btn');
+      await page.waitForSelector('[data-delivered-status]', { timeout: 3000 });
+      ok('pressing 交件 again re-delivers the same folders', deliverBodies(m).length === before + 1 &&
+        JSON.stringify(deliverBodies(m)[before]) === '{"final_folders":["shoot/精修/"]}', JSON.stringify(deliverBodies(m)));
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN });
+}
+
+// ── upload.html：← 回選圖 / ← 回專案 ──
+await suite('upload — ?project=<id>：返回鍵改成「← 回專案」連到 admin.html#project=<id>',
+  `${base}/upload.html?project=abc-123&folder=${encodeURIComponent('shoot/精修/')}`,
+  async page => {
+    const out = [];
+    const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+    const r = await page.evaluate(() => {
+      const a = document.querySelector('.header .btn-back');
+      return a ? { text: a.textContent.trim(), href: a.getAttribute('href'), n: document.querySelectorAll('.btn-back').length, inHeader: !!a.closest('header.header') } : null;
+    });
+    ok('exactly one back link, inside the header', !!r && r.n === 1 && r.inHeader, JSON.stringify(r));
+    ok('text is ← 回專案', r && r.text === '← 回專案', JSON.stringify(r));
+    ok('href is admin.html#project=abc-123', r && r.href === 'admin.html#project=abc-123', JSON.stringify(r));
+    ok('the ?folder= pre-fill still works alongside',
+      (await page.evaluate(() => document.body.textContent)).includes('shoot/精修/'));
+    return out;
+  });
+
+await suite('upload — ?project= 的 id 有特殊字元：href 正確編碼（不能多帶參數或換掉 hash）',
+  `${base}/upload.html?project=${encodeURIComponent('a b&c#d')}`,
+  async page => {
+    const href = await page.$eval('.btn-back', a => a.getAttribute('href'));
+    return [href === 'admin.html#project=' + encodeURIComponent('a b&c#d') ? 'ok    id encoded with encodeURIComponent' : `FAIL  ${href}`];
+  });
+
+await suite('upload — 沒有 ?project=（或空值）：返回鍵維持「← 回選圖」→ index.html（舊行為不變）',
+  `${base}/upload.html`,
+  async page => {
+    const read = () => page.$eval('.btn-back', a => ({ text: a.textContent.trim(), href: a.getAttribute('href') }));
+    const out = [];
+    const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+    const a = await read();
+    ok('no param: ← 回選圖 → index.html', a.text === '← 回選圖' && a.href === 'index.html', JSON.stringify(a));
+    await page.goto(`${base}/upload.html?folder=${encodeURIComponent('x/')}`, { waitUntil: 'load' });
+    const b = await read();
+    ok('only ?folder=: unchanged', b.text === '← 回選圖' && b.href === 'index.html', JSON.stringify(b));
+    await page.goto(`${base}/upload.html?project=`, { waitUntil: 'load' });
+    const c = await read();
+    ok('empty ?project=: unchanged', c.text === '← 回選圖' && c.href === 'index.html', JSON.stringify(c));
+    return out;
+  });
 
 {
   const m = pickFakeWorker({ projectId: 'proj-codes', phase: 'retouching', folders: ['shoot/毛片/'],
