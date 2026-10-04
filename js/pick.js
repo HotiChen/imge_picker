@@ -958,6 +958,7 @@
         _exitPinMode(quiet) {
             if (!this.pinMode) return;
             this.pinMode = false;
+            this.closePinEditor(true);
             if (window.annotationManager) annotationManager.setPinMode(false);
             if (!quiet) this.syncPinUI();
         },
@@ -978,6 +979,9 @@
             const hearted = !!sel && sel.rating > 0;
             const editable = this.canEdit() && hearted;
             if (!editable && this.pinMode) this._exitPinMode(true);
+            // the note editor lives only while its pin does, on this photo, editable
+            const ed = this._pinEd;
+            if (ed && (!editable || !this.pinMode || ed.key !== id || !this.marksOf(id)[ed.index])) this.closePinEditor(true);
             if (row) {
                 const left = row.querySelector('.pick-tools-left');
                 left.replaceChildren();
@@ -1095,6 +1099,92 @@
             }
             this._saveMarks(key, cur.concat({ x, y, note: '' }));
             this.syncPinUI();
+            // the tap that placed the pin is a user gesture: focus now, in the
+            // same call stack, or iOS will not raise the keyboard
+            if (this.pinMode) this._openPinEditor(cur.length);
+        },
+
+        // The note input that opens on a freshly placed pin. Pinned to the TOP
+        // of the photo area (a phone keyboard rises from the bottom, so the
+        // input is never under it). Typing saves through setPinNote — the same
+        // path as the panel's list, so no new data shape; Enter, 確定, tapping
+        // another spot or leaving pin mode just close it. A pin closed
+        // without text stays as an empty-note pin, as it always could.
+        _openPinEditor(index) {
+            const cc = document.querySelector('.canvas-container');
+            const key = this._pinPhotoId;
+            const mark = this.marksOf(key)[index];
+            if (!cc || !mark || !this.pinMode || !this.canEdit()) return;
+            this.closePinEditor(true);
+            const ed = document.createElement('div');
+            ed.id = 'pickPinEditor';
+            ed.className = 'pick-pin-editor';
+            const num = document.createElement('span');
+            num.className = 'pick-pin-num';
+            num.textContent = String(index + 1);
+            const input = document.createElement('input');
+            input.type = 'text';
+            input.id = 'pickPinEditorInput';
+            input.className = 'pick-pin-editor-input';
+            input.maxLength = PIN_NOTE_MAX;
+            input.value = mark.note;
+            input.placeholder = '這裡要修改什麼？例：這裡痘痘';
+            input.enterKeyHint = 'done';
+            input.setAttribute('dir', 'auto');
+            input.setAttribute('autocomplete', 'off');
+            input.setAttribute('aria-label', `標示 ${index + 1} 的備註`);
+            const ok = document.createElement('button');
+            ok.type = 'button';
+            ok.id = 'pickPinEditorOk';
+            ok.className = 'pick-tool-btn pick-tool-done';
+            ok.textContent = '確定';
+            input.addEventListener('input', () => {
+                const clean = pinSanitize(input.value);
+                if (clean !== input.value) input.value = clean;
+                this.setPinNote(key, index, clean);
+            });
+            input.addEventListener('keydown', e => {
+                if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229) { e.preventDefault(); this.closePinEditor(); }
+            });
+            input.addEventListener('blur', () => { if (this._pinEd && this._pinEd.input === input) this.closePinEditor(); });
+            ok.addEventListener('click', () => this.closePinEditor());
+            ed.append(num, input, ok);
+            cc.appendChild(ed);
+            cc.classList.add('pin-editing');
+            this._pinEd = { el: ed, input, key, index };
+            input.focus({ preventScroll: true });
+        },
+
+        // quiet = the caller re-renders everything itself. Otherwise the
+        // panel's list is brought up to date with what was just typed.
+        closePinEditor(quiet) {
+            const ed = this._pinEd;
+            if (!ed) return;
+            this._pinEd = null; // first: removing a focused input fires blur
+            ed.el.remove();
+            document.querySelector('.canvas-container')?.classList.remove('pin-editing');
+            if (!quiet) this._refreshPinList();
+        },
+
+        // setPinNote does not re-render the list; copy the stored notes into
+        // its inputs in place (a re-render would drop a focus the guest has
+        // just put in the list), or rebuild it if the pin count differs.
+        _refreshPinList() {
+            const id = this._pinPhotoId;
+            const sel = id ? this.selections.get(id) : null;
+            const hearted = !!sel && sel.rating > 0;
+            const marks = hearted ? this.marksOf(id) : [];
+            const rows = document.querySelectorAll('#pickPinList .pick-pin-item');
+            if (rows.length !== marks.length || !rows.length) {
+                this._renderPinList(hearted, this.canEdit() && hearted, marks);
+                return;
+            }
+            rows.forEach((li, i) => {
+                const input = li.querySelector('.pick-pin-note');
+                const count = li.querySelector('.pick-pin-count');
+                if (input && input !== document.activeElement && input.value !== marks[i].note) input.value = marks[i].note;
+                if (count) count.textContent = `${pinLen(marks[i].note)}/${PIN_NOTE_MAX}`;
+            });
         },
 
         setPinNote(key, index, note) {

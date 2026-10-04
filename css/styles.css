@@ -2345,6 +2345,34 @@ span.pick-heart-btn { cursor: default; }
   pointer-events: none;
 }
 
+/* the note input that opens on a freshly placed pin: at the TOP of the photo
+   area (a phone keyboard rises from the bottom), 16px text (no iOS focus zoom) */
+.pick-pin-editor {
+  position: absolute;
+  top: 8px; left: 8px; right: 60px; /* clear of the preview's ✕ */
+  z-index: 9;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px;
+  background: rgba(14,12,8,.92);
+  border: 1px solid rgba(255,255,255,.35);
+  border-radius: 10px;
+}
+.pick-pin-editor-input {
+  flex: 1; min-width: 0;
+  min-height: 44px;
+  padding: 0 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--ink);
+  font-size: 16px;
+  font-family: var(--font-sans);
+  unicode-bidi: isolate;
+}
+.pick-pin-editor-input:focus { outline: none; border-color: var(--accent); }
+.canvas-container.pin-editing .pick-pin-hint { display: none; }
+
 /* the 修改標示 list in the note panel */
 .pick-pins-empty { margin: 0; font-size: 12px; color: var(--ink-55); line-height: 1.5; }
 .pick-pin-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }

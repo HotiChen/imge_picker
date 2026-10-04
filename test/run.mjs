@@ -11790,6 +11790,273 @@ const pinPoint = async (page, fx, fy) => {
     { before: m.attach, contextOptions: MOBILE });
 }
 
+// ── pin note editor: placing a pin opens its note input, focused, at once ──
+// (js/pick.js _openPinEditor). The positive checks matter: an absent editor
+// would pass every "not shown" assertion, so each case first proves it exists,
+// is really displayed (computed style + hit-test) and owns the focus.
+const PE = {
+  info: page => page.evaluate(() => {
+    const ed = document.getElementById('pickPinEditor');
+    const input = document.getElementById('pickPinEditorInput');
+    if (!ed || !input) return null;
+    const cs = getComputedStyle(ed), r = input.getBoundingClientRect();
+    const cc = document.querySelector('.canvas-container').getBoundingClientRect();
+    const bar = document.querySelector('.modal-photo-info').getBoundingClientRect();
+    const top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+    const okb = document.getElementById('pickPinEditorOk');
+    const okr = okb.getBoundingClientRect();
+    const okTop = document.elementFromPoint(okr.left + okr.width / 2, okr.top + okr.height / 2);
+    return {
+      okHit: okTop === okb && okr.width >= 44 && okr.height >= 44, // not under the preview's ✕
+      display: cs.display, visibility: cs.visibility, inContainer: !!ed.closest('.canvas-container'),
+      focused: document.activeElement === input, value: input.value, maxLength: input.maxLength,
+      fontPx: parseFloat(getComputedStyle(input).fontSize), w: r.width, h: r.height,
+      inViewport: r.left >= 0 && r.right <= innerWidth && r.top >= 0 && r.bottom <= innerHeight,
+      inContainerBox: r.top >= cc.top - 1 && r.bottom <= cc.bottom + 1 && r.left >= cc.left - 1 && r.right <= cc.right + 1,
+      overBar: r.bottom > bar.top && r.top < bar.bottom,
+      hit: top === input,
+      num: ed.querySelector('.pick-pin-num')?.textContent,
+      scroll: [scrollX, scrollY, document.scrollingElement.scrollTop],
+      vv: window.visualViewport ? window.visualViewport.scale : 1,
+    };
+  }),
+  // the stored pins (what a save sends); annotationManager.marks only follows x/y
+  state: page => page.evaluate(() => {
+    const id = PickController._pinPhotoId;
+    return { marks: PickController.marksOf(id), mode: annotationManager.pinMode, phase: PickController.phase };
+  }),
+  gone: page => page.evaluate(() => !document.getElementById('pickPinEditor') && !document.getElementById('pickPinEditorInput')),
+};
+const peShown = i => !!i && i.display !== 'none' && i.visibility !== 'hidden' && i.inContainer && i.hit && i.okHit && i.w > 100 && i.h >= 40;
+
+{
+  const m = pickFakeWorker({ ownerName: 'Edie', ownerKey: 'EDIE-KEY', photos: PHOTOS(3), image: BIG_PHOTO });
+  await suite('retouch pins (guest 390px) — placing a pin opens its note input focused; Enter / 確定 / tapping elsewhere keep what was typed',
+    `${base}/index.html?t=TOK`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      const { t } = await pinOpenHearted(page);
+      await page.locator('#pickPinBtn').tap();
+      await page.waitForTimeout(60);
+      ok('pin mode on, and no editor yet (nothing placed)', (await PE.state(page)).mode === true && await PE.gone(page));
+
+      // 1. a real touch tap places pin ① and opens the editor on it
+      let p = await pinPoint(page, 0.40, 0.50);
+      await t.tap(p.x, p.y);
+      await page.waitForTimeout(100);
+      let i = await PE.info(page);
+      ok('the editor exists, is displayed and is what a tap on it would hit', peShown(i), JSON.stringify(i));
+      ok('document.activeElement is the editor input', i?.focused === true, JSON.stringify(i));
+      ok('it is labelled ① and starts empty', i?.num === '1' && i?.value === '', JSON.stringify(i));
+      ok('16px+ text (no iOS focus zoom), capped at 100 chars', i?.fontPx >= 16 && i?.maxLength === 100, JSON.stringify(i));
+      ok('inside the photo area, in the viewport, not over the bottom ♥ bar', i?.inViewport && i?.inContainerBox && !i?.overBar, JSON.stringify(i));
+      ok('the page did not scroll or zoom', i?.scroll.every(v => v === 0) && i?.vv === 1, JSON.stringify(i));
+      ok('exactly one pin, at the tapped fraction',
+        (await PE.state(page)).marks.length === 1 && pinNear((await PE.state(page)).marks[0].x, 0.40), JSON.stringify(await PE.state(page)));
+
+      // 2. typing is saved into the pin through the existing save path
+      await page.keyboard.type('這裡痘痘');
+      await PIN_FLUSH(page);
+      let puts = PIN_PUTS(m);
+      let body = puts[puts.length - 1].body;
+      ok('the save carries the photo\'s FULL marks with the typed note, canonical x/y/note',
+        body.upsert.length === 1 && body.upsert[0].marks.length === 1 && Object.keys(body.upsert[0].marks[0]).join() === 'x,y,note' &&
+        body.upsert[0].marks[0].note === '這裡痘痘' && pinNear(body.upsert[0].marks[0].x, 0.40) && pinNear(body.upsert[0].marks[0].y, 0.50), JSON.stringify(body));
+      ok('the fake server (real contract) stored it', [...m.state.selections.values()][0].marks[0].note === '這裡痘痘', JSON.stringify([...m.state.selections.values()]));
+
+      // 3. Enter confirms: the editor closes, the note stays, the list agrees
+      await page.keyboard.press('Enter');
+      await page.waitForTimeout(60);
+      ok('Enter closes the editor and the input has lost the focus',
+        await PE.gone(page) && await page.evaluate(() => document.activeElement?.tagName !== 'INPUT'));
+      ok('the note is kept on the pin and the pin is still there',
+        (await PE.state(page)).marks.length === 1 && (await PE.state(page)).marks[0].note === '這裡痘痘');
+      await page.locator('#pickPanelBtn').tap();
+      await page.waitForTimeout(400);
+      ok('the 備註・標示 list shows the note too (not stale)',
+        (await page.evaluate(() => document.querySelector('#pickPinList .pick-pin-note')?.value)) === '這裡痘痘');
+      await page.locator('#modalSidebar .btn-close-mini').tap();
+      await page.waitForTimeout(400);
+
+      // 4. dismissing without typing: the pin stays, with an empty note (as before this change)
+      p = await pinPoint(page, 0.70, 0.60);
+      await t.tap(p.x, p.y);
+      await page.waitForTimeout(100);
+      i = await PE.info(page);
+      ok('pin ②: editor open, focused, labelled 2', peShown(i) && i.focused && i.num === '2', JSON.stringify(i));
+      await page.locator('#pickPinEditorOk').tap();
+      await page.waitForTimeout(60);
+      let st = await PE.state(page);
+      ok('確定 closes it; the second pin stays with an empty note (the existing behaviour for a pin without text)',
+        await PE.gone(page) && st.marks.length === 2 && st.marks[1].note === '', JSON.stringify(st));
+      await PIN_FLUSH(page);
+      puts = PIN_PUTS(m);
+      body = puts[puts.length - 1].body;
+      ok('and no pin was lost, none invented, by the close',
+        (await PE.state(page)).marks.length === 2 && [...m.state.selections.values()][0].marks.length === 2, JSON.stringify(body));
+
+      // 5. tapping elsewhere on the photo: commits the note, opens the NEW pin's editor
+      p = await pinPoint(page, 0.20, 0.80);
+      await t.tap(p.x, p.y);
+      await page.waitForTimeout(100);
+      await page.keyboard.type('膚色不均');
+      p = await pinPoint(page, 0.85, 0.85);
+      await t.tap(p.x, p.y);
+      await page.waitForTimeout(100);
+      i = await PE.info(page);
+      st = await PE.state(page);
+      ok('a tap elsewhere keeps ③\'s note and the editor is now ④\'s (one editor, focused, empty)',
+        st.marks.length === 4 && st.marks[2].note === '膚色不均' && peShown(i) && i.focused && i.num === '4' && i.value === '' &&
+        (await page.evaluate(() => document.querySelectorAll('#pickPinEditor').length)) === 1, JSON.stringify({ st, i }));
+
+      // 6. 100-char limit holds while typing
+      await page.keyboard.type('a'.repeat(105));
+      st = await PE.state(page);
+      ok('the note stops at 100 characters', st.marks[3].note.length === 100, String(st.marks[3].note.length));
+
+      // 6b. control characters never reach the pin (the server would 400 the save)
+      await page.locator('#pickPinEditorInput').fill('p\u0007q');
+      st = await PE.state(page);
+      ok('control characters are stripped from what is typed', st.marks[3].note === 'pq', JSON.stringify(st.marks[3]));
+
+      // 6c. a tap off the photo (the black bars) ends the note too, and adds no pin
+      p = await pinPoint(page, 0.5, -0.2);
+      await t.tap(p.x, p.y);
+      await page.waitForTimeout(100);
+      st = await PE.state(page);
+      ok('a tap off the photo closes the editor (positive: still in pin mode, 4 pins, note kept)',
+        await PE.gone(page) && st.mode === true && st.marks.length === 4 && st.marks[3].note === 'pq', JSON.stringify(st));
+      p = await pinPoint(page, 0.9, 0.2);
+      await t.tap(p.x, p.y);
+      await page.waitForTimeout(100);
+      ok('and the next tap on the photo opens ⑤\'s editor', (await PE.info(page))?.num === '5');
+      await page.locator('#pickPinEditorOk').tap();
+      await page.waitForTimeout(60);
+
+      // 7. 完成 (leaving pin mode) closes the editor; nothing lost
+      await page.locator('#pickPinDoneBtn').tap();
+      await page.waitForTimeout(80);
+      st = await PE.state(page);
+      ok('完成 closes the editor and leaves pin mode; all five pins and their notes kept',
+        await PE.gone(page) && st.mode === false && st.marks.length === 5 && st.marks[3].note === 'pq' && st.marks[2].note === '膚色不均', JSON.stringify(st));
+      // a tap on the photo outside pin mode opens nothing
+      p = await pinPoint(page, 0.5, 0.5);
+      await t.tap(p.x, p.y);
+      await page.waitForTimeout(100);
+      ok('outside pin mode a tap opens no editor and adds no pin', await PE.gone(page) && (await PE.state(page)).marks.length === 5);
+      return out;
+    },
+    { before: m.attach, initScript: () => localStorage.setItem('pick_key:TOK', 'EDIE-KEY'), contextOptions: MOBILE });
+}
+
+{
+  const o = { ownerName: 'Ed2', ownerKey: 'ED2-KEY', photos: PHOTOS(3), image: BIG_PHOTO };
+  const m = pickFakeWorker(o);
+  await suite('retouch pins (guest 390px) — no editor when the photographer starts retouching (409) or the phase already locks',
+    `${base}/index.html?t=TOK`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      const { t } = await pinOpenHearted(page);
+      await PIN_FLUSH(page);
+      await page.locator('#pickPinBtn').tap();
+      const p = await pinPoint(page, 0.4, 0.4);
+      await t.tap(p.x, p.y);
+      await page.waitForTimeout(100);
+      ok('editor open and focused while picking', peShown(await PE.info(page)) && (await PE.info(page)).focused);
+      o.failNextSave = { status: 409, body: { error: '攝影師已開始修圖，無法再修改或送出', code: 'retouching' } };
+      await page.keyboard.type('x');
+      await PIN_FLUSH(page);
+      await page.waitForTimeout(100);
+      const r = await page.evaluate(() => ({ phase: PickController.phase, mode: annotationManager.pinMode }));
+      ok('the 409 flips the phase and the open editor is removed from the DOM', r.phase === 'retouching' && r.mode === false && await PE.gone(page), JSON.stringify(r));
+      // the gate itself: addPin (what a tap calls) opens nothing now
+      const p2 = await pinPoint(page, 0.6, 0.6);
+      await t.tap(p2.x, p2.y);
+      await page.evaluate(() => PickController.addPin([...PickController.selections.keys()][0], 0.5, 0.5));
+      await page.waitForTimeout(100);
+      ok('locked: neither a tap nor addPin opens an editor or adds a pin', await PE.gone(page));
+      return out;
+    },
+    { before: m.attach, initScript: () => localStorage.setItem('pick_key:TOK', 'ED2-KEY'), contextOptions: MOBILE });
+}
+
+{
+  const m = pickFakeWorker({ ownerName: 'Ed3', ownerKey: 'ED3-KEY', phase: 'retouching', photos: PHOTOS(3), image: BIG_PHOTO });
+  m.state.selections.set('20260819/p0.jpg', PIN_SEL([{ x: 0.3, y: 0.4, note: '舊的' }]));
+  await suite('retouch pins (guest 390px) — a photo in an already-locked phase (retouching) never gets an editor',
+    `${base}/index.html?t=TOK`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      const { t } = await pinOpenHearted(page, { heart: false });
+      await page.waitForTimeout(200);
+      const r = await page.evaluate(() => ({
+        phase: PickController.phase, rows: document.querySelectorAll('#pickPinList .pick-pin-item').length,
+        pinBtn: !!document.getElementById('pickPinBtn'), marks: annotationManager.marks.length,
+      }));
+      ok('fixture sanity: retouching, the ♥ photo\'s existing pin is listed, no 標示修改', r.phase === 'retouching' && r.rows === 1 && !r.pinBtn && r.marks === 1, JSON.stringify(r));
+      const before = PIN_PUTS(m).length;
+      const p = await pinPoint(page, 0.6, 0.6);
+      await t.tap(p.x, p.y);
+      await page.evaluate(() => PickController.addPin([...PickController.selections.keys()][0], 0.5, 0.5));
+      await page.waitForTimeout(150);
+      ok('a tap and a direct addPin: no editor, no new pin, no save',
+        await PE.gone(page) && (await PE.state(page)).marks.length === 1 && PIN_PUTS(m).length === before);
+      return out;
+    },
+    { before: m.attach, initScript: () => localStorage.setItem('pick_key:TOK', 'ED3-KEY'), contextOptions: MOBILE });
+}
+
+{
+  const m = pickFakeWorker({ ownerName: 'Ed4', ownerKey: 'ED4-KEY', photos: PHOTOS(3), image: BIG_PHOTO });
+  await suite('retouch pins (guest 1280px, mouse) — a click places a pin and focuses its note input; Enter keeps the note',
+    `${base}/index.html?t=TOK`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.setViewportSize({ width: 1280, height: 900 });
+      await page.waitForSelector('.photo-card', { timeout: 5000 });
+      await page.locator('.photo-card').first().click();
+      await page.waitForSelector('#photoModal.active', { timeout: 5000 });
+      await page.waitForFunction(PREVIEW_SETTLED, null, { timeout: 5000 });
+      await page.waitForTimeout(150);
+      await page.locator('#modalPhotoRating .pick-heart-btn').click();
+      await page.waitForTimeout(60);
+      await page.locator('#pickPinBtn').click();
+      const f = await page.evaluate(PIN_FIT);
+      await page.mouse.click(f.left + f.w * 0.5, f.top + f.h * 0.5);
+      await page.waitForTimeout(100);
+      const i = await PE.info(page);
+      ok('click: editor shown and focused', peShown(i) && i.focused && i.num === '1', JSON.stringify(i));
+      await page.keyboard.type('嘴角');
+      await page.keyboard.press('Enter');
+      await page.waitForTimeout(60);
+      let st = await PE.state(page);
+      ok('Enter: closed, note kept', await PE.gone(page) && st.marks.length === 1 && st.marks[0].note === '嘴角', JSON.stringify(st));
+
+      // clicking into the panel's list while a note is open: the note is kept
+      // and the focus really lands on the list input (a re-render would drop it)
+      await page.mouse.click(f.left + f.w * 0.2, f.top + f.h * 0.2);
+      await page.waitForTimeout(100);
+      ok('a second pin opens its editor', (await PE.info(page))?.num === '2' && (await PE.info(page)).focused);
+      await page.keyboard.type('額頭');
+      await page.locator('#pickPinList .pick-pin-note').first().click();
+      await page.waitForTimeout(60);
+      const r = await page.evaluate(() => ({
+        focusInList: document.activeElement?.classList.contains('pick-pin-note'),
+        which: [...document.querySelectorAll('#pickPinList .pick-pin-note')].indexOf(document.activeElement),
+        values: [...document.querySelectorAll('#pickPinList .pick-pin-note')].map(i => i.value),
+      }));
+      st = await PE.state(page);
+      ok('clicking a list input closes the editor, keeps the note, and that input holds the focus',
+        await PE.gone(page) && st.marks[1].note === '額頭' && r.focusInList && r.which === 0 && r.values[1] === '額頭', JSON.stringify({ st, r }));
+      return out;
+    },
+    { before: m.attach, initScript: () => localStorage.setItem('pick_key:TOK', 'ED4-KEY') });
+}
+
 {
   // hostile notes, in the guest panel and (below) the photographer's preview
   const NOTES = ['<img src=x onerror=alert(1)>', '‮evil', 'a​b‏c'];
