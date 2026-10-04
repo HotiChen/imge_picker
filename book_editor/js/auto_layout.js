@@ -581,11 +581,346 @@ const AutoLayout = (() => {
         return { cover, pages, dropped };
     }
 
+    // ─── planSpreads: the A4 album (cover page + spreads) ───────────────────
+    // The same analyze() output and the same first steps as plan() (natural
+    // order, de-duplication, cover pick, focus crops), but the inside is laid
+    // out in SPREADS poured into templates from spread_templates.js, chosen by
+    // dynamic programming over the shooting order:
+    //   * a spread is the next k photos poured into a k-slot template, seated
+    //     by an optimal assignment (Hungarian) that minimises crop loss, with
+    //     a small pull to keep the shooting order along the reading order;
+    //   * cost of a spread = seating cost + a price per spread + a rhythm cost
+    //     per photo count (2-3 photos is sparse, 4-6 is the sweet spot, 8 is
+    //     busy) + a tiny deterministic jitter so equal templates take turns;
+    //   * hard rules (relaxed one by one, last first, when they cannot hold):
+    //       - the next spread never uses the same template,
+    //       - the same family (tags[0]) is never on three spreads running,
+    //       - a through-spread (`hero`) needs 4 other spreads before the next,
+    //       - a lone photo only on a hero spread, and the last spread is never
+    //         a stray non-hero photo (unless the whole book is one photo),
+    //       - 2-3 photos in all make exactly one spread.
+    //   * a hero slot pays more for a blurry or non-landscape photo and is
+    //     never the cover photo; a hero spread earns a bonus, so the sharpest
+    //     landscapes get them, as often as the cap allows.
+    const SPREAD_DEFAULTS = Object.freeze({
+        coverAspect: 210 / 297,   // A4 portrait page
+        spreadAspect: 420 / 297,  // two of them side by side
+        maxPerFace: 4,
+        heroGap: 4,               // a hero spread needs this many other spreads before the next (<= 1 in any 5)
+        maxFamilyRun: 2,          // spreads of one family running
+        spreadPrice: 0.55,        // every spread costs this much: fewer, fuller spreads win ties
+        heroBonus: 0.65,          // what a through-spread earns (paid back by a blurry or portrait photo)
+        jitter: 0.12,             // deterministic variety, scaled by `seed`'s hash
+    });
+    const SP_RHYTHM = [0, 0.15, 0.3, 0.14, 0.04, 0, 0.1, 0.25, 0.4, 0.6, 0.8, 1, 1.2];   // by photo count
+    const SP_SOLO = 0.6;              // a lone non-hero photo (only ever the whole book's last resort)
+    const SP_ORDER = 0.03;            // per seat of distance between shooting order and reading order
+    const SP_SAME_FAMILY = 0.1;       // next spread of the same family
+    const SP_BIG_SHARP = 0.15;        // sharp photos in the big slots
+    const SP_BIG = 1e6;               // "impossible" inside the assignment (crushed photo in a no-crush pass)
+    const SP_PASSES = 8;              // variety polish: at most this many sweeps over the spreads
+    const SP_MAX_K = 12;
+
+    // min-cost assignment, rows = photos, columns = slots (n x n, O(n^3)); returns the column of each row
+    function hungarian(a, n) {
+        const u = new Float64Array(n + 1), v = new Float64Array(n + 1), p = new Int32Array(n + 1), way = new Int32Array(n + 1);
+        for (let i = 1; i <= n; i++) {
+            p[0] = i;
+            let j0 = 0;
+            const minv = new Float64Array(n + 1).fill(Infinity), used = new Uint8Array(n + 1);
+            do {
+                used[j0] = 1;
+                const i0 = p[j0];
+                let delta = Infinity, j1 = 0;
+                for (let j = 1; j <= n; j++) {
+                    if (used[j]) continue;
+                    const cur = a[i0 - 1][j - 1] - u[i0] - v[j];
+                    if (cur < minv[j]) { minv[j] = cur; way[j] = j0; }
+                    if (minv[j] < delta) { delta = minv[j]; j1 = j; }
+                }
+                for (let j = 0; j <= n; j++) {
+                    if (used[j]) { u[p[j]] += delta; v[j] -= delta; } else minv[j] -= delta;
+                }
+                j0 = j1;
+            } while (p[j0] !== 0);
+            do { const j1 = way[j0]; p[j0] = p[j1]; j0 = j1; } while (j0);
+        }
+        const col = new Array(n);
+        for (let j = 1; j <= n; j++) col[p[j] - 1] = j - 1;
+        return col;
+    }
+
+    // small deterministic hash -> 0..1, from the template id, the position and the seed
+    function jitterOf(id, at, seed) {
+        let h = 2166136261 ^ (seed | 0);
+        for (let i = 0; i < id.length; i++) { h ^= id.charCodeAt(i); h = Math.imul(h, 16777619); }
+        h ^= Math.imul(at + 1, 0x9E3779B1);
+        h = Math.imul(h ^ (h >>> 15), 0x85EBCA6B);
+        h = Math.imul(h ^ (h >>> 13), 0xC2B2AE35);
+        h ^= h >>> 16;
+        return (h >>> 0) / 4294967296;
+    }
+
+    // what the planner needs to know about each usable template; broken ones are skipped
+    function spreadCatalogue(templates, spreadAspect, maxPerFace) {
+        const cat = [];
+        const list = templates.filter(t => t && typeof t.id === 'string' && Array.isArray(t.slots));
+        list.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+        for (const t of list) {
+            const slots = t.slots;
+            if (slots.length === 0 || slots.length > SP_MAX_K) continue;
+            if (!slots.every(s => s && [s.x, s.y, s.w, s.h].every(Number.isFinite) && s.w > 0 && s.h > 0 && ['left', 'right', 'span'].includes(s.face))) continue;
+            const tags = Array.isArray(t.tags) ? t.tags : [];
+            const hero = tags.includes('hero');
+            const left = slots.filter(s => s.face === 'left').length, right = slots.filter(s => s.face === 'right').length;
+            if (left > maxPerFace || right > maxPerFace) continue;
+            if (slots.some(s => s.face === 'span') && !hero) continue;      // only a hero may cross the fold
+            cat.push({
+                id: t.id, tpl: t, k: slots.length, hero,
+                family: tags.length ? tags[0] : t.id,
+                aspects: slots.map(s => (s.w / s.h) * spreadAspect),
+                span: slots.map(s => s.face === 'span'),
+                big: slots.map(s => Math.min(1, (s.w * s.h) / 0.2)),
+            });
+        }
+        return cat;
+    }
+
+    function spreadCosts(P, cat, ctx, noCrush) {
+        const m = P.length, T = cat.length;
+        const cost = new Float64Array(m * T).fill(Infinity);
+        const seat = new Array(m * T).fill(null);
+        for (let ti = 0; ti < T; ti++) {
+            const lay = cat[ti], k = lay.k;
+            const spans = lay.span.filter(Boolean).length;
+            for (let i = 0; i + k <= m; i++) {
+                const a = new Array(k);
+                for (let p = 0; p < k; p++) {
+                    const r = P[i + p];
+                    const row = new Array(k);
+                    for (let s = 0; s < k; s++) {
+                        let c = cropCost(r.aspect, lay.aspects[s]) + SP_ORDER * Math.abs(p - s);
+                        if (keptShare(r.aspect, lay.aspects[s]) < CRUSH_BELOW && noCrush) c += SP_BIG;
+                        const sharp = 1 - ctx.pct.get(r.id);
+                        if (lay.span[s]) {
+                            c += 1.0 * sharp;
+                            if (r.orientation !== 'square' && r.orientation !== 'landscape') c += 0.8;
+                            if (r.id === ctx.coverId) c += 10;                  // the cover is already that picture
+                        } else {
+                            c += SP_BIG_SHARP * sharp * lay.big[s];
+                        }
+                        row[s] = c;
+                    }
+                    a[p] = row;
+                }
+                const col = k === 1 ? [0] : hungarian(a, k);
+                let c = 0;
+                for (let p = 0; p < k; p++) c += a[p][col[p]];
+                if (c >= SP_BIG / 2) continue;                                   // every seating crushes a photo
+                c += lay.hero ? SP_RHYTHM[k] - ctx.cfg.heroBonus * (k === 1 ? 1 : 0.5 * spans) : (k === 1 ? SP_SOLO : SP_RHYTHM[k]);
+                c += ctx.cfg.jitter * jitterOf(lay.id, i, ctx.seed);
+                cost[i * T + ti] = c;
+                seat[i * T + ti] = col;
+            }
+        }
+        return { cost, seat };
+    }
+
+    // state = (the previous template, how many spreads of its family run, spreads since the last hero)
+    function spreadSolve(costs, cat, m, rules, cfg) {
+        const T = cat.length, NONE = T, H = cfg.heroGap, RUN = cfg.maxFamilyRun;
+        const idx = (i, last, run, since) => ((i * (T + 1) + last) * RUN + (run - 1)) * (H + 1) + since;
+        const size = (m + 1) * (T + 1) * RUN * (H + 1);
+        const dp = new Float64Array(size).fill(Infinity);
+        const from = new Int32Array(size).fill(-1);
+        const via = new Int16Array(size).fill(-1);
+        dp[idx(0, NONE, 1, H)] = 0;
+        for (let i = 0; i < m; i++) {
+            for (let last = 0; last <= T; last++) for (let run = 1; run <= RUN; run++) for (let since = 0; since <= H; since++) {
+                const here = idx(i, last, run, since);
+                const cur = dp[here];
+                if (cur === Infinity) continue;
+                for (let t = 0; t < T; t++) {
+                    const lay = cat[t], k = lay.k;
+                    if (i + k > m) continue;
+                    const pc = costs.cost[i * T + t];
+                    if (pc === Infinity) continue;
+                    if (rules.whole && !(i === 0 && k === m)) continue;
+                    if (rules.adj && t === last) continue;
+                    if (rules.hero && lay.hero && since < H) continue;
+                    if (rules.solo && k === 1 && !lay.hero && m > 1) continue;
+                    if (rules.last && i + k === m && k === 1 && !lay.hero && m > 1) continue;
+                    const same = last !== NONE && cat[last].family === lay.family;
+                    let nrun = 1;
+                    if (same) {
+                        nrun = run + 1;
+                        if (nrun > RUN) { if (rules.run) continue; nrun = RUN; }
+                    }
+                    const ns = lay.hero ? 0 : Math.min(H, since + 1);
+                    const c = cur + pc + cfg.spreadPrice + (same ? SP_SAME_FAMILY : 0);
+                    const to = idx(i + k, t, nrun, ns);
+                    if (c < dp[to]) { dp[to] = c; from[to] = here; via[to] = t; }
+                }
+            }
+        }
+        let best = Infinity, bestT = -1;
+        for (let last = 0; last < T; last++) for (let run = 1; run <= RUN; run++) for (let since = 0; since <= H; since++) {
+            const t = idx(m, last, run, since);
+            if (dp[t] < best) { best = dp[t]; bestT = t; }
+        }
+        if (bestT < 0) return null;
+        const groups = [];
+        for (let t = bestT; via[t] >= 0; t = from[t]) groups.push(via[t]);
+        return groups.reverse();
+    }
+
+    // charge for the same template on two spreads `d` apart (d = 1 is a hard rule, handled by `adj`)
+    const spNear = d => (d === 2 ? 0.5 : d === 3 ? 0.35 : d === 4 ? 0.2 : 0.1);
+    function polishVariety(groups, costs, cat, m, rules, cfg) {
+        const T = cat.length, S = groups.length, H = cfg.heroGap, RUN = cfg.maxFamilyRun;
+        const g = groups.slice();
+        const starts = [];
+        { let at = 0; for (const t of g) { starts.push(at); at += cat[t].k; } }
+        const costAt = (j, t) => costs.cost[starts[j] * T + t];
+        // what spread j adds to the book when it uses template t (its own cost, the family
+        // charge with its neighbours, the repeat charge with every other spread)
+        const share = (j, t) => {
+            let c = costAt(j, t);
+            if (j > 0 && cat[g[j - 1]].family === cat[t].family) c += SP_SAME_FAMILY;
+            if (j + 1 < S && cat[g[j + 1]].family === cat[t].family) c += SP_SAME_FAMILY;
+            for (let o = 0; o < S; o++) if (o !== j && g[o] === t) c += spNear(Math.abs(o - j));
+            return c;
+        };
+        const allowed = (j, t) => {
+            const lay = cat[t];
+            if (rules.adj && ((j > 0 && g[j - 1] === t) || (j + 1 < S && g[j + 1] === t))) return false;
+            if (rules.hero && lay.hero) for (let o = Math.max(0, j - H); o <= Math.min(S - 1, j + H); o++) if (o !== j && cat[g[o]].hero) return false;
+            if (rules.solo && lay.k === 1 && !lay.hero && m > 1) return false;
+            if (rules.last && j === S - 1 && lay.k === 1 && !lay.hero && m > 1) return false;
+            if (rules.run) {
+                const fam = i => (i === j ? lay.family : cat[g[i]].family);
+                for (let a = Math.max(0, j - RUN); a <= j && a + RUN < S; a++) {
+                    let same = true;
+                    for (let q = a; q <= a + RUN; q++) if (fam(q) !== fam(a)) { same = false; break; }
+                    if (same) return false;
+                }
+            }
+            return true;
+        };
+        for (let sweep = 0; sweep < SP_PASSES; sweep++) {
+            let moved = false;
+            for (let j = 0; j < S; j++) {
+                const k = cat[g[j]].k;
+                let bestT = g[j], best = share(j, g[j]);
+                for (let t = 0; t < T; t++) {
+                    if (t === g[j] || cat[t].k !== k || costAt(j, t) === Infinity || !allowed(j, t)) continue;
+                    const c = share(j, t);
+                    if (c < best - 1e-9) { best = c; bestT = t; }
+                }
+                if (bestT !== g[j]) { g[j] = bestT; moved = true; }
+            }
+            if (!moved) break;
+        }
+        return g;
+    }
+
+    // opts: { templates, coverAspect, spreadAspect, hashThreshold, window, maxPerFace, seed, order, back }
+    function planSpreads(items, opts = {}) {
+        const D = SPREAD_DEFAULTS;
+        const num = (v, d) => (Number(v) > 0 && Number.isFinite(Number(v)) ? Number(v) : d);
+        const coverAspect = num(opts.coverAspect, D.coverAspect);
+        const spreadAspect = num(opts.spreadAspect, D.spreadAspect);
+        const maxPerFace = Number.isFinite(opts.maxPerFace) ? Math.max(1, Math.floor(opts.maxPerFace)) : D.maxPerFace;
+        const threshold = Number.isFinite(opts.hashThreshold) ? opts.hashThreshold : DEFAULTS.hashThreshold;
+        const windowSize = Number.isFinite(opts.window) ? opts.window : DEFAULTS.window;
+        const seed = Number.isFinite(opts.seed) ? Math.trunc(opts.seed) : 0;
+
+        const list = Array.isArray(items) ? items : [];
+        let recs = list.map(normalise);
+        if (opts.order !== 'given') {
+            recs = recs.map((r, i) => ({ r, i })).sort((a, b) => naturalCompare(a.r.id, b.r.id) || a.i - b.i).map(x => x.r);
+        }
+        const { kept, dropped } = dedupe(recs, threshold, windowSize);
+        if (kept.length === 0) return { cover: null, spreads: [], back: null, dropped };
+
+        const sharps = kept.map(r => r.sharp).sort((a, b) => a - b);
+        const below = v => { let lo = 0, hi = sharps.length; while (lo < hi) { const mid = (lo + hi) >> 1; if (sharps[mid] < v) lo = mid + 1; else hi = mid; } return lo; };
+        const pct = new Map(kept.map(r => [r.id, kept.length > 1 ? below(r.sharp) / (kept.length - 1) : 1]));
+
+        const coverRec = pickCover(kept, coverAspect);
+        const cover = { photoId: coverRec.id, crop: cropFor(coverRec.aspect, coverAspect, coverRec.focus) };
+        // one photo: the cover alone. 2-3: the cover is not repeated inside. 4+: it is.
+        const inner = kept.length === 1 ? [] : kept.length <= FEW_PHOTOS ? kept.filter(r => r !== coverRec) : kept;
+        const m = inner.length;
+        if (m === 0) return { cover, spreads: [], back: null, dropped };
+
+        const templates = opts.templates !== undefined ? opts.templates
+            : (typeof SpreadTemplates !== 'undefined' ? SpreadTemplates.TEMPLATES : null);
+        if (!Array.isArray(templates)) throw new Error('AutoLayout.planSpreads: load spread_templates.js first, or pass { templates }');
+        const cat = spreadCatalogue(templates, spreadAspect, maxPerFace);
+
+        const cfg = { spreadPrice: D.spreadPrice, heroBonus: D.heroBonus, jitter: D.jitter, heroGap: D.heroGap, maxFamilyRun: D.maxFamilyRun };
+        const ctx = { pct, coverId: coverRec.id, seed, cfg };
+        const memo = {};
+        const costsFor = noCrush => memo[noCrush] || (memo[noCrush] = spreadCosts(inner, cat, ctx, noCrush));
+        // Rules first, then taste: strictest rule set first, and inside it no
+        // crushed photo before a crushed one; only then give a rule up.
+        const ladder = [
+            { adj: true, run: true, hero: true, solo: true, last: true },
+            { adj: true, run: false, hero: true, solo: true, last: true },
+            { adj: true, run: false, hero: false, solo: true, last: true },
+            { adj: true, run: false, hero: false, solo: false, last: true },
+            { adj: true, run: false, hero: false, solo: false, last: false },
+            { adj: false, run: false, hero: false, solo: false, last: false },
+        ];
+        let groups = null, costs = null, used = null;
+        search:
+        for (const whole of m <= FEW_PHOTOS ? [true, false] : [false]) {
+            for (const rules of ladder) {
+                for (const noCrush of [true, false]) {
+                    const c = costsFor(noCrush);
+                    const g = cat.length ? spreadSolve(c, cat, m, { ...rules, whole }, cfg) : null;
+                    if (g) { groups = g; costs = c; used = { ...rules, whole }; break search; }
+                }
+            }
+        }
+        if (!groups) throw new Error('AutoLayout.planSpreads: the templates given cannot seat these photos — include templates for 1 and 2 photos');
+
+        // Variety. The pass above takes the cheapest book, which tends to lean on a
+        // few templates. Polish it: keep every spread's photos, and try the other
+        // templates with the same number of slots, one spread at a time, taking a
+        // swap when it lowers (cost + a charge for the same template showing up
+        // again within a few spreads, or at all). Every hard rule is checked on
+        // each candidate, so none is bent. Deterministic; stops when nothing moves.
+        if (groups.length > 1 && cat.length > 1) groups = polishVariety(groups, costs, cat, m, used, cfg);
+
+        const T = cat.length;
+        const spreads = [];
+        let at = 0;
+        groups.forEach((ti, n) => {
+            const lay = cat[ti], col = costs.seat[at * T + ti];
+            const slots = new Array(lay.k);
+            for (let p = 0; p < lay.k; p++) {
+                const s = col[p], r = inner[at + p], sd = lay.tpl.slots[s];
+                slots[s] = {
+                    photoId: r.id,
+                    crop: cropFor(r.aspect, lay.aspects[s], r.focus),
+                    slot: { x: sd.x, y: sd.y, w: sd.w, h: sd.h, face: sd.face },
+                };
+            }
+            spreads.push({ id: `spread-${n + 1}`, template: lay.id, slots });
+            at += lay.k;
+        });
+        return { cover, spreads, back: opts.back === true ? {} : null, dropped };
+    }
+
     // ─── the original five styles (editor) ─────────────────────────────────
     return {
         DEFAULTS,
+        SPREAD_DEFAULTS,
         analyze,
         plan,
+        planSpreads,
         // pure helpers, exposed for tests and for callers that want to reuse them
         util: { naturalCompare, toGray, dHash, hamming, sharpnessOf, focusOf, cropFor },
 
