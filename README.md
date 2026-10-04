@@ -26,20 +26,46 @@
 |---|---|
 | `home.html` | 入口首頁（明亮版），登入後進 dashboard |
 | `dashboard.html` | 攝影師後台儀表板：專案、已交付狀態、營收 |
-| `admin.html` | 專案 / 客戶管理：上傳、分享連結、選片狀態 |
+| `admin.html` | 專案 / 客戶管理：分享連結、選片狀態、交件（含「＋上傳精修」、預填上次精修資料夾）、訂單、下載選片 / 需求表 CSV |
 | `settings.html` | 工作室設定（名稱、logo、預設方案）與商品目錄（從平台加入商品、定價） |
 | `orders.html` | 訂單列表與編輯 |
 | `operator.html` | 平台營運者（OPERATOR_TOKEN）管理平台商品 |
-| `upload.html` | 上傳照片到 R2 |
-| `index.html` | 選圖介面（評分、旗標、標注；客人用選片連結開啟） |
+| `upload.html` | 上傳照片到 R2；從專案進來（`?project=<id>`）時返回鍵回專案 |
+| `index.html` | 選圖介面：客人用選片連結開啟（挑片、標示修改 pins、交件後的精修 gallery）；攝影師從專案的「看照片」進入是唯讀的 Review 模式（`js/project-view.js`，沒有標注工具，pins 列在右欄 / 照片下方） |
 | `client-login.html` | 客戶登入 |
 | `tutorial.html` | 操作說明 |
 | `ping.html` | 連線診斷 |
 | `book_editor/` | 相本排版：`index.html` 編輯器（自動排版、匯出 JPG ZIP）、`view.html` 客戶預覽 / 核准 |
 | `r2_designer/` | 自由排版畫布（Fabric.js） |
 
-設計文件在 `docs/`：`backlog.md`（路線圖與待辦）、`guest-picking.md`、`dashboard-settings.md`、
-`products-orders.md`。`CLAUDE.md` 是工作約定。
+設計文件在 `docs/`：`backlog.md`（路線圖與待辦）、`guest-picking.md`（客人挑片與 pins）、
+`delivery.md`（交件）、`project-plan.md`（方案與加挑上限）、`dashboard-settings.md`、
+`products-orders.md`、`guest-shop.md`、`pick-handover.md`、`photographer-interviews.md`。
+`CLAUDE.md` 是工作約定。
+
+### 主題
+
+攝影師端頁面（`home` / `dashboard` / `admin` / `upload` / `settings` / `orders` / `operator`）
+一律用 `home.html` 的米色亮色主題（`--bg:#fff8ee`）。客戶端（`index.html` 客人模式、
+`client-login.html`、`book_editor/view.html`）維持深色。`book_editor/index.html`（攝影師用的相本編輯器）
+目前還是自己的深藍主題，尚未統一。
+
+---
+
+## 專案流程（目前的樣子）
+
+專案狀態：挑片 → 已送出 → 精修中 → 已交件（`delivered_at`）。
+
+- **一條連結兩個畫面**：交件前客人看到挑片畫面；交件後同一條連結變成精修 gallery（只顯示精修資料夾）。
+- **交件狀態只看 `delivered_at`**。`projects.final_folders` 是「上次選定的精修資料夾」，
+  **取消交件**和**開放修改（reopen）**都只清 `delivered_at`、保留它，下次交件時 admin 會預填
+  （可修改，按「交件」才生效）。未交件時任何連結都讀不到精修資料夾。
+- **標示修改（pins）**：客人在 ♥ 的照片上點位置放編號 pin，放下後自動跳出輸入框填文字；
+  資料是 `selections.marks`（0–1 比例座標）。攝影師在 Review 看到，也可用「下載需求表 (CSV)」
+  匯出（檔名、備註、標示；UTF-8 含 BOM）給修圖師。
+- 精修 / 毛片請放在各自獨立的資料夾（慣例 `<shoot>/毛片/` 與 `<shoot>/精修/` 並排）；
+  精修資料夾不可與毛片資料夾重疊。
+- 同名檔案上傳會**直接覆蓋**（PUT 不檢查），要保留版本請放不同資料夾。
 
 ---
 
@@ -75,7 +101,7 @@ Schema 只做 append-only 變更（`ALTER TABLE ... ADD COLUMN`）。SQL 放在 
 ```bash
 # Worker（幾秒）
 node --test "worker/test/*.test.mjs"
-node --check worker/worker.js
+node --input-type=module --check < worker/worker.js   # 抓得到語法錯；單純 node --check 抓不到
 
 # 瀏覽器（幾分鐘；Playwright 在 repo 外，Chromium 在 /opt/pw-browsers）
 NODE_PATH=/tmp/pwinstall/node_modules node test/run.mjs
@@ -84,6 +110,9 @@ ONLY=<suite 名稱片段> NODE_PATH=/tmp/pwinstall/node_modules node test/run.mj
 ```
 
 開發時只跑相關測試，commit / merge 前全部跑。CI 只跑 Worker 測試。
+
+已知 flaky：book_editor「no token is minted for an empty folder set」在高負載下會失敗；
+單獨跑會過。若 `/tmp/pwinstall` 不存在，Playwright 可能在 `/opt/node-tools/node_modules`。
 
 ---
 
