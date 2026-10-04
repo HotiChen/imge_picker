@@ -14,6 +14,13 @@ outside this list.
      `worker/migrations/2026-09-30-delivery.sql` in D1 before its merge, and
      a check in `ping.html` for photos without thumbnails (they no longer fall
      back to the original in the picking view).
+   - Client confirmation + revision requests (Publish ≠ Complete: after
+     交件 the guest taps 確認完成 or 要求修改; 精修二 goes out with the
+     existing 更換精修) — **in progress (2026-10-04)**: Worker side built
+     (`docs/delivery.md` → "Client confirmation and revision requests"),
+     frontend (pick.js buttons, admin.html badge / list / 標記完成) next.
+     Needs `worker/migrations/2026-10-04-client-confirm.sql` in D1 before its
+     merge.
    - Email: Cloudflare Email Routing on, verify the photographer's inbox,
      `wrangler secret put PHOTOGRAPHER_EMAIL`, submit a test pick.
    - Real phone: iPhone / LINE in-app browser / Safari — picking, gestures,

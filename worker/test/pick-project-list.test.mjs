@@ -86,6 +86,9 @@ test('each project shows phase, flag, seat holder, submits and its live link', a
     delivered_at: null, // not delivered (docs/dashboard-settings.md)
     final_folders: null, // no finals snapshot yet (docs/delivery.md)
     allow_proof_download: false, // the proof-originals switch, off by default
+    client_confirmed_at: null, // not confirmed (docs/delivery.md, client confirmation)
+    client_confirmed_by: null,
+    open_revision_count: 0, // no open 要求修改
     submission_count: 2,
     last_submitted_at: latest,
     unnotified_submissions: 2, // no mail binding here, so neither was emailed

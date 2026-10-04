@@ -1240,6 +1240,123 @@ function deliveryFields(row) {
   return { final_folders: Array.isArray(finals) ? finals : null, allow_proof_download: row.allow_proof_download === 1 };
 }
 
+// ─── Client confirmation and revision requests (docs/delivery.md) ───────────
+// After delivery the seat holder either confirms it (確認完成) or asks for
+// changes (要求修改, revision_requests). The photographer may also confirm by
+// hand. Nothing confirms on its own. Every deliver (a repeat one too),
+// undeliver and reopen clears the confirmation; every deliver and every
+// confirmation resolves the open requests in the same batch, so a confirmed
+// project never has an open request. Change the limits here only.
+const REVISION_MESSAGE_MAX = 1000;
+const REVISION_OPEN_MAX = 10;
+const REVISION_TOTAL_MAX = 50;
+const CONFIRM_UNAVAILABLE = { error: '確認完成功能尚未啟用', code: 'confirm_unavailable' };
+// where the photographer's notification email links to (admin.html opens a
+// project from #project=<id>)
+const STUDIO_ADMIN_URL = 'https://imhoti.tw/studio/admin.html';
+// the characters a pin note refuses, every one of them
+const PICK_CONTROL_ALL = new RegExp(PICK_KEY_CONTROL.source, 'g');
+
+// A column or a table a hand-run migration adds is not there yet.
+function isMissingSchema(e) {
+  return isMissingColumn(e) || /no such table/i.test(String(e?.message || ''));
+}
+async function withoutMissingSchema(primary, fallback) {
+  try { return await primary(); } catch (e) {
+    if (!isMissingSchema(e)) throw e;
+    return fallback();
+  }
+}
+
+// A revision request's text: the guest's own words, a paragraph, so line
+// breaks stay (CRLF / CR become LF, a tab a space) and every other control or
+// line-separator character a pin note refuses (PICK_KEY_CONTROL) is dropped.
+// Trimmed; null unless 1–REVISION_MESSAGE_MAX characters are left.
+function revisionMessage(value) {
+  if (typeof value !== 'string') return null;
+  const text = value.replace(/\r\n?/g, '\n').replace(/\t/g, ' ').replace(PICK_CONTROL_ALL, c => (c === '\n' ? c : '')).trim();
+  if (!text || overChars(text, REVISION_MESSAGE_MAX)) return null;
+  return text;
+}
+
+// Resolves a project's open requests, but only once it is confirmed: rides in
+// the same batch as a confirmation (guest or photographer).
+function resolveRevisionsIfConfirmed(env, projectId, at) {
+  return env.DB.prepare(
+    'UPDATE revision_requests SET resolved_at = ? WHERE project_id = ? AND resolved_at IS NULL ' +
+    'AND EXISTS (SELECT 1 FROM projects WHERE id = ? AND client_confirmed_at IS NOT NULL)'
+  ).bind(at, projectId, projectId);
+}
+
+// The latest open request of a project ({message}) or null — also before the
+// migration.
+async function openRevision(env, projectId) {
+  try {
+    return await env.DB.prepare(
+      'SELECT message FROM revision_requests WHERE project_id = ? AND resolved_at IS NULL ORDER BY created_at DESC, rowid DESC LIMIT 1'
+    ).bind(projectId).first();
+  } catch (e) {
+    if (!isMissingSchema(e)) throw e;
+    return null;
+  }
+}
+
+// The admin's view: the newest REVISION_TOTAL_MAX requests with the asker's
+// name when known, and how many are open. Empty before the migration.
+async function revisionRequestsFor(env, projectId) {
+  try {
+    const { results } = await env.DB.prepare(
+      'SELECT r.id, r.message, r.created_at, r.resolved_at, r.picker_id, pk.name AS picker_name FROM revision_requests r ' +
+      'LEFT JOIN pickers pk ON pk.id = r.picker_id AND pk.project_id = r.project_id ' +
+      'WHERE r.project_id = ? ORDER BY r.created_at DESC, r.rowid DESC LIMIT ?'
+    ).bind(projectId, REVISION_TOTAL_MAX).all();
+    const counted = await env.DB.prepare('SELECT COUNT(*) AS open FROM revision_requests WHERE project_id = ? AND resolved_at IS NULL')
+      .bind(projectId).first();
+    return { rows: results, open: counted?.open ?? 0 };
+  } catch (e) {
+    if (!isMissingSchema(e)) throw e;
+    return { rows: [], open: 0 };
+  }
+}
+
+// 409 for a guest confirm / revision request on a project that is not
+// delivered now.
+function pickNotDelivered() {
+  return jsonOk({ error: '尚未交件', code: 'not_delivered' }, 409);
+}
+
+// Tells the photographer the guest confirmed (message null) or asked for
+// changes (message: their text). Same transport and rules as
+// sendPickNotification: a skip when mail is not set up, the subject on one
+// line, the guest's words never in a header and escaped in the HTML part.
+async function sendClientNotification(env, project, pickerName, message) {
+  if (!env.NOTIFY_EMAIL || !env.PHOTOGRAPHER_EMAIL) {
+    console.warn('client notification skipped: NOTIFY_EMAIL or PHOTOGRAPHER_EMAIL is not configured');
+    return false;
+  }
+  const oneLine = v => String(v ?? '').replace(PICK_CONTROL_ALL, ' ');
+  const title = oneLine(project.title || '未命名專案');
+  const name = oneLine(pickerName || '客人');
+  const link = `${STUDIO_ADMIN_URL}#project=${encodeURIComponent(project.id)}`;
+  const asked = message != null;
+  const lead = asked ? '客人看過交件的精修照片，要求修改：' : '客人已確認交件的精修照片。';
+  const subject = oneLine(`[${asked ? '要求修改' : '客人確認完成'}] ${title} — ${name}`);
+  const fields = [['專案', title], ['客人', name]];
+  const text = fields.map(([k, v]) => `${k}：${v}`).join('\n') + `\n\n${lead}` +
+    (asked ? `\n\n${message}` : '') + `\n\n打開專案：${link}`;
+  const html = '<table>' +
+    fields.map(([k, v]) => `<tr><th align="left">${escapeHtml(k)}</th><td>${escapeHtml(v)}</td></tr>`).join('') +
+    `</table><p>${escapeHtml(lead)}</p>` +
+    (asked ? `<p style="white-space:pre-wrap">${escapeHtml(message)}</p>` : '') +
+    `<p><a href="${escapeHtml(link)}">打開專案</a></p>`;
+  await env.NOTIFY_EMAIL.send({
+    to: env.PHOTOGRAPHER_EMAIL,
+    from: env.NOTIFY_FROM || env.PHOTOGRAPHER_EMAIL,
+    subject, html, text,
+  });
+  return true;
+}
+
 // The project behind a pick token and, when the request carries a picker key,
 // the picker it belongs to. The key is looked up by its hash and only within
 // the token's own project, so a key from another project finds nobody. null
@@ -1887,14 +2004,28 @@ export default {
       ).all();
       // extra_max (the plan's extra-pick cap) comes from a later hand-run
       // migration still: without it every project lists as uncapped (null)
-      const { results } = await withoutMissingColumn(
-        () => listed(' p.final_folders, p.allow_proof_download, p.extra_max,'),
+      // and the client-confirm columns and table (docs/delivery.md) from a
+      // later one: without them nothing is confirmed and nothing is open
+      const confirmCols = ' p.client_confirmed_at, p.client_confirmed_by,' +
+        ' (SELECT COUNT(*) FROM revision_requests r WHERE r.project_id = p.id AND r.resolved_at IS NULL) AS open_revision_count,';
+      const { results } = await withoutMissingSchema(
+        () => listed(' p.final_folders, p.allow_proof_download, p.extra_max,' + confirmCols),
         () => withoutMissingColumn(
-          () => listed(' p.final_folders, p.allow_proof_download,'),
-          () => listed(''),
+          () => listed(' p.final_folders, p.allow_proof_download, p.extra_max,'),
+          () => withoutMissingColumn(
+            () => listed(' p.final_folders, p.allow_proof_download,'),
+            () => listed(''),
+          ),
         ),
       );
-      return jsonOk({ projects: results.map(r => ({ ...r, extra_max: r.extra_max ?? null, ...deliveryFields(r) })) }, 200, ADMIN_ONLY_HEADERS);
+      return jsonOk({
+        projects: results.map(r => ({
+          ...r, extra_max: r.extra_max ?? null, ...deliveryFields(r),
+          client_confirmed_at: r.client_confirmed_at ?? null,
+          client_confirmed_by: r.client_confirmed_by ?? null,
+          open_revision_count: r.open_revision_count ?? 0,
+        })),
+      }, 200, ADMIN_ONLY_HEADERS);
     }
 
     // GET /api/admin/projects/:id — the seat holder, every submit record and
@@ -1938,10 +2069,19 @@ export default {
       const tokens = tokenRows.map(t => ({ ...t, status: pickTokenStatus(t, now) }));
       let folders = null;
       try { folders = JSON.parse(project.folders); } catch {}
+      // the guest's 要求修改, newest first (docs/delivery.md); none before the
+      // client-confirm migration
+      const revisions = await revisionRequestsFor(env, project.id);
       return jsonOk({
-        project: { ...project, folders, extra_max: project.extra_max ?? null, ...deliveryFields(project) },
+        project: {
+          ...project, folders, extra_max: project.extra_max ?? null, ...deliveryFields(project),
+          client_confirmed_at: project.client_confirmed_at ?? null,
+          client_confirmed_by: project.client_confirmed_by ?? null,
+          open_revision_count: revisions.open,
+        },
         owner: pickers.find(p => p.id === project.owner_picker_id) || null,
         pickers, selections, tokens, submissions, unnotified_submissions: unnotified,
+        revision_requests: revisions.rows,
       }, 200, ADMIN_ONLY_HEADERS);
     }
 
@@ -1985,10 +2125,14 @@ export default {
         // finals snapshot stays as the last choice (admin.html prefills the
         // next deliver with it); without the stamp pickFinals reads it as not
         // delivered, so no link can reach it. Names no column the delivery
-        // migration adds, so it works before that migration too.
-        const moved = await env.DB.prepare(
-          "UPDATE projects SET phase = 'picking', modified_after_submit = 0, delivered_at = NULL WHERE id = ? AND photographer_id = ?"
+        // migration adds, so it works before that migration too. The
+        // confirmation goes with the delivery, in the same statement (retried
+        // without it before the client-confirm migration).
+        const reopen = confirm => env.DB.prepare(
+          `UPDATE projects SET phase = 'picking', modified_after_submit = 0, delivered_at = NULL${confirm} WHERE id = ? AND photographer_id = ?`
         ).bind(id, DEFAULT_PHOTOGRAPHER_ID).run();
+        const moved = await withoutMissingColumn(
+          () => reopen(', client_confirmed_at = NULL, client_confirmed_by = NULL'), () => reopen(''));
         if (!moved.meta?.changes) return jsonErr('Not found', 404);
         return jsonOk({ ok: true, phase: 'picking' });
       }
@@ -2140,8 +2284,11 @@ export default {
       if (!env.DB) return jsonErr('DB not configured', 500);
       const id = pathParts[3];
       if (pathParts[4] === 'undeliver') {
-        const result = await env.DB.prepare('UPDATE projects SET delivered_at = NULL WHERE id = ? AND photographer_id = ?')
+        // the confirmation goes with the delivery, in the same statement
+        const undeliver = confirm => env.DB.prepare(`UPDATE projects SET delivered_at = NULL${confirm} WHERE id = ? AND photographer_id = ?`)
           .bind(id, DEFAULT_PHOTOGRAPHER_ID).run();
+        const result = await withoutMissingColumn(
+          () => undeliver(', client_confirmed_at = NULL, client_confirmed_by = NULL'), () => undeliver(''));
         if (!result.meta?.changes) return jsonErr('Not found', 404);
         return jsonOk({ ok: true, delivered_at: null }, 200, ADMIN_ONLY_HEADERS);
       }
@@ -2174,10 +2321,26 @@ export default {
       const clash = finals.find(f => proofs.some(p => folderCovers(p, f) || folderCovers(f, p)));
       if (clash) return invalid('final_overlaps_proofs', { folder: clash }, `「${clash}」與毛片資料夾重疊，精修請放在獨立的資料夾`);
       const at = new Date().toISOString();
-      // gated on the phase and on the folders the check above read
-      const result = await env.DB.prepare(
-        "UPDATE projects SET delivered_at = COALESCE(delivered_at, ?), final_folders = ? WHERE id = ? AND photographer_id = ? AND phase = 'retouching' AND folders = ?"
-      ).bind(at, JSON.stringify(finals), id, DEFAULT_PHOTOGRAPHER_ID, project.folders).run();
+      // gated on the phase and on the folders the check above read. Every
+      // deliver puts a new version up (docs/delivery.md, client
+      // confirmation): it clears the confirmation in the same statement and,
+      // in the same batch and under the same gate, resolves the guest's open
+      // 要求修改 — so a refused deliver changes neither. Before the
+      // client-confirm migration it is the one statement it always was.
+      const gate = "id = ? AND photographer_id = ? AND phase = 'retouching' AND folders = ?";
+      const gateBinds = [id, DEFAULT_PHOTOGRAPHER_ID, project.folders];
+      const stamp = confirm => env.DB.prepare(
+        `UPDATE projects SET delivered_at = COALESCE(delivered_at, ?), final_folders = ?${confirm} WHERE ${gate}`
+      ).bind(at, JSON.stringify(finals), ...gateBinds);
+      const result = await withoutMissingSchema(
+        async () => (await env.DB.batch([
+          stamp(', client_confirmed_at = NULL, client_confirmed_by = NULL'),
+          env.DB.prepare(
+            `UPDATE revision_requests SET resolved_at = ? WHERE project_id = ? AND resolved_at IS NULL AND EXISTS (SELECT 1 FROM projects WHERE ${gate} AND delivered_at IS NOT NULL)`
+          ).bind(at, id, ...gateBinds),
+        ]))[0],
+        () => stamp('').run(),
+      );
       const row = await env.DB.prepare('SELECT phase, delivered_at FROM projects WHERE id = ? AND photographer_id = ?')
         .bind(id, DEFAULT_PHOTOGRAPHER_ID).first();
       if (!row) return jsonErr('Not found', 404);
@@ -2186,6 +2349,46 @@ export default {
       // choice): either way the project is not delivered now.
       if (!result.meta?.changes || !row.delivered_at) return notRetouching(row.phase);
       return jsonOk({ ok: true, delivered_at: row.delivered_at, final_folders: finals }, 200, ADMIN_ONLY_HEADERS);
+    }
+
+    // POST /api/admin/projects/:id/confirm — 標記完成: the photographer marks
+    // the delivery complete when the guest never answers (docs/delivery.md,
+    // client confirmation). Recorded as the photographer's, never as the
+    // guest's. Only while delivered (409 not_delivered); a second press
+    // answers the first stamp, whoever made it. Resolves the open requests in
+    // the same batch. No email (the photographer did it).
+    if (request.method === 'POST' && pathParts[0] === 'api' && pathParts[1] === 'admin' && pathParts[2] === 'projects' && pathParts[3] &&
+        pathParts[4] === 'confirm' && !pathParts[5]) {
+      if (!isAdminToken(request, env)) return jsonErr('Unauthorized', 401);
+      if (!env.DB) return jsonErr('DB not configured', 500);
+      const id = pathParts[3];
+      const done = (data, status = 200) => jsonOk(data, status, ADMIN_ONLY_HEADERS);
+      const notDelivered = () => done({ error: '尚未交件，無法標記完成', code: 'not_delivered' }, 409);
+      const project = await env.DB.prepare('SELECT * FROM projects WHERE id = ? AND photographer_id = ?')
+        .bind(id, DEFAULT_PHOTOGRAPHER_ID).first();
+      if (!project) return jsonErr('Not found', 404);
+      if (!hasField(project, 'client_confirmed_at')) return done(CONFIRM_UNAVAILABLE, 500);
+      if (!project.delivered_at) return notDelivered();
+      const at = new Date().toISOString();
+      try {
+        await env.DB.batch([
+          env.DB.prepare(
+            "UPDATE projects SET client_confirmed_at = ?, client_confirmed_by = 'photographer' " +
+            'WHERE id = ? AND photographer_id = ? AND delivered_at IS NOT NULL AND client_confirmed_at IS NULL'
+          ).bind(at, id, DEFAULT_PHOTOGRAPHER_ID),
+          resolveRevisionsIfConfirmed(env, id, at),
+        ]);
+      } catch (e) {
+        // the columns are there but not the table: nothing was written
+        if (isMissingSchema(e)) return done(CONFIRM_UNAVAILABLE, 500);
+        throw e;
+      }
+      const row = await env.DB.prepare('SELECT client_confirmed_at, client_confirmed_by FROM projects WHERE id = ? AND photographer_id = ?')
+        .bind(id, DEFAULT_PHOTOGRAPHER_ID).first();
+      if (!row) return jsonErr('Not found', 404);
+      // not confirmed now: an undeliver landed before the write
+      if (!row.client_confirmed_at) return notDelivered();
+      return done({ ok: true, client_confirmed_at: row.client_confirmed_at, client_confirmed_by: row.client_confirmed_by });
     }
 
     // PATCH /api/admin/projects/:id — any non-empty subset of
@@ -3037,6 +3240,11 @@ export default {
         // ([] once delivered unless the switch is on), `final_folders` the
         // finals ([] until delivered); the page lists each through ?list=.
         const scope = pickReadScope(s);
+        // client confirmation (docs/delivery.md): only once delivered, the
+        // same for owner and viewers — the time it was confirmed (never who),
+        // and the latest open 要求修改's text (never the list, never another's)
+        const delivered = scope.mode === 'delivered';
+        const revision = delivered ? await openRevision(env, project.id) : null;
         return jsonOk({
           // extra_max / max_picks: the plan's cap as the submit enforces it
           // (null = none, also on a database without the column yet)
@@ -3050,6 +3258,9 @@ export default {
           final_folders: scope.finals,
           allow_proof_download: scope.proofOriginals,
           delivered_at: scope.mode === 'delivered' ? project.delivered_at : null,
+          confirmed_at: delivered ? project.client_confirmed_at ?? null : null,
+          revision_open: !!revision,
+          revision_message: revision ? revision.message : null,
           owner: await pickOwnerName(env, project.id),
           is_owner: isOwner,
           phase: project.phase,
@@ -3426,6 +3637,90 @@ export default {
           ok: true, phase: 'submitted', submission_id: record.id, submitted_at: record.created_at,
           count, limit, price, over: limit == null ? 0 : Math.max(0, count - limit),
         });
+      }
+
+      // POST /api/pick/confirm (no body, or {}) — the seat holder confirms
+      // the delivery (確認完成). POST /api/pick/revision {message} — or asks
+      // for changes (要求修改). docs/delivery.md, client confirmation. Seat
+      // first (403), then delivered now (409 not_delivered, before the body),
+      // then the body. Each is one gated write (a batch for confirm, which
+      // resolves the open requests with it; a single INSERT for a request,
+      // which re-checks "not confirmed" and both caps itself), so a seat
+      // reset, an undeliver, an archive or the other route landing after the
+      // checks still wins. The photographer is emailed in the background; a
+      // mail that fails never fails the request.
+      if (request.method === 'POST' && (route === 'confirm' || route === 'revision')) {
+        const confirming = route === 'confirm';
+        const notOwner = confirming ? '只有挑選人可以確認完成' : '只有挑選人可以要求修改';
+        if (!isOwner) return jsonErr(notOwner, 403);
+        if (pickReadScope(s).mode !== 'delivered') return pickNotDelivered();
+        const bytes = await readBodyCapped(request, PICK_SUBMIT_BODY_MAX);
+        if (!bytes) return jsonOk({ error: '資料太大', code: 'too_large', max: PICK_SUBMIT_BODY_MAX }, 413);
+        const text = new TextDecoder().decode(bytes);
+        let body = {};
+        if (text.trim()) {
+          try { body = JSON.parse(text); } catch { return jsonErr('Invalid JSON'); }
+        }
+        if (!isPlainObject(body)) return jsonOk({ error: 'Invalid body', code: 'invalid_body' }, 400);
+        const message = confirming ? null : revisionMessage(body.message);
+        if (!confirming && !message) {
+          return jsonOk({ error: `請輸入 1–${REVISION_MESSAGE_MAX} 字的修改說明`, code: 'invalid_message', max: REVISION_MESSAGE_MAX }, 400);
+        }
+        // resolveShareToken read the project with SELECT *: the key is there
+        // exactly when the migration has run
+        if (!hasField(project, 'client_confirmed_at')) return jsonOk(CONFIRM_UNAVAILABLE, 500);
+        const done = data => jsonOk({ ok: true, ...data }, 200, SHARED_LINK_HEADERS);
+        const alreadyConfirmed = () => jsonOk({ error: '已確認完成，無法再要求修改', code: 'already_confirmed' }, 409);
+        // a repeat confirm answers the first stamp (whoever made it) and
+        // writes nothing; a request after it is refused
+        if (project.client_confirmed_at) return confirming ? done({ confirmed_at: project.client_confirmed_at }) : alreadyConfirmed();
+        const at = new Date().toISOString();
+        const open = "id = ?1 AND owner_picker_id = ?2 AND archived_at IS NULL AND phase = 'retouching' " +
+          'AND delivered_at IS NOT NULL AND final_folders IS NOT NULL';
+        let changed;
+        try {
+          if (confirming) {
+            const [stamped] = await env.DB.batch([
+              env.DB.prepare(
+                `UPDATE projects SET client_confirmed_at = ?3, client_confirmed_by = 'guest' WHERE ${open} AND client_confirmed_at IS NULL`
+              ).bind(project.id, picker.id, at),
+              resolveRevisionsIfConfirmed(env, project.id, at),
+            ]);
+            changed = stamped.meta?.changes;
+          } else {
+            const inserted = await env.DB.prepare(
+              'INSERT INTO revision_requests (id, project_id, picker_id, message, created_at) SELECT ?3, ?1, ?2, ?4, ?5 ' +
+              `WHERE EXISTS (SELECT 1 FROM projects WHERE ${open} AND client_confirmed_at IS NULL) ` +
+              `AND (SELECT COUNT(*) FROM revision_requests WHERE project_id = ?1 AND resolved_at IS NULL) < ${REVISION_OPEN_MAX} ` +
+              `AND (SELECT COUNT(*) FROM revision_requests WHERE project_id = ?1) < ${REVISION_TOTAL_MAX}`
+            ).bind(project.id, picker.id, crypto.randomUUID(), message, at).run();
+            changed = inserted.meta?.changes;
+          }
+        } catch (e) {
+          // the columns are there but not the table: nothing was written
+          if (isMissingSchema(e)) return jsonOk(CONFIRM_UNAVAILABLE, 500);
+          throw e;
+        }
+        if (!changed) {
+          // re-read to say why, in the order the checks above run
+          const now = await env.DB.prepare('SELECT * FROM projects WHERE id = ?').bind(project.id).first();
+          if (!now || now.archived_at) return jsonErr('Unauthorized', 401);
+          if (now.owner_picker_id !== picker.id) return jsonErr(notOwner, 403);
+          if (now.phase !== 'retouching' || !pickFinals(now)) return pickNotDelivered();
+          if (now.client_confirmed_at) return confirming ? done({ confirmed_at: now.client_confirmed_at }) : alreadyConfirmed();
+          if (confirming) return pickNotDelivered();
+          const counted = await env.DB.prepare('SELECT COUNT(*) AS open FROM revision_requests WHERE project_id = ? AND resolved_at IS NULL')
+            .bind(project.id).first();
+          if ((counted?.open ?? 0) >= REVISION_OPEN_MAX) {
+            return jsonOk({ error: `尚未處理的修改需求已有 ${REVISION_OPEN_MAX} 則，請等攝影師回覆`, code: 'revision_open_cap', max: REVISION_OPEN_MAX }, 409);
+          }
+          return jsonOk({ error: `修改需求已達上限（${REVISION_TOTAL_MAX} 則），請直接聯絡攝影師`, code: 'revision_cap', max: REVISION_TOTAL_MAX }, 409);
+        }
+        const notify = Promise.resolve()
+          .then(() => sendClientNotification(env, project, picker.name, message))
+          .catch(e => console.error('client notification failed:', e?.message || e));
+        if (ctx?.waitUntil) ctx.waitUntil(notify); else await notify;
+        return done(confirming ? { confirmed_at: at } : { message, created_at: at });
       }
 
       return jsonErr('Not found', 404);

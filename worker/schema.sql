@@ -153,7 +153,20 @@ CREATE TABLE IF NOT EXISTS projects (
   -- /api/admin/projects/:id (docs/project-plan.md). Appended, from a hand-run
   --   ALTER TABLE projects ADD COLUMN extra_max INTEGER;
   -- (worker/migrations/2026-09-30-extra-max.sql).
-  extra_max       INTEGER
+  extra_max       INTEGER,
+  -- when the delivery was confirmed complete; NULL = not confirmed. Only
+  -- ever set while delivered_at is set (POST /api/pick/confirm by the seat
+  -- holder, POST /api/admin/projects/:id/confirm by the photographer), never
+  -- automatically. Every deliver (a repeat one included), undeliver and reopen
+  -- clears both columns, so a confirmation always belongs to the delivery
+  -- that is up now. Appended, from a hand-run
+  --   ALTER TABLE projects ADD COLUMN client_confirmed_at TEXT;
+  --   ALTER TABLE projects ADD COLUMN client_confirmed_by TEXT;
+  -- (worker/migrations/2026-10-04-client-confirm.sql).
+  client_confirmed_at TEXT,
+  -- who confirmed: 'guest' (the seat holder) or 'photographer' (by hand,
+  -- when the guest never answers); NULL with client_confirmed_at
+  client_confirmed_by TEXT
 );
 
 -- Everyone who ever held the seat. key_hash is the SHA-256 of the bearer key
@@ -373,3 +386,23 @@ CREATE TABLE IF NOT EXISTS platform_product_options (
   sort                INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_platform_options_product ON platform_product_options(platform_product_id, sort);
+
+-- ─── Client confirmation (docs/delivery.md) ────────────────────────────────
+-- A new table, so a deployed database gets it from the same hand-run file as
+-- projects.client_confirmed_at/_by: worker/migrations/2026-10-04-client-confirm.sql.
+-- One row per 要求修改 the seat holder sent after a delivery: their own words
+-- to the photographer (trimmed, 1–1000 characters, line breaks kept, other
+-- control characters dropped), never rewritten. resolved_at is stamped by the
+-- next deliver (the photographer put a new version up) or by a confirmation
+-- (guest or photographer), in the same batch, so a confirmed project never has
+-- an open request. At most 10 open and 50 in all per project, checked inside
+-- the INSERT.
+CREATE TABLE IF NOT EXISTS revision_requests (
+  id          TEXT PRIMARY KEY,
+  project_id  TEXT NOT NULL,
+  picker_id   TEXT,                      -- the seat holder who asked; NULL if unknown
+  message     TEXT NOT NULL CHECK (length(message) BETWEEN 1 AND 1000),
+  created_at  TEXT NOT NULL,
+  resolved_at TEXT                       -- NULL = open
+);
+CREATE INDEX IF NOT EXISTS idx_revision_requests_project ON revision_requests(project_id, resolved_at);

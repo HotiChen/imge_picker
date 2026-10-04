@@ -142,6 +142,130 @@ undeliver and every pick link keep working (not delivered, switch off).
 - Guest save/submit after delivery: still 409 `retouching`. Archived,
   revoked and expired links: 401 for everything, finals included.
 
+## Client confirmation and revision requests (decided 2026-10-04)
+
+Publish ≠ Complete. 交件 (`delivered_at`) only puts the finals up; the guest
+then either **confirms** (確認完成) or **asks for changes** (要求修改, a short
+text). The photographer is emailed, uploads a 「精修二」 folder and presses
+the existing 「更換精修」 (a repeat deliver), which is the second version.
+Versions are folders: there is no version table.
+
+**Decisions**
+
+- Only the seat holder (owner) confirms or asks; viewers see the state but
+  cannot write (403, as save/submit). Only while delivered — `pickReadScope`
+  mode `'delivered'` (stamp **and** a readable finals snapshot); otherwise
+  409 `not_delivered`. Archived, revoked and expired links: 401 as always.
+- The gallery stays open while changes are asked for (the guest keeps seeing
+  the current finals).
+- Honest record: `client_confirmed_by` is `'guest'` or `'photographer'`. The
+  photographer may mark it complete by hand (標記完成) when the guest never
+  answers. **Nothing ever confirms on its own.**
+- Clearing rules — a confirmation always belongs to the delivery that is up:
+  - **every deliver** (the first, a repeat 更換精修, one after undeliver or
+    reopen) clears the confirmation in the same `UPDATE` as the stamp and, in
+    the same batch under the same gate, resolves every open request
+    (`resolved_at = now`). A refused deliver (not retouching, a reopen racing
+    it) changes neither.
+  - **undeliver** and **reopen** clear the confirmation in the same statement
+    that clears `delivered_at`; open requests stay open for the photographer
+    (the next deliver resolves them).
+  - **a confirmation** (guest or photographer) resolves the open requests in
+    the same batch, so a confirmed project never has an open request (the
+    guest may confirm after asking: "算了，這樣就好").
+- A request after the confirmation: 409 `already_confirmed`. A repeat confirm
+  is idempotent: 200 with the first stamp, nothing written, no email — also
+  when the photographer confirmed first (`by` stays `'photographer'`).
+- Limits: message trimmed, 1–1000 characters (characters, not UTF-16 units);
+  line breaks kept (CRLF/CR → LF, tab → space), every other control or
+  line-separator character (`PICK_KEY_CONTROL`, the set pin notes refuse) is
+  **dropped**; ≤ 10 open and ≤ 50 in all per project (both checked inside the
+  `INSERT`); body ≤ 16 KB (`PICK_SUBMIT_BODY_MAX`, streamed).
+- Email (same binding and rules as the submit mail; never throttled — the
+  caps bound it to ≤ 50 requests per project): on a request (subject
+  `[要求修改] <title> — <name>`) and on the guest's first confirm (`[客人確認完成] …`).
+  Subject on one line (control characters → space); the guest's text only in
+  the body — raw in the text part, HTML-escaped (`white-space:pre-wrap`) in the
+  HTML part; a link to `https://imhoti.tw/studio/admin.html#project=<id>`. A
+  mail that fails or is not configured never fails the request (background,
+  caught). The photographer's 標記完成 sends nothing.
+
+**States** (only while delivered; any deliver / undeliver / reopen goes back
+to the top):
+
+```
+delivered ──guest 要求修改──▶ delivered + open request(s) ──更換精修──▶ delivered (new finals, requests resolved)
+    │                                │
+    └──確認完成 / 標記完成──▶ confirmed ◀─────┘ (resolves open requests)
+confirmed ──要求修改──▶ 409 already_confirmed     confirmed ──更換精修 / 取消交件 / 退回挑片──▶ not confirmed
+```
+
+**API**
+
+| Route | Auth | Body | Answer |
+|---|---|---|---|
+| `POST /api/pick/confirm` | pick token + key, owner | none or a JSON object (keys ignored) | 200 `{ok, confirmed_at}` (repeat: the first stamp); 401 dead link; 403 not the owner; 409 `not_delivered`; 400 `Invalid JSON` / `invalid_body` (not an object); 413 `too_large`; 500 `confirm_unavailable` |
+| `POST /api/pick/revision` | pick token + key, owner | `{message}` | 200 `{ok, message (as stored), created_at}`; 401; 403; 409 `not_delivered` / `already_confirmed` / `revision_open_cap` (`max: 10`) / `revision_cap` (`max: 50`); 400 `invalid_message` (`max: 1000`) / `Invalid JSON` / `invalid_body`; 413 `too_large`; 500 `confirm_unavailable` |
+| `POST /api/admin/projects/:id/confirm` | admin | — | 200 `{ok, client_confirmed_at, client_confirmed_by}` (repeat: the first stamp, whoever made it); 401; 404 unknown / other photographer; 409 `not_delivered` (no `delivered_at`); 500 `confirm_unavailable` |
+
+Check order (guest): link (401) → seat (403) → delivered now (409, before the
+body) → body (413 / 400) → message (400) → migration (500) → confirmed
+(repeat 200 / 409) → the gated write; a write that changed nothing is re-read
+to say why (401 archived, 403 seat moved, 409 not delivered, confirmed, then
+the caps: open first).
+
+- `GET /api/pick/state` adds, the same for owner and viewers: `confirmed_at`
+  (string|null), `revision_open` (boolean), `revision_message` (the latest
+  **open** request's text, else null). Outside delivered mode always `null /
+  false / null`. Never `client_confirmed_by`, never the list.
+- `GET /api/admin/projects` rows and `GET /api/admin/projects/:id`'s `project`
+  add `client_confirmed_at`, `client_confirmed_by`, `open_revision_count`;
+  the detail adds `revision_requests` (newest first, ≤ 50: `{id, message,
+  created_at, resolved_at, picker_id, picker_name}`; `picker_name` null when
+  the picker is gone). Guest text is raw in JSON: admin.html must escape it.
+- Dashboard stats are unchanged: 已交付 still counts `delivered_at`;
+  confirmation is a separate dimension.
+
+**Concurrency.** Guest confirm = one batch: `UPDATE projects SET
+client_confirmed_at … WHERE id, owner_picker_id = me, archived_at IS NULL,
+phase = 'retouching', delivered_at IS NOT NULL, final_folders IS NOT NULL,
+client_confirmed_at IS NULL` + resolve-open (gated on "confirmed"). A request
+= one `INSERT … SELECT … WHERE` the same gate + not confirmed + both caps.
+Deliver = one batch (stamp + clear, resolve under the same gate). Undeliver /
+reopen clear stamp and confirmation in one statement. So no interleaving
+leaves "confirmed with an open request" or "confirmed while `delivered_at` is
+NULL".
+
+**Schema** (`worker/migrations/2026-10-04-client-confirm.sql`, four statements,
+run one by one in the D1 Console before the merge):
+
+```sql
+ALTER TABLE projects ADD COLUMN client_confirmed_at TEXT;   -- NULL = not confirmed
+ALTER TABLE projects ADD COLUMN client_confirmed_by TEXT;   -- 'guest' | 'photographer'
+CREATE TABLE IF NOT EXISTS revision_requests (
+  id TEXT PRIMARY KEY, project_id TEXT NOT NULL, picker_id TEXT,
+  message TEXT NOT NULL CHECK (length(message) BETWEEN 1 AND 1000),
+  created_at TEXT NOT NULL, resolved_at TEXT);              -- resolved_at NULL = open
+CREATE INDEX IF NOT EXISTS idx_revision_requests_project ON revision_requests(project_id, resolved_at);
+```
+
+**Before the migration** (or with only the ALTERs run): every existing route
+works — list, detail, pick state (`null / false / null`), claim, save,
+submit, start-retouch, deliver, undeliver, reopen, stats; the three new
+routes answer 500 `confirm_unavailable` and write nothing.
+
+**Not done, on purpose** (CLAUDE.md "Decided not to do"): a limit on rounds,
+a reply deadline, auto-complete on expiry (a client who did nothing must
+never read as confirmed), per-photo marks on a revision request (the text
+says which photo; pins stay a picking feature), a version table (versions
+are folders). Also not done: emailing the guest when 精修二 is up; the stale
+page case below.
+
+**Known limit:** a guest whose page still shows version 1 can confirm after
+the photographer already put version 2 up (the confirm lands on what is up
+now). The page should re-read `/api/pick/state` before sending a confirm and
+say so if `final_folders` changed.
+
 ## Out of scope for this step
 
 Zip download of everything; watermarks; a second link just for delivery;

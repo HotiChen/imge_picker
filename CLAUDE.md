@@ -108,6 +108,11 @@ empty scan passes.
 - A project is delivered **only** when `delivered_at` is set. `final_folders` being
   non-null does not mean delivered: it is the last chosen finals folders and
   stays after 取消交件 and 開放修改 (reopen). Both clear `delivered_at` only.
+- `client_confirmed_at` is only set while delivered and never automatically.
+  Every deliver (repeat 更換精修 too), undeliver and reopen clears it (and
+  `_by`) in the same write; every deliver and every confirm resolves the open
+  `revision_requests` in the same batch. Confirmed never coexists with an open
+  request (`docs/delivery.md`, client confirmation).
 - Every guest read of finals goes through `pickFinals` (needs `delivered_at`).
   A new read path must not bypass it; admin routes may return `final_folders`,
   guest routes must not.
