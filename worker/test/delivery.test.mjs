@@ -285,14 +285,20 @@ test('deliver / undeliver / the switch: unknown or other photographer is 404, un
   assert.equal(JSON.stringify(rows(env, 'SELECT * FROM projects')), before);
 });
 
-test('undeliver clears delivered_at and the finals; reopen clears both too', async () => {
+test('undeliver clears delivered_at only and keeps the finals snapshot; reopen still clears both', async () => {
   const env = setup();
-  const p = await delivered(env);
+  const p = await delivered(env, [FINAL, 'shoot/精修2/']);
   const res = await admin(env, p.id, 'undeliver');
   assert.equal(res.status, 200);
   assert.deepEqual(await res.json(), { ok: true, delivered_at: null });
-  assert.deepEqual({ ...one(env, 'SELECT delivered_at, final_folders, phase FROM projects') },
-    { delivered_at: null, final_folders: null, phase: 'retouching' });
+  const row = one(env, 'SELECT delivered_at, final_folders, phase FROM projects');
+  assert.equal(row.delivered_at, null);
+  assert.equal(row.phase, 'retouching');
+  // the photographer's choice stays, for the next deliver to start from
+  assert.deepEqual(JSON.parse(row.final_folders), [FINAL, 'shoot/精修2/']);
+  // a second undeliver is still fine and still keeps it
+  assert.equal((await admin(env, p.id, 'undeliver')).status, 200);
+  assert.deepEqual(JSON.parse(one(env, 'SELECT final_folders FROM projects').final_folders), [FINAL, 'shoot/精修2/']);
   assert.equal((await deliver(env, p.id)).status, 200);
   assert.equal((await admin(env, p.id, 'reopen')).status, 200);
   assert.deepEqual({ ...one(env, 'SELECT delivered_at, final_folders, phase FROM projects') },
@@ -321,9 +327,15 @@ test('PATCH /api/admin/projects/:id sets allow_proof_download on and off; list a
   assert.equal(d.project.allow_proof_download, false);
   l = (await list(env)).projects.find(r => r.id === p.id);
   assert.equal(l.allow_proof_download, false);
-  await admin(env, p.id, 'undeliver');
-  assert.equal((await detail(env, p.id)).project.final_folders, null);
-  assert.equal((await list(env)).projects.find(r => r.id === p.id).final_folders, null);
+  // undelivered: the last chosen finals are still there for the page to
+  // prefill; delivered_at is what says it is not delivered
+  assert.equal((await admin(env, p.id, 'undeliver')).status, 200);
+  d = await detail(env, p.id);
+  assert.deepEqual(d.project.final_folders, [FINAL]);
+  assert.equal(d.project.delivered_at, null);
+  l = (await list(env)).projects.find(r => r.id === p.id);
+  assert.deepEqual(l.final_folders, [FINAL]);
+  assert.equal(l.delivered_at, null);
 });
 
 test('PATCH refuses anything but a boolean allow_proof_download (400 invalid_body)', async () => {
@@ -533,19 +545,76 @@ test('delivered: guest save and submit are still refused (409 retouching), nothi
   assert.equal((await save(env, p.token, undefined, { upsert: [{ photo_key: PA, rating: 3 }] })).status, 403);
 });
 
+// every read of the finals a link can make: originals, thumbnails (both
+// forms), downloads, the subfolder, the listings
+const FINAL_READS = [
+  [enc(FA), 'FINAL-A-ORIGINAL'], [`${enc(FA)}?w=400`, 'FINAL-A-400'], [enc(thumb(FA)), 'FINAL-A-400'],
+  [`${enc(FA)}?download=1`, 'FINAL-A-ORIGINAL'], [enc(FSUB), 'FINAL-SUB-ORIGINAL'], [`${enc(FSUB)}?w=400`, 'FINAL-SUB-400'],
+  [`${enc(FNOTHUMB)}?w=400`, 'FINAL-NOTHUMB-ORIGINAL'],
+  [`/?list=${encodeURIComponent(FINAL)}`], [`/?list=${encodeURIComponent('shoot/精修/sub/')}`],
+];
+
 test('undeliver takes the gallery down: back to the proofs, thumbnails only', async () => {
   const env = setup();
   const p = await delivered(env);
-  await expectStatus(env, p.token, enc(FA), 200);
+  // delivered: every finals read is served (so the 401s below are the gate,
+  // not a path that never worked)
+  for (const [path, body] of FINAL_READS) await expectStatus(env, p.token, path, 200, body);
   assert.equal((await admin(env, p.id, 'undeliver')).status, 200);
-  await expectStatus(env, p.token, enc(FA), 401);
-  await expectStatus(env, p.token, `${enc(FA)}?w=400`, 401);
+  // the snapshot is still on the project: the refusals below come from the
+  // stamp being gone, which is the case this guards
+  assert.deepEqual(JSON.parse(one(env, 'SELECT final_folders FROM projects').final_folders), [FINAL]);
+  assert.equal(one(env, 'SELECT delivered_at FROM projects').delivered_at, null);
+  for (const [path] of FINAL_READS) await expectStatus(env, p.token, path, 401);
   await expectStatus(env, p.token, `${enc(PA)}?w=400`, 200, 'PROOF-A-400');
   await expectStatus(env, p.token, enc(PA), 403);
-  const s = await state(env, p.token);
+  for (const key of [p.key, undefined, 'not-a-key']) {
+    const s = await state(env, p.token, key);
+    assert.equal(s.mode, 'picking');
+    assert.deepEqual(s.final_folders, []);
+    assert.deepEqual(s.folders, [PROOF]);
+    assert.equal(s.delivered_at, null);
+  }
+});
+
+test('undelivered with the switch on: proof originals come back, the kept finals stay shut', async () => {
+  const env = setup();
+  const p = await delivered(env);
+  setSwitch(env, true);
+  for (const [path, body] of FINAL_READS) await expectStatus(env, p.token, path, 200, body);
+  assert.equal((await admin(env, p.id, 'undeliver')).status, 200);
+  assert.deepEqual(JSON.parse(one(env, 'SELECT final_folders FROM projects').final_folders), [FINAL]);
+  for (const [path] of FINAL_READS) await expectStatus(env, p.token, path, 401);
+  // the switch is what opens the proofs in full, as while picking
+  await expectStatus(env, p.token, enc(PA), 200, 'PROOF-A-ORIGINAL');
+  await expectStatus(env, p.token, `${enc(PA)}?download=1`, 200, 'PROOF-A-ORIGINAL');
+  const s = await state(env, p.token, p.key);
   assert.equal(s.mode, 'picking');
   assert.deepEqual(s.final_folders, []);
   assert.deepEqual(s.folders, [PROOF]);
+  assert.equal(s.allow_proof_download, true);
+});
+
+test('deliver after undeliver replaces the kept finals and stamps a new delivered_at', async () => {
+  const env = setup();
+  const p = await delivered(env);
+  env.DB._db.prepare("UPDATE projects SET delivered_at = '2026-01-01T00:00:00.000Z'").run();
+  assert.equal((await admin(env, p.id, 'undeliver')).status, 200);
+  const res = await deliver(env, p.id, ['shoot/精修2/']);
+  assert.equal(res.status, 200);
+  const json = await res.json();
+  assert.deepEqual(json.final_folders, ['shoot/精修2/']);
+  assert.match(json.delivered_at, /^\d{4}-\d\d-\d\dT/);
+  assert.notEqual(json.delivered_at, '2026-01-01T00:00:00.000Z', 'a fresh stamp, not the cancelled one');
+  const row = one(env, 'SELECT delivered_at, final_folders FROM projects');
+  assert.equal(row.delivered_at, json.delivered_at);
+  assert.deepEqual(JSON.parse(row.final_folders), ['shoot/精修2/']);
+  // the gallery follows the new finals: the old one is not readable any more
+  await expectStatus(env, p.token, enc(FA), 401);
+  const s = await state(env, p.token);
+  assert.equal(s.mode, 'delivered');
+  assert.deepEqual(s.final_folders, ['shoot/精修2/']);
+  assert.equal(s.delivered_at, json.delivered_at);
 });
 
 test('a legacy delivered stamp without finals keeps the picking scope', async () => {
@@ -554,6 +623,8 @@ test('a legacy delivered stamp without finals keeps the picking scope', async ()
   env.DB._db.prepare("UPDATE projects SET delivered_at = '2026-09-01T00:00:00.000Z'").run();
   const s = await state(env, p.token);
   assert.equal(s.mode, 'picking');
+  // not a delivery, so the page is not told a delivery date either
+  assert.equal(s.delivered_at, null);
   await expectStatus(env, p.token, `${enc(PA)}?w=400`, 200);
   await expectStatus(env, p.token, enc(PA), 403);
 });

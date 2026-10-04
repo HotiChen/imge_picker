@@ -132,9 +132,13 @@ CREATE TABLE IF NOT EXISTS projects (
   -- (worker/migrations/2026-09-28-dashboard-settings.sql).
   delivered_at    TEXT,
   -- the finals folder snapshot the delivery gallery shows (JSON array, the
-  -- same canonical form as `folders`); NULL = not delivered. Written together
-  -- with delivered_at by POST .../deliver, cleared with it by undeliver and
-  -- reopen. Never inside or around a proof folder (docs/delivery.md).
+  -- same canonical form as `folders`): the last chosen finals. Written
+  -- together with delivered_at by POST .../deliver; undeliver clears only
+  -- delivered_at and keeps this (the next deliver is prefilled from it), so
+  -- it can be set while not delivered — delivered means delivered_at set
+  -- AND a valid snapshot, never this alone. Reopen clears both. NULL = never
+  -- chosen (or reopened). Never inside or around a proof folder
+  -- (docs/delivery.md).
   -- 1 = the guest may download the proof originals (full resolution); 0 =
   -- thumbnails only, the default. Set by PATCH /api/admin/projects/:id.
   -- Both appended, from a hand-run
