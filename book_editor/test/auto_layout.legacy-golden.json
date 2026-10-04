@@ -1,0 +1,1462 @@
+{
+ "thirteen/magazine": [
+  {
+   "id": "page-auto-1700000000000-0qfw",
+   "type": "inner",
+   "layout": "full-bleed",
+   "slots": [
+    {
+     "photoId": "p01",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    }
+   ],
+   "bg": "#ffffff"
+  },
+  {
+   "id": "page-auto-1700000000000-0lg2",
+   "type": "inner",
+   "layout": "full-bleed",
+   "slots": [
+    {
+     "photoId": "p05",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    }
+   ],
+   "bg": "#ffffff"
+  },
+  {
+   "id": "page-auto-1700000000000-jjxh",
+   "type": "inner",
+   "layout": "full-bleed",
+   "slots": [
+    {
+     "photoId": "p12",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    }
+   ],
+   "bg": "#ffffff"
+  },
+  {
+   "id": "page-auto-1700000000000-muu3",
+   "type": "inner",
+   "layout": "4-grid",
+   "slots": [
+    {
+     "photoId": "p04",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    },
+    {
+     "photoId": "p09",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    },
+    {
+     "photoId": "p03",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    },
+    {
+     "photoId": "p10",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    }
+   ],
+   "bg": "#ffffff"
+  },
+  {
+   "id": "page-auto-1700000000000-wrec",
+   "type": "inner",
+   "layout": "4-grid",
+   "slots": [
+    {
+     "photoId": "p06",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    },
+    {
+     "photoId": "p13",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    },
+    {
+     "photoId": "p07",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    },
+    {
+     "photoId": "p02",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    }
+   ],
+   "bg": "#ffffff"
+  },
+  {
+   "id": "page-auto-1700000000000-41r0",
+   "type": "inner",
+   "layout": "2-up-h",
+   "slots": [
+    {
+     "photoId": "p08",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    },
+    {
+     "photoId": "p11",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    }
+   ],
+   "bg": "#ffffff"
+  }
+ ],
+ "thirteen/uniform": [
+  {
+   "id": "page-auto-1700000000000-0qfw",
+   "type": "inner",
+   "layout": "2-up-h",
+   "slots": [
+    {
+     "photoId": "p01",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    },
+    {
+     "photoId": "p02",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    }
+   ],
+   "bg": "#ffffff"
+  },
+  {
+   "id": "page-auto-1700000000000-0lg2",
+   "type": "inner",
+   "layout": "2-up-h",
+   "slots": [
+    {
+     "photoId": "p03",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    },
+    {
+     "photoId": "p04",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    }
+   ],
+   "bg": "#ffffff"
+  },
+  {
+   "id": "page-auto-1700000000000-jjxh",
+   "type": "inner",
+   "layout": "2-up-h",
+   "slots": [
+    {
+     "photoId": "p05",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    },
+    {
+     "photoId": "p06",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    }
+   ],
+   "bg": "#ffffff"
+  },
+  {
+   "id": "page-auto-1700000000000-muu3",
+   "type": "inner",
+   "layout": "2-up-h",
+   "slots": [
+    {
+     "photoId": "p07",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    },
+    {
+     "photoId": "p08",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    }
+   ],
+   "bg": "#ffffff"
+  },
+  {
+   "id": "page-auto-1700000000000-wrec",
+   "type": "inner",
+   "layout": "2-up-h",
+   "slots": [
+    {
+     "photoId": "p09",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    },
+    {
+     "photoId": "p10",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    }
+   ],
+   "bg": "#ffffff"
+  },
+  {
+   "id": "page-auto-1700000000000-41r0",
+   "type": "inner",
+   "layout": "2-up-h",
+   "slots": [
+    {
+     "photoId": "p11",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    },
+    {
+     "photoId": "p12",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    }
+   ],
+   "bg": "#ffffff"
+  },
+  {
+   "id": "page-auto-1700000000000-huo7",
+   "type": "inner",
+   "layout": "1-up",
+   "slots": [
+    {
+     "photoId": "p13",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    }
+   ],
+   "bg": "#ffffff"
+  }
+ ],
+ "thirteen/story": [
+  {
+   "id": "page-auto-1700000000000-0qfw",
+   "type": "inner",
+   "layout": "3-up",
+   "slots": [
+    {
+     "photoId": "p01",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    },
+    {
+     "photoId": "p02",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    },
+    {
+     "photoId": "p03",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    }
+   ],
+   "bg": "#ffffff"
+  },
+  {
+   "id": "page-auto-1700000000000-0lg2",
+   "type": "inner",
+   "layout": "2-up-v",
+   "slots": [
+    {
+     "photoId": "p04",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    },
+    {
+     "photoId": "p05",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    }
+   ],
+   "bg": "#ffffff"
+  },
+  {
+   "id": "page-auto-1700000000000-jjxh",
+   "type": "inner",
+   "layout": "2-up-v",
+   "slots": [
+    {
+     "photoId": "p06",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    },
+    {
+     "photoId": "p07",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    }
+   ],
+   "bg": "#ffffff"
+  },
+  {
+   "id": "page-auto-1700000000000-muu3",
+   "type": "inner",
+   "layout": "3-up",
+   "slots": [
+    {
+     "photoId": "p08",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    },
+    {
+     "photoId": "p09",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    },
+    {
+     "photoId": "p10",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    }
+   ],
+   "bg": "#ffffff"
+  },
+  {
+   "id": "page-auto-1700000000000-wrec",
+   "type": "inner",
+   "layout": "3-up",
+   "slots": [
+    {
+     "photoId": "p11",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    },
+    {
+     "photoId": "p12",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    },
+    {
+     "photoId": "p13",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    }
+   ],
+   "bg": "#ffffff"
+  }
+ ],
+ "thirteen/byRating": [
+  {
+   "id": "page-auto-1700000000000-0qfw",
+   "type": "inner",
+   "layout": "full-bleed",
+   "slots": [
+    {
+     "photoId": "p01",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    }
+   ],
+   "bg": "#ffffff"
+  },
+  {
+   "id": "page-auto-1700000000000-0lg2",
+   "type": "inner",
+   "layout": "full-bleed",
+   "slots": [
+    {
+     "photoId": "p05",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    }
+   ],
+   "bg": "#ffffff"
+  },
+  {
+   "id": "page-auto-1700000000000-jjxh",
+   "type": "inner",
+   "layout": "full-bleed",
+   "slots": [
+    {
+     "photoId": "p12",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    }
+   ],
+   "bg": "#ffffff"
+  },
+  {
+   "id": "page-auto-1700000000000-muu3",
+   "type": "inner",
+   "layout": "1-up",
+   "slots": [
+    {
+     "photoId": "p04",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    }
+   ],
+   "bg": "#ffffff"
+  },
+  {
+   "id": "page-auto-1700000000000-wrec",
+   "type": "inner",
+   "layout": "1-up",
+   "slots": [
+    {
+     "photoId": "p09",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    }
+   ],
+   "bg": "#ffffff"
+  },
+  {
+   "id": "page-auto-1700000000000-41r0",
+   "type": "inner",
+   "layout": "2-up-h",
+   "slots": [
+    {
+     "photoId": "p03",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    },
+    {
+     "photoId": "p10",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    }
+   ],
+   "bg": "#ffffff"
+  },
+  {
+   "id": "page-auto-1700000000000-huo7",
+   "type": "inner",
+   "layout": "4-grid",
+   "slots": [
+    {
+     "photoId": "p06",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    },
+    {
+     "photoId": "p13",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    },
+    {
+     "photoId": "p07",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    },
+    {
+     "photoId": "p02",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    }
+   ],
+   "bg": "#ffffff"
+  },
+  {
+   "id": "page-auto-1700000000000-jqnr",
+   "type": "inner",
+   "layout": "1-up",
+   "slots": [
+    {
+     "photoId": "p08",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    }
+   ],
+   "bg": "#ffffff"
+  },
+  {
+   "id": "page-auto-1700000000000-lgjn",
+   "type": "inner",
+   "layout": "1-up",
+   "slots": [
+    {
+     "photoId": "p11",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    }
+   ],
+   "bg": "#ffffff"
+  }
+ ],
+ "thirteen/random": [
+  {
+   "id": "page-auto-1700000000000-0lg2",
+   "type": "inner",
+   "layout": "full-bleed",
+   "slots": [
+    {
+     "photoId": "p01",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    }
+   ],
+   "bg": "#ffffff"
+  },
+  {
+   "id": "page-auto-1700000000000-muu3",
+   "type": "inner",
+   "layout": "2-up-v",
+   "slots": [
+    {
+     "photoId": "p02",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    },
+    {
+     "photoId": "p03",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    }
+   ],
+   "bg": "#ffffff"
+  },
+  {
+   "id": "page-auto-1700000000000-41r0",
+   "type": "inner",
+   "layout": "4-grid",
+   "slots": [
+    {
+     "photoId": "p04",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    },
+    {
+     "photoId": "p05",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    },
+    {
+     "photoId": "p06",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    },
+    {
+     "photoId": "p07",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    }
+   ],
+   "bg": "#ffffff"
+  },
+  {
+   "id": "page-auto-1700000000000-jqnr",
+   "type": "inner",
+   "layout": "2-up-h",
+   "slots": [
+    {
+     "photoId": "p08",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    },
+    {
+     "photoId": "p09",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    }
+   ],
+   "bg": "#ffffff"
+  },
+  {
+   "id": "page-auto-1700000000000-s7cn",
+   "type": "inner",
+   "layout": "2-up-v",
+   "slots": [
+    {
+     "photoId": "p10",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    },
+    {
+     "photoId": "p11",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    }
+   ],
+   "bg": "#ffffff"
+  },
+  {
+   "id": "page-auto-1700000000000-qrys",
+   "type": "inner",
+   "layout": "full-bleed",
+   "slots": [
+    {
+     "photoId": "p12",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    }
+   ],
+   "bg": "#ffffff"
+  },
+  {
+   "id": "page-auto-1700000000000-2nh1",
+   "type": "inner",
+   "layout": "1-up",
+   "slots": [
+    {
+     "photoId": "p13",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    }
+   ],
+   "bg": "#ffffff"
+  }
+ ],
+ "thirteen/no-such-style": [
+  {
+   "id": "page-auto-1700000000000-0qfw",
+   "type": "inner",
+   "layout": "full-bleed",
+   "slots": [
+    {
+     "photoId": "p01",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    }
+   ],
+   "bg": "#ffffff"
+  },
+  {
+   "id": "page-auto-1700000000000-0lg2",
+   "type": "inner",
+   "layout": "full-bleed",
+   "slots": [
+    {
+     "photoId": "p05",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    }
+   ],
+   "bg": "#ffffff"
+  },
+  {
+   "id": "page-auto-1700000000000-jjxh",
+   "type": "inner",
+   "layout": "full-bleed",
+   "slots": [
+    {
+     "photoId": "p12",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    }
+   ],
+   "bg": "#ffffff"
+  },
+  {
+   "id": "page-auto-1700000000000-muu3",
+   "type": "inner",
+   "layout": "4-grid",
+   "slots": [
+    {
+     "photoId": "p04",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    },
+    {
+     "photoId": "p09",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    },
+    {
+     "photoId": "p03",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    },
+    {
+     "photoId": "p10",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    }
+   ],
+   "bg": "#ffffff"
+  },
+  {
+   "id": "page-auto-1700000000000-wrec",
+   "type": "inner",
+   "layout": "4-grid",
+   "slots": [
+    {
+     "photoId": "p06",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    },
+    {
+     "photoId": "p13",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    },
+    {
+     "photoId": "p07",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    },
+    {
+     "photoId": "p02",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    }
+   ],
+   "bg": "#ffffff"
+  },
+  {
+   "id": "page-auto-1700000000000-41r0",
+   "type": "inner",
+   "layout": "2-up-h",
+   "slots": [
+    {
+     "photoId": "p08",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    },
+    {
+     "photoId": "p11",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    }
+   ],
+   "bg": "#ffffff"
+  }
+ ],
+ "five/magazine": [
+  {
+   "id": "page-auto-1700000000000-0qfw",
+   "type": "inner",
+   "layout": "full-bleed",
+   "slots": [
+    {
+     "photoId": "p01",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    }
+   ],
+   "bg": "#ffffff"
+  },
+  {
+   "id": "page-auto-1700000000000-0lg2",
+   "type": "inner",
+   "layout": "full-bleed",
+   "slots": [
+    {
+     "photoId": "p05",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    }
+   ],
+   "bg": "#ffffff"
+  },
+  {
+   "id": "page-auto-1700000000000-jjxh",
+   "type": "inner",
+   "layout": "3-up",
+   "slots": [
+    {
+     "photoId": "p04",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    },
+    {
+     "photoId": "p03",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    },
+    {
+     "photoId": "p02",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    }
+   ],
+   "bg": "#ffffff"
+  }
+ ],
+ "five/uniform": [
+  {
+   "id": "page-auto-1700000000000-0qfw",
+   "type": "inner",
+   "layout": "2-up-h",
+   "slots": [
+    {
+     "photoId": "p01",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    },
+    {
+     "photoId": "p02",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    }
+   ],
+   "bg": "#ffffff"
+  },
+  {
+   "id": "page-auto-1700000000000-0lg2",
+   "type": "inner",
+   "layout": "2-up-h",
+   "slots": [
+    {
+     "photoId": "p03",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    },
+    {
+     "photoId": "p04",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    }
+   ],
+   "bg": "#ffffff"
+  },
+  {
+   "id": "page-auto-1700000000000-jjxh",
+   "type": "inner",
+   "layout": "1-up",
+   "slots": [
+    {
+     "photoId": "p05",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    }
+   ],
+   "bg": "#ffffff"
+  }
+ ],
+ "five/story": [
+  {
+   "id": "page-auto-1700000000000-0qfw",
+   "type": "inner",
+   "layout": "3-up",
+   "slots": [
+    {
+     "photoId": "p01",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    },
+    {
+     "photoId": "p02",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    },
+    {
+     "photoId": "p03",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    }
+   ],
+   "bg": "#ffffff"
+  },
+  {
+   "id": "page-auto-1700000000000-0lg2",
+   "type": "inner",
+   "layout": "2-up-v",
+   "slots": [
+    {
+     "photoId": "p04",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    },
+    {
+     "photoId": "p05",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    }
+   ],
+   "bg": "#ffffff"
+  }
+ ],
+ "five/byRating": [
+  {
+   "id": "page-auto-1700000000000-0qfw",
+   "type": "inner",
+   "layout": "full-bleed",
+   "slots": [
+    {
+     "photoId": "p01",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    }
+   ],
+   "bg": "#ffffff"
+  },
+  {
+   "id": "page-auto-1700000000000-0lg2",
+   "type": "inner",
+   "layout": "full-bleed",
+   "slots": [
+    {
+     "photoId": "p05",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    }
+   ],
+   "bg": "#ffffff"
+  },
+  {
+   "id": "page-auto-1700000000000-jjxh",
+   "type": "inner",
+   "layout": "1-up",
+   "slots": [
+    {
+     "photoId": "p04",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    }
+   ],
+   "bg": "#ffffff"
+  },
+  {
+   "id": "page-auto-1700000000000-muu3",
+   "type": "inner",
+   "layout": "2-up-h",
+   "slots": [
+    {
+     "photoId": "p03",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    },
+    {
+     "photoId": "p02",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    }
+   ],
+   "bg": "#ffffff"
+  }
+ ],
+ "five/random": [
+  {
+   "id": "page-auto-1700000000000-0lg2",
+   "type": "inner",
+   "layout": "full-bleed",
+   "slots": [
+    {
+     "photoId": "p01",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    }
+   ],
+   "bg": "#ffffff"
+  },
+  {
+   "id": "page-auto-1700000000000-muu3",
+   "type": "inner",
+   "layout": "2-up-v",
+   "slots": [
+    {
+     "photoId": "p02",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    },
+    {
+     "photoId": "p03",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    }
+   ],
+   "bg": "#ffffff"
+  },
+  {
+   "id": "page-auto-1700000000000-41r0",
+   "type": "inner",
+   "layout": "2-up-v",
+   "slots": [
+    {
+     "photoId": "p04",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    },
+    {
+     "photoId": "p05",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    }
+   ],
+   "bg": "#ffffff"
+  }
+ ],
+ "five/no-such-style": [
+  {
+   "id": "page-auto-1700000000000-0qfw",
+   "type": "inner",
+   "layout": "full-bleed",
+   "slots": [
+    {
+     "photoId": "p01",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    }
+   ],
+   "bg": "#ffffff"
+  },
+  {
+   "id": "page-auto-1700000000000-0lg2",
+   "type": "inner",
+   "layout": "full-bleed",
+   "slots": [
+    {
+     "photoId": "p05",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    }
+   ],
+   "bg": "#ffffff"
+  },
+  {
+   "id": "page-auto-1700000000000-jjxh",
+   "type": "inner",
+   "layout": "3-up",
+   "slots": [
+    {
+     "photoId": "p04",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    },
+    {
+     "photoId": "p03",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    },
+    {
+     "photoId": "p02",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    }
+   ],
+   "bg": "#ffffff"
+  }
+ ],
+ "one/magazine": [
+  {
+   "id": "page-auto-1700000000000-0qfw",
+   "type": "inner",
+   "layout": "full-bleed",
+   "slots": [
+    {
+     "photoId": "p01",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    }
+   ],
+   "bg": "#ffffff"
+  }
+ ],
+ "one/uniform": [
+  {
+   "id": "page-auto-1700000000000-0qfw",
+   "type": "inner",
+   "layout": "1-up",
+   "slots": [
+    {
+     "photoId": "p01",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    }
+   ],
+   "bg": "#ffffff"
+  }
+ ],
+ "one/story": [
+  {
+   "id": "page-auto-1700000000000-0qfw",
+   "type": "inner",
+   "layout": "full-bleed",
+   "slots": [
+    {
+     "photoId": "p01",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    }
+   ],
+   "bg": "#ffffff"
+  }
+ ],
+ "one/byRating": [
+  {
+   "id": "page-auto-1700000000000-0qfw",
+   "type": "inner",
+   "layout": "full-bleed",
+   "slots": [
+    {
+     "photoId": "p01",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    }
+   ],
+   "bg": "#ffffff"
+  }
+ ],
+ "one/random": [
+  {
+   "id": "page-auto-1700000000000-0lg2",
+   "type": "inner",
+   "layout": "full-bleed",
+   "slots": [
+    {
+     "photoId": "p01",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    }
+   ],
+   "bg": "#ffffff"
+  }
+ ],
+ "one/no-such-style": [
+  {
+   "id": "page-auto-1700000000000-0qfw",
+   "type": "inner",
+   "layout": "full-bleed",
+   "slots": [
+    {
+     "photoId": "p01",
+     "crop": {
+      "x": 0,
+      "y": 0,
+      "scale": 1
+     }
+    }
+   ],
+   "bg": "#ffffff"
+  }
+ ]
+}

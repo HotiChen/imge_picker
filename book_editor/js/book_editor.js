@@ -1918,13 +1918,24 @@ class BookEditor {
         const snapshot = JSON.parse(JSON.stringify(this.book.pages));
 
         try {
-            const innerPages = await AutoLayout.run(this.libraryPhotos, style);
+            // 'auto' (智慧) = analyze + plan: reading order, near-duplicates out, pacing,
+            // a chosen cover and focus crops. The other styles keep AutoLayout.run.
+            let innerPages, plan = null;
+            if (style === 'auto') {
+                plan = await this._planSmartLayout();
+                const stamp = Date.now();
+                innerPages = plan.pages.map((pg, i) => ({ ...pg, id: `page-auto-${stamp}-${i + 1}` }));
+            } else {
+                innerPages = await AutoLayout.run(this.libraryPhotos, style);
+            }
 
             const cover = this.book.pages.find(p => p.type === 'cover') || this._addPage('cover', 'full-bleed');
             const back = this.book.pages.find(p => p.type === 'back-cover') || this._addPage('back-cover', 'blank');
 
-            // 封面用第一張5星或第一張
-            if (innerPages.length > 0 && innerPages[0].slots[0]?.photoId) {
+            // 封面用第一張5星或第一張（智慧：演算法挑的那張，連同裁切焦點）
+            if (plan && plan.cover) {
+                cover.slots[0] = { photoId: plan.cover.photoId, crop: plan.cover.crop };
+            } else if (innerPages.length > 0 && innerPages[0].slots[0]?.photoId) {
                 cover.slots[0] = { photoId: innerPages[0].slots[0].photoId, crop: { x: 0, y: 0, scale: 1 } };
             }
 
@@ -1933,13 +1944,28 @@ class BookEditor {
             this._autoLayoutSnapshot = snapshot;
             this.renderAll();
             this.saveToStorage();
+            const skipped = plan ? plan.dropped.length : 0;
             toast.withAction(
-                `自動排版完成！共 ${this.book.pages.length} 頁`,
+                `自動排版完成！共 ${this.book.pages.length} 頁` + (skipped ? `（略過 ${skipped} 張近似重複或讀取失敗的照片）` : ''),
                 'success', '復原', () => this._undoAutoLayout()
             );
         } finally {
             if (btn) btn.disabled = false;
         }
+    }
+
+    // The smart style needs no editor state beyond the library and the page shapes:
+    // thumbnails (?w=400) in, a plan out. Nothing is saved until the caller applies it.
+    async _planSmartLayout() {
+        const byId = new Map(this.libraryPhotos.map(p => [p.id, p]));
+        const items = await AutoLayout.analyze([...byId.keys()], {
+            urlFor: id => driveManager.getImageUrl(byId.get(id), 400),
+        });
+        const aspect = st => (st && st.width > 0 && st.height > 0) ? st.width / st.height : 1;
+        return AutoLayout.plan(items, {
+            pageAspect: aspect(this.book.settings),
+            coverAspect: aspect(this.book.coverSettings || this.book.settings),
+        });
     }
 
     _undoAutoLayout() {

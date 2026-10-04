@@ -69,6 +69,7 @@ Commands:
   `node --input-type=module --check < worker/worker.js`.
   **Plain `node --check worker/worker.js` is not enough**: there is no package.json,
   so the file is read as CommonJS and a missing paren still exits 0 (verified).
+- Album layout engine (seconds, CI does not run it): `node --test book_editor/test/auto_layout.test.mjs`
 - Browser (minutes): `NODE_PATH=/tmp/pwinstall/node_modules node test/run.mjs`
   - Only matching suites: `ONLY=<text in suite name> ...` (a filter matching nothing fails)
   - Playwright lives outside the repo; Chromium at /opt/pw-browsers. In the cloud

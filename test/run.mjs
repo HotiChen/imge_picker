@@ -470,6 +470,109 @@ await suite('editor picker grid — tiles must not overlap and scroll must reach
     before: mockWorker(52),
   });
 
+// AutoLayout in a real browser: the default loader (crossOrigin image) and the
+// default pixel reader (canvas) are the one part the node tests cannot cover.
+// Twelve SVG "photos" of mixed shape; p4 is a pixel-for-pixel copy of p3.
+const svgPhoto = i => {
+  const [w, h] = [[600, 400], [400, 600], [600, 400], [600, 400], [600, 400], [400, 600],
+    [500, 500], [600, 400], [400, 600], [800, 400], [600, 400], [400, 600]][i];
+  const src = i === 4 ? 3 : i;                       // p4 repeats p3's picture
+  let seed = 7919 * (src + 1), rects = '';
+  const rnd = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648;
+  for (let k = 0; k < 14; k++) {
+    rects += `<rect x="${Math.floor(rnd() * w * 0.8)}" y="${Math.floor(rnd() * h * 0.8)}" ` +
+      `width="${Math.floor(30 + rnd() * w * 0.4)}" height="${Math.floor(30 + rnd() * h * 0.4)}" ` +
+      `fill="hsl(${Math.floor(rnd() * 360)},70%,${Math.floor(25 + rnd() * 55)}%)"/>`;
+  }
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">` +
+    `<rect width="${w}" height="${h}" fill="#888"/>${rects}</svg>`;
+};
+await suite('auto layout — the smart style and the old styles in the editor, on real pixels',
+  `${base}/book_editor/index.html`,
+  async page => {
+    const out = [];
+    const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+    await page.waitForFunction(() => !!window.bookEditor, null, { timeout: 5000 });
+    const r = await page.evaluate(async () => {
+      const ids = Array.from({ length: 12 }, (_, i) => `20260819/p${i}.jpg`);
+      bookEditor.libraryPhotos = ids.map(id => ({ id, name: id.split('/')[1], rating: 0 }));
+      bookEditor._confirm = async () => true;
+      const sel = document.getElementById('autoLayoutStyle');
+      const info = { values: [...sel.options].map(o => o.value), initial: sel.value };
+
+      info.analysed = await AutoLayout.analyze(ids, {
+        urlFor: id => driveManager.getImageUrl({ id }, 400),
+      });
+
+      sel.value = 'auto';
+      await bookEditor.runAutoLayout();
+      const pages = bookEditor.book.pages;
+      const aspect = st => st.width / st.height;
+      const expected = AutoLayout.plan(info.analysed, {
+        pageAspect: aspect(bookEditor.book.settings),
+        coverAspect: aspect(bookEditor.book.coverSettings || bookEditor.book.settings),
+      });
+      info.expectedCover = expected.cover;
+      info.expectedInner = expected.pages.map(p => p.layout);
+      info.auto = {
+        types: pages.map(p => p.type),
+        photos: pages.flatMap(p => p.slots.map(s => s.photoId)),
+        cover: pages[0].slots[0],
+        inner: pages.filter(p => p.type === 'inner').map(p => ({ layout: p.layout, n: p.slots.length })),
+        idsUnique: new Set(pages.map(p => p.id)).size === pages.length,
+        shown: !!document.querySelector('.page-canvas .slot-cover-img'),
+      };
+
+      sel.value = 'story';
+      await bookEditor.runAutoLayout();
+      const p2 = bookEditor.book.pages;
+      info.story = { inner: p2.filter(p => p.type === 'inner').length, photos: p2.filter(p => p.type === 'inner').flatMap(p => p.slots.map(s => s.photoId)).filter(Boolean) };
+      return { ...info, ids };
+    });
+
+    ok('the smart style is offered, as the last choice', r.values.at(-1) === 'auto' && r.values.includes('story'), r.values.join());
+    ok('and the default is still an old style', r.initial !== 'auto', r.initial);
+
+    const a = r.analysed;
+    ok('analyze: every photo loaded with real pixels', a.length === 12 && a.every(x => x.ok && /^[0-9a-f]{16}$/.test(x.hash)), JSON.stringify(a.map(x => [x.ok, x.hash])));
+    ok('analyze: shapes are read from the thumbnails', Math.abs(a[0].aspect - 1.5) < 0.01 && Math.abs(a[1].aspect - 2 / 3) < 0.01 && a[6].orientation === 'square',
+      JSON.stringify(a.slice(0, 7).map(x => [x.aspect, x.orientation])));
+    ok('analyze: the copy has the same hash, the others differ', a[3].hash === a[4].hash && new Set(a.map(x => x.hash)).size === 11, JSON.stringify(a.map(x => x.hash)));
+    ok('analyze: textured pictures have sharpness, focus stays inside 0.2..0.8',
+      a.every(x => x.sharpness > 0 && x.focus.x >= 0.2 && x.focus.x <= 0.8 && x.focus.y >= 0.2 && x.focus.y <= 0.8));
+
+    const m = r.auto;
+    ok('smart: cover + inner pages + back cover', m.types[0] === 'cover' && m.types.at(-1) === 'back-cover' && m.inner.length >= 3, m.types.join());
+    ok('smart: the cover is the one plan() chose, with its focus crop',
+      m.cover.photoId === r.expectedCover.photoId && JSON.stringify(m.cover.crop) === JSON.stringify(r.expectedCover.crop),
+      JSON.stringify([m.cover, r.expectedCover]));
+    ok('smart: the inner pages are plan()\'s pages', JSON.stringify(m.inner.map(p => p.layout)) === JSON.stringify(r.expectedInner), JSON.stringify([m.inner, r.expectedInner]));
+    const used = new Set(m.photos.filter(Boolean));
+    ok('smart: the repeated shot is left out, every other photo is used', used.size === 11 && !(used.has(r.ids[3]) && used.has(r.ids[4])), `${used.size} used`);
+    ok('smart: no empty slots on inner pages', m.inner.every(p => p.n >= 1) && m.photos.every(Boolean), JSON.stringify(m.photos));
+    ok('smart: the pages are drawn', m.shown && m.idsUnique);
+
+    ok('story still works through run() with real Image loads', r.story.inner >= 3 && r.story.photos.length === 12, JSON.stringify(r.story));
+    return out;
+  },
+  {
+    initScript: () => {
+      sessionStorage.setItem('studio_token', 'x');
+      try { localStorage.setItem('book_editor_tour_done', '1'); } catch (e) {}
+    },
+    before: async page => {
+      await mockWorker(12)(page);
+      // later routes win: the photos themselves, with the CORS header the Worker sends
+      await page.route('**/imagepicker.hotichen.workers.dev/**', route => {
+        const u = new URL(route.request().url());
+        const m = /\/p(\d+)\.jpg$/.exec(u.pathname);
+        if (!m || u.searchParams.has('list')) return route.fallback();
+        route.fulfill({ status: 200, contentType: 'image/svg+xml', body: svgPhoto(Number(m[1])),
+          headers: { 'Access-Control-Allow-Origin': '*' } });
+      });
+    },
+  });
+
 // The client sees the same guides the photographer works to, so both pages
 // must draw them from the one implementation in layouts.js.
 const GUIDE_READ = () => {
