@@ -25,6 +25,7 @@
         photoKey,
         app: null,
         photos: [],
+        projectTitle: '',
         ownerName: null,
         tokens: [],
 
@@ -75,6 +76,7 @@
 
         _applyState(data) {
             this.ownerName = data.owner ? data.owner.name : null;
+            this.projectTitle = data.project && data.project.title ? String(data.project.title) : '';
             // GET /api/admin/projects/:id already returns these newest-first
             // (worker.js: ORDER BY created_at DESC), each with a computed
             // status — so the first 'live' one found here is the newest live
@@ -226,13 +228,20 @@
         // picks and has no selection control any more (the checkbox is gone,
         // see js/app.js createPhotoCard), so there is no meaningful subset to
         // carve out — 下載選取 downloads exactly what 打包全部下載 does.
+        //
+        // The zip is named <project title>_選片_<N>張.zip (N = photos in it), not
+        // after the internal id. Because 下載選取 is the same thing as 打包全部下載
+        // here, its buttons are hidden in this view (body.pv-active, css/styles.css)
+        // — the markup and the hook below stay, so it can come back.
         _wireDownloads() {
             const self = this;
+            const zipName = () =>
+                `${driveManager.sanitizeFileTitle(self.projectTitle)}_選片_${self.photos.length}張.zip`;
             driveManager.downloadAllPhotos = function () {
-                return this.downloadPhotos(self.photos, `Project_${self.projectId}.zip`);
+                return this.downloadPhotos(self.photos, zipName());
             };
             this.app.downloadSelected = function () {
-                return driveManager.downloadPhotos(self.photos, `Project_${self.projectId}.zip`);
+                return driveManager.downloadPhotos(self.photos, zipName());
             };
         },
 

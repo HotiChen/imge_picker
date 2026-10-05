@@ -18,6 +18,8 @@
 // session token fills.
 (function () {
     const token = new URLSearchParams(window.location.search).get('t') || '';
+    // css/styles.css hides the photographer's 登出 / avatar under this class
+    if (token) document.documentElement.classList.add('guest-mode');
 
     // Retouch pins (docs/guest-picking.md "Retouch pins — the save contract").
     const PIN_MAX = 10;         // per photo (server PICK_MARKS_MAX)

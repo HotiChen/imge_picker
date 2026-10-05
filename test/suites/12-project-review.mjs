@@ -688,7 +688,9 @@ async function rvInteract(page, ok, errs) {
         filesAll.length === 2 && filesAll.includes('a.jpg') && filesAll.includes('b.jpg'), JSON.stringify(filesAll));
 
       await page.evaluate(() => { window.__zipFiles.length = 0; });
-      await page.click('#downloadSelectedHeaderBtn'); // no checkbox to pick a subset with — see js/project-view.js _wireDownloads
+      // 下載選取's buttons are hidden in this view (suite 31 checks that), so call the hook they
+      // are wired to — it still exists and still does what 打包全部下載 does
+      await page.evaluate(() => app.downloadSelected());
       await page.waitForTimeout(400);
       const filesSel = await page.evaluate(() => window.__zipFiles.slice());
       ok('下載選取 downloads the same set (documented behaviour: 下載選取 = 全部選片)',

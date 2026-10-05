@@ -413,6 +413,7 @@
 <script src="js/shoot-types.js?v=20261005b"></script>
 <script src="js/project-folders.js?v=20261005b"></script>
 <script src="js/build-version.js?v=20261005b"></script>
+<script src="js/util.js?v=20261005b"></script>
 <script src="js/side-nav.js?v=20261005b"></script>
 <script src="js/orders-common.js?v=20261005b"></script>
 <script src="js/selection-export.js?v=20261005b"></script>
@@ -2405,13 +2406,6 @@
   function flashGreen(el) {
     el.style.borderColor = 'var(--success)';
     setTimeout(() => { el.style.borderColor = ''; }, 1500);
-  }
-
-  function escHtml(str) {
-    // str || '' turns 0 (a rating, a count) into '' — blank instead of "0".
-    // null/undefined are the only values meant to render as empty.
-    const s = (str === null || str === undefined) ? '' : str;
-    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
   }
 
   // D1 timestamps come back as raw UTC ISO strings; Tim reads them in Taipei.
