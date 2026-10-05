@@ -165,6 +165,7 @@
 </div>
 
 <script src="js/build-version.js?v=20261005b"></script>
+<script src="js/util.js?v=20261005b"></script>
 <script src="js/side-nav.js?v=20261005b"></script>
 <script src="js/orders-common.js?v=20261005b"></script>
 <script>
@@ -179,12 +180,6 @@
   else {
     SideNav.render(document.getElementById('sideNav'), 'dashboard', SideNav.logoutToHome);
     document.getElementById('logout-btn').addEventListener('click', SideNav.logoutToHome);
-
-    function escHtml(s) {
-      return String(s == null ? '' : s).replace(/[&<>"']/g, c => (
-        { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
-      ));
-    }
 
     async function authedGet(path) {
       const r = await fetch(`${WORKER_URL}${path}`, { headers: { 'Authorization': `Bearer ${token}` } });
