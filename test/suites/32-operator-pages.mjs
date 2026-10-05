@@ -254,6 +254,14 @@ const invalid = (page, which) => page.$eval(`#opf-${which}-pages`, e => e.getAtt
         (await range('pp-stray')) === null && (await T(page, '[data-product-id="pp-stray"]')).includes('輸出品殘值'));
       ok('the count and the range sit side by side on an album that has both', (await T(page, '[data-product-id="pa-both"] .prod-main')).replace(/\s+/g, ' ').includes('指定 20 張'));
 
+      // the formatter itself, whatever a response carries (the Worker nulls a print's bounds; this is the second lock)
+      const fmt = await page.evaluate(() => [
+        { kind: 'print', min_pages: 5, max_pages: 9 }, { kind: 'service', min_pages: 5 }, null, undefined, {}, { kind: 'album' },
+        { kind: 'album', min_pages: 0, max_pages: -3 }, { kind: 'album', min_pages: '10', max_pages: 1.5 }, { kind: 'album', min_pages: 10, max_pages: 30 }, { kind: 'album', min_pages: 7 },
+      ].map(x => window.Orders.pageRangeText(x)));
+      ok('pageRangeText: a print/service/missing/garbage gives nothing, real numbers give the label',
+        JSON.stringify(fmt) === JSON.stringify(['', '', '', '', '', '', '', '', '10–30 跨頁', '至少 7 跨頁']), JSON.stringify(fmt));
+
       // escaping: a hostile name / description / option label next to a range
       const probe = await page.evaluate(() => ({ fired: !!window.__xss, injected: document.querySelectorAll('img[src="x"]').length,
         name: document.querySelector('[data-product-id="plat-xss"] .prod-name')?.textContent, range: document.querySelector('[data-product-id="plat-xss"] [data-page-range]')?.textContent,
@@ -330,6 +338,8 @@ const invalid = (page, which) => page.$eval(`#opf-${which}-pages`, e => e.getAtt
   // 8×8: 售價 1,000 under the 1,500 floor; 12×12: 2,400 = floor; a third at 5,800 above (added below)
   prodAlbum.options[0].price = 1000;
   prodAlbum.options[1].price = 2400;
+  // 舊規格: the platform retired it, and 售價 10 is under its floor of 50 — unusable already, so no price warning on top
+  Object.assign(prodAlbum.options.find(x => x.id === 'opt-album-old'), { active: 1, price: 10 });
   prodAlbum.options.splice(2, 0, { id: 'opt-album-xl', label: '16×16 吋', price: 9000, cost: 3000, active: 1, sort: 2, platform_option_id: 'popt-album-xl' });
   const platA = platAlbum({ min_pages: 10, max_pages: 30 });
   platA.options.splice(2, 0, { id: 'popt-album-xl', label: '16×16 吋', vendor_cost: 2800, platform_price: 3000, active: 1, sort: 2 });
@@ -357,6 +367,9 @@ const invalid = (page, which) => page.$eval(`#opf-${which}-pages`, e => e.getAtt
       ok('售價 2,400 = 平台價 2,400: no warning (positive: the line is there with its prices)', equal.n === 0 && equal.li.includes('平台價 NT$2,400 · 售價 NT$2,400'), JSON.stringify(equal));
       const above = await li('prod-album', 'opt-album-xl');
       ok('售價 9,000 > 平台價 3,000: no warning (positive: the line is there)', above.n === 0 && above.li.includes('16×16 吋') && above.li.includes('售價 NT$9,000'), JSON.stringify(above));
+      const gone = await li('prod-album', 'opt-album-old');
+      ok('an option the platform retired (售價 10 < 平台價 50) shows 平台已下架 and no price warning — positive: the pill is there',
+        gone.n === 0 && gone.li.includes('平台已下架') && gone.li.includes('售價 NT$10'), JSON.stringify(gone));
       ok('exactly one warning in the whole album row', (await page.$$('[data-product-id="prod-album"] [data-warn="guest-hidden"]')).length === 1);
       const printLi = await li('prod-print', 'opt-print');
       ok('the print (售價 1,200 > 平台價 500) has none', printLi.n === 0 && printLi.li.includes('售價 NT$1,200'), JSON.stringify(printLi));
