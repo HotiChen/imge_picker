@@ -482,3 +482,34 @@ CREATE TABLE IF NOT EXISTS platform_product_options (
 - **Images:** 413 `too_large`, 415 `unsupported_type`, 404 unknown product.
   The public route serves a retired product's image too (old orders show it);
   non-GET is 405, anything else under `/api/platform/` 404.
+
+## min_pages — album minimum (decided by Tim 2026-10-05)
+
+「我們的相本最少 10 頁，在 operator 設定，綁在商品上。」
+
+- `platform_products.min_pages INTEGER`, nullable: the fewest **inside
+  spreads** an album may have. One spread = 1 P; cover and back are not
+  counted, so 相本書 with `min_pages = 10` needs at least 10 spreads.
+  NULL = no minimum.
+- **Operator only.** `POST /api/operator/products` and
+  `PUT /api/operator/products/:id` take `min_pages`: a safe integer 1–200 or
+  `null`, else 400 `invalid_min_pages` with nothing written (a bad value is
+  refused on any kind). Albums only, like `photo_count`: on a print it is
+  stored as NULL; a product changed from album to print loses it. A PUT
+  without the field keeps it.
+- **Reads:** every product shape that carries `photo_count` carries
+  `min_pages` too — the operator's list and responses, the photographer's
+  `GET /api/admin/products` (adopted products show the platform's live value;
+  custom products `null`), every product response of create / adopt / PUT,
+  `GET /api/admin/platform-products`, and the guest shop
+  (`docs/guest-shop.md`). Always `null` on a non-album, whatever the row says.
+- The photographer cannot set it: `min_pages` on an adopted product's PUT is
+  400 `platform_managed`; on a custom product (service) it is ignored.
+- **Migration** `worker/migrations/2026-10-06-product-min-pages.sql`
+  (`ALTER TABLE platform_products ADD COLUMN min_pages INTEGER`), hand-run
+  before the merge. Before it runs every read says `null`; an operator
+  create/PUT that sets a number answers 500 `min_pages_unavailable` and writes
+  nothing (`null`, or no field, still works).
+- Not enforced anywhere yet (no order or album check reads it): the album
+  editor / guest album flow will use it. Whether an order below the minimum
+  is refused or charged per extra spread is still open.

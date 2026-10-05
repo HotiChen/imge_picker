@@ -372,7 +372,13 @@ CREATE TABLE IF NOT EXISTS platform_products (
   image_type       TEXT,
   image_updated_at TEXT,
   created_at       TEXT NOT NULL,
-  updated_at       TEXT NOT NULL
+  updated_at       TEXT NOT NULL,
+  -- album: the fewest inside spreads (1 spread = 1 P; cover and back not
+  -- counted), 1–200; NULL = no minimum, and always NULL on a print. Shown to
+  -- photographers and guests. Added to a deployed database by
+  --   ALTER TABLE platform_products ADD COLUMN min_pages INTEGER;
+  -- (worker/migrations/2026-10-06-product-min-pages.sql).
+  min_pages        INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_platform_products_sort ON platform_products(active, sort);
 

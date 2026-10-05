@@ -408,3 +408,54 @@ Worker packages are serial (one file). Bump `?v=` on every frontend change.
 
 Guest-shop stages are unchanged; S1 (info + promo) can start once the project
 defaults exist, because the promo settings live there.
+
+## S1 trimmed — built (Worker, 2026-10-05)
+
+Tim cut S1 down to the read: **no promo, no countdown, no `ship_enabled`, no
+`shop_enabled`** (none of those columns exist yet; the S1 migration above is
+not needed for this). What the Worker serves:
+
+`GET /api/pick/shop` — pick link only (`?t=` or `X-Share-Token`, through
+`resolvePick`), owner and viewers alike (information only). Order of checks:
+
+| Case | Answer |
+|---|---|
+| no / unknown / revoked / expired link, archived project, any non-pick token (client, studio, session, admin, operator), a picker key alone | 401 `{error}` |
+| any method but GET | 405 `{error}`, `Allow: GET` |
+| not delivered now (`pickReadScope(share).mode !== 'delivered'`: picking, retouching before delivery, undelivered, reopened) | 409 `{error: '尚未交件', code: 'not_delivered'}` |
+| catalogue tables missing (migration not run) | 500 `{error, code: 'shop_unavailable'}` |
+| delivered | 200 `{products: [...]}` (may be `[]`) |
+
+All answers but the 401 carry `Cache-Control: private, no-store` and
+`Vary: X-Share-Token`. The route writes nothing (not even the link's
+last-seen stamp).
+
+```
+{ "products": [ {
+    "id": "<products.id>",            // the photographer's product
+    "kind": "print" | "album",
+    "name": "相本書",                  // plain text, ≤ 60 — render as text
+    "description": "精裝 20×20",       // plain text, ≤ 500, '' when none
+    "photo_count": 20 | null,         // album only, advisory
+    "min_pages": 10 | null,           // album only: fewest inside spreads (1 spread = 1 P, cover/back not counted)
+    "image_url": "/api/platform/products/<id>/image?v=<stamp>" | null,  // relative to the Worker origin, public
+    "options": [ { "id": "<product_options.id>", "label": "20×20", "price": 5000 } ]  // label '' when single
+} ] }
+```
+
+- **Which products:** the products of the photographer who owns the link's
+  project (`projects.photographer_id`, never anything from the request),
+  adopted from the platform (custom products and services never appear),
+  `guest_visible = 1`, product and platform product active, kind print/album.
+- **Which options:** active, its platform option active and belonging to the
+  same platform product, and `price ≥` today's `platform_price` — exactly what
+  an order would accept (`orderLines` refuses a price under the floor with
+  `below_platform_price`, so such an option is hidden until the photographer
+  reprices it). A product with no such option is left out.
+- **price** = the photographer's option price = the `unit_price` an order on
+  that option is created with. Never `cost`, `platform_price`, `vendor_cost`,
+  `platform_option_id`, `guest_visible`, `photographer_id`; the platform
+  product id appears only inside `image_url`.
+- **Sorted** by the photographer's `sort` (then created), options in their
+  set order. **Capped** at 50 products (sellable ones, by sort) × 20 options.
+- Before the `min_pages` migration everything works with `min_pages: null`.

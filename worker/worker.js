@@ -759,6 +759,25 @@ const isPlainObject = v => !!v && typeof v === 'object' && !Array.isArray(v);
 const customProductsEnabled = env => env.CUSTOM_PRODUCTS === 'on';
 const CUSTOM_PRODUCTS_DISABLED = { error: '目前只能從平台加入商品', code: 'custom_products_disabled' };
 
+// platform_products.min_pages: the fewest inside spreads an album may have
+// (one spread = 1 P; cover and back are not counted). The operator's, bound
+// to the platform product; NULL = no minimum; albums only (a print or any
+// other kind stores NULL, like photo_count). The column arrives in a hand-run
+// migration (2026-10-06-product-min-pages.sql): until then every read says
+// null, and only a write of a non-null value answers 500 below.
+const MIN_PAGES_MAX = 200;
+const MIN_PAGES_UNAVAILABLE = { error: '最少頁數功能尚未啟用', code: 'min_pages_unavailable' };
+// {} when the body does not name min_pages, {value} when it names a valid
+// one, {bad: code} otherwise
+function minPagesField(body) {
+  if (!hasField(body, 'min_pages')) return {};
+  const v = body.min_pages;
+  if (v !== null && !(Number.isSafeInteger(v) && v >= 1 && v <= MIN_PAGES_MAX)) return { bad: 'invalid_min_pages' };
+  return { value: v };
+}
+// a platform product's min_pages as every response shows it: albums only
+const albumOnly = (kind, v) => (kind === 'album' && v != null ? v : null);
+
 // 400 {error, code}, the settings route's shape
 const orderBad = (code, error) => jsonOk({ error: error ?? `${code.replace(/_/g, ' ')}`, code }, 400);
 
@@ -912,14 +931,18 @@ async function readProducts(env, id = null) {
   const one = id === null ? '' : ' AND p.id = ?2';
   const binds = id === null ? [DEFAULT_PHOTOGRAPHER_ID] : [DEFAULT_PHOTOGRAPHER_ID, id];
   const own = (col, expr = `p.${col}`) => `CASE WHEN pp.id IS NULL THEN ${expr} ELSE ${expr.replace('p.', 'pp.')} END AS ${col}`;
-  const { results: products } = await env.DB.prepare(
+  // min_pages is the platform's only (a custom product has none), and null
+  // on a database without the column yet
+  const selectProducts = minPages => env.DB.prepare(
     `SELECT p.id, ${own('kind')}, ${own('name')}, ${own('description')}, ${own('photo_count')},
+            ${minPages ? 'pp.min_pages' : 'NULL'} AS min_pages,
             p.guest_visible, p.active, p.sort,
             ${own('has_image', 'p.image IS NOT NULL')}, ${own('image_type')}, ${own('image_updated_at')},
             p.created_at, p.updated_at, p.platform_product_id, pp.active AS platform_active
        FROM products p LEFT JOIN platform_products pp ON pp.id = p.platform_product_id
       WHERE p.photographer_id = ?1${one} ORDER BY p.active DESC, p.sort, p.created_at, p.rowid`
   ).bind(...binds).all();
+  const { results: products } = await withoutMissingColumn(() => selectProducts(true), () => selectProducts(false));
   const { results: options } = await env.DB.prepare(
     `SELECT o.id, o.product_id, COALESCE(po.label, o.label) AS label, o.price,
             COALESCE(po.platform_price, o.cost) AS cost, o.active, o.sort,
@@ -930,6 +953,7 @@ async function readProducts(env, id = null) {
   ).bind(...binds).all();
   return products.map(p => ({
     ...p,
+    min_pages: albumOnly(p.kind, p.min_pages),
     has_image: !!p.has_image,
     options: options.filter(o => o.product_id === p.id).map(({ product_id, ...o }) => ({
       ...o,
@@ -944,11 +968,13 @@ async function readProducts(env, id = null) {
 async function readPlatformProducts(env, id = null) {
   const one = id === null ? '' : ' WHERE pp.id = ?';
   const binds = id === null ? [] : [id];
-  const { results: products } = await env.DB.prepare(
-    `SELECT pp.id, pp.kind, pp.name, pp.description, pp.photo_count, pp.active, pp.sort,
+  const selectProducts = minPages => env.DB.prepare(
+    `SELECT pp.id, pp.kind, pp.name, pp.description, pp.photo_count, ${minPages ? 'pp.min_pages' : 'NULL'} AS min_pages,
+            pp.active, pp.sort,
             pp.image IS NOT NULL AS has_image, pp.image_type, pp.image_updated_at, pp.created_at, pp.updated_at
        FROM platform_products pp${one} ORDER BY pp.active DESC, pp.sort, pp.created_at, pp.rowid`
   ).bind(...binds).all();
+  const { results: products } = await withoutMissingColumn(() => selectProducts(true), () => selectProducts(false));
   const { results: options } = await env.DB.prepare(
     `SELECT po.id, po.platform_product_id, po.label, po.vendor_cost, po.platform_price, po.active, po.sort
        FROM platform_product_options po JOIN platform_products pp ON pp.id = po.platform_product_id${one}
@@ -956,9 +982,69 @@ async function readPlatformProducts(env, id = null) {
   ).bind(...binds).all();
   return products.map(p => ({
     ...p,
+    min_pages: albumOnly(p.kind, p.min_pages),
     has_image: !!p.has_image,
     options: options.filter(o => o.platform_product_id === p.id).map(({ platform_product_id, ...o }) => o),
   }));
+}
+
+// ─── Guest shop, read only (docs/guest-shop.md, S1 trimmed) ─────────────────
+// What a guest holding a delivered pick link may buy: the products of the
+// photographer who owns the link's project (never a value from the request)
+// that are adopted from the platform, print or album, shown to guests, and
+// live on both sides, each with the options a guest could order today.
+// An option is sellable when it and its platform option are active, the
+// platform option belongs to this very product's platform product, and the
+// photographer's price is not under today's platform price — exactly what
+// orderLines would accept, at the price it would charge (the option's
+// `price`). Built from a named field list: never cost, platform_price,
+// vendor_cost or any platform option id. Capped: GUEST_SHOP_PRODUCTS_MAX
+// products × PRODUCT_OPTIONS_MAX options.
+const GUEST_SHOP_PRODUCTS_MAX = 50;
+const SHOP_UNAVAILABLE = { error: '商品資訊暫時無法顯示', code: 'shop_unavailable' };
+const GUEST_SELLABLE_SQL = 'o.active = 1 AND po.active = 1 AND po.platform_product_id = p.platform_product_id AND o.price >= po.platform_price';
+const GUEST_OPTION_JOIN = 'FROM product_options o JOIN platform_product_options po ON po.id = o.platform_option_id';
+
+// {products} for the guest, or null when the catalogue tables are not there
+// (a hand-run migration missing): the route answers 500, never a guess.
+async function readGuestShop(env, photographerId) {
+  try {
+    const selectProducts = minPages => env.DB.prepare(
+      `SELECT p.id, pp.id AS platform_id, pp.kind, pp.name, pp.description, pp.photo_count,
+              ${minPages ? 'pp.min_pages' : 'NULL'} AS min_pages, pp.image IS NOT NULL AS has_image, pp.image_updated_at
+         FROM products p JOIN platform_products pp ON pp.id = p.platform_product_id
+        WHERE p.photographer_id = ?1 AND p.guest_visible = 1 AND p.active = 1 AND pp.active = 1
+          AND pp.kind IN ('print', 'album') AND p.kind IN ('print', 'album')
+          AND EXISTS (SELECT 1 ${GUEST_OPTION_JOIN} WHERE o.product_id = p.id AND ${GUEST_SELLABLE_SQL})
+        ORDER BY p.sort, p.created_at, p.rowid LIMIT ${GUEST_SHOP_PRODUCTS_MAX}`
+    ).bind(photographerId).all();
+    const { results: products } = await withoutMissingColumn(() => selectProducts(true), () => selectProducts(false));
+    if (!products.length) return [];
+    const { results: options } = await env.DB.prepare(
+      `SELECT o.id, o.product_id, po.label, o.price ${GUEST_OPTION_JOIN} JOIN products p ON p.id = o.product_id
+        WHERE p.photographer_id = ?1 AND o.product_id IN (${products.map((_, i) => `?${i + 2}`).join(', ')})
+          AND ${GUEST_SELLABLE_SQL}
+        ORDER BY o.sort, o.rowid`
+    ).bind(photographerId, ...products.map(p => p.id)).all();
+    return products.map(p => ({
+      id: p.id,
+      kind: p.kind,
+      name: p.name,
+      description: p.description ?? '',
+      photo_count: albumOnly(p.kind, p.photo_count),
+      min_pages: albumOnly(p.kind, p.min_pages),
+      // the public image route (relative to the Worker), versioned by when
+      // the operator last changed it
+      image_url: p.has_image
+        ? `/api/platform/products/${encodeURIComponent(p.platform_id)}/image?v=${encodeURIComponent(p.image_updated_at || '')}`
+        : null,
+      options: options.filter(o => o.product_id === p.id).slice(0, PRODUCT_OPTIONS_MAX)
+        .map(o => ({ id: o.id, label: o.label, price: o.price })),
+    })).filter(p => p.options.length);
+  } catch (e) {
+    if (isMissingSchema(e)) return null;
+    throw e;
+  }
 }
 
 // Orders matching `where` (on `o`, after ORDER_SCOPE_SQL), newest first, with
@@ -2623,24 +2709,38 @@ export default {
       if (!isPlainObject(body)) return jsonErr('Invalid body');
 
       // POST /api/operator/products — {kind: print|album, name,
-      // description?, photo_count?, sort?, options: [{label, vendor_cost,
-      // platform_price}]}, ≥ 1 option.
+      // description?, photo_count?, min_pages?, sort?, options: [{label,
+      // vendor_cost, platform_price}]}, ≥ 1 option. photo_count and
+      // min_pages stick to albums only.
       if (route === 'products') {
         const fields = productFields(body, false, PLATFORM_KINDS, false);
         if (fields.bad) return orderBad(fields.bad);
+        const minPages = minPagesField(body);
+        if (minPages.bad) return orderBad(minPages.bad);
         const opts = productOptions(body.options, new Set(), PLATFORM_MONEY);
         if (opts.bad) return orderBad(opts.bad);
         const p = { description: '', photo_count: null, sort: 0, ...fields.set };
         if (p.kind !== 'album') p.photo_count = null;
+        const pages = p.kind === 'album' ? (minPages.value ?? null) : null;
+        // the column is named only for a value (NULL is its default), so a
+        // product without a minimum is made before the migration too
+        const withPages = pages !== null;
         const productId = crypto.randomUUID();
-        await env.DB.batch([
-          env.DB.prepare(
-            'INSERT INTO platform_products (id, kind, name, description, photo_count, sort, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
-          ).bind(productId, p.kind, p.name, p.description, p.photo_count, p.sort, now, now),
-          ...opts.options.map(o => env.DB.prepare(
-            'INSERT INTO platform_product_options (id, platform_product_id, label, vendor_cost, platform_price, sort) VALUES (?, ?, ?, ?, ?, ?)'
-          ).bind(crypto.randomUUID(), productId, o.label, o.vendor_cost, o.platform_price, o.sort)),
-        ]);
+        try {
+          await env.DB.batch([
+            env.DB.prepare(
+              `INSERT INTO platform_products (id, kind, name, description, photo_count, sort, created_at, updated_at${withPages ? ', min_pages' : ''}) ` +
+              `VALUES (?, ?, ?, ?, ?, ?, ?, ?${withPages ? ', ?' : ''})`
+            ).bind(productId, p.kind, p.name, p.description, p.photo_count, p.sort, now, now, ...(withPages ? [pages] : [])),
+            ...opts.options.map(o => env.DB.prepare(
+              'INSERT INTO platform_product_options (id, platform_product_id, label, vendor_cost, platform_price, sort) VALUES (?, ?, ?, ?, ?, ?)'
+            ).bind(crypto.randomUUID(), productId, o.label, o.vendor_cost, o.platform_price, o.sort)),
+          ]);
+        } catch (e) {
+          // min_pages before its migration: the batch wrote nothing
+          if (withPages && isMissingColumn(e)) return done(MIN_PAGES_UNAVAILABLE, 500);
+          throw e;
+        }
         const [product] = await readPlatformProducts(env, productId);
         return done({ product }, 201);
       }
@@ -2652,6 +2752,8 @@ export default {
       if (!current) return jsonErr('Not found', 404);
       const fields = productFields(body, true, PLATFORM_KINDS, false);
       if (fields.bad) return orderBad(fields.bad);
+      const minPages = minPagesField(body);
+      if (minPages.bad) return orderBad(minPages.bad);
       let opts = null;
       if (hasField(body, 'options')) {
         const { results } = await env.DB.prepare('SELECT id FROM platform_product_options WHERE platform_product_id = ?').bind(id).all();
@@ -2659,8 +2761,21 @@ export default {
         if (checked.bad) return orderBad(checked.bad);
         opts = checked.options;
       }
-      if ((fields.set.kind ?? current.kind) !== 'album') fields.set.photo_count = null;
-      await env.DB.batch(catalogueWrites(env, PLATFORM_TABLES, id, fields.set, opts, now));
+      const kind = fields.set.kind ?? current.kind;
+      if (kind !== 'album') fields.set.photo_count = null;
+      // min_pages as named (albums only); one leaving album drops its own
+      if (minPages.value !== undefined) fields.set.min_pages = kind === 'album' ? minPages.value : null;
+      else if (kind !== 'album' && current.kind === 'album') fields.set.min_pages = null;
+      try {
+        await env.DB.batch(catalogueWrites(env, PLATFORM_TABLES, id, fields.set, opts, now));
+      } catch (e) {
+        if (!isMissingColumn(e) || !hasField(fields.set, 'min_pages')) throw e;
+        // before the migration the batch wrote nothing: a minimum cannot be
+        // stored (500), and there is none to clear (write the rest)
+        if (fields.set.min_pages !== null) return done(MIN_PAGES_UNAVAILABLE, 500);
+        const { min_pages, ...rest } = fields.set;
+        await env.DB.batch(catalogueWrites(env, PLATFORM_TABLES, id, rest, opts, now));
+      }
       const [product] = await readPlatformProducts(env, id);
       return done({ product });
     }
@@ -2738,13 +2853,15 @@ export default {
       // products with their active options and platform price (never the
       // vendor cost), and which one this photographer already adopted.
       if (route === 'platform-products') {
-        const { results: offered } = await env.DB.prepare(
-          `SELECT pp.id, pp.kind, pp.name, pp.description, pp.photo_count, pp.sort,
+        // min_pages: null on a database without the column yet
+        const selectOffered = minPages => env.DB.prepare(
+          `SELECT pp.id, pp.kind, pp.name, pp.description, pp.photo_count, ${minPages ? 'pp.min_pages' : 'NULL'} AS min_pages, pp.sort,
                   pp.image IS NOT NULL AS has_image, pp.image_updated_at,
                   (SELECT p.id FROM products p WHERE p.photographer_id = ? AND p.platform_product_id = pp.id
                     ORDER BY p.rowid LIMIT 1) AS adopted_product_id
              FROM platform_products pp WHERE pp.active = 1 ORDER BY pp.sort, pp.created_at, pp.rowid`
         ).bind(DEFAULT_PHOTOGRAPHER_ID).all();
+        const { results: offered } = await withoutMissingColumn(() => selectOffered(true), () => selectOffered(false));
         const { results: options } = await env.DB.prepare(
           `SELECT po.id, po.platform_product_id, po.label, po.platform_price, po.sort
              FROM platform_product_options po JOIN platform_products pp ON pp.id = po.platform_product_id
@@ -2752,6 +2869,7 @@ export default {
         ).all();
         const products = offered.map(p => ({
           ...p,
+          min_pages: albumOnly(p.kind, p.min_pages),
           has_image: !!p.has_image,
           options: options.filter(o => o.platform_product_id === p.id).map(({ platform_product_id, ...o }) => o),
         })).filter(p => p.options.length);
@@ -2841,7 +2959,7 @@ export default {
         if (!current) return jsonErr('Not found', 404);
         let statements;
         if (current.platform_product_id) {
-          if (['kind', 'name', 'description', 'photo_count'].some(k => hasField(body, k))) return orderBad('platform_managed');
+          if (['kind', 'name', 'description', 'photo_count', 'min_pages'].some(k => hasField(body, k))) return orderBad('platform_managed');
           const fields = productFields(body, true);
           if (fields.bad) return orderBad(fields.bad);
           let opts = null;
@@ -3289,6 +3407,20 @@ export default {
       if (!ctxPick) return jsonErr('Unauthorized', 401);
       const { project, picker, isOwner } = ctxPick;
       const route = pathParts.slice(2).join('/');
+
+      // GET /api/pick/shop — 購買資訊 (docs/guest-shop.md, S1 trimmed): what
+      // this link's guest may buy, owner and viewers alike (information
+      // only). The link first (401 above), then the method (405), then
+      // delivered now (409 not_delivered: picking, undelivered, reopened).
+      // The photographer is the project's, never the request's. Reads only.
+      if (route === 'shop') {
+        if (request.method !== 'GET') return jsonOk({ error: 'Method not allowed' }, 405, { ...SHARED_LINK_HEADERS, Allow: 'GET' });
+        if (pickReadScope(s).mode !== 'delivered') return jsonOk({ error: '尚未交件', code: 'not_delivered' }, 409, SHARED_LINK_HEADERS);
+        const owner = project.photographer_id;
+        const products = typeof owner === 'string' && owner ? await readGuestShop(env, owner) : [];
+        if (!products) return jsonOk(SHOP_UNAVAILABLE, 500, SHARED_LINK_HEADERS);
+        return jsonOk({ products }, 200, SHARED_LINK_HEADERS);
+      }
 
       // GET /api/pick/state — what anyone holding the link may see
       if (request.method === 'GET' && route === 'state') {
