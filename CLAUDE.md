@@ -22,7 +22,8 @@ jobs end to end first; no new big feature outside that list.
   CSV for the retoucher; `js/auth.js` login overlay.
 - `admin.html` project list/detail (delivery block, orders, downloads);
   `upload.html` upload; `book_editor/` album editor (own CSS `book_editor.css`,
-  not `css/styles.css`); `test/run.mjs` the whole browser suite.
+  not `css/styles.css`); `test/run.mjs` the browser-suite runner (suites live in
+  `test/suites/NN-<topic>.mjs`, shared helpers/fakes in `test/lib/`; `test/README.md`).
 
 ## Talking with Tim
 - Reply in Traditional Chinese, short: what's wrong, how to fix it.
@@ -102,9 +103,10 @@ empty scan passes.
 - One agent per file area; agents commit in their own worktree, never push, never
   touch main, never bump `?v=`. The orchestrator merges, resolves conflicts,
   bumps `?v=` once, runs everything, then pushes the `claude/<topic>` branch.
-- `test/run.mjs` is one very large file: agents adding suites in parallel
-  conflict there. Merge them one at a time, and syntax-check
-  (`node --check test/run.mjs`) after resolving.
+- Browser suites live in `test/suites/NN-<topic>.mjs` (`test/run.mjs` is only the
+  runner): a new suite goes in its own new file there, not into an existing one, so
+  parallel agents do not conflict. If two agents did touch the same suite file, merge
+  them one at a time and `node --check` that file after resolving.
 - Reports are not evidence: re-run the suites and read the diff yourself.
 - `.claude/worktrees/` holds the agents' worktrees; keep it out of commits
   (`.git/info/exclude`).
