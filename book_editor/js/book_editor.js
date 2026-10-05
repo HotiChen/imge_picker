@@ -1030,7 +1030,7 @@ class BookEditor {
         }
 
         const src = _thumbUrl(bgImage.photoId, 400);
-        if (preview) preview.innerHTML = `<img src="${src}" style="width:100%;height:100%;object-fit:cover;display:block;">`;
+        if (preview) preview.innerHTML = `<img src="${_escapeHtml(src)}" style="width:100%;height:100%;object-fit:cover;display:block;">`;
         const opPct = Math.round((bgImage.opacity ?? 1) * 100);
         if (slider) slider.value = opPct;
         if (sliderVal) sliderVal.textContent = `${opPct}%`;
@@ -1321,10 +1321,11 @@ class BookEditor {
         } else {
             list.innerHTML = layers.map(t => {
                 const sel = t.id === this.selectedTextLayerId;
-                return `<div class="text-layer-item${sel ? ' selected' : ''}" data-layer-id="${t.id}">
-                    <span class="text-layer-preview">${t.text || '(空白)'}</span>
+                // book data: escaped like the canvas does (audit FE-1)
+                return `<div class="text-layer-item${sel ? ' selected' : ''}" data-layer-id="${_escapeHtml(t.id)}">
+                    <span class="text-layer-preview">${_escapeHtml(t.text || '(空白)')}</span>
                     <span class="text-layer-tag">${t.layer === 'below' ? '照片下↓' : '照片上↑'}</span>
-                    <button class="text-layer-del-btn" data-layer-id="${t.id}" title="刪除">×</button>
+                    <button class="text-layer-del-btn" data-layer-id="${_escapeHtml(t.id)}" title="刪除">×</button>
                 </div>`;
             }).join('');
             list.querySelectorAll('.text-layer-item').forEach(el => {
@@ -1855,8 +1856,10 @@ class BookEditor {
         btn.title = name;
 
         const layout = LAYOUTS[id];
-        const slotPreviews = (layout?.slots || []).map(s =>
-            `<div style="position:absolute;left:${s.x}%;top:${s.y}%;width:${s.w}%;height:${s.h}%;background:rgba(255,255,255,0.15);border-radius:1px;"></div>`
+        // a custom layout can arrive inside a cloud book (_customLayouts), so
+        // its geometry is numbers or nothing
+        const slotPreviews = (Array.isArray(layout?.slots) ? layout.slots : []).map(s =>
+            `<div style="position:absolute;left:${_num(s?.x, 0)}%;top:${_num(s?.y, 0)}%;width:${_num(s?.w, 0)}%;height:${_num(s?.h, 0)}%;background:rgba(255,255,255,0.15);border-radius:1px;"></div>`
         ).join('');
         btn.innerHTML = `<div class="layout-btn-preview">${slotPreviews}</div>`;
         btn.addEventListener('click', () => this.setLayout(id));
@@ -2037,7 +2040,7 @@ class BookEditor {
         const id = this.currentBookId;
         try {
             this._setCloudSyncStatus('saving');
-            await fetch(`${CONFIG.WORKER_URL}/api/books/${id}`, {
+            const r = await fetch(`${CONFIG.WORKER_URL}/api/books/${id}`, {
                 method: 'PUT',
                 headers: {
                     'Content-Type': 'application/json',
@@ -2045,6 +2048,9 @@ class BookEditor {
                 },
                 body: JSON.stringify(this._bookDataForSave())
             });
+            // the Worker refuses a book whose slots could carry markup (400);
+            // that must not read as 已同步
+            if (!r.ok) throw new Error(`HTTP ${r.status}`);
             if (!this.book.cloudId) { this.book.cloudId = id; }
             this._setCloudSyncStatus('saved');
         } catch (e) {

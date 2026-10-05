@@ -168,7 +168,9 @@ test('auto_layout.js loads with no DOM and adds only AutoLayout', () => {
 
 test('layouts.js loads with no DOM; the globals it adds are only declarations', () => {
   assert.deepEqual(layoutsGlobals, [
-    '_coverImgHTML', '_escapeHtml', '_originalUrl', '_renderTextLayerHTML', '_thumbUrl',
+    // _encode*/_num/_oneOf/_safe*: the book-data sanitisers (audit FE-1)
+    '_coverImgHTML', '_encodeKey', '_encodeUrlPart', '_escapeHtml', '_num', '_oneOf', '_originalUrl',
+    '_renderTextLayerHTML', '_safeColor', '_safeFont', '_thumbUrl',
     'appendPageGuides', 'fitCoverImage', 'pageLabel', 'pageZOrder', 'removePageGuides',
     'renderPageHTML', 'renderPageThumbnailHTML',
   ]);

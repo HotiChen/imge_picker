@@ -61,17 +61,68 @@ const LAYOUTS = {
 // send the X-Share-Token header the fetch() calls use, so it travels in the
 // query string here.
 function _thumbUrl(photoId, w = 400) {
-    const base = `${CONFIG.WORKER_URL}/${photoId}?w=${w}`;
+    const base = `${CONFIG.WORKER_URL}/${_encodeKey(photoId)}?w=${_num(w, 400, 0, 10000)}`;
     const t = (typeof CONFIG !== 'undefined' && CONFIG.SHARE_TOKEN) || '';
-    return t ? `${base}&t=${encodeURIComponent(t)}` : base;
+    return t ? `${base}&t=${_encodeUrlPart(t)}` : base;
 }
 
 // The original, no ?w=. Same rule: this ends up in an <img src> and in an
 // <a download href>, and a navigation cannot send a header either.
 function _originalUrl(photoId) {
-    const base = `${CONFIG.WORKER_URL}/${photoId}`;
+    const base = `${CONFIG.WORKER_URL}/${_encodeKey(photoId)}`;
     const t = (typeof CONFIG !== 'undefined' && CONFIG.SHARE_TOKEN) || '';
-    return t ? `${base}?t=${encodeURIComponent(t)}` : base;
+    return t ? `${base}?t=${_encodeUrlPart(t)}` : base;
+}
+
+// ─── Book data is not trusted HTML (audit FE-1) ──────────────────────────────
+// A client's share-link PATCH writes slot photoId / crop, and books saved
+// before the Worker checked them may hold anything. Everything below that
+// reaches an HTML string goes through one of these: keys are percent-encoded,
+// numbers are Number()-coerced and clamped, colours / fonts / keywords are
+// whitelisted, and the rest is escaped.
+
+// One URL component. encodeURIComponent leaves ! ' ( ) * alone; ' and ( )
+// would end the CSS url('…') a repeat background is drawn with.
+function _encodeUrlPart(s) {
+    return encodeURIComponent(String(s ?? ''))
+        .replace(/[!'()*]/g, c => '%' + c.charCodeAt(0).toString(16).toUpperCase());
+}
+
+// An R2 key as a URL path: each segment encoded, the `/`s kept. The Worker
+// decodeURIComponent()s the path, so it gets back exactly this key. A key
+// that cannot be encoded (a lone surrogate) becomes '' rather than throwing
+// and taking the whole page down.
+function _encodeKey(key) {
+    try { return String(key ?? '').split('/').map(_encodeUrlPart).join('/'); }
+    catch (e) { return ''; }
+}
+
+// A finite number within [min, max], or the fallback.
+function _num(v, fallback, min = -1e6, max = 1e6) {
+    if (v === null || v === undefined || v === '' || typeof v === 'boolean') return fallback;
+    const n = Number(v);
+    if (!Number.isFinite(n)) return fallback;
+    return Math.min(max, Math.max(min, n));
+}
+
+// #rgb / #rrggbb(aa), rgb()/hsl() with plain numbers, or a colour name.
+function _safeColor(v, fallback) {
+    const s = String(v ?? '').trim();
+    if (/^#[0-9a-f]{3,8}$/i.test(s)) return s;
+    if (/^(rgb|rgba|hsl|hsla)\(\s*[\d.\s,%/-]+\)$/i.test(s)) return s;
+    if (/^[a-z]{3,30}$/i.test(s)) return s;
+    return fallback;
+}
+
+// A font-family list: letters (any script), digits, spaces, commas, quotes,
+// dots, hyphens. No ; : ( ) { } < > \ — nothing that ends the declaration.
+function _safeFont(v, fallback) {
+    const s = String(v ?? '');
+    return /^[\p{L}\p{N} ,'"._-]{1,200}$/u.test(s) ? s : fallback;
+}
+
+function _oneOf(v, allowed, fallback) {
+    return allowed.includes(v) ? v : fallback;
 }
 
 // Positions a cover-mode photo using exactly the geometry exporter.js draws
@@ -116,8 +167,10 @@ function fitCoverImage(img) {
 function _coverImgHTML(src, crop, scale, rotation, lazy) {
     // The starting style is the old cover behaviour, so a photo still looks
     // right for the moment before it loads, or if onload never arrives.
-    return `<img class="slot-cover-img" src="${src}" draggable="false"
-        data-scale="${scale}" data-cropx="${crop.x || 0}" data-cropy="${crop.y || 0}" data-rot="${rotation}"
+    // Every value is re-checked here: callers pass book data straight through.
+    const c = crop || {};
+    return `<img class="slot-cover-img" src="${_escapeHtml(src)}" draggable="false"
+        data-scale="${_num(scale, 1) || 1}" data-cropx="${_num(c.x, 0)}" data-cropy="${_num(c.y, 0)}" data-rot="${_num(rotation, 0)}"
         onload="fitCoverImage(this)"
         ${lazy ? 'loading="lazy" ' : ''}decoding="async"
         style="position:absolute;left:0;top:0;width:100%;height:100%;object-fit:cover;object-position:50% 50%;display:block;pointer-events:none;">`;
@@ -213,14 +266,17 @@ function _escapeHtml(s) {
 
 // 產生文字層 HTML
 function _renderTextLayerHTML(t, displayW, selectedId, zIndex) {
-    const fontSize = Math.max(8, Math.round(t.size / 100 * displayW));
+    const fontSize = Math.max(8, Math.round(_num(t.size, 5, 0, 1000) / 100 * _num(displayW, 0, 0, 1e5)));
     const fw = t.bold ? '700' : '400';
     const fs = t.italic ? 'italic' : 'normal';
     const isSelected = t.id === selectedId;
     const lines = _escapeHtml(t.text || '').split('\n').join('<br>');
-    return `<div class="page-text-layer${isSelected ? ' text-layer-selected' : ''}" data-text-layer-id="${t.id}"
-        style="position:absolute;left:${t.x}%;top:${t.y}%;width:${t.w}%;transform:translate(-50%,-50%);text-align:${t.align};cursor:move;user-select:none;z-index:${zIndex};pointer-events:auto;">
-        <span style="font-family:${t.font};font-size:${fontSize}px;font-weight:${fw};font-style:${fs};color:${t.color};line-height:1.35;white-space:pre-wrap;display:block;text-shadow:0 1px 4px rgba(0,0,0,0.55);">${lines || '&#8203;'}</span>
+    const font = _escapeHtml(_safeFont(t.font, 'inherit'));
+    const color = _escapeHtml(_safeColor(t.color, 'inherit'));
+    const align = _oneOf(t.align, ['left', 'center', 'right', 'justify'], 'center');
+    return `<div class="page-text-layer${isSelected ? ' text-layer-selected' : ''}" data-text-layer-id="${_escapeHtml(t.id)}"
+        style="position:absolute;left:${_num(t.x, 50)}%;top:${_num(t.y, 50)}%;width:${_num(t.w, 80)}%;transform:translate(-50%,-50%);text-align:${align};cursor:move;user-select:none;z-index:${_num(zIndex, 1)};pointer-events:auto;">
+        <span style="font-family:${font};font-size:${fontSize}px;font-weight:${fw};font-style:${fs};color:${color};line-height:1.35;white-space:pre-wrap;display:block;text-shadow:0 1px 4px rgba(0,0,0,0.55);">${lines || '&#8203;'}</span>
     </div>`;
 }
 
@@ -236,16 +292,20 @@ function _renderTextLayerHTML(t, displayW, selectedId, zIndex) {
  */
 function renderPageHTML(page, displayW, displayH, cropSlotIdx = -1) {
     const layout = LAYOUTS[page.layout] || LAYOUTS['blank'];
-    const bg = page.bg || '#ffffff';
+    const layoutSlots = Array.isArray(layout?.slots) ? layout.slots : [];
+    const bg = _safeColor(page.bg, '#ffffff');
+    displayW = _num(displayW, 0, 0, 1e5);
+    displayH = _num(displayH, 0, 0, 1e5);
 
     // ─── 底圖層 ───────────────────────────────────────────────────
     let bgImageHTML = '';
     if (page.bgImage?.photoId) {
-        const src = _thumbUrl(page.bgImage.photoId, 1600);
-        const fit = page.bgImage.fit || 'cover';
-        const opacity = page.bgImage.opacity ?? 1;
+        // percent-encoded, so it holds no quote or bracket; escaped for the attribute
+        const src = _escapeHtml(_thumbUrl(page.bgImage.photoId, 1600));
+        const fit = _oneOf(page.bgImage.fit, ['cover', 'contain', 'fill', 'none', 'scale-down', 'repeat'], 'cover');
+        const opacity = _num(page.bgImage.opacity, 1, 0, 1);
         if (fit === 'repeat') {
-            const repeatSize = page.bgImage.repeatSize || 10;
+            const repeatSize = _num(page.bgImage.repeatSize, 10, 0, 1000) || 10;
             bgImageHTML = `<div class="page-bgimage" style="position:absolute;inset:0;z-index:0;opacity:${opacity};pointer-events:none;background-image:url('${src}');background-size:${repeatSize}%;background-repeat:repeat;"></div>`;
         } else {
             bgImageHTML = `<div class="page-bgimage" style="position:absolute;inset:0;z-index:0;opacity:${opacity};pointer-events:none;overflow:hidden;"><img src="${src}" draggable="false" style="width:100%;height:100%;object-fit:${fit};display:block;pointer-events:none;"></div>`;
@@ -258,29 +318,32 @@ function renderPageHTML(page, displayW, displayH, cropSlotIdx = -1) {
 
     // ─── 照片格子層 ───────────────────────────────────────────────
     const slotsArray = Array.isArray(page.slots) ? page.slots : [];
-    const slotHTMLByIdx = layout.slots.map((slotDef, idx) => {
+    const slotHTMLByIdx = layoutSlots.map((slotDef, idx) => {
         const slot = slotsArray[idx] || { photoId: null, crop: { x: 0, y: 0, scale: 1 } };
+        const def = slotDef || {};
         const isCropActive = idx === cropSlotIdx;
         const crop = slot.crop || { x: 0, y: 0, scale: 1 };
-        const scale = crop.scale || 1;
-        const cropX = (crop.x || 0) * 100;
-        const cropY = (crop.y || 0) * 100;
-        const rotation = crop.rotation || 0;
-        const slotRotation = slot.override?.rotation ?? 0;
-        const sx = slot.override?.x ?? slotDef.x;
-        const sy = slot.override?.y ?? slotDef.y;
-        const sw = slot.override?.w ?? slotDef.w;
-        const sh = slot.override?.h ?? slotDef.h;
+        const scale = _num(crop.scale, 1) || 1;
+        const cropX = _num(crop.x, 0) * 100;
+        const cropY = _num(crop.y, 0) * 100;
+        const rotation = _num(crop.rotation, 0);
+        const slotRotation = _num(slot.override?.rotation, 0);
+        const sx = _num(slot.override?.x ?? def.x, 0);
+        const sy = _num(slot.override?.y ?? def.y, 0);
+        const sw = _num(slot.override?.w ?? def.w, 100);
+        const sh = _num(slot.override?.h ?? def.h, 100);
 
         let innerHTML = '';
         if (slot.photoId) {
+            // _coverImgHTML escapes it itself; the templates below use srcAttr
             const src = _thumbUrl(slot.photoId, 1600);
+            const srcAttr = _escapeHtml(src);
             const fitMode = slot.fit || 'cover';
             if (fitMode === 'contain') {
                 innerHTML = `
                     <div style="position:absolute;inset:0;overflow:hidden;">
                         <div class="slot-crop-wrapper" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;">
-                            <img src="${src}" draggable="false" style="max-width:100%;max-height:100%;object-fit:contain;display:block;pointer-events:none;">
+                            <img src="${srcAttr}" draggable="false" style="max-width:100%;max-height:100%;object-fit:contain;display:block;pointer-events:none;">
                         </div>
                     </div>
                     <button class="slot-clear-btn" data-slot-idx="${idx}" title="移除照片">×</button>
@@ -288,7 +351,7 @@ function renderPageHTML(page, displayW, displayH, cropSlotIdx = -1) {
             } else if (fitMode === 'fit-width') {
                 innerHTML = `
                     <div class="slot-crop-wrapper" style="position:absolute;inset:0;overflow:hidden;">
-                        <img src="${src}" draggable="false" style="
+                        <img src="${srcAttr}" draggable="false" style="
                             position:absolute;
                             width:${100 * scale}%; height:auto;
                             left:${50 + cropX}%; top:${50 + cropY}%;
@@ -302,7 +365,7 @@ function renderPageHTML(page, displayW, displayH, cropSlotIdx = -1) {
             } else if (fitMode === 'fit-height') {
                 innerHTML = `
                     <div class="slot-crop-wrapper" style="position:absolute;inset:0;overflow:hidden;">
-                        <img src="${src}" draggable="false" style="
+                        <img src="${srcAttr}" draggable="false" style="
                             position:absolute;
                             width:auto; height:${100 * scale}%;
                             left:${50 + cropX}%; top:${50 + cropY}%;
@@ -376,34 +439,34 @@ function renderPageHTML(page, displayW, displayH, cropSlotIdx = -1) {
  */
 function renderPageThumbnailHTML(page) {
     const layout = LAYOUTS[page.layout] || LAYOUTS['blank'];
-    const bg = page.bg || '#ffffff';
+    const layoutSlots = Array.isArray(layout?.slots) ? layout.slots : [];
+    const bg = _safeColor(page.bg, '#ffffff');
 
     // 底圖縮圖
     let bgThumbHTML = '';
     if (page.bgImage?.photoId) {
-        const src = _thumbUrl(page.bgImage.photoId, 400);
-        const fit = page.bgImage.fit || 'cover';
-        const opacity = page.bgImage.opacity ?? 1;
+        const src = _escapeHtml(_thumbUrl(page.bgImage.photoId, 400));
+        const fit = _oneOf(page.bgImage.fit, ['cover', 'contain', 'fill', 'none', 'scale-down'], 'cover');
+        const opacity = _num(page.bgImage.opacity, 1, 0, 1);
         bgThumbHTML = `<div style="position:absolute;inset:0;opacity:${opacity};pointer-events:none;overflow:hidden;z-index:0;"><img src="${src}" loading="lazy" decoding="async" style="width:100%;height:100%;object-fit:${fit};display:block;"></div>`;
     }
 
     const slotsArray = Array.isArray(page.slots) ? page.slots : [];
-    const slotsHTML = layout.slots.map((slotDef, idx) => {
+    const slotsHTML = layoutSlots.map((slotDef, idx) => {
         const slot = slotsArray[idx] || { photoId: null, crop: { x: 0, y: 0, scale: 1 } };
-        const tsx = slot.override?.x ?? slotDef.x;
-        const tsy = slot.override?.y ?? slotDef.y;
-        const tsw = slot.override?.w ?? slotDef.w;
-        const tsh = slot.override?.h ?? slotDef.h;
-        const tsr = slot.override?.rotation ?? 0;
+        const def = slotDef || {};
+        const tsx = _num(slot.override?.x ?? def.x, 0);
+        const tsy = _num(slot.override?.y ?? def.y, 0);
+        const tsw = _num(slot.override?.w ?? def.w, 100);
+        const tsh = _num(slot.override?.h ?? def.h, 100);
+        const tsr = _num(slot.override?.rotation, 0);
         const tsRotStyle = tsr ? `transform:rotate(${tsr}deg);transform-origin:center center;` : '';
         if (!slot.photoId) {
             return `<div style="position:absolute;left:${tsx}%;top:${tsy}%;width:${tsw}%;height:${tsh}%;background:rgba(255,255,255,0.08);box-sizing:border-box;z-index:2;${tsRotStyle}"></div>`;
         }
-        const scale = slot.crop?.scale || 1;
-        const cropX = (slot.crop?.x || 0) * 100;
-        const cropY = (slot.crop?.y || 0) * 100;
+        const scale = _num(slot.crop?.scale, 1) || 1;
         const src = _thumbUrl(slot.photoId, 400);
-        const rotation = slot.crop?.rotation || 0;
+        const rotation = _num(slot.crop?.rotation, 0);
         return `
             <div style="position:absolute;left:${tsx}%;top:${tsy}%;width:${tsw}%;height:${tsh}%;overflow:hidden;box-sizing:border-box;z-index:2;${tsRotStyle}">
                 <div style="position:absolute;inset:0;overflow:hidden;">

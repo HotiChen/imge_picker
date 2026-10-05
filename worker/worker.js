@@ -275,6 +275,78 @@ function folderCovers(folder, path) {
   return path === prefix || path.startsWith(prefix);
 }
 
+// ─── What an album write may store (audit FE-1) ─────────────────────────────
+// A slot's photoId and crop go straight into HTML in book_editor/js/layouts.js
+// — in the photographer's editor (studio token in sessionStorage) and in every
+// viewer of the link. The share-link PATCH lets a CLIENT write both, and the
+// folder gate alone does not help: `20260819/a.jpg" onerror="…` is inside the
+// folder. The renderer escapes too; this keeps such values out of R2.
+//
+// Refused in a key: the characters that end or start markup (`"` `<` `>`),
+// backtick and backslash, every control character (C0, DEL, C1), the line and
+// paragraph separators, the bidi controls and BOM that disguise a name, and a
+// lone surrogate (no UTF-8 key holds one; with the `u` flag a paired emoji is
+// one code point and does not match).
+// Upload keeps the file name as it is (upload.html), so this must not refuse
+// real names: Chinese, spaces, parentheses, `&#%+[]{}` and `'` all pass.
+// `'` deliberately: "Tim's pick.jpg" / "O'Brien.jpg" are ordinary file names,
+// every attribute the renderer writes is double-quoted and escaped, and its
+// URL encoder turns `'` into %27 for the one CSS url('…') it builds.
+// Windows cannot name a file with `" < > \` anyway; a macOS file named with
+// them cannot go into an album (it uploads and shows in the picker as before).
+const BOOK_KEY_MAX = 1024;   // R2's own key limit (bytes; chars is looser)
+const UNSAFE_KEY_CHAR = /["<>`\\\x00-\x1f\x7f-\x9f\u{61c}\u{200e}\u{200f}\u{2028}\u{2029}\u{202a}-\u{202e}\u{2066}-\u{2069}\u{feff}\u{d800}-\u{dfff}]/u;
+function bookPhotoIdSafe(id) {
+  return typeof id === 'string' && id.length <= BOOK_KEY_MAX && !UNSAFE_KEY_CHAR.test(id);
+}
+
+// The fields the editor writes (book_editor.js: pan x/y as fractions of the
+// slot, unclamped; zoom 1–4; rotation in degrees, which repeated ±90 steps
+// let grow). The ranges are far past anything the UI produces and only stop
+// absurd values; anything else is refused, unknown keys included.
+const CROP_RANGE = { x: [-1000, 1000], y: [-1000, 1000], scale: [0, 1000], rotation: [-1e6, 1e6] };
+// allowNull: an old saved book can hold a null (a NaN through JSON.stringify);
+// the renderer reads it as the default. Only the photographer's PUT allows it.
+function bookCropValid(crop, { allowNull = false } = {}) {
+  if (crop === null || typeof crop !== 'object' || Array.isArray(crop)) return false;
+  for (const [k, v] of Object.entries(crop)) {
+    if (!Object.hasOwn(CROP_RANGE, k)) return false;
+    if (v === null && allowNull) continue;
+    const [lo, hi] = CROP_RANGE[k];
+    if (typeof v !== 'number' || !Number.isFinite(v) || v < lo || v > hi) return false;
+  }
+  return true;
+}
+
+// The photographer's whole-book PUT: the same two rules on every slot and
+// background, lenient where the editor's own saved books differ (null
+// slots, null crop, null crop fields). Returns an error code or null.
+function bookContentProblem(book) {
+  if (book === null || typeof book !== 'object' || Array.isArray(book)) return 'invalid_book';
+  if (book.pages === undefined) return null;
+  if (!Array.isArray(book.pages)) return 'invalid_book';
+  const photoOk = id => !id || bookPhotoIdSafe(id);
+  for (const page of book.pages) {
+    if (!page || typeof page !== 'object') continue;
+    if (page.bgImage && !photoOk(page.bgImage.photoId)) return 'invalid_photo_id';
+    if (page.slots === undefined || page.slots === null) continue;
+    if (!Array.isArray(page.slots)) return 'invalid_book';
+    for (const slot of page.slots) {
+      if (!slot || typeof slot !== 'object') continue;
+      if (!photoOk(slot.photoId)) return 'invalid_photo_id';
+      if (slot.crop !== undefined && slot.crop !== null && !bookCropValid(slot.crop, { allowNull: true })) return 'invalid_crop';
+    }
+  }
+  return null;
+}
+
+const BOOK_CONTENT_ERRORS = {
+  invalid_book: '相本資料格式不正確',
+  invalid_photo_id: '照片路徑含有不允許的字元',
+  invalid_crop: '裁切資料格式不正確',
+};
+const bookContentRefusal = code => jsonOk({ error: BOOK_CONTENT_ERRORS[code], code }, 400);
+
 function shareCovers(share, path) {
   if (!path) return false;
   const segments = path.split('/');
@@ -3830,7 +3902,14 @@ export default {
 
       if (request.method === 'PUT' && !pathParts[3]) {
         if (!isAdminToken(request, env)) return jsonErr('Unauthorized', 401);
-        await env.imagepicker.put(`_books/${bookId}.json`, await request.text(), {
+        // stored as sent (byte for byte), but only once it is a book whose
+        // slots cannot carry markup into the editor and the viewer
+        const text = await request.text();
+        let book;
+        try { book = JSON.parse(text); } catch { return bookContentRefusal('invalid_book'); }
+        const problem = bookContentProblem(book);
+        if (problem) return bookContentRefusal(problem);
+        await env.imagepicker.put(`_books/${bookId}.json`, text, {
           httpMetadata: { contentType: 'application/json' }
         });
         return jsonOk({ ok: true, id: bookId });
@@ -3857,6 +3936,9 @@ export default {
         if (Array.isArray(slots)) {
           for (const slot of slots) {
             if (!slot) continue;
+            // checked before the photoId, whose branches `continue` on an
+            // empty one — a crop rides along with a cleared slot too
+            if (slot.crop !== undefined && !bookCropValid(slot.crop)) return bookContentRefusal('invalid_crop');
             // folderCovers calls startsWith on this and shareCovers splits it,
             // so a number or an array leaves the runtime to turn a TypeError
             // into a 1101. A falsy one still means "clear the slot".
@@ -3865,6 +3947,9 @@ export default {
               continue;
             }
             if (!slot.photoId) continue;
+            // inside the folder is not enough: the rest of the key is rendered
+            // into an attribute (FE-1)
+            if (!bookPhotoIdSafe(slot.photoId)) return bookContentRefusal('invalid_photo_id');
             // the book's own policy, which applies to the photographer too
             if (clientFolders.length > 0 && !clientFolders.some(f => folderCovers(f, slot.photoId))) {
               return jsonErr('照片不在開放資料夾內', 403);
