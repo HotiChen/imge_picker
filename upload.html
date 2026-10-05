@@ -445,6 +445,7 @@ details[open] > .tree-dir-summary .tree-chevron { transform: rotate(90deg); }
 <script src="js/build-version.js?v=20261005b"></script>
 <script src="js/config.js?v=20261005b"></script>
 <script src="js/auth.js?v=20261005b"></script>
+<script src="js/util.js?v=20261005b"></script>
 <script>
 const CONCURRENCY = 4;
 const IMAGE_EXTS = /\.(jpe?g|png|webp|heic|heif|tiff?|gif|avif|bmp)$/i;
@@ -465,9 +466,6 @@ let folderLocked = false;
 const $ = id => document.getElementById(id);
 
 // ── Helpers ──
-function escHtml(s) {
-    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-}
 function fmtSize(bytes) {
     if (bytes < 1024) return bytes + ' B';
     if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(0) + ' KB';

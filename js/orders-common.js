@@ -61,11 +61,8 @@
     unsupported_type: '不支援的檔案格式，僅限 PNG / JPEG / WebP',
   };
 
-  function esc(s) {
-    return String(s == null ? '' : s).replace(/[&<>"']/g, c => (
-      { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
-    ));
-  }
+  // The one shared escaper (js/util.js, loaded before this file).
+  const esc = window.escHtml;
 
   // NT$1,234 — money is an integer, tax included.
   function money(n) {

@@ -385,8 +385,4 @@
     input.addEventListener('keydown', e => { if (e.key === 'Enter') tryLogin(); });
     setTimeout(() => input.focus(), 50);
   }
-
-  function escHtml(str) {
-    return String(str || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-  }
 })();
