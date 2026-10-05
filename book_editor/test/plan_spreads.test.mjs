@@ -180,7 +180,7 @@ test('edges: all portrait, all landscape, all square, all identical, panoramas, 
     check(planCover(items), items, name);
   }
   const same = ids(6).map(id => item(id, { hash: '0123456789abcdef' }));
-  const p = planCover(same);
+  const p = planCover(same, { dedupe: 'drop' });   // 'drop' = the legacy near-duplicate drop (the planSpreads default is now 'separate')
   assert.ok(p.cover, 'the survivor is the cover');
   assert.equal(p.dropped.filter(d => d.reason === 'duplicate').length, 5, 'six identical shots inside one window collapse to one');
   assert.deepEqual(p.spreads, []);
@@ -390,7 +390,7 @@ test('speed: 240 photos plan in under 2 seconds', () => {
 test('dedupe: near-identical neighbours collapse to the sharper one and say so', () => {
   const items = randomItems(15, 12);
   items[4] = item(items[4].id, { aspect: items[3].aspect, hash: items[3].hash, sharp: items[3].sharpness + 30 });
-  const p = planCover(items);
+  const p = planCover(items, { dedupe: 'drop' });   // the legacy drop; the planSpreads default is 'separate' (plan_spreads_separate.test.mjs)
   const d = p.dropped.find(x => x.reason === 'duplicate');
   assert.ok(d, 'one is dropped');
   assert.equal(d.id, items[3].id); assert.equal(d.of, items[4].id);
