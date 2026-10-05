@@ -67,11 +67,8 @@
     max_pages_unavailable: '最多頁數還不能存：D1 migration（2026-10-06-product-max-pages.sql）尚未執行',
   };
 
-  function esc(s) {
-    return String(s == null ? '' : s).replace(/[&<>"']/g, c => (
-      { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
-    ));
-  }
+  // The one shared escaper (js/util.js, loaded before this file).
+  const esc = window.escHtml;
 
   // NT$1,234 — money is an integer, tax included.
   function money(n) {

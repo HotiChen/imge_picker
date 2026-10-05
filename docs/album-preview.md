@@ -54,11 +54,15 @@ AutoLayout.plan(items /* analyze() output */, { style = 'auto', layouts, pages, 
        dropped: [{ id, reason: 'duplicate', of } | { id, reason: 'failed' }] }
 
 AutoLayout.planSpreads(items, { fit = 'contain', templates, coverAspect = 210/297, spreadAspect = 420/297, hashThreshold = 6, window = 5,
-                                maxPerFace = 4, seed = 0, order = 'natural', back = false })
+                                maxPerFace = 4, seed = 0, order = 'natural', back = false,
+                                dedupe = 'separate', similarThreshold = 12, similarWindow = 7,   // near-duplicates, see below
+                                minSpreads, maxSpreads })                                        // spread-count bounds, see below
   -> { cover: { photoId, crop, fit? } | null,
        spreads: [{ id: 'spread-n', template: <template id>, slots: [{ photoId, fit?, crop: {x, y, scale: 1}, slot: {x, y, w, h, face} }] }],
        back: null | {},                       // {} = a blank closing page (only with back: true and a book to close)
-       dropped: [ same as plan ] }            // see "A4 album: spreads and the template library"
+       dropped: [ same as plan ],             // see "A4 album: spreads and the template library"
+       similarPairs?, similarSpreads?,        // only when look-alikes exist: see "Near-duplicates"
+       minSpreads?, maxSpreads? }             // only when asked for: see "Spread-count bounds"
 
 AutoLayout.run(photos, style)   // the editor's five old styles; same output as before
 AutoLayout.DEFAULTS             // the numbers below
@@ -256,8 +260,9 @@ with the real `fitCoverImage` crops).
 ### `planSpreads`: rules, defaults, trade-offs
 
 Same first steps as `plan`: natural order of the ids (`order: 'given'` keeps the
-caller's), the same dedupe (dHash, `hashThreshold` 6, `window` 5, the sharpest of
-a group survives, `dropped` has the same shape), the same cover pick (now against
+caller's), the same dedupe **only with `dedupe: 'drop'`** (dHash, `hashThreshold` 6, `window` 5, the sharpest of
+a group survives, `dropped` has the same shape; the default is now `'separate'`: nothing is dropped for being
+similar, see "Near-duplicates, minimum and maximum spreads"), the same cover pick (now against
 `coverAspect` 0.7071, so a portrait wins) and the same focus crop (`crop` is
 computed for the slot's own shape, covers the slot with no gap, `scale` stays 1).
 Pure and deterministic (no `Math.random`, clock or DOM), never mutates `items`.
@@ -301,6 +306,117 @@ Pure and deterministic (no `Math.random`, clock or DOM), never mutates `items`.
   says to load `spread_templates.js`). A template with a broken slot is skipped.
 - `back: true` returns `back: {}` (a blank closing page) when there is a book to
   close; the default is `null`. Nothing puts a photo on the back yet.
+
+## Near-duplicates, minimum and maximum spreads (`planSpreads`)
+
+Decisions by Tim (owner): near-identical shots are **not dropped any more, but kept apart** (the real case: four
+same-pose studio frames of one couple on one spread), and the product (相本書) sets a **minimum** and a **maximum** of
+inside spreads. The unit of both bounds is the **spread inside the book**: the cover and the back are not counted.
+All of it is in `planSpreads` only (`plan` and `run` do not call it and are untouched).
+
+### Near-duplicates: `dedupe`
+
+| option | default | meaning |
+|---|---|---|
+| `dedupe` | `'separate'` | `'separate'`: only failed photos and the same id twice leave `dropped`; look-alikes are kept and kept off the same spread. `'drop'`: the old behaviour (near-duplicates go to `dropped`, `hashThreshold` / `window`), no separation. Anything else means `'separate'`. |
+| `similarThreshold` | 12 | two photos are look-alikes when their dHashes differ in at most this many of 64 bits |
+| `similarWindow` | 7 | ...and are at most this many places apart in shooting order (inclusive; 7 because a spread holds 8 at most) |
+
+A photo without a hash (`''`: the canvas read failed) is never similar to anything.
+
+**How the planner separates.** (1) Look-alike pairs are found. (2) The planner tries the shooting order and, if look-alikes
+sit close together, up to four mild reorders (`AutoLayout.util.similarEdges`, `spreadOutOrder`): look-alikes at least
+3 / 4 / 5 / 6 places apart, nobody moved more than 6 / 8 / 10 / 12 places from their shooting-order place (on top of the
+usual seating inside a spread), deterministic, so the overall order stays chronological and **no photo is ever dropped**.
+(3) On each order the spread DP forbids a group that holds two look-alikes. This is a hard rule, but the softest one: it is
+relaxed before any other rule or waste floor, and only if no order can satisfy it at that rule set; the first order that
+works (the mildest reorder) wins. (4) If none can, a soft pass charges 3 per look-alike pair sharing a spread and takes the
+order that leaves the fewest. When it is unavoidable (six look-alikes, one spread; 2 or 3 photos in all) the pair is allowed.
+A bound (`maxSpreads` / `minSpreads`) outranks the separation: a plan inside the bounds with look-alikes together beats one
+outside them without.
+
+**Result.** `similarPairs` (number of look-alike pairs still on one spread) and `similarSpreads` (their spread ids,
+`['spread-3', ...]`) are present **only when the book has at least one look-alike pair**; absent means none, so a book
+without look-alikes returns exactly the old object (the cover golden hash is unchanged). `similarPairs: 0` means they
+were all separated.
+
+**The threshold 12, and why.** Chosen on synthetic hash sets, **not real photos** (none were available). Model: the chance
+that one hash bit differs between two photos is q, so the distance is Binomial(64, q); share of pairs at or under T:
+
+| pair type | T=6 | 8 | 10 | **12** | 14 | 16 |
+|---|---|---|---|---|---|---|
+| same pose, 5% of bits flip | 96% | 99.6% | 100% | 100% | 100% | 100% |
+| same pose, 10% flip | 54% | 81% | 95% | **99%** | 99.9% | 100% |
+| same pose, 15% flip | 14% | 36% | 64% | **85%** | 95% | 99% |
+| same pose, 20% flip | 1.8% | 8% | 24% | **48%** | 71% | 88% |
+| same set, other pose, q = .30 | 0 | 0.1% | 0.6% | **3%** | 9.7% | 23% |
+| same set, other pose, q = .35 | 0 | 0 | 0 | **0.3%** | 1.7% | 5.8% |
+| unrelated, q = .50 | 0 | 0 | 0 | **~0** | ~0 | 0.004% |
+
+The old drop threshold 6 catches only about half of a 10%-flip same-pose pair, which is why looser is needed. 12 catches
+99% of those, 85% of a noisier 15% pair, and a very similar *different* pose of the same set (q .30) only 3% of the time.
+A false positive is cheap now (a little reordering, about 1.4 more spreads per 60 photos), a miss is what Tim reported, so
+the threshold errs loose; 14 is the next step if real bursts still meet. **Limits:** real dHash bits are correlated (a white
+backdrop, the same dress), so real "different pose" pairs are probably closer than the q = .30 row, and a studio set could
+make many photos "similar"; then the planner just reorders more and some pairs stay together (reported in `similarPairs`).
+Tim must look at real photos. Measured on synthetic books of 40 to 100 photos with clusters of 2 to 5 frames: 0 pairs left
+in 160 of 160 books (347 and 714 pairs together in the 30-book samples without it), 1.4 to 2.3 more spreads, mean waste
+unchanged (0.100 vs 0.099); clusters of 8 or more in a row cannot always be split (4 of 40 books kept a pair). Cost: with
+look-alikes the planner solves up to five orders (about 0.3 s for 240 photos); without them nothing changes.
+
+### Spread-count bounds: `minSpreads`, `maxSpreads`
+
+Both are integers >= 1 (a fraction is rounded down; anything else, `0`, a negative, `NaN`, a string, means "not given" and
+the result has no key for it). Neither ever crops (`fit` stays what was asked: `'contain'` by default, every slot
+`fit: 'contain'`, crop `{0,0,1}`), neither ever drops a photo, neither throws, and the hard rules stay (hero gap: at most
+1 hero in any 5 spreads; <= 4 photos per face; <= 8 per spread; template validity).
+
+```
+result.minSpreads = { wanted, achieved, met, photosNeeded }       // only when opts.minSpreads was given
+result.maxSpreads = { wanted, achieved, met, photosAllowed }      // only when opts.maxSpreads was given
+```
+`achieved` = `spreads.length`. `met` = `achieved >= wanted` (min) / `achieved <= wanted` (max). When the plan is already inside
+the bound nothing else changes: the result is exactly the one without the option plus the report (40 photos with
+`minSpreads: 10` is byte for byte the plan without it, tested).
+
+**minSpreads.** The planner uses fewer photos on each spread, then single-photo spreads, then through-spreads (heroes).
+Rule order when the minimum needs it: (1) the strict rules with a spread-count constraint (the DP has a count dimension);
+(2) a lone photo on a quiet single page (`solo-left` / `solo-right`) is allowed; (3) the same-family run rule goes; (4) the
+last-spread-is-not-a-lone-photo rule goes; (5) the adjacent-same-template rule goes. **The hero gap never goes.** Inside each
+step the waste floor still relaxes 45% -> 60% -> none before the next rule goes, so **the minimum is met with emptier spreads
+(more paper around the photos) rather than failed**: single-photo spreads have up to about 60% waste, never a crop. If even
+that cannot reach it (too few photos), the plan with the most spreads reachable is returned with `met: false`.
+`photosNeeded` = the smallest photo count for which the planner CAN reach `wanted`, found by planning synthetic photos with the
+same aspect (and sharpness) mix as the real ones (evenly resampled, no hashes), galloping up from `wanted` (+1, +2, +4 ...) and
+binary-searching the last gap; `null` if `wanted > 60` or nothing up to 8 * wanted + 16 photos reaches it (a template list
+with no single-photo spread). It assumes more photos never hurt (pinned on uniform books). **It is the bare minimum, not a
+comfortable count**: with the full library `photosNeeded` equals `wanted` (one photo on each spread); 14 photos make 10 spreads
+with mean waste about 0.12 and a worst slot about 0.3, while 10 to 12 photos reach 60% waste on single pages. A UI that wants a
+nicer album should ask for more than `photosNeeded`.
+
+**maxSpreads.** The planner packs more photos on each spread (templates with up to 8 photos, <= 4 per face): the DP has an
+exact spread-count dimension that forbids exceeding it and prunes states that cannot seat the photos left in the spreads left.
+Rules that go, in order: the family-run rule, then the adjacent-template rule (dense templates are few); the hero gap,
+lone-photo and last-spread rules stay. If it cannot be met even so, `met: false` and the **densest** plan the rules allow is
+returned (a very high price per spread; ceil(photos / 8) spreads with the full library), **all photos kept**: the UI is
+expected to tell the guest to deselect. `photosAllowed` = the largest photo count that fits in `wanted` spreads, in closed
+form: `k * wanted`, k = slots of the biggest non-hero template (8 in the library; tested against real planning: `8 * N` photos
+fit N spreads, `8 * N + 1` do not; for a template list without every size 2..k it is only an upper bound); `null` if
+`wanted > 60`. A capacity under 4 photos is probed by planning (the cover is not repeated inside below 4 photos).
+
+**Both.** `minSpreads <= maxSpreads`: the plan lands inside the window when it can; each bound reports its own `met`.
+**`minSpreads > maxSpreads` is a caller error:** no throw; the **minimum is ignored** (the maximum is the hard limit; the plan
+is the one `maxSpreads` alone gives), both reports carry `met: false`, `error: 'minSpreads-greater-than-maxSpreads'`,
+`ignored: 'minSpreads'`, and `photosNeeded` / `photosAllowed` are `null`.
+
+**Not verified:** all of it ran on synthetic photos only. How a book of single pages looks, and whether 8-photo spreads are
+readable on a phone, is for Tim to see (the 45% floor is relaxed there). The browser preview is not wired to these options yet
+(`AlbumPreview.PLAN_OPTS` passes any of `{ minSpreads, maxSpreads, dedupe, similarThreshold, similarWindow }` straight through).
+The viewer's note 「已略過 N 張相近的照片」 reads `dropped`, which is now empty by default.
+
+**Tests.** `book_editor/test/plan_spreads_separate.test.mjs`, `plan_spreads_minspreads.test.mjs`,
+`plan_spreads_maxspreads.test.mjs` (`plan_spreads.test.mjs` runs its two duplicate-drop assertions with `dedupe: 'drop'`;
+the 6-book cover golden is unchanged).
 
 ## Whole photos: fit `contain` (the default) and how to switch back to `cover`
 
@@ -394,7 +510,8 @@ at DPR 3 on a 40 px slot); real photographs (the suites use synthetic shapes and
 ## Needs real photos to confirm
 
 - Is `hashThreshold` 6 / `window` 5 right for real bursts and for wedding
-  sets with many similar-looking shots (white dress, same wall)?
+  sets with many similar-looking shots (white dress, same wall)? And the album path's `similarThreshold` 12 /
+  `similarWindow` 7 (chosen on synthetic hash sets only, see "Near-duplicates")?
 - Do the focus crops look natural, or is a gradient centroid too naive on
   portraits (a centred face with a busy background pulls the crop)?
 - Safari / LINE in-app browser: the `crossOrigin` image + canvas read, and

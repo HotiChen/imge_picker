@@ -17,12 +17,6 @@
     { key: 'settings', label: '設定', href: 'settings.html' },
   ];
 
-  function escHtml(s) {
-    return String(s == null ? '' : s).replace(/[&<>"']/g, c => (
-      { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
-    ));
-  }
-
   // activeKey: which ITEMS.key is "current page" (gets .active). onLogout:
   // called when the 登出 item is clicked — the page decides what that means.
   function render(container, activeKey, onLogout) {
