@@ -372,7 +372,20 @@ CREATE TABLE IF NOT EXISTS platform_products (
   image_type       TEXT,
   image_updated_at TEXT,
   created_at       TEXT NOT NULL,
-  updated_at       TEXT NOT NULL
+  updated_at       TEXT NOT NULL,
+  -- album: the fewest inside spreads (1 spread = 1 P; cover and back not
+  -- counted), 1–200; NULL = no minimum, and always NULL on a print. Shown to
+  -- photographers and guests. Added to a deployed database by
+  --   ALTER TABLE platform_products ADD COLUMN min_pages INTEGER;
+  -- (worker/migrations/2026-10-06-product-min-pages.sql).
+  min_pages        INTEGER,
+  -- album: the most inside spreads, same unit, 1–200, and >= min_pages when
+  -- both are set; NULL = no maximum, always NULL on a print. An album order
+  -- outside [min_pages, max_pages] is refused (S3, docs/guest-shop.md). Added
+  -- to a deployed database by
+  --   ALTER TABLE platform_products ADD COLUMN max_pages INTEGER;
+  -- (worker/migrations/2026-10-06-product-max-pages.sql, after the one above).
+  max_pages        INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_platform_products_sort ON platform_products(active, sort);
 

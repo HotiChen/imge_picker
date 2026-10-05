@@ -408,3 +408,90 @@ Worker packages are serial (one file). Bump `?v=` on every frontend change.
 
 Guest-shop stages are unchanged; S1 (info + promo) can start once the project
 defaults exist, because the promo settings live there.
+
+## S1 trimmed — built (Worker, 2026-10-05)
+
+Tim cut S1 down to the read: **no promo, no countdown, no `ship_enabled`, no
+`shop_enabled`** (none of those columns exist yet; the S1 migration above is
+not needed for this). What the Worker serves:
+
+`GET /api/pick/shop` — pick link only (`?t=` or `X-Share-Token`, through
+`resolvePick`), owner and viewers alike (information only). Order of checks:
+
+| Case | Answer |
+|---|---|
+| no / unknown / revoked / expired link, archived project, any non-pick token (client, studio, session, admin, operator), a picker key alone | 401 `{error}` |
+| any method but GET | 405 `{error}`, `Allow: GET` |
+| not delivered now (`pickReadScope(share).mode !== 'delivered'`: picking, retouching before delivery, undelivered, reopened) | 409 `{error: '尚未交件', code: 'not_delivered'}` |
+| catalogue tables missing (migration not run) | 500 `{error, code: 'shop_unavailable'}` |
+| delivered | 200 `{products: [...]}` (may be `[]`) |
+
+All answers but the 401 carry `Cache-Control: private, no-store` and
+`Vary: X-Share-Token`. The route writes nothing (not even the link's
+last-seen stamp).
+
+```
+{ "products": [ {
+    "id": "<products.id>",            // the photographer's product
+    "kind": "print" | "album",
+    "name": "相本書",                  // plain text, ≤ 60 — render as text
+    "description": "精裝 20×20",       // plain text, ≤ 500, '' when none
+    "photo_count": 20 | null,         // album only, advisory
+    "min_pages": 10 | null,           // album only: fewest inside spreads (1 spread = 1 P, cover/back not counted)
+    "max_pages": 30 | null,           // album only: most inside spreads, same unit, >= min_pages
+    "image_url": "/api/platform/products/<id>/image?v=<stamp>" | null,  // relative to the Worker origin, public
+    "options": [ { "id": "<product_options.id>", "label": "20×20", "price": 5000 } ]  // label '' when single
+} ] }
+```
+
+- **Which products:** the products of the photographer who owns the link's
+  project (`projects.photographer_id`, never anything from the request),
+  adopted from the platform (custom products and services never appear),
+  `guest_visible = 1`, product and platform product active, kind print/album.
+- **Which options:** active, its platform option active and belonging to the
+  same platform product, and `price ≥` today's `platform_price` — exactly what
+  an order would accept (`orderLines` refuses a price under the floor with
+  `below_platform_price`, so such an option is hidden until the photographer
+  reprices it). A product with no such option is left out.
+- **price** = the photographer's option price = the `unit_price` an order on
+  that option is created with. Never `cost`, `platform_price`, `vendor_cost`,
+  `platform_option_id`, `guest_visible`, `photographer_id`; the platform
+  product id appears only inside `image_url`.
+- **Sorted** by the photographer's `sort` (then created), options in their
+  set order. **Capped** at 50 products (sellable ones, by sort) × 20 options.
+- Before the `min_pages` / `max_pages` migrations everything works with that
+  field `null` (each column on its own).
+
+## Album page range — where the refusal lives (S3, not built yet)
+
+Tim (2026-10-05): an album outside its platform product's page range is
+**refused**, never charged per extra spread. The range is
+`platform_products.min_pages` / `max_pages` (`docs/products-orders.md`),
+inside spreads, both nullable.
+
+Nothing refuses anything today, on purpose: admin orders carry no layout and
+guest ordering (S2/S3) does not exist, so there is no page count to judge. Do
+not add a check to the admin order routes.
+
+When S3 builds `POST /api/pick/orders` with an album `layout`:
+
+- For each album line in `mode: 'auto'`, spreads = `layout.pages.length`
+  (one layout page = one spread = 1 P; cover and back are not layout pages).
+- Read the line's platform product live (`pp.kind`, `pp.min_pages`,
+  `pp.max_pages`) the way every read here does:
+  `withPageColumns(env, cols => …${pageSelect(cols)}…)` — one query on a
+  migrated database, a probe only after a missing-column failure, and a
+  missing column reads as no bound, never an error. Then call
+  `albumPagesProblem(spreads, product)` (`worker.js`, pure, unit-tested in
+  `worker/test/product-max-pages.test.mjs`). It returns `null` (fits, or not
+  an album), `'pages_below_min'`, `'pages_above_max'` or `'invalid_layout'`
+  (spreads not a whole number ≥ 0). Any non-null → 400 `{error, code}` with
+  that code, nothing written — together with the other S3 layout checks,
+  before the order insert.
+- `mode: 'photographer'` (請攝影師排版, `pages: []`) has no page count: skip
+  the check; the photographer lays it out within the range.
+- The guest page uses `min_pages` / `max_pages` from `GET /api/pick/shop` to
+  guide the layout, but the Worker's check is the only one that counts.
+- New error codes for the S2 list: `pages_below_min`, `pages_above_max`.
+- The test `albumPagesProblem is not wired to any route yet` fails once the
+  helper is called; update it then.
