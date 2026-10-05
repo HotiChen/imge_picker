@@ -100,11 +100,13 @@ function planCards(plan, items) {
   const num = id => items.findIndex(p => p.id === id) + 1;
   const slotHtml = (s, kind) => {
     const p = byId.get(s.photoId), sd = s.slot;
+    // fit: 'contain' (the default): the whole photo, centred (the viewer's drawing); no fit key = cover, drawn with fitCoverImage
+    if (s.fit === 'contain') return `<div class="slot" style="left:${sd.x * 100}%;top:${sd.y * 100}%;width:${sd.w * 100}%;height:${sd.h * 100}%"><div class="crop"><img data-keep="1" style="inset:0;width:100%;height:100%;object-fit:contain;box-shadow:0 0 0 1px rgba(0,0,0,.14)" src="${photoSvg(p, num(s.photoId))}"></div></div>`;
     return `<div class="slot" style="left:${sd.x * 100}%;top:${sd.y * 100}%;width:${sd.w * 100}%;height:${sd.h * 100}%"><div class="crop"><img data-scale="${s.crop.scale}" data-cropx="${s.crop.x}" data-cropy="${s.crop.y}" data-rot="0" src="${photoSvg(p, num(s.photoId))}" onload="fitCoverImage(this)"></div></div>`;
   };
   const cards = [];
   if (plan.cover) {
-    const one = { photoId: plan.cover.photoId, crop: plan.cover.crop, slot: { x: 0, y: 0, w: 1, h: 1 } };
+    const one = { photoId: plan.cover.photoId, crop: plan.cover.crop, fit: plan.cover.fit, slot: { x: 0, y: 0, w: 1, h: 1 } };
     cards.push(`<div class="card"><div class="cap"><span><b>封面</b> #${num(plan.cover.photoId)}</span><span>A4 單頁 210×297</span></div><div class="cover">${slotHtml(one)}</div></div>`);
   }
   plan.spreads.forEach((sp, i) => {
@@ -124,7 +126,7 @@ const shoot = async (name, html, width = 1800) => {
   await page.setContent(html, { waitUntil: 'load' });
   await page.addScriptTag({ content: layoutsSrc });
   await page.evaluate(() => Promise.all([...document.images].map(i => (i.complete ? 0 : new Promise(r => { i.onload = i.onerror = r; })))));
-  await page.evaluate(() => document.querySelectorAll('img').forEach(i => typeof fitCoverImage === 'function' && fitCoverImage(i)));
+  await page.evaluate(() => document.querySelectorAll('img').forEach(i => !i.dataset.keep && typeof fitCoverImage === 'function' && fitCoverImage(i)));
   await page.screenshot({ path: path.join(outDir, name), fullPage: true });
   console.log('wrote', path.join(outDir, name));
 };

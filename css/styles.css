@@ -2586,6 +2586,14 @@ html.album-open, html.album-open body { overflow: hidden; }
   position: absolute; left: 0; top: 0; width: 100%; height: 100%; max-width: none;
   object-fit: cover; display: block; pointer-events: none; user-select: none; -webkit-user-drag: none;
 }
+/* fit: 'contain' (the default): the whole photo, centred on the white paper, never cropped. js/album-preview.js sets the
+   <img> box in px (AutoLayout.util.containBox); object-fit: contain is the fallback until it loads. The frame shows the
+   paper (no ground colour) and does not clip, so the hairline and the soft lift around the photo are not cut off;
+   they keep a white sky from melting into the white paper. */
+.album-page { --album-photo-edge: rgba(0,0,0,.14); --album-photo-lift: rgba(0,0,0,.16); }
+.album-slot[data-fit="contain"] { overflow: visible; background: transparent; }
+.album-slot[data-fit="contain"] .album-slot-crop { overflow: visible; }
+.album-img[data-fit="contain"] { object-fit: contain; box-shadow: 0 0 0 1px var(--album-photo-edge), 0 2px 6px var(--album-photo-lift); }
 
 .album-panel {
   position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;

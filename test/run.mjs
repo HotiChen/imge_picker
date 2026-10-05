@@ -16016,7 +16016,7 @@ function albumWorld(o = {}) {
   const log = [];                                // every request the page sent to the Worker
   const assets = [];                             // every request the page sent to the static host
   const ctl = { failImages: false, failList: 0, hold: null, waiting: [], imageHits: 0, corsHits: 0 };
-  const svgFor = key => { const i = idx.get(key); const src = dup[i] ?? i; return albSvg(src, ALB_SHAPES[src % ALB_SHAPES.length]); };
+  const svgFor = key => { const i = idx.get(key); const src = dup[i] ?? i; const shapes = o.shapes || ALB_SHAPES; return albSvg(src, shapes[src % shapes.length]); };
   const answer = async (route, key) => {
     try {
       await route.fulfill({ status: 200, contentType: 'image/svg+xml', body: svgFor(key),
@@ -16235,14 +16235,17 @@ for (const [name, opts] of [
         const bar = v.querySelector('.album-viewer-bar').getBoundingClientRect(), foot = v.querySelector('.album-viewer-foot').getBoundingClientRect();
         const im = cur.querySelector('img'), sl = im.parentElement.getBoundingClientRect(), ir = im.getBoundingClientRect();
         return { w: r.width, h: r.height, l: r.left, t: r.top, barB: bar.bottom, footT: foot.top, iw: innerWidth, ih: innerHeight,
-          covers: ir.left <= sl.left + 1 && ir.right >= sl.right - 1 && ir.top <= sl.top + 1 && ir.bottom >= sl.bottom - 1,
+          // REWRITTEN for fit: 'contain' (the default): the photo sits WHOLE inside its frame and touches it on one side
+          // (it used to fill the frame, cropped); the whole-photo geometry is measured properly in the "album preview contain" suites
+          covers: ir.left >= sl.left - 1 && ir.right <= sl.right + 1 && ir.top >= sl.top - 1 && ir.bottom <= sl.bottom + 1
+            && (Math.abs(ir.width - sl.width) <= 1 || Math.abs(ir.height - sl.height) <= 1),
           loaded: im.complete && im.naturalWidth > 0, dec: im.decoding, bg: getComputedStyle(v).backgroundColor, color: getComputedStyle(v).color,
           dpr: devicePixelRatio, w: r.width, src: im.src };
       });
       ok('the cover is one A4 portrait page (210 x 297, 0.7071)', Math.abs(shown.w / shown.h - 210 / 297) < 0.01 && shown.h > 500, `${shown.w}x${shown.h}`);
       ok('and it sits in the middle of the window (single page, centred)', Math.abs((shown.l + shown.w / 2) - shown.iw / 2) < 2, JSON.stringify(shown));
       ok('it sits between the bar and the footer, inside the window', shown.t >= shown.barB - 0.5 && shown.t + shown.h <= shown.footT + 0.5 && shown.l >= 0 && shown.l + shown.w <= shown.iw, JSON.stringify(shown));
-      ok('the cover photo is loaded and fills its frame (no gap)', shown.loaded && shown.covers && shown.dec === 'async', JSON.stringify(shown));
+      ok('the cover photo is loaded and sits whole in its frame, touching it on one side (contain: nothing cropped)', shown.loaded && shown.covers && shown.dec === 'async', JSON.stringify(shown));
       ok('dark ground, light text', await page.evaluate(`(() => { const L = ${LUM}; const v = getComputedStyle(document.getElementById('albumViewer')); return L(v.backgroundColor) < 0.2 && L(v.color) > 0.6; })()`));
       await albShot(page, 'cover-1280');
 
@@ -16541,7 +16544,9 @@ for (const [name, n, dup, expectRe] of [
         const cur = v.querySelector('.album-slide[data-current="true"] .album-page').getBoundingClientRect();
         const bar = v.querySelector('.album-viewer-bar').getBoundingClientRect(), foot = v.querySelector('.album-viewer-foot').getBoundingClientRect();
         const btn = id => { const r = document.getElementById(id).getBoundingClientRect(); return [r.width, r.height, r.left, r.right]; };
-        const covered = [...v.querySelectorAll('.album-slide[data-current="true"] .album-slot')].every(s => { const im = s.querySelector('img'); const a = s.getBoundingClientRect(), b = im.getBoundingClientRect(); return b.left <= a.left + 1 && b.right >= a.right - 1 && b.top <= a.top + 1 && b.bottom >= a.bottom - 1; });
+        // REWRITTEN for fit: 'contain' (was: the photo covers the frame): the photo is whole inside its frame and touches it on one side
+        const covered = [...v.querySelectorAll('.album-slide[data-current="true"] .album-slot')].every(s => { const im = s.querySelector('img'); const a = s.getBoundingClientRect(), b = im.getBoundingClientRect();
+          return b.left >= a.left - 1 && b.right <= a.right + 1 && b.top >= a.top - 1 && b.bottom <= a.bottom + 1 && (Math.abs(b.width - a.width) <= 1 || Math.abs(b.height - a.height) <= 1); });
         return { vr: [vr.left, vr.top, vr.right, vr.bottom], page: [cur.left, cur.top, cur.width, cur.height], barB: bar.bottom, footT: foot.top, footB: foot.bottom,
           iw: innerWidth, ih: innerHeight, sw: document.documentElement.scrollWidth, vsw: v.scrollWidth, btns: ['albumPrev', 'albumNext', 'albumClose'].map(btn), covered };
       });
@@ -16550,7 +16555,7 @@ for (const [name, n, dup, expectRe] of [
       ok('the cover is one A4 portrait page (0.7071), centred, inside the window with a side gutter', Math.abs(g.page[2] / g.page[3] - 210 / 297) < 0.01 && g.page[0] >= 8 && g.page[0] + g.page[2] <= g.iw - 8 && Math.abs(g.page[0] + g.page[2] / 2 - g.iw / 2) < 2, JSON.stringify(g.page));
       ok('the page sits between the bar and the footer; the footer ends inside the window (the bottom bar of a browser cannot cover it: dvh)', g.page[1] >= g.barB - 0.5 && g.page[1] + g.page[3] <= g.footT + 0.5 && g.footB <= g.ih + 0.5, JSON.stringify(g));
       ok('every control is at least 44px', g.btns.every(b => b[0] >= 44 && b[1] >= 44 && b[2] >= 0 && b[3] <= g.iw), JSON.stringify(g.btns));
-      ok('the photo fills its frame (no gap)', g.covered);
+      ok('the photo sits whole in its frame (contain)', g.covered);
 
       const cur = async () => (await albSnap(page)).label;
       await swipeTouch(page, '#albumStage', 300, 400, 100, 400);
@@ -16559,7 +16564,7 @@ for (const [name, n, dup, expectRe] of [
       await albShot(page, 'page-1-390');
       const gs = await geo();
       ok('a spread on a 390px phone is the whole width and about 390 x 276 (A4 pages side by side, 1.4142)', gs.page[2] >= 388 && gs.page[2] <= 390.5 && Math.abs(gs.page[2] / gs.page[3] - 420 / 297) < 0.01 && Math.abs(gs.page[3] - 276) <= 2, JSON.stringify(gs.page));
-      ok('...between the bar and the footer, no sideways scroll, photos fill their frames', gs.page[1] >= gs.barB - 0.5 && gs.page[1] + gs.page[3] <= gs.footT + 0.5 && gs.sw <= gs.iw && gs.covered, JSON.stringify(gs));
+      ok('...between the bar and the footer, no sideways scroll, photos sit whole in their frames', gs.page[1] >= gs.barB - 0.5 && gs.page[1] + gs.page[3] <= gs.footT + 0.5 && gs.sw <= gs.iw && gs.covered, JSON.stringify(gs));
       await swipeTouch(page, '#albumStage', 100, 400, 300, 400);
       ok('swipe right goes back, to the cover', (await cur()) === '封面');
       await swipeTouch(page, '#albumStage', 100, 400, 300, 400);
@@ -16594,7 +16599,7 @@ for (const [name, n, dup, expectRe] of [
       await page.setViewportSize({ width: 844, height: 390 });
       await page.waitForTimeout(400);
       const land = await geo();
-      ok('landscape phone: viewer fills the window, the spread keeps its 1.4142 shape and fits between bar and footer, photos still cover their frames',
+      ok('landscape phone: viewer fills the window, the spread keeps its 1.4142 shape and fits between bar and footer, photos still sit whole in their frames',
         land.vr[2] === land.iw && land.vr[3] === land.ih && Math.abs(land.page[2] / land.page[3] - 420 / 297) < 0.01 && land.page[1] >= land.barB - 0.5 && land.page[1] + land.page[3] <= land.footT + 0.5 && land.covered && land.sw <= land.iw && land.page[3] >= 240, JSON.stringify(land));
       await albShot(page, 'landscape-390');
       await page.setViewportSize({ width: 390, height: 844 });
@@ -16714,6 +16719,164 @@ for (const [label, co, init] of [['desktop 1280', ALB_DESK, ALB_OWNER], ['phone 
       await albGoTo(page, '2 / ' + spreads.length);
       await page.waitForTimeout(350);
       await albShot(page, `spread-${label.replace(' ', '-')}`);
+      return out;
+    },
+    { before: w.before, initScript: init, contextOptions: co });
+}
+
+// ── 7b. fit: 'contain' (the default): every photo whole — never cropped, never stretched, centred in its frame.
+//      Real pictures of six different shapes; every <img>'s box is measured against its frame and its natural size,
+//      and pixels of a screenshot show the bare paper beside a picture (a cropped or stretched photo would not leave any).
+const ALB_CONTAIN_SHAPES = [[900, 600], [600, 900], [600, 750], [600, 600], [960, 540], [540, 960], [900, 600], [600, 900], [800, 600], [600, 800]];
+// a PNG screenshot -> { w, h, px(x, y) -> [r, g, b] } (8-bit, non-interlaced, any colour type Chromium writes). The page cannot read
+// its own rendered pixels (no canvas of the DOM), and nothing else in this file decodes a PNG (pngOf only writes one), so it is here.
+function decodePng(buf) {
+  let p = 8, w = 0, h = 0, ct = 0; const idat = [];
+  while (p < buf.length) {
+    const len = buf.readUInt32BE(p), type = buf.toString('ascii', p + 4, p + 8), data = buf.subarray(p + 8, p + 8 + len);
+    if (type === 'IHDR') { w = data.readUInt32BE(0); h = data.readUInt32BE(4); ct = data[9]; }
+    if (type === 'IDAT') idat.push(data);
+    p += 12 + len;
+  }
+  const bpp = ct === 6 ? 4 : ct === 2 ? 3 : ct === 0 ? 1 : 4;
+  const raw = zlib.inflateSync(Buffer.concat(idat)), stride = w * bpp, out = Buffer.alloc(h * stride);
+  for (let y = 0; y < h; y++) {
+    const f = raw[y * (stride + 1)], src = y * (stride + 1) + 1;
+    for (let x = 0; x < stride; x++) {
+      const a = x >= bpp ? out[y * stride + x - bpp] : 0, b = y ? out[(y - 1) * stride + x] : 0, c = x >= bpp && y ? out[(y - 1) * stride + x - bpp] : 0;
+      let v = raw[src + x];
+      if (f === 1) v += a; else if (f === 2) v += b; else if (f === 3) v += (a + b) >> 1;
+      else if (f === 4) { const pa = Math.abs(b - c), pb = Math.abs(a - c), pc = Math.abs(a + b - 2 * c); v += pa <= pb && pa <= pc ? a : pb <= pc ? b : c; }
+      out[y * stride + x] = v & 255;
+    }
+  }
+  return { w, h, px: (x, y) => { const o = y * stride + x * bpp; return ct === 0 ? [out[o], out[o], out[o]] : [out[o], out[o + 1], out[o + 2]]; } };
+}
+// what the current page looks like: for every slot its frame, the picture's own box, its natural size, whether any
+// ancestor that clips (overflow other than visible) cuts into the picture
+const albFitGeo = page => page.evaluate(() => {
+  const cur = document.querySelector('.album-slide[data-current="true"] .album-page');
+  const pr = cur.getBoundingClientRect();
+  return [...cur.querySelectorAll('.album-slot')].map(b => {
+    const im = b.querySelector('img'), a = b.getBoundingClientRect(), r = im.getBoundingClientRect(), cs = getComputedStyle(im);
+    let clipped = false;
+    for (let e = im.parentElement; e && e !== cur.parentElement; e = e.parentElement) {
+      if (getComputedStyle(e).overflow === 'visible') continue;
+      const q = e.getBoundingClientRect();
+      if (r.left < q.left - 0.75 || r.right > q.right + 0.75 || r.top < q.top - 0.75 || r.bottom > q.bottom + 0.75) clipped = true;
+    }
+    return { fl: a.left, ft: a.top, fw: a.width, fh: a.height, il: r.left, it: r.top, iw: r.width, ih: r.height,
+      nw: im.naturalWidth, nh: im.naturalHeight, fit: b.dataset.fit ?? null, imgFit: cs.objectFit, bg: getComputedStyle(b).backgroundColor,
+      clipped, loaded: im.complete && im.naturalWidth > 0, page: { l: pr.left, t: pr.top, w: pr.width, h: pr.height }, kind: cur.dataset.kind };
+  });
+});
+const albPhotosReady = page => page.waitForFunction(() => {
+  const ims = [...document.querySelectorAll('.album-slide[data-current="true"] img')];
+  return ims.length > 0 && ims.every(im => im.complete && im.naturalWidth > 0 && /px$/.test(im.style.width));
+}, null, { timeout: 8000 });
+// every page of the book, each as albFitGeo's list; cover first
+async function albWalkFit(page, phone, tag) {
+  const pages = [];
+  for (let guard = 0; guard < 40; guard++) {
+    await albPhotosReady(page);
+    await page.waitForTimeout(60);
+    pages.push(await albFitGeo(page));
+    if (tag && pages.length <= 5) await albShot(page, `${tag}-p${pages.length - 1}`);       // SHOTS_ALBUM=<dir>: the cover and four spreads
+    if ((await albSnap(page)).nextDis) break;
+    if (phone) await page.tap('#albumNext'); else await page.click('#albumNext');
+    await page.waitForFunction(n => document.querySelector('.album-slide[data-current="true"]')?.dataset.index === String(n), pages.length, { timeout: 4000 });
+    await page.waitForTimeout(280);
+  }
+  return pages;
+}
+for (const [label, co, init, phone] of [['desktop 1280', ALB_DESK, ALB_OWNER, false], ['phone 390', MOBILE, ALB_VIEWER, true]]) {
+  const w = albumWorld({ n: 40, shapes: ALB_CONTAIN_SHAPES });
+  await suite(`album preview contain ${label} — every photo whole in its frame: not cropped, not stretched, centred, nothing clips it`,
+    `${base}/index.html?t=TOK`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await albGalleryReady(page);
+      if (phone) await page.tap('#albumPreviewBtn'); else await page.click('#albumPreviewBtn');
+      await albReady(page);
+      const pages = await albWalkFit(page, phone, `contain-${label.replace(' ', '-')}`);
+      const slots = pages.flat();
+      const spreads = pages.slice(1);
+      ok('control: a real book — a cover, at least 7 spreads, at least 38 photos measured', pages[0][0].kind === 'cover' && pages[0].length === 1 && spreads.length >= 7 && slots.length >= 38, `${spreads.length} spreads, ${slots.length} slots`);
+      ok('every photo is loaded', slots.every(s => s.loaded));
+      ok('every frame and picture says contain (data-fit and object-fit), none cover', slots.every(s => s.fit === 'contain' && s.imgFit === 'contain'), JSON.stringify(slots.filter(s => s.fit !== 'contain' || s.imgFit !== 'contain').slice(0, 2)));
+      const T = 1;       // px of slack (sub-pixel layout, rounded device pixels)
+      const bad = f => slots.filter(s => !f(s)).slice(0, 2).map(s => JSON.stringify({ f: [s.fw, s.fh], i: [s.iw, s.ih], n: [s.nw, s.nh] })).join(' | ');
+      ok('the whole photo is inside its frame, on all four sides (nothing cropped)', slots.every(s => s.il >= s.fl - T && s.it >= s.ft - T && s.il + s.iw <= s.fl + s.fw + T && s.it + s.ih <= s.ft + s.fh + T), bad(s => s.il >= s.fl - T && s.it >= s.ft - T && s.il + s.iw <= s.fl + s.fw + T && s.it + s.ih <= s.ft + s.fh + T));
+      ok('the picture\'s shown ratio is its own naturalWidth / naturalHeight within 0.5% (not stretched, not squeezed)', slots.every(s => Math.abs((s.iw / s.ih) / (s.nw / s.nh) - 1) <= 0.005), bad(s => Math.abs((s.iw / s.ih) / (s.nw / s.nh) - 1) <= 0.005));
+      ok('it is centred in its frame (within 1px on both axes)', slots.every(s => Math.abs(s.il + s.iw / 2 - (s.fl + s.fw / 2)) <= T && Math.abs(s.it + s.ih / 2 - (s.ft + s.fh / 2)) <= T), bad(s => Math.abs(s.il + s.iw / 2 - (s.fl + s.fw / 2)) <= T));
+      ok('and as big as the frame allows: it touches the frame on one axis (no needless margin)', slots.every(s => Math.abs(s.iw - s.fw) <= T || Math.abs(s.ih - s.fh) <= T), bad(s => Math.abs(s.iw - s.fw) <= T || Math.abs(s.ih - s.fh) <= T));
+      ok('no ancestor that clips (overflow) cuts into a picture', slots.every(s => !s.clipped));
+      const shapes = new Set(slots.map(s => (s.nw / s.nh).toFixed(2)));
+      ok('control: the test really saw six different shapes (3:2, 2:3, 4:5, 1:1, 16:9, 9:16 and more)', shapes.size >= 6, [...shapes].join());
+      ok('control: some picture leaves bare paper at the sides AND some above / below (so "touches on one axis" is not vacuous)',
+        slots.some(s => s.fw - s.iw >= 4) && slots.some(s => s.fh - s.ih >= 4), JSON.stringify(slots.slice(0, 3).map(s => [s.fw, s.fh, s.iw, s.ih])));
+      const waste = 1 - slots.reduce((a, s) => a + s.iw * s.ih, 0) / slots.reduce((a, s) => a + s.fw * s.fh, 0);
+      ok('on screen the bare paper is under 20% of the slot area, over the whole book (the planner picks shapes that fit)', waste < 0.2, waste.toFixed(3));
+      ok('the paper is white and the frames add no colour of their own (transparent behind a whole photo)', slots.every(s => s.bg === 'rgba(0, 0, 0, 0)') &&
+        await page.evaluate(() => getComputedStyle(document.querySelector('.album-slide[data-current="true"] .album-page')).backgroundColor === 'rgb(255, 255, 255)'), slots[0].bg);
+      const cover = pages[0][0];
+      ok('the cover is a portrait photo, whole on the A4 page (a portrait fits the tall page: the strip of a landscape is avoided)', cover.nw < cover.nh && (Math.abs(cover.iw - cover.fw) <= T + 1 || Math.abs(cover.ih - cover.fh) <= T + 1), JSON.stringify(cover));
+      ok('the cover wastes under 25% of its page', 1 - (cover.iw * cover.ih) / (cover.fw * cover.fh) <= 0.25, JSON.stringify(cover));
+
+      // real pixels: beside a picture there is paper, right inside its edge there is picture
+      let probes = 0; const pixelBad = [];
+      const goTo = async n => {            // to spread n, whichever way it lies
+        for (let g = 0; g < 60; g++) {
+          const label = (await albSnap(page)).label, at = label === '封面' ? 0 : +label.split('/')[0];
+          if (at === n) return;
+          if (phone) await page.tap(at < n ? '#albumNext' : '#albumPrev'); else await page.click(at < n ? '#albumNext' : '#albumPrev');
+          await page.waitForTimeout(60);
+        }
+      };
+      for (let i = 1; i < pages.length && probes < 3; i++) {
+        await goTo(i);
+        await page.waitForTimeout(350);
+        await albPhotosReady(page);
+        const sp = await albFitGeo(page);
+        const cand = sp.map(s => ({ s, mx: Math.max(s.fw - s.iw, s.fh - s.ih) })).filter(c => c.mx >= 8).sort((a, b) => b.mx - a.mx)[0];
+        if (!cand) continue;
+        const s = cand.s, horiz = s.fw - s.iw >= s.fh - s.ih;       // bare bands left / right, else above / below
+        const fold = s.page.l + s.page.w / 2;
+        const pt = horiz ? [s.fl + (s.il - s.fl) / 2, s.it + s.ih * 0.3, s.il + 3, s.it + s.ih * 0.3] : [s.il + s.iw * 0.3, s.ft + (s.it - s.ft) / 2, s.il + s.iw * 0.3, s.it + 3];
+        if (Math.abs(pt[0] - fold) < s.page.w * 0.06 || Math.abs(pt[2] - fold) < s.page.w * 0.06) continue;     // the fold's shade darkens paper
+        const shot = decodePng(await page.screenshot({ scale: 'css' }));
+        const paper = shot.px(Math.round(pt[0]), Math.round(pt[1])), inside = shot.px(Math.round(pt[2]), Math.round(pt[3]));
+        probes++;
+        if (!(Math.min(...paper) >= 205)) pixelBad.push(`paper beside ${s.nw}x${s.nh} is ${paper}`);
+        if (!(Math.min(...inside) < 200)) pixelBad.push(`edge of ${s.nw}x${s.nh} is ${inside}`);
+      }
+      ok('pixels: the bare band beside a picture is paper (light), the pixel just inside its edge is picture (colour) — on 3 spreads', probes === 3 && pixelBad.length === 0, `${probes} probes: ${pixelBad.join(' ; ')}`);
+      await albShot(page, `contain-${label.replace(' ', '-')}`);
+      return out;
+    },
+    { before: w.before, initScript: init, contextOptions: co });
+}
+
+// ── 7c. fit: 'cover' stays available (PLAN_OPTS.fit): the old crop-to-fill drawing, the switch back
+for (const [label, co, init, phone] of [['desktop 1280', ALB_DESK, ALB_OWNER, false], ['phone 390', MOBILE, ALB_VIEWER, true]]) {
+  const w = albumWorld({ n: 40, shapes: ALB_CONTAIN_SHAPES });
+  await suite(`album preview cover mode ${label} (PLAN_OPTS.fit = 'cover') — the old drawing: photos fill their frames, cropped`,
+    `${base}/index.html?t=TOK`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await albGalleryReady(page);
+      await page.evaluate(() => { AlbumPreview.PLAN_OPTS = { fit: 'cover' }; });
+      if (phone) await page.tap('#albumPreviewBtn'); else await page.click('#albumPreviewBtn');
+      await albReady(page);
+      const pages = await albWalkFit(page, phone, `cover-${label.replace(' ', '-')}`);
+      const slots = pages.flat(), T = 1;
+      ok('control: a real book', pages.length >= 8 && slots.length >= 38, `${pages.length} pages`);
+      ok('no frame says contain, every picture is object-fit: cover', slots.every(s => s.fit !== 'contain' && s.imgFit === 'cover'), JSON.stringify(slots.slice(0, 2)));
+      ok('every picture covers its frame (no gap on any side)', slots.every(s => s.il <= s.fl + T && s.it <= s.ft + T && s.il + s.iw >= s.fl + s.fw - T && s.it + s.ih >= s.ft + s.fh - T));
+      ok('and some picture is cut by its frame (shown box wider or taller than the frame, ratio not the photo\'s) — the crop is real', slots.some(s => s.iw > s.fw + 2 || s.ih > s.fh + 2) && slots.some(s => Math.abs((s.iw / s.ih) / (s.nw / s.nh) - 1) <= 0.005 && (s.iw > s.fw + 2 || s.ih > s.fh + 2)));
+      ok('the frames keep the old paper-coloured ground (#ece8de)', slots.every(s => s.bg === 'rgb(236, 232, 222)'), slots[0].bg);
       return out;
     },
     { before: w.before, initScript: init, contextOptions: co });

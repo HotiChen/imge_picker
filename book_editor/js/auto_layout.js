@@ -331,6 +331,23 @@ const AutoLayout = (() => {
         return loss + 2 * Math.max(0, loss - 0.45) + 6 * Math.max(0, loss - 0.6);
     }
 
+    // share of the slot left bare when the whole photo is drawn inside it (contain): 0 = a perfect fit
+    const wasteOf = (photoAspect, slotAspect) => 1 - keptShare(photoAspect, slotAspect);
+    const wasteCost = w => SP_WASTE_WEIGHT * (w + 2 * Math.max(0, w - 0.3) + 6 * Math.max(0, w - 0.45));
+
+    // Where the photo is drawn inside a slot for fit: 'contain' (the viewer and any renderer use this one function):
+    // s = min(scale * slotW / natW, scale * slotH / natH); centred, then moved by crop.x / crop.y of the slot.
+    // scale 1 (the planner's only value) shows the whole photo, touching the slot on one axis.
+    function containBox(natW, natH, slotW, slotH, crop) {
+        if (!(natW > 0 && natH > 0 && slotW > 0 && slotH > 0)) return { left: 0, top: 0, w: Math.max(0, slotW) || 0, h: Math.max(0, slotH) || 0 };
+        const scale = crop && Number(crop.scale) > 0 ? Number(crop.scale) : 1;
+        const cx = crop && Number.isFinite(Number(crop.x)) ? Number(crop.x) : 0;
+        const cy = crop && Number.isFinite(Number(crop.y)) ? Number(crop.y) : 0;
+        const k = Math.min(scale * slotW / natW, scale * slotH / natH);
+        const w = natW * k, h = natH * k;
+        return { left: (slotW - w) / 2 + cx * slotW, top: (slotH - h) / 2 + cy * slotH, w, h };
+    }
+
     const baseCost = (L) => L.hero ? -0.15 : L.k === 1 ? 0.3 : L.k === 2 ? 0.04 : L.k === 3 ? 0.02 : 0;
 
     function normalise(it, index) {
@@ -398,6 +415,23 @@ const AutoLayout = (() => {
         if (pool.length === 0) pool = survivors;
         let best = pool[0];
         for (const r of pool) if (r.sharp > best.sharp) best = r;
+        return best;
+    }
+
+    // contain cover: the cover is ONE tall A4 page and the photo is shown whole, so a 3:2 would be a small strip on
+    // a big white page. Among the survivors that waste at most COVER_WASTE_TARGET of the page (a portrait, in practice)
+    // the sharpest; none: at most COVER_WASTE_SOFT; none: the one that wastes least (the sharper on a tie).
+    function pickCoverContain(survivors, coverAspect) {
+        const sharpest = pool => { let best = pool[0]; for (const r of pool) if (r.sharp > best.sharp) best = r; return best; };
+        for (const limit of [COVER_WASTE_TARGET, COVER_WASTE_SOFT]) {
+            const pool = survivors.filter(r => wasteOf(r.aspect, coverAspect) <= limit);
+            if (pool.length) return sharpest(pool);
+        }
+        let best = survivors[0];
+        for (const r of survivors) {
+            const d = wasteOf(r.aspect, coverAspect) - wasteOf(best.aspect, coverAspect);
+            if (d < -1e-12 || (Math.abs(d) <= 1e-12 && r.sharp > best.sharp)) best = r;
+        }
         return best;
     }
 
@@ -620,6 +654,17 @@ const AutoLayout = (() => {
     const SP_BIG = 1e6;               // "impossible" inside the assignment (crushed photo in a no-crush pass)
     const SP_PASSES = 8;              // variety polish: at most this many sweeps over the spreads
     const SP_MAX_K = 12;
+    // fit: 'contain' (the default): the whole photo, never cropped. A slot's cost is its WASTE, the share of the slot
+    // the photo does not cover (1 - min/max of the two aspects), because that is the paper that shows.
+    const CONTAIN_LIMITS = [0.45, 0.6, Infinity];   // the hard floor on one slot's waste, relaxed in these steps (45% first)
+    const SP_WASTE_WEIGHT = 2;        // (1 gave a mean waste of 11% on mixed 40-photo books, 2 gives 10% and a worst slot of 35% for ~0.5 more spreads; 3 only 9.5%) waste cost = weight * (waste + 2 * (waste - 0.3)+ + 6 * (waste - 0.45)+)
+    const SP_HERO_WRONG_COVER = 0.8;  // a portrait on a through-spread, in cover mode (cropped to a spread)
+    const SP_HERO_WRONG_CONTAIN = 2.4;// ...and in contain mode, where it would sit in a small box between two blank bands
+    const SP_USE_MIN = 3;             // contain: a template may carry this many spreads without a price (more in a long book)...
+    const SP_USE_PRICE = 0.4;         // ...each spread over it adds this to that template's cost, each round
+    const SP_USE_ROUNDS = 8;
+    const COVER_WASTE_TARGET = 0.25;  // contain cover: candidates wasting at most this much of the A4 page...
+    const COVER_WASTE_SOFT = 0.45;    // ...else at most this much; else the one that wastes least
 
     // min-cost assignment, rows = photos, columns = slots (n x n, O(n^3)); returns the column of each row
     function hungarian(a, n) {
@@ -686,7 +731,9 @@ const AutoLayout = (() => {
         return cat;
     }
 
-    function spreadCosts(P, cat, ctx, noCrush) {
+    // `level` is the crush rule of this pass. cover: true = no photo may keep < 40% of itself, false = anything goes.
+    // contain: the most waste one slot may have (CONTAIN_LIMITS; Infinity = anything goes).
+    function spreadCosts(P, cat, ctx, level) {
         const m = P.length, T = cat.length;
         const cost = new Float64Array(m * T).fill(Infinity);
         const seat = new Array(m * T).fill(null);
@@ -699,12 +746,19 @@ const AutoLayout = (() => {
                     const r = P[i + p];
                     const row = new Array(k);
                     for (let s = 0; s < k; s++) {
-                        let c = cropCost(r.aspect, lay.aspects[s]) + SP_ORDER * Math.abs(p - s);
-                        if (keptShare(r.aspect, lay.aspects[s]) < CRUSH_BELOW && noCrush) c += SP_BIG;
+                        let c;
+                        if (ctx.contain) {
+                            const waste = wasteOf(r.aspect, lay.aspects[s]);
+                            c = wasteCost(waste) + SP_ORDER * Math.abs(p - s);
+                            if (waste > level) c += SP_BIG;
+                        } else {
+                            c = cropCost(r.aspect, lay.aspects[s]) + SP_ORDER * Math.abs(p - s);
+                            if (keptShare(r.aspect, lay.aspects[s]) < CRUSH_BELOW && level) c += SP_BIG;
+                        }
                         const sharp = 1 - ctx.pct.get(r.id);
                         if (lay.span[s]) {
                             c += 1.0 * sharp;
-                            if (r.orientation !== 'square' && r.orientation !== 'landscape') c += 0.8;
+                            if (r.orientation !== 'square' && r.orientation !== 'landscape') c += ctx.contain ? SP_HERO_WRONG_CONTAIN : SP_HERO_WRONG_COVER;
                             if (r.id === ctx.coverId) c += 10;                  // the cover is already that picture
                         } else {
                             c += SP_BIG_SHARP * sharp * lay.big[s];
@@ -824,7 +878,31 @@ const AutoLayout = (() => {
         return g;
     }
 
-    // opts: { templates, coverAspect, spreadAspect, hashThreshold, window, maxPerFace, seed, order, back }
+    // Contain only. Waste is a sharper taste than crop loss was, so a book whose photos repeat a shape (a long run of
+    // 3:2 with a portrait now and then) would lean on the one or two templates that fit it. Price the templates that
+    // carry too many spreads and solve again, a few rounds: the spreads move to the next-best fitting templates (the
+    // photo groups change too, which the swap polish below cannot do). A template may carry max(3, a fifth of the
+    // spreads); each round adds SP_USE_PRICE per spread over that. Same rules as the first solve; stops when no template
+    // is over, when a solve fails, or after SP_USE_ROUNDS.
+    function spreadOutUsage(groups, costs, cat, m, rules, cfg) {
+        const T = cat.length, price = new Float64Array(T);
+        let best = groups;
+        for (let round = 0; round < SP_USE_ROUNDS; round++) {
+            const uses = new Map();
+            best.forEach(t => uses.set(t, (uses.get(t) || 0) + 1));
+            const allowed = Math.max(SP_USE_MIN, Math.ceil(best.length / 5));
+            let over = false;
+            for (const [t, c] of uses) if (c > allowed) { price[t] += SP_USE_PRICE * (c - allowed); over = true; }
+            if (!over) break;
+            const cost = Float64Array.from(costs.cost, (c, i) => c + price[i % T]);
+            const g = spreadSolve({ cost, seat: costs.seat }, cat, m, rules, cfg);
+            if (!g) break;
+            best = g;
+        }
+        return best;
+    }
+
+    // opts: { templates, coverAspect, spreadAspect, hashThreshold, window, maxPerFace, seed, order, back, fit }
     function planSpreads(items, opts = {}) {
         const D = SPREAD_DEFAULTS;
         const num = (v, d) => (Number(v) > 0 && Number.isFinite(Number(v)) ? Number(v) : d);
@@ -834,6 +912,7 @@ const AutoLayout = (() => {
         const threshold = Number.isFinite(opts.hashThreshold) ? opts.hashThreshold : DEFAULTS.hashThreshold;
         const windowSize = Number.isFinite(opts.window) ? opts.window : DEFAULTS.window;
         const seed = Number.isFinite(opts.seed) ? Math.trunc(opts.seed) : 0;
+        const contain = opts.fit !== 'cover';        // 'contain' (whole photo, nothing cropped) unless 'cover' is asked for
 
         const list = Array.isArray(items) ? items : [];
         let recs = list.map(normalise);
@@ -847,8 +926,10 @@ const AutoLayout = (() => {
         const below = v => { let lo = 0, hi = sharps.length; while (lo < hi) { const mid = (lo + hi) >> 1; if (sharps[mid] < v) lo = mid + 1; else hi = mid; } return lo; };
         const pct = new Map(kept.map(r => [r.id, kept.length > 1 ? below(r.sharp) / (kept.length - 1) : 1]));
 
-        const coverRec = pickCover(kept, coverAspect);
-        const cover = { photoId: coverRec.id, crop: cropFor(coverRec.aspect, coverAspect, coverRec.focus) };
+        const coverRec = contain ? pickCoverContain(kept, coverAspect) : pickCover(kept, coverAspect);
+        const cover = contain
+            ? { photoId: coverRec.id, fit: 'contain', crop: { x: 0, y: 0, scale: 1 } }
+            : { photoId: coverRec.id, crop: cropFor(coverRec.aspect, coverAspect, coverRec.focus) };
         // one photo: the cover alone. 2-3: the cover is not repeated inside. 4+: it is.
         const inner = kept.length === 1 ? [] : kept.length <= FEW_PHOTOS ? kept.filter(r => r !== coverRec) : kept;
         const m = inner.length;
@@ -860,9 +941,10 @@ const AutoLayout = (() => {
         const cat = spreadCatalogue(templates, spreadAspect, maxPerFace);
 
         const cfg = { spreadPrice: D.spreadPrice, heroBonus: D.heroBonus, jitter: D.jitter, heroGap: D.heroGap, maxFamilyRun: D.maxFamilyRun };
-        const ctx = { pct, coverId: coverRec.id, seed, cfg };
-        const memo = {};
-        const costsFor = noCrush => memo[noCrush] || (memo[noCrush] = spreadCosts(inner, cat, ctx, noCrush));
+        const ctx = { pct, coverId: coverRec.id, seed, cfg, contain };
+        const memo = new Map();
+        const costsFor = level => { if (!memo.has(level)) memo.set(level, spreadCosts(inner, cat, ctx, level)); return memo.get(level); };
+        const levels = contain ? CONTAIN_LIMITS : [true, false];
         // Rules first, then taste: strictest rule set first, and inside it no
         // crushed photo before a crushed one; only then give a rule up.
         const ladder = [
@@ -877,8 +959,8 @@ const AutoLayout = (() => {
         search:
         for (const whole of m <= FEW_PHOTOS ? [true, false] : [false]) {
             for (const rules of ladder) {
-                for (const noCrush of [true, false]) {
-                    const c = costsFor(noCrush);
+                for (const level of levels) {
+                    const c = costsFor(level);
                     const g = cat.length ? spreadSolve(c, cat, m, { ...rules, whole }, cfg) : null;
                     if (g) { groups = g; costs = c; used = { ...rules, whole }; break search; }
                 }
@@ -892,6 +974,7 @@ const AutoLayout = (() => {
         // swap when it lowers (cost + a charge for the same template showing up
         // again within a few spreads, or at all). Every hard rule is checked on
         // each candidate, so none is bent. Deterministic; stops when nothing moves.
+        if (contain && groups.length > 1 && cat.length > 1) groups = spreadOutUsage(groups, costs, cat, m, used, cfg);
         if (groups.length > 1 && cat.length > 1) groups = polishVariety(groups, costs, cat, m, used, cfg);
 
         const T = cat.length;
@@ -902,11 +985,9 @@ const AutoLayout = (() => {
             const slots = new Array(lay.k);
             for (let p = 0; p < lay.k; p++) {
                 const s = col[p], r = inner[at + p], sd = lay.tpl.slots[s];
-                slots[s] = {
-                    photoId: r.id,
-                    crop: cropFor(r.aspect, lay.aspects[s], r.focus),
-                    slot: { x: sd.x, y: sd.y, w: sd.w, h: sd.h, face: sd.face },
-                };
+                slots[s] = contain
+                    ? { photoId: r.id, fit: 'contain', crop: { x: 0, y: 0, scale: 1 }, slot: { x: sd.x, y: sd.y, w: sd.w, h: sd.h, face: sd.face } }
+                    : { photoId: r.id, crop: cropFor(r.aspect, lay.aspects[s], r.focus), slot: { x: sd.x, y: sd.y, w: sd.w, h: sd.h, face: sd.face } };
             }
             spreads.push({ id: `spread-${n + 1}`, template: lay.id, slots });
             at += lay.k;
@@ -922,7 +1003,7 @@ const AutoLayout = (() => {
         plan,
         planSpreads,
         // pure helpers, exposed for tests and for callers that want to reuse them
-        util: { naturalCompare, toGray, dHash, hamming, sharpnessOf, focusOf, cropFor },
+        util: { naturalCompare, toGray, dHash, hamming, sharpnessOf, focusOf, cropFor, wasteOf, containBox },
 
         // 入口：photos 為照片陣列，style 為排版風格
         async run(photos, style = 'magazine') {

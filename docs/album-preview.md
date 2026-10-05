@@ -53,18 +53,21 @@ AutoLayout.plan(items /* analyze() output */, { style = 'auto', layouts, pages, 
        pages: [{ id, type: 'inner', layout, slots: [{ photoId, crop: {x, y, scale: 1} }], bg: '#ffffff' }],
        dropped: [{ id, reason: 'duplicate', of } | { id, reason: 'failed' }] }
 
-AutoLayout.planSpreads(items, { templates, coverAspect = 210/297, spreadAspect = 420/297, hashThreshold = 6, window = 5,
+AutoLayout.planSpreads(items, { fit = 'contain', templates, coverAspect = 210/297, spreadAspect = 420/297, hashThreshold = 6, window = 5,
                                 maxPerFace = 4, seed = 0, order = 'natural', back = false })
-  -> { cover: { photoId, crop } | null,
-       spreads: [{ id: 'spread-n', template: <template id>, slots: [{ photoId, crop: {x, y, scale: 1}, slot: {x, y, w, h, face} }] }],
+  -> { cover: { photoId, crop, fit? } | null,
+       spreads: [{ id: 'spread-n', template: <template id>, slots: [{ photoId, fit?, crop: {x, y, scale: 1}, slot: {x, y, w, h, face} }] }],
        back: null | {},                       // {} = a blank closing page (only with back: true and a book to close)
        dropped: [ same as plan ] }            // see "A4 album: spreads and the template library"
 
 AutoLayout.run(photos, style)   // the editor's five old styles; same output as before
 AutoLayout.DEFAULTS             // the numbers below
 AutoLayout.SPREAD_DEFAULTS      // the planSpreads numbers (price per spread, hero gap, ...)
-AutoLayout.util                 // pure helpers (tests): naturalCompare, dHash, hamming, sharpnessOf, focusOf, cropFor, toGray
+AutoLayout.util                 // pure helpers (tests): naturalCompare, dHash, hamming, sharpnessOf, focusOf, cropFor, toGray,
+                                // wasteOf(photoAspect, slotAspect), containBox(natW, natH, slotW, slotH, crop) -> {left, top, w, h}
 ```
+
+`planSpreads` takes `fit: 'contain' | 'cover'`, **default `'contain'`** (anything else is the default). See "Whole photos: fit contain".
 
 - `analyze` never rejects because of one photo (it comes back `ok: false`,
   `aspect: 1`, empty hash). It rejects with `AbortError` when `signal` fires.
@@ -277,6 +280,7 @@ Pure and deterministic (no `Math.random`, clock or DOM), never mutates `items`.
   photo (unless the whole book is one photo); every page holds at most `maxPerFace`
   (4) photos; only `hero` templates may cross the fold (also checked here, for
   libraries passed in).
+- (Costs below are cover mode's: contain mode swaps the crop loss for the waste, see "Whole photos: fit contain".)
 - **Hero spreads** pay for a blurry or non-landscape photo and are never the cover
   photo, and earn a bonus (0.65): the sharpest landscapes get them, as often as the
   cap allows (about 1 spread in 10 for a landscape-heavy book).
@@ -297,6 +301,77 @@ Pure and deterministic (no `Math.random`, clock or DOM), never mutates `items`.
   says to load `spread_templates.js`). A template with a broken slot is skipped.
 - `back: true` returns `back: {}` (a blank closing page) when there is a book to
   close; the default is `null`. Nothing puts a photo on the back yet.
+
+## Whole photos: fit `contain` (the default) and how to switch back to `cover`
+
+**Decision (Tim, checking the A4 preview in the iPhone LINE browser):** do not crop; cropping to fill a slot "cuts off
+heads" (a portrait cropped into a landscape slot, a landscape cropped narrow). So the album shows every photo whole,
+centred on the white paper, never cropped, never stretched. The cost is white space around photos whose shape does not
+match their slot; the planner is therefore built to pick shapes that match.
+
+**The contract.** `planSpreads(items, { fit })`:
+
+| `fit` | slots and `cover` | the viewer draws |
+|---|---|---|
+| `'contain'` (default) | every slot `{ photoId, fit: 'contain', crop: {x:0, y:0, scale:1}, slot }`; `cover` `{ photoId, fit: 'contain', crop: {0,0,1} }` | `AutoLayout.util.containBox`: the whole photo, centred, touching its frame on one axis |
+| `'cover'` | exactly the engine before `fit` existed (byte for byte, pinned by a golden hash in `plan_spreads.test.mjs`): focus-offset `crop`, **no `fit` key** (absent = cover, as `slot.fit \|\| 'cover'` in `layouts.js`) | `fitCoverImage` (crop to fill), the frame's old `#ece8de` ground |
+
+`containBox(natW, natH, slotW, slotH, crop)`: `k = min(scale*slotW/natW, scale*slotH/natH)`, size `natW*k x natH*k`, centred,
+then moved by `crop.x * slotW` / `crop.y * slotH` (zero from the planner). The focus point plays no part in contain mode.
+
+**Switching back to cover:** set `AlbumPreview.PLAN_OPTS = { fit: 'cover' }` (`js/album-preview.js`; a one-line default
+change there, or pass it from `js/pick.js`). The viewer draws by each slot's `fit`, so nothing else changes; the cover
+mode suite ("album preview cover mode …") keeps that path green.
+
+**Cost model (contain).** A slot's waste = `1 - min(p, s) / max(p, s)` for photo aspect `p` and slot aspect `s`: the share
+of the slot the whole photo does not cover (the same number cover mode called the crop loss). Cost of a seat =
+`2 * (waste + 2*(waste-0.3)+ + 6*(waste-0.45)+)` (weight `SP_WASTE_WEIGHT = 2`; weight 1 gave a mean waste of 11% on
+mixed 40-photo books, 2 gives 10% with a worst slot of 35% for about half a spread more, 3 only 9.5%) plus the
+unchanged seating pull, big-slot sharpness and spread terms. The Hungarian seating, the template DP, the rhythm and
+price, the hard rules and their relaxation order (adjacent, family run, hero gap, lone photo, last spread) are untouched,
+so the planner prefers templates and seats whose shape is close to the photo's.
+
+**Hard floor.** A slot may waste at most **45%**. Each rule set is tried at floor 45%, then 60%, then no floor (the floor
+relaxes before a rule does, as the crush rule did): an unsolvable library degrades step by step and never throws. On
+normal photo shapes no slot of 30 books wastes more than 45% (worst seen 36% to 43%); the harsh pool (panoramas, 2:5
+tall) tops out at 44%. A through-spread for a portrait (below).
+
+**Heroes.** The orientation charge for a non-landscape, non-square photo on a through-spread is 2.4 in contain mode
+(0.8 in cover): a 2:3 photo in a 1.414 spread would be a small box between two bands (53% waste, already over the floor).
+For aspects 0.78 to 0.95 the waste term alone (at least 0.96 against a 0.65 bonus) already keeps them off, so the charge
+is a belt: deleting it changes no book in the 900 compared (mutant E5/E10, equivalent by domination). A hero-only library
+still seats a portrait when it is the only way.
+
+**Cover.** One tall A4 page, so a 3:2 would be a small strip. Contain-mode pick: among survivors wasting at most **25%** of
+the page (aspect 0.53 to 0.94: a portrait in practice) the sharpest (earlier on a tie); none: at most 45%; none: the one
+wasting least (sharper on a tie). `plan()` (the editor) keeps its own pick.
+
+**Variety.** Waste is a sharper taste than crop loss, so a book whose photos repeat a shape (a long run of 3:2 with a
+portrait now and then, or a periodic set) leaned on one or two templates (one of 12 spreads' templates five times).
+Contain mode therefore re-solves after the first pass with a usage price (`spreadOutUsage`): a template may carry
+`max(3, a fifth of the spreads)` spreads for free, each spread over adds 0.4 to its cost per round, up to 8 rounds, same
+rules; the swap polish runs after it. Measured: periodic books go from 5 to 2 spreads of the busiest template; mixed
+books pay nothing (mean waste 0.0995 either way); a book of one landscape shape pays 7 to 10 points of whitespace
+(0.05 to 0.11-0.15) for not repeating one layout 5 times in 12 spreads.
+
+**Numbers (30 mixed 40-photo books, `NORMAL` shapes, cover mode in brackets):** mean waste 0.0995 (0.120), worst slot 0.36
+(0.55; 12 books had a slot over 45%), 6 to 10 templates a book, no template over 3 spreads; a fixed template per size
+wastes 0.27 and a random one 0.31. Harsh pool: 0.13 (0.15).
+
+**Viewer.** `js/album-preview.js` marks a contain frame `data-fit="contain"`, sizes the `<img>` with `containBox` in px
+(from the frame's layout size, so a zoomed page does not distort it) and re-fits on rotation. CSS: the frame is transparent
+and does not clip, so the paper shows; the photo has a 1px hairline and a soft lift (`--album-photo-edge`,
+`--album-photo-lift` on `.album-page`) so a white sky does not melt into the white paper. Zoom, pan, loading, thumbnail
+buckets and the no-writes rule are unchanged.
+
+**Tests.** `book_editor/test/plan_spreads_contain.test.mjs` (the contract, `containBox` geometry on every slot of 30
+books, waste numbers vs fixed / random baselines, the floor, hero, cover, variety, purity); `plan_spreads.test.mjs`
+runs every old assertion through `planCover` (`fit: 'cover'`) plus the golden; browser suites "album preview contain
+desktop 1280 / phone 390" (every `<img>` box inside its frame, shown ratio = natural ratio within 0.5%, centred, nothing
+clips it, pixels of a screenshot: paper beside the photo, picture just inside its edge) and "album preview cover mode".
+
+**Not verified here:** the real iPhone LINE browser (hairline and shadow rendering on a white sky, `containBox` in px
+at DPR 3 on a 40 px slot); real photographs (the suites use synthetic shapes and SVG pictures).
 
 ## Not done, and why
 
@@ -376,7 +451,7 @@ constants go to `planSpreads` and to the renderer, so a crop is drawn on the sha
 was made for. A spread has a soft shade down its middle (`::after`, over the photos)
 to show the fold.
 
-**Rendering.** Built with DOM calls (no `innerHTML`; a photo key never becomes
+**Rendering.** (Photos are drawn whole by default: see "Whole photos: fit contain"; the cover-fit description in this paragraph is the `fit: 'cover'` path.) Built with DOM calls (no `innerHTML`; a photo key never becomes
 markup — `renderPageHTML` writes keys into HTML strings, adds the editor's
 x / right-click buttons and fixes the width at 1600). Each slot draws its photo
 with `fitCoverImage` from `layouts.js` (re-run on rotation / resize), so the

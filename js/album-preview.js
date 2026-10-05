@@ -18,6 +18,10 @@
 //      double tap / double click zooms 2.5x, pinch and the wheel zoom 1x-4x,
 //      and a zoomed page is dragged to pan (the swipe is off while zoomed).
 //
+// A photo is drawn WHOLE by default (the plan says fit: 'contain' for every slot: centred inside its frame on the
+// white paper, never cropped, never stretched; Tim's check in the LINE browser: cropping "cuts off heads"). A plan with
+// fit: 'cover' (AlbumPreview.PLAN_OPTS = { fit: 'cover' }) is still drawn the old way, filling its frame with crop.
+//
 // Every string that came from outside (photo keys) only ever reaches
 // img.src as a property — no innerHTML anywhere in this file, so a file name
 // that is markup stays text. book_editor.js / exporter.js are not loaded.
@@ -68,6 +72,29 @@
         const e = new Error('Aborted'); e.name = 'AbortError'; return e;
     };
     const isAbort = e => !!e && e.name === 'AbortError';
+
+    // ── one photo in its frame ────────────────────────────────────────────
+    // contain: the box AutoLayout.util.containBox works out (the whole photo, centred, touching the frame on one
+    // axis), set as px on the <img>. The frame's own layout size is used (not getBoundingClientRect, which a zoomed
+    // page would scale). object-fit: contain stays in the CSS as the belt to these braces.
+    function frameSize(wrap) {
+        const cs = getComputedStyle(wrap);
+        const w = parseFloat(cs.width), h = parseFloat(cs.height);
+        return { w: w > 0 ? w : wrap.clientWidth, h: h > 0 ? h : wrap.clientHeight };
+    }
+    function fitContainImage(img) {
+        const wrap = img.parentElement;
+        if (!wrap || !img.naturalWidth || !img.naturalHeight) return;
+        const f = frameSize(wrap);
+        if (!f.w || !f.h) return;
+        const b = AutoLayout.util.containBox(img.naturalWidth, img.naturalHeight, f.w, f.h,
+            { x: parseFloat(img.dataset.cropx) || 0, y: parseFloat(img.dataset.cropy) || 0, scale: parseFloat(img.dataset.scale) || 1 });
+        img.style.width = `${b.w}px`;
+        img.style.height = `${b.h}px`;
+        img.style.left = `${b.left}px`;
+        img.style.top = `${b.top}px`;
+    }
+    const fitPhoto = img => (img.dataset.fit === 'contain' ? fitContainImage(img) : fitCoverImage(img));
 
     // ── the engine files, loaded on the first press ─────────────────────
     function stamp() {
@@ -356,13 +383,13 @@
             this.stage.dataset.zoomable = 'true';       // CSS: the stage takes the touches itself (touch-action: none)
             this.pages = [
                 { kind: 'cover', aspect: COVER_ASPECT, layout: 'cover',
-                  slots: [{ photoId: plan.cover.photoId, crop: plan.cover.crop, slot: { x: 0, y: 0, w: 1, h: 1 } }] },
+                  slots: [{ photoId: plan.cover.photoId, crop: plan.cover.crop, fit: plan.cover.fit, slot: { x: 0, y: 0, w: 1, h: 1 } }] },
                 ...plan.spreads.map(sp => ({ kind: 'spread', aspect: SPREAD_ASPECT, layout: sp.template, slots: sp.slots })),
             ];
             if (plan.back) {
                 const b = plan.back;
                 this.pages.push({ kind: 'back', aspect: COVER_ASPECT, layout: 'back',
-                    slots: b.photoId ? [{ photoId: b.photoId, crop: b.crop || { x: 0, y: 0, scale: 1 }, slot: { x: 0, y: 0, w: 1, h: 1 } }] : [] });
+                    slots: b.photoId ? [{ photoId: b.photoId, crop: b.crop || { x: 0, y: 0, scale: 1 }, fit: b.fit, slot: { x: 0, y: 0, w: 1, h: 1 } }] : [] });
             }
             const note = text('div', 'album-note', notes.join('・'), 'albumNote');
             note.hidden = notes.length === 0;
@@ -440,8 +467,8 @@
             page.querySelectorAll('img').forEach(im => { im.src = window.driveManager.getImageUrl({ id: im.dataset.photoId }, w); });
         },
 
-        // The cover-fit drawing layouts.js uses (fitCoverImage: the whole photo
-        // scaled to cover its slot, positioned by crop), built with DOM calls —
+        // The drawing layouts.js uses (contain: the whole photo inside its slot, as fitContainImage works it out;
+        // cover: fitCoverImage, the photo scaled to cover its slot, positioned by crop), built with DOM calls —
         // renderPageHTML would put a photo key into an HTML string, and brings
         // the editor's x / right-click buttons and a fixed 1600px width. A slot's
         // box is the template's own fractions of the page (or spread).
@@ -454,7 +481,9 @@
             pageData.slots.forEach(slot => {
                 if (!slot || !slot.photoId || !slot.slot) return;
                 const sd = slot.slot;
+                const contain = slot.fit === 'contain';       // absent = cover, as layouts.js reads slot.fit
                 const box = text('div', 'album-slot');
+                if (contain) box.dataset.fit = 'contain';
                 box.style.cssText = `left:${pct(sd.x)};top:${pct(sd.y)};width:${pct(sd.w)};height:${pct(sd.h)};`;
                 const wrap = text('div', 'album-slot-crop');
                 const crop = slot.crop || {};
@@ -464,12 +493,13 @@
                 img.draggable = false;
                 img.decoding = 'async';
                 img.loading = 'eager';          // at most three pages exist, so the neighbours are preloaded on purpose
+                if (contain) img.dataset.fit = 'contain';
                 img.dataset.photoId = slot.photoId;
                 img.dataset.scale = String(crop.scale || 1);
                 img.dataset.cropx = String(crop.x || 0);
                 img.dataset.cropy = String(crop.y || 0);
                 img.dataset.rot = '0';
-                img.addEventListener('load', () => { img.style.visibility = ''; fitCoverImage(img); });
+                img.addEventListener('load', () => { img.style.visibility = ''; fitPhoto(img); });
                 img.addEventListener('error', () => { img.style.visibility = 'hidden'; });
                 wrap.appendChild(img);
                 box.appendChild(wrap);
@@ -508,7 +538,7 @@
             for (const slide of this.stage.querySelectorAll('.album-slide')) {
                 const page = slide.firstElementChild;
                 this.sizePage(page, this.pages[+slide.dataset.index]);
-                page.querySelectorAll('img').forEach(im => { if (im.naturalWidth) fitCoverImage(im); });
+                page.querySelectorAll('img').forEach(im => { if (im.naturalWidth) fitPhoto(im); });
             }
         },
 
