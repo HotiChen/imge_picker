@@ -131,10 +131,10 @@ const GUI_GONE = ['#sidebarToggle', '#sidebarBackdrop', 'aside.sidebar', '.sideb
         const n = document.querySelector('.logo-name');
         const b = n.getBoundingClientRect();
         return { text: n.textContent, sw: n.scrollWidth, cw: n.clientWidth, r: b.right, vw: innerWidth,
-          img: !!document.querySelector('.logo-mark-img'), av: document.getElementById('userAvatarStudio').getBoundingClientRect().left };
+          img: !!document.querySelector('.logo-mark-img'), av: document.querySelector('.header-right').getBoundingClientRect().left };
       });
       ok('studio name is fully visible (scrollWidth <= clientWidth) with its logo', br.text === '海邊影像工作' && br.sw <= br.cw && br.cw > 60 && br.img, JSON.stringify(br));
-      ok('and does not run under the avatar', br.r <= br.av, JSON.stringify(br));
+      ok('and does not run under the right-hand header group (the avatar is hidden on a guest page)', br.r <= br.av, JSON.stringify(br));
 
       if (process.env.SHOTS) await page.screenshot({ path: `${process.env.SHOTS}/pick-390.png` });
       // ── folder selector switches the grid
@@ -281,10 +281,10 @@ const GUI_GONE = ['#sidebarToggle', '#sidebarBackdrop', 'aside.sidebar', '.sideb
       const r = await page.evaluate(() => {
         const n = document.querySelector('.logo-name').getBoundingClientRect();
         const hl = document.querySelector('.header-left').getBoundingClientRect();
-        const av = document.getElementById('userAvatarStudio').getBoundingClientRect();
+        const av = document.querySelector('.header-right').getBoundingClientRect();
         return { nr: n.right, hl: hl.right, al: av.left, ar: av.right, vw: innerWidth, sw: document.documentElement.scrollWidth };
       });
-      return [r.nr <= r.hl + 0.5 && r.hl <= r.al + 0.5 && r.ar <= r.vw && r.sw <= r.vw ? 'ok    long name stays inside the header, avatar on screen' : 'FAIL  ' + JSON.stringify(r)];
+      return [r.nr <= r.hl + 0.5 && r.hl <= r.al + 0.5 && r.ar <= r.vw && r.sw <= r.vw ? 'ok    long name stays inside the header, header-right group on screen (the avatar itself is hidden)' : 'FAIL  ' + JSON.stringify(r)];
     },
     { before: m.attach, initScript: () => localStorage.setItem('pick_key:TOK', 'ZOE-KEY'), contextOptions: MOBILE });
 }
