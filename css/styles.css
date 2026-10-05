@@ -2276,6 +2276,19 @@ span.pick-heart-btn { cursor: default; }
 .guest-avatar { background: var(--card-hi); color: var(--ink-70); pointer-events: none; }
 .guest-avatar svg { display: block; }
 
+/* A share link (?t=, picking and the delivered gallery) hides the photographer's
+   登出 button and the avatar. Hidden, not deleted: delete this rule to bring them
+   back. html.guest-mode is set by js/pick.js, only when the URL has ?t=. */
+html.guest-mode #userAvatarStudio,
+html.guest-mode #studio-logout,
+html.guest-mode #client-logout { display: none !important; }
+
+/* Review view (index.html?project=): 下載選取 does exactly what 打包全部下載 does
+   there (no subset exists), so both of its buttons are hidden; the hook stays
+   wired in js/project-view.js _wireDownloads. body.pv-active is set by that view. */
+body.pv-active #downloadSelectedHeaderBtn,
+body.pv-active #bulkActionBar button[onclick="app.downloadSelected()"] { display: none !important; }
+
 .guest-bar { display: none; }
 @media (max-width: 1024px) {
   .guest-bar {

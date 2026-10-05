@@ -221,6 +221,36 @@ class DriveManager {
         }
     }
 
+    // A project / folder title as a file name: strip / \ : * ? " < > | and
+    // control characters, collapse whitespace, trim, drop leading/trailing dots
+    // (hidden / Windows-invalid names), cap at 60 characters (Chinese kept),
+    // 'Project' when nothing is left.
+    sanitizeFileTitle(title) {
+        const clean = String(title == null ? '' : title)
+            .replace(/[\\/:*?"<>|\u0000-\u001F\u007F-\u009F\u2028\u2029]/g, '')
+            .replace(/\s+/g, ' ').trim()
+            .replace(/^\.+|\.+$/g, '').trim();
+        return Array.from(clean).slice(0, 60).join('').trim().replace(/\.+$/, '').trim() || 'Project';
+    }
+
+    // One file name per photo, unique inside the zip even when two photos from
+    // different folders share a name (zip.file() silently replaces a name it
+    // already holds, and an extracted zip is case-insensitive on Windows/macOS):
+    // the first keeps its name, later ones become "name (2).ext", "name (3).ext".
+    uniqueZipNames(photoList) {
+        const used = new Set();
+        return photoList.map(photo => {
+            const raw = String((photo && (photo.name || String(photo.id || '').split('/').pop())) || 'photo');
+            const dot = raw.lastIndexOf('.');
+            const stem = dot > 0 ? raw.slice(0, dot) : raw;
+            const ext = dot > 0 ? raw.slice(dot) : '';
+            let name = raw, n = 1;
+            while (used.has(name.toLowerCase())) { n += 1; name = `${stem} (${n})${ext}`; }
+            used.add(name.toLowerCase());
+            return name;
+        });
+    }
+
     // [核心下載邏輯] 通用的打包下載方法
     async downloadPhotos(photoList, zipName = 'Photos.zip') {
         if (!photoList || photoList.length === 0) {
@@ -230,17 +260,22 @@ class DriveManager {
 
         toast.info(`正在準備打包 ${photoList.length} 張照片...`);
         const zip = new JSZip();
+        const names = this.uniqueZipNames(photoList);
 
         try {
             // 分割批次下載，避免瀏覽器瞬間請求過多導致崩潰
             const batchSize = 5;
+            let packed = 0;
             for (let i = 0; i < photoList.length; i += batchSize) {
                 const batch = photoList.slice(i, i + batchSize);
-                await Promise.all(batch.map(async (photo) => {
+                await Promise.all(batch.map(async (photo, j) => {
                     const url = this.objectUrl(photo.id);
                     const response = await fetch(url, { headers: this._authHeaders() });
+                    // an error page zipped as "photo.jpg" would be a silent, corrupt file
+                    if (!response.ok) throw new Error(`HTTP ${response.status} for ${photo.id}`);
                     const blob = await response.blob();
-                    zip.file(photo.name, blob);
+                    zip.file(names[i + j], blob);
+                    packed += 1;
                 }));
                 const progress = Math.min(i + batchSize, photoList.length);
                 console.log(`打包進度: ${progress}/${photoList.length}`);
@@ -255,7 +290,8 @@ class DriveManager {
             a.download = zipName;
             a.click();
             URL.revokeObjectURL(url);
-            toast.success('打包下載完成！');
+            // the count lets the photographer check it against the picks
+            toast.success(`已打包 ${packed} 張`);
         } catch (error) {
             console.error('打包下載失敗:', error);
             toast.error('打包連線出錯，請稍後再試');
