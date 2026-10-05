@@ -59,6 +59,12 @@
     invalid_platform_price: '平台價需為 0 以上的整數',
     too_large: '圖片超過 200 KB，請壓縮後再試',
     unsupported_type: '不支援的檔案格式，僅限 PNG / JPEG / WebP',
+    // album page range (operator): inside spreads, 1 spread = 1 P
+    invalid_min_pages: '最少頁數需為 1–200 的整數（或留空）',
+    invalid_max_pages: '最多頁數需為 1–200 的整數（或留空）',
+    invalid_page_range: '最多頁數不能小於最少頁數',
+    min_pages_unavailable: '最少頁數還不能存：D1 migration（2026-10-06-product-min-pages.sql）尚未執行',
+    max_pages_unavailable: '最多頁數還不能存：D1 migration（2026-10-06-product-max-pages.sql）尚未執行',
   };
 
   // The one shared escaper (js/util.js, loaded before this file).
@@ -97,6 +103,20 @@
     return `${workerUrl}/api/platform/products/${encodeURIComponent(platformProductId)}/image?v=${encodeURIComponent(stamp || '')}`;
   }
 
+  // An album's page range as a short label, inside spreads (1 spread = 1 P,
+  // cover and back not counted): '10–30 跨頁' / '至少 10 跨頁' / '最多 30 跨頁'
+  // ('10 跨頁' when both are the same). '' for anything that is not an album
+  // or has neither bound. A value that is not a whole number >= 1 counts as none.
+  function pageRangeText(p) {
+    if (!p || p.kind !== 'album') return '';
+    const bound = v => (Number.isSafeInteger(v) && v >= 1 ? v : null);
+    const min = bound(p.min_pages), max = bound(p.max_pages);
+    if (min !== null && max !== null) return min === max ? `${min} 跨頁` : `${min}–${max} 跨頁`;
+    if (min !== null) return `至少 ${min} 跨頁`;
+    if (max !== null) return `最多 ${max} 跨頁`;
+    return '';
+  }
+
   // "name 規格" — a line's display name.
   function lineName(i) {
     return i.option_label ? `${i.name} · ${i.option_label}` : i.name;
@@ -123,6 +143,6 @@
 
   window.Orders = {
     KIND_LABEL, STATUS_LABEL, METHOD_LABEL, SOURCE_LABEL, STATUS_MOVES, PAYMENT_LABEL,
-    esc, money, errorText, paymentState, lineName, platformImageUrl, client,
+    esc, money, errorText, paymentState, lineName, platformImageUrl, pageRangeText, client,
   };
 })();

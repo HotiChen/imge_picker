@@ -104,7 +104,8 @@
   .pill-plat { background: var(--accent-dim); color: var(--ink-90); }
   .prod-row.platform-gone { opacity: .6; }
   .opt-off { opacity: .55; }
-  .warn-below { color: var(--danger); font-weight: 600; }
+  .warn-below, .warn-hidden { color: var(--danger); font-weight: 600; }
+  .warn-hidden { display: block; margin-top: 2px; }
   .pick-row { display: flex; gap: 10px; align-items: center; margin: 6px 0; flex-wrap: wrap; }
   .pick-tick { display: flex; gap: 6px; align-items: center; min-width: 120px; margin: 0; font-size: 13px; color: var(--ink-90); }
   .panel-stat { color: var(--ink-90); font-size: 14px; font-weight: 500; margin-bottom: 8px; }
@@ -449,6 +450,13 @@
     // (or the whole product): the read gives the product's and the option's flag.
     function platformGone(p) { return !!p.platform_product_id && !p.platform_active; }
     function optionGone(p, o) { return !!p.platform_product_id && (platformGone(p) || !o.platform_active); }
+    // an adopted option sells under the platform floor (GET /api/admin/products
+    // gives `cost` = the floor for adopted options): a number each, strictly lower
+    function underFloor(o) {
+      if (o.price == null || o.cost == null) return false;
+      const price = Number(o.price), floor = Number(o.cost);
+      return Number.isFinite(price) && Number.isFinite(floor) && price < floor;
+    }
 
     function productRowHtml(p) {
       const adopted = !!p.platform_product_id;
@@ -458,9 +466,13 @@
         if (!adopted) return `<li data-option-id="${O.esc(o.id)}">${label} · 售價 ${O.money(o.price)} · 成本 ${O.money(o.cost)}</li>`;
         const off = optionGone(p, o);
         const below = !off && o.below_platform_price;
+        // price under the platform floor (`cost` of an adopted option): the guest
+        // shop hides the option, so say what the guest sees, not only why
+        const hidden = !off && p.active && underFloor(o);
         return `<li data-option-id="${O.esc(o.id)}"${off ? ' data-unavailable="1" class="opt-off"' : ''}${below ? ' data-below="1"' : ''}>${label} · 平台價 ${O.money(o.platform_price != null ? o.platform_price : o.cost)} · 售價 ${O.money(o.price)}${
           off ? ' <span class="pill pill-off">平台已下架</span>' : ''}${
-          below ? ' <span class="warn-below">平台價已調整，售價低於平台價，請更新</span>' : ''}</li>`;
+          below ? ' <span class="warn-below">平台價已調整，售價低於平台價，請更新</span>' : ''}${
+          hidden ? ' <span class="warn-hidden" data-warn="guest-hidden">價格低於平台底價，客人看不到這個選項</span>' : ''}</li>`;
       }).join('');
       const retired = !p.active;
       // a custom product with custom products off: 下架 only
@@ -479,6 +491,7 @@
           ${retired ? '<span class="pill pill-off">已下架</span>' : ''}
           ${gone ? '<span class="pill pill-off">平台已下架</span>' : ''}
           ${p.kind === 'album' && p.photo_count ? `<span class="hint">指定 ${O.esc(p.photo_count)} 張</span>` : ''}
+          ${adopted && O.pageRangeText(p) ? `<span class="hint" data-page-range>${O.esc(O.pageRangeText(p))}</span>` : ''}
           ${p.description ? `<div class="hint">${O.esc(p.description)}</div>` : ''}
           <ul class="prod-opts">${opts}</ul>
         </div>

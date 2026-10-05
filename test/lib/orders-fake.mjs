@@ -18,7 +18,10 @@ export function ordersFake(opts = {}) {
     // CUSTOM_PRODUCTS: the Worker's switch for the photographer's own
     // products, off unless exactly "on" — so off here unless asked for
     customProducts: opts.customProducts === true,
-    platform: opts.platform || [],   // platform catalogue: {id, kind, name, …, options: [{id, label, vendor_cost, platform_price, active, sort}]}
+    platform: opts.platform || [],   // platform catalogue: {id, kind, name, …, min_pages?, max_pages?, options: [{id, label, vendor_cost, platform_price, active, sort}]}
+    // which page-bound columns the fake database has (worker.js pageColumns): a
+    // missing one reads null and refuses a number (500 <col>_unavailable)
+    pageColumns: { min_pages: true, max_pages: true, ...(opts.pageColumns || {}) },
     imageSeq: 0,
     operatorToken: opts.operatorToken || 'op',
     orders: opts.orders || [],
@@ -96,8 +99,9 @@ export function ordersFake(opts = {}) {
   const viewProduct = p => {
     const pp = p.platform_product_id ? platformOf(p.platform_product_id) : null;
     const adopted = !!p.platform_product_id;
-    const v = { ...p, platform_active: adopted ? (pp ? pp.active : 0) : null };
+    const v = { ...p, platform_active: adopted ? (pp ? pp.active : 0) : null, min_pages: null, max_pages: null };
     if (pp) Object.assign(v, { kind: pp.kind, name: pp.name, description: pp.description, photo_count: pp.photo_count,
+      min_pages: pageRead(pp, 'min_pages'), max_pages: pageRead(pp, 'max_pages'),
       has_image: pp.has_image, image_type: pp.image_type, image_updated_at: pp.image_updated_at });
     v.options = p.options.map(o => {
       if (!o.platform_option_id) return { ...o };
@@ -109,6 +113,7 @@ export function ordersFake(opts = {}) {
     return v;
   };
   const platView = pp => ({ id: pp.id, kind: pp.kind, name: pp.name, description: pp.description, photo_count: pp.photo_count,
+    min_pages: pageRead(pp, 'min_pages'), max_pages: pageRead(pp, 'max_pages'),
     active: pp.active, sort: pp.sort, has_image: pp.has_image, image_type: pp.image_type, image_updated_at: pp.image_updated_at,
     created_at: NOW, updated_at: NOW, options: pp.options.map(o => ({ ...o })) });
   // the photographer's option, as an order line reads it
@@ -123,6 +128,39 @@ export function ordersFake(opts = {}) {
     return pp ? pp.options.find(o => o.id === op.platform_option_id).vendor_cost : 0;
   };
   const bad = (code, status = 400) => ({ status, body: { error: code.replace(/_/g, ' '), code } });
+
+  // platform_products.min_pages / max_pages (worker.js: albumOnly, pageBoundsWrite,
+  // pageBoundsFit, PAGES_UNAVAILABLE): safe integer 1–200 or null, albums only,
+  // max ≥ min on the merged row; a number for a column the database lacks is a
+  // 500 <col>_unavailable, a missing column reads null
+  const PAGE_BOUNDS = ['min_pages', 'max_pages'];
+  const PAGES_UNAVAILABLE = {
+    min_pages: { error: '最少頁數功能尚未啟用', code: 'min_pages_unavailable' },
+    max_pages: { error: '最多頁數功能尚未啟用', code: 'max_pages_unavailable' },
+  };
+  const albumOnly = (kind, v) => (kind === 'album' && v != null ? v : null);
+  const pageRead = (pp, col) => (st.pageColumns[col] ? albumOnly(pp.kind, pp[col]) : null);
+  // returns {set} (the bounds to store) | {bad} | {unavailable}
+  function pageBoundsWrite(body, kind, current) {
+    const named = {};
+    for (const col of PAGE_BOUNDS) {
+      if (!(col in body)) continue;
+      const v = body[col];
+      if (v !== null && !(Number.isSafeInteger(v) && v >= 1 && v <= 200)) return { bad: `invalid_${col}` };
+      named[col] = v;
+    }
+    const set = {};
+    if (kind !== 'album') {
+      for (const col of PAGE_BOUNDS) if (col in named || (current && current.kind === 'album')) set[col] = null;
+    } else {
+      for (const col of PAGE_BOUNDS) set[col] = col in named ? named[col] : (current ? pageRead(current, col) : null);
+      if (set.min_pages !== null && set.max_pages !== null && set.max_pages < set.min_pages) return { bad: 'invalid_page_range' };
+      const entering = current !== null && current.kind !== 'album';
+      for (const col of PAGE_BOUNDS) if (!(col in named) && !entering) delete set[col];
+    }
+    for (const col of PAGE_BOUNDS) if (col in set && !st.pageColumns[col] && set[col] !== null) return { unavailable: PAGES_UNAVAILABLE[col] };
+    return { set };
+  }
 
   // productOptions(): {id?, label, ...money}; returns {options} | {bad}
   function checkOptions(value, existingIds, money) {
@@ -210,9 +248,12 @@ export function ordersFake(opts = {}) {
     if (path === '/api/operator/products' && method === 'POST') {
       const f = checkFields(body, false, ['print', 'album']);
       if (f.bad) return bad(f.bad);
+      const bounds = pageBoundsWrite(body, f.set.kind, null);
+      if (bounds.bad) return bad(bounds.bad);
       const opts = checkOptions(body.options, new Set(), PLATFORM_MONEY);
       if (opts.bad) return bad(opts.bad);
-      const pp = { id: id('plat'), description: '', photo_count: null, sort: 0, ...f.set, active: 1, has_image: false, image_type: null, image_updated_at: null,
+      if (bounds.unavailable) return { status: 500, body: bounds.unavailable };
+      const pp = { id: id('plat'), description: '', photo_count: null, sort: 0, ...f.set, ...bounds.set, active: 1, has_image: false, image_type: null, image_updated_at: null,
         options: opts.options.map(o => ({ id: id('popt'), label: o.label, vendor_cost: o.vendor_cost, platform_price: o.platform_price, active: 1, sort: o.sort })) };
       if (pp.kind !== 'album') pp.photo_count = null;
       st.platform.push(pp);
@@ -223,13 +264,16 @@ export function ordersFake(opts = {}) {
       if (!pp) return { status: 404, body: { error: 'Not found' } };
       const f = checkFields(body, true, ['print', 'album']);
       if (f.bad) return bad(f.bad);
+      const bounds = pageBoundsWrite(body, f.set.kind ?? pp.kind, pp);
+      if (bounds.bad) return bad(bounds.bad);
       let opts = null;
       if ('options' in body) {
         const c = checkOptions(body.options, new Set(pp.options.map(o => o.id)), PLATFORM_MONEY);
         if (c.bad) return bad(c.bad);
         opts = c.options;
       }
-      Object.assign(pp, f.set);
+      if (bounds.unavailable) return { status: 500, body: bounds.unavailable };
+      Object.assign(pp, f.set, bounds.set);
       if (pp.kind !== 'album') pp.photo_count = null;
       if (opts) {
         const keep = new Set(opts.filter(o => o.id).map(o => o.id));
@@ -265,6 +309,7 @@ export function ordersFake(opts = {}) {
       const products = st.platform.filter(pp => pp.active).map(pp => {
         const mine = st.products.find(p => p.platform_product_id === pp.id);
         return { id: pp.id, kind: pp.kind, name: pp.name, description: pp.description, photo_count: pp.photo_count, sort: pp.sort,
+          min_pages: pageRead(pp, 'min_pages'), max_pages: pageRead(pp, 'max_pages'),
           has_image: pp.has_image, image_updated_at: pp.image_updated_at, adopted_product_id: mine ? mine.id : null,
           options: pp.options.filter(o => o.active).map(o => ({ id: o.id, label: o.label, platform_price: o.platform_price, sort: o.sort })) };
       }).filter(p => p.options.length);
@@ -539,3 +584,9 @@ export const secInfo = page => page.evaluate(names => Object.fromEntries(names.m
 })), SEC_NAMES);
 export const secWait = page => page.waitForSelector('#pd-sec-settings-btn', { timeout: 5000 });
 export const secOpen = i => i && i.expanded === 'true' && i.display !== 'none' && i.caret === '▾';
+
+// ── operator.html: the operator's own sign-in key and a seed for it ────────
+export const OP_KEY = 'imhoti_operator_token';
+// seeds the operator token once per tab (sessionStorage marks it), so a later
+// sign-out or reload is not undone by the init script running again
+export const OP_SEED = () => { if (!sessionStorage.getItem('__seeded')) { localStorage.setItem('imhoti_operator_token', 'op'); sessionStorage.setItem('__seeded', '1'); } };
