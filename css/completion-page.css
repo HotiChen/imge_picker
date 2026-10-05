@@ -1,0 +1,147 @@
+/* ══════════════════════════════════════════════════════
+   完成頁 (js/completion-page.js, docs/delivery.md): the page a client sees once the
+   delivered project is CONFIRMED.
+
+   A deliberate exception to "client pages are dark": a light page (home.html's cream
+   tokens), because it is the thing the client keeps and shows. It is fenced in:
+   - every rule is under `.cp` (the root js/completion-page.js builds), under `html.cp-on`
+     (set only while that root exists) or under a modifier class the gallery adds only for
+     this page (`.fg--light`, `.fg-lightbox--light`);
+   - the tokens are `--cp-*`, defined on `.cp`: css/styles.css's :root and every dark rule
+     are untouched, and the unconfirmed delivered page does not change a pixel.
+   Loaded by index.html only (guests and the photographer's review view share it; the
+   photographer's view never has `.cp`).
+   ══════════════════════════════════════════════════════ */
+
+/* the dark app chrome stays in the DOM (the page switches back without a reload) but is gone */
+html.cp-on, html.cp-on body { background: #fff8ee; }
+html.cp-on header.header,
+html.cp-on #deliveryBar,
+html.cp-on #deliveryDone,
+html.cp-on #pickBanner,
+html.cp-on #pickClaimOverlay,
+html.cp-on #projectViewBanner,
+html.cp-on main.main-content,
+html.cp-on footer.app-footer { display: none !important; }
+
+.cp {
+  --cp-bg: #fff8ee;
+  --cp-surface: #ffffff;
+  --cp-ink: #231b12;
+  --cp-ink-70: #5b4f42;
+  --cp-ink-55: #7a6d5d;
+  --cp-rule: #efe6d8;
+  --cp-accent: #f5a13b;
+  --cp-accent-shadow: #d6801f;
+  --cp-mint: #d6f0e3;
+  --cp-mint-ink: #1f6b4f;
+  --cp-serif: 'Noto Serif TC', 'Songti TC', 'Source Han Serif TC', 'PMingLiU', serif;
+  min-height: 100vh;
+  background: var(--cp-bg);
+  color: var(--cp-ink);
+  font-family: var(--font-sans, system-ui, sans-serif);
+  font-size: 16px;
+  line-height: 1.6;
+  outline: none;
+}
+.cp *, .cp *::before, .cp *::after { box-sizing: border-box; }
+.cp :focus-visible { outline: 2px solid var(--cp-ink); outline-offset: 2px; }
+.cp-wrap { max-width: 1160px; margin: 0 auto; padding: 0 16px; }
+@media (min-width: 700px) { .cp-wrap { padding: 0 32px; } }
+
+/* 1. hero */
+.cp-hero { padding: 20px 0 8px; }
+.cp-cover-frame { position: relative; width: 100%; aspect-ratio: 3 / 2; max-height: 72vh; overflow: hidden; border-radius: 10px; background: var(--cp-rule); }
+.cp-cover { display: block; width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity .5s ease; }
+.cp-cover.on { opacity: 1; }
+.cp-hero-text { max-width: 720px; margin: 0 auto; padding: 28px 8px 8px; text-align: center; }
+.cp-studio { display: flex; align-items: center; justify-content: center; gap: 10px; margin-bottom: 14px; min-width: 0; color: var(--cp-ink-70); font-size: 14px; letter-spacing: .14em; }
+.cp-studio[hidden] { display: none; }
+.cp-studio-logo { flex: 0 0 auto; width: 32px; height: 32px; border-radius: 50%; object-fit: cover; }
+.cp-studio-name { min-width: 0; overflow-wrap: anywhere; }
+.cp-title { margin: 0; font-family: var(--cp-serif); font-weight: 600; font-size: clamp(28px, 5vw, 48px); line-height: 1.2; letter-spacing: .02em; overflow-wrap: anywhere; text-wrap: balance; }
+.cp-thanks { margin: 16px 0 0; font-size: 16px; line-height: 1.8; color: var(--cp-ink-70); text-wrap: balance; }
+.cp-confirmed { display: inline-block; margin: 18px 0 0; padding: 6px 16px; border-radius: 999px; background: var(--cp-mint); color: var(--cp-mint-ink); font-size: 14px; font-weight: 600; }
+
+/* sections */
+.cp-sec { padding: 44px 0 4px; }
+.cp-sec-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+.cp-h2 { margin: 0 0 10px; font-family: var(--cp-serif); font-weight: 600; font-size: clamp(22px, 3vw, 28px); line-height: 1.3; }
+.cp-sec-head .cp-h2 { margin: 0; }
+.cp-count { font-size: 14px; color: var(--cp-ink-70); font-variant-numeric: tabular-nums; }
+.cp-sub { margin: 0 0 18px; font-size: 15px; line-height: 1.7; color: var(--cp-ink-70); }
+
+/* buttons: their own classes, never the dark .btn */
+.cp-btn {
+  display: inline-flex; align-items: center; justify-content: center; min-height: 48px; padding: 0 28px;
+  border: 2px solid var(--cp-ink); border-radius: 999px; font: inherit; font-size: 16px; font-weight: 600; text-decoration: none;
+  cursor: pointer; -webkit-tap-highlight-color: transparent;
+}
+.cp-btn--solid { background: var(--cp-accent); color: var(--cp-ink); box-shadow: 0 3px 0 var(--cp-accent-shadow); }
+.cp-btn--solid:hover { background: #f7ad54; }
+.cp-btn--solid:active { transform: translateY(2px); box-shadow: 0 1px 0 var(--cp-accent-shadow); }
+.cp-btn--line { background: transparent; color: var(--cp-ink); }
+.cp-btn--line:hover { background: var(--cp-surface); }
+.cp-btn:disabled { opacity: .6; cursor: progress; }
+.cp-link { display: inline-flex; align-items: center; min-height: 44px; color: var(--cp-ink-70); text-decoration: underline; text-underline-offset: 3px; }
+
+/* 2. the gallery: js/finals-gallery.js, light variant (only with theme: 'light', i.e. here) */
+.cp .fg.fg--light { --fg-pad: 0px; background: transparent; color: var(--cp-ink); padding-bottom: 0; }
+.fg.fg--light .fg-rows { margin: 0; }
+.fg.fg--light .fg-tile { background: var(--cp-rule); border-radius: 6px; }
+.fg.fg--light .fg-tile:hover img.on { filter: brightness(1.04); }
+.fg.fg--light .fg-chips { padding: 0 0 14px; }
+.fg.fg--light .fg-chip { min-height: 44px; background: var(--cp-surface); border: 1px solid #d9ccb8; color: var(--cp-ink-70); }
+.fg.fg--light .fg-chip:hover { border-color: var(--cp-ink-70); color: var(--cp-ink); }
+.fg.fg--light .fg-chip[aria-pressed="true"] { background: var(--cp-accent); border-color: var(--cp-accent-shadow); color: var(--cp-ink); }
+.fg.fg--light .fg-empty { color: var(--cp-ink-70); }
+
+/* the lightbox hangs off <body>, so it carries its own colours */
+.fg-lightbox.fg-lightbox--light { background: #fff8ee; color: #231b12; }
+.fg-lightbox--light .fg-lb-count, .fg-lightbox--light .fg-lb-name, .fg-lightbox--light .fg-lb-msg { color: #5b4f42; }
+.fg-lightbox--light .fg-lb-btn { color: #231b12; }
+.fg-lightbox--light .fg-lb-dl { border-color: #cdbfa9; }
+.fg-lightbox--light .fg-lb-btn:hover { border-color: #5b4f42; }
+.fg-lightbox--light .fg-lb-btn:focus-visible, .fg-lightbox--light .fg-lb-nav:focus-visible { outline-color: #231b12; }
+.fg-lightbox--light .fg-lb-nav { background: rgba(255, 255, 255, .85); color: #231b12; box-shadow: 0 1px 6px rgba(35, 27, 18, .18); }
+.fg-lightbox--light .fg-lb-nav:hover:not(:disabled) { background: #fff; }
+
+/* 4. 商品／加購 */
+.cp-products { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr)); gap: 18px; align-items: start; }
+.cp-product { display: flex; flex-direction: column; min-width: 0; overflow: hidden; background: var(--cp-surface); border: 1px solid var(--cp-rule); border-radius: 14px; }
+.cp-product-img { aspect-ratio: 4 / 3; background: var(--cp-rule); }
+.cp-product-img img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.cp-product-body { display: flex; flex-direction: column; gap: 6px; padding: 16px 18px 18px; min-width: 0; }
+.cp-product-name { margin: 0; font-family: var(--cp-serif); font-weight: 600; font-size: 19px; line-height: 1.4; overflow-wrap: anywhere; }
+.cp-product-range { margin: 0; font-size: 14px; font-weight: 600; color: var(--cp-mint-ink); }
+.cp-product-desc { margin: 0; font-size: 15px; line-height: 1.6; color: var(--cp-ink-70); overflow-wrap: anywhere; }
+.cp-options { list-style: none; margin: 8px 0 0; padding: 0; border-top: 1px solid var(--cp-rule); }
+.cp-option { display: flex; align-items: baseline; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--cp-rule); font-size: 15px; min-width: 0; }
+.cp-option:last-child { border-bottom: 0; padding-bottom: 0; }
+.cp-option-label { min-width: 0; overflow-wrap: anywhere; color: var(--cp-ink-70); }
+.cp-option-price { margin-left: auto; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.cp-cta { margin-top: 22px; text-align: center; }
+.cp-cta-plain { margin: 0; font-size: 15px; color: var(--cp-ink-70); }
+
+/* 5. the album preview entry (js/album-preview.js builds it; the viewer it opens stays the dark full-screen one) */
+.cp .album-entry { margin: 0; padding: 0; background: transparent; border: 0; }
+.cp .album-entry-btn { min-height: 64px; background: var(--cp-surface); border: 1px solid var(--cp-rule); border-radius: 14px; color: var(--cp-ink); }
+.cp .album-entry-btn:hover, .cp .album-entry-btn:active { background: var(--cp-surface); border-color: var(--cp-accent-shadow); }
+.cp .album-entry-title { font-size: 16px; color: var(--cp-ink); }
+.cp .album-entry-sub { font-size: 14px; line-height: 1.5; color: var(--cp-ink-70); }
+.cp .album-entry-chev { color: var(--cp-ink); }
+.cp-hint { margin: 12px 0 0; padding: 12px 14px; background: var(--cp-surface); border: 1px solid var(--cp-rule); border-left: 4px solid var(--cp-accent); border-radius: 8px; font-size: 15px; line-height: 1.7; color: var(--cp-ink); }
+/* the same sentence inside the dark viewer's footer (the viewer is outside .cp, so the dark tokens apply) */
+.album-bounds { margin: 0 0 8px; padding: 8px 10px; background: var(--accent-dim); border-left: 3px solid var(--accent); font-size: 14px; line-height: 1.5; text-align: left; color: var(--ink); }
+
+/* 6. footer */
+.cp-foot { display: flex; flex-direction: column; align-items: center; gap: 14px; margin-top: 56px; padding: 28px 0 calc(40px + env(safe-area-inset-bottom, 0px)); border-top: 1px solid var(--cp-rule); text-align: center; }
+.cp-foot-studio { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 4px 16px; font-size: 14px; color: var(--cp-ink-55); }
+.cp-foot-studio[hidden] { display: none; }
+
+/* the toast is the page's one dark leftover: lighten it while this page is up */
+html.cp-on .toast { background: #fff; border-color: #efe6d8; color: #231b12; box-shadow: 0 6px 20px rgba(35, 27, 18, .12); }
+html.cp-on .toast-title, html.cp-on .toast-message { color: #231b12; }
+html.cp-on .toast-message { font-size: 13px; }
+
+@media (prefers-reduced-motion: reduce) { .cp-cover { transition: none; } }

@@ -7,10 +7,19 @@ import { pickFakeWorker } from '../lib/pick-fake.mjs';
 
 export default async function register() {
 const AS_OWNER = () => localStorage.setItem('pick_key:TOK', 'ZOE-KEY');
+const CONFIRMED_UP = () => document.getElementById('deliveryDone')?.dataset.state === 'confirmed' || !!document.getElementById('completionPage');
 const stateGets = m => m.requests.filter(r => r.method === 'GET' && r.path === '/api/pick/state').length;
+// EDITED with the 完成頁 (suite 33): a confirmed delivery no longer shows the 驗收頁's status block but the
+// light completion page, so for that state this reads the page's 已確認完成（date） line as the same
+// "state confirmed, ✓ status, no buttons" (the 完成頁 itself is asserted in 33-completion-page.mjs).
 const doneBlock = page => page.evaluate(() => {
   const el = document.getElementById('deliveryDone');
-  if (!el) return null;
+  if (!el) {
+    const cp = document.getElementById('completionPage');
+    if (!cp) return null;
+    return { state: 'confirmed', status: `✓ ${document.getElementById('cpConfirmed').textContent}`, msg: null, msgEl: false,
+      buttons: [...document.querySelectorAll('#doneConfirmBtn, #doneReviseBtn')].map(b => b.textContent) };
+  }
   return { state: el.dataset.state, status: document.getElementById('deliveryDoneStatus')?.textContent ?? null,
     msg: document.getElementById('deliveryDoneMsg')?.textContent ?? null,
     msgEl: !!document.getElementById('deliveryDoneMsg'),
@@ -60,7 +69,7 @@ for (const [label, co] of [['1280px', { viewport: { width: 1280, height: 900 } }
 
       await page.click('#doneConfirmBtn');
       await page.click('#doneConfirmSubmit');
-      await page.waitForFunction(() => document.getElementById('deliveryDone')?.dataset.state === 'confirmed', null, { timeout: 5000 });
+      await page.waitForFunction(CONFIRMED_UP, null, { timeout: 5000 });
       const posts = donePosts(m, 'confirm');
       ok('exactly one POST /api/pick/confirm, with this link\'s token and seat key, body {}',
         posts.length === 1 && posts[0].t === 'TOK' && posts[0].key === 'ZOE-KEY' && JSON.stringify(posts[0].body) === '{}', JSON.stringify(posts));
@@ -71,7 +80,7 @@ for (const [label, co] of [['1280px', { viewport: { width: 1280, height: 900 } }
       ok('the modals are removed from the DOM, not just closed', (await page.$('#doneConfirmModal')) === null && (await page.$('#doneReviseModal')) === null);
       ok('the Worker recorded it as the guest\'s', m.state.project.client_confirmed_by === 'guest');
       await page.reload({ waitUntil: 'load' });
-      await page.waitForSelector('#deliveryDone', { timeout: 5000 });
+      await page.waitForSelector('#deliveryDone, #completionPage', { timeout: 5000 });
       const b2 = await doneBlock(page);
       ok('after a reload the confirmed state comes from the Worker: ✓ and still no buttons', b2.state === 'confirmed' && b2.buttons.length === 0 && /^✓ 已確認完成/.test(b2.status), JSON.stringify(b2));
       if (process.env.SHOTS_DONE) await page.screenshot({ path: `${process.env.SHOTS_DONE}/guest-confirmed-${label}.png` });
@@ -120,7 +129,7 @@ for (const [name, extra, expectState, statusRe] of [
     async page => {
       const out = [];
       const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
-      await page.waitForSelector('#deliveryDone', { timeout: 5000 });
+      await page.waitForSelector('#deliveryDone, #completionPage', { timeout: 5000 });
       await page.waitForSelector('.fg-tile', { timeout: 5000 });   // the finals gallery (was .photo-card)
       const b = await doneBlock(page);
       ok(`block in state ${expectState} with the status text`, b.state === expectState && statusRe.test(b.status), JSON.stringify(b));
@@ -263,7 +272,7 @@ for (const [label, co] of [['1280px', { viewport: { width: 1280, height: 900 } }
       // 算了，這樣就好
       await page.click('#doneConfirmBtn');
       await page.click('#doneConfirmSubmit');
-      await page.waitForFunction(() => document.getElementById('deliveryDone')?.dataset.state === 'confirmed', null, { timeout: 5000 });
+      await page.waitForFunction(CONFIRMED_UP, null, { timeout: 5000 });
       const b3 = await doneBlock(page);
       ok('confirming after asking: ✓ 已確認完成, the request text is gone, no buttons', /^✓ 已確認完成/.test(b3.status) && b3.msgEl === false && b3.buttons.length === 0, JSON.stringify(b3));
       ok('the Worker resolved the request', m.state.revisions.every(r => r.resolved_at));
@@ -347,7 +356,7 @@ for (const [label, co] of [['1280px', { viewport: { width: 1280, height: 900 } }
       ok('after all that, nothing was ever recorded', m.state.revisions.length === 0 && m.state.project.client_confirmed_at === null);
       ok('and a success afterwards still goes through', await (async () => {
         await page.click('#doneConfirmBtn'); await page.click('#doneConfirmSubmit');
-        await page.waitForFunction(() => document.getElementById('deliveryDone')?.dataset.state === 'confirmed', null, { timeout: 5000 });
+        await page.waitForFunction(CONFIRMED_UP, null, { timeout: 5000 });
         return m.state.project.client_confirmed_at !== null;
       })());
       return out;
@@ -380,7 +389,7 @@ for (const [label, co] of [['1280px', { viewport: { width: 1280, height: 900 } }
         effect: () => { m.state.project.client_confirmed_at = '2026-09-22T01:00:00.000Z'; m.state.project.client_confirmed_by = 'photographer'; } }];
       await page.click('#doneReviseBtn');
       await page.click('#doneReviseSubmit');
-      await page.waitForFunction(() => document.getElementById('deliveryDone')?.dataset.state === 'confirmed', null, { timeout: 5000 });
+      await page.waitForFunction(CONFIRMED_UP, null, { timeout: 5000 });
       const b = await doneBlock(page);
       ok('the page shows ✓ 已確認完成（2026/9/22）, no buttons, modals gone', b.status === '✓ 已確認完成（2026/9/22）' && b.buttons.length === 0 && (await page.$('#doneReviseModal')) === null, JSON.stringify(b));
       ok('a toast says so', await page.evaluate(() => [...document.querySelectorAll('.toast')].some(t => t.textContent.includes('已確認完成'))));
@@ -408,7 +417,7 @@ for (const [label, co] of [['1280px', { viewport: { width: 1280, height: 900 } }
       await page.waitForTimeout(150);
       await page.evaluate(() => document.getElementById('doneConfirmCancel').click());
       ok('取消 while sending does not close the modal', await modalShown(page, 'doneConfirmModal'));
-      await page.waitForFunction(() => document.getElementById('deliveryDone')?.dataset.state === 'confirmed', null, { timeout: 5000 });
+      await page.waitForFunction(CONFIRMED_UP, null, { timeout: 5000 });
       ok('exactly one POST for three clicks', donePosts(m, 'confirm').length === 1, String(donePosts(m, 'confirm').length));
       return out;
     },
@@ -468,7 +477,7 @@ for (const [name, mutate, seed] of [
       m.state.project.client_confirmed_by = 'photographer';
       await page.click('#doneConfirmBtn');
       await page.click('#doneConfirmSubmit');
-      await page.waitForFunction(() => document.getElementById('deliveryDone')?.dataset.state === 'confirmed', null, { timeout: 5000 });
+      await page.waitForFunction(CONFIRMED_UP, null, { timeout: 5000 });
       const b = await doneBlock(page);
       ok('✓ 已確認完成（2026/9/22）, no buttons', b.status === '✓ 已確認完成（2026/9/22）' && b.buttons.length === 0, JSON.stringify(b));
       ok('no confirm POST was sent', donePosts(m, 'confirm').length === 0);

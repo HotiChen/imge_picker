@@ -622,9 +622,12 @@ for (const [label, co, init] of [['owner 1280px', FG_DESK, FG_OWNER], ['viewer 3
         await page.click('#doneConfirmBtn');
         ok('確認完成 opens its modal', await modalShown(page, 'doneConfirmModal'));
         await page.click('#doneConfirmSubmit');
-        await page.waitForFunction(() => document.getElementById('deliveryDone').dataset.state === 'confirmed', null, { timeout: 5000 });
-        const c = await page.evaluate(() => ({ status: document.getElementById('deliveryDoneStatus').textContent, btns: document.querySelectorAll('#deliveryDone button').length, tiles: document.querySelectorAll('.fg-tile').length }));
-        ok('confirming works end to end: ✓ 已確認完成, no buttons left, the gallery is untouched', /^✓ 已確認完成/.test(c.status) && c.btns === 0 && c.tiles === 8, JSON.stringify(c));
+        // EDITED with the 完成頁 (suite 33): confirming now switches to the light completion page in place; the
+        // 驗收頁's ✓ status block is gone, the gallery (same 8 photos) lives on inside the new page.
+        await page.waitForSelector('#completionPage', { timeout: 5000 });
+        await page.waitForFunction(() => document.querySelectorAll('#completionPage .fg-tile').length === 8, null, { timeout: 5000 });
+        const c = await page.evaluate(() => ({ status: document.getElementById('cpConfirmed').textContent, btns: document.querySelectorAll('#doneConfirmBtn, #doneReviseBtn, #deliveryDone').length, tiles: document.querySelectorAll('.fg-tile').length }));
+        ok('confirming works end to end: 已確認完成 on the completion page, no 驗收頁 block left, the gallery carried over', /^已確認完成/.test(c.status) && c.btns === 0 && c.tiles === 8, JSON.stringify(c));
         ok('exactly one POST /api/pick/confirm', donePosts(m, 'confirm').length === 1);
       }
       return out;

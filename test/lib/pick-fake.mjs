@@ -261,6 +261,27 @@ export function pickFakeWorker(opts = {}) {
         return json(resp);
       }
 
+      // GET /api/pick/shop (worker.js, docs/guest-shop.md "S1 trimmed"): the same order of checks as the
+      // Worker — link (401: no token, or an archived project; a picker key alone is no link) -> method
+      // (405, Allow: GET) -> delivered now (409 not_delivered) -> catalogue tables (500 shop_unavailable)
+      // -> 200 {products}. Every answer but the 401 carries Cache-Control: private, no-store and
+      // Vary: X-Share-Token. opts.shopProducts is the exact list the Worker would send (see
+      // shopProductsFake); opts.shopUnavailable = the migration has not run; opts.shopFail = 'net'
+      // drops the connection (a fetch TypeError), a number answers that status with a plain JSON error;
+      // opts.shopDelay holds every answer back that many ms.
+      if (u.pathname === '/api/pick/shop') {
+        if (opts.shopDelay) await new Promise(r => setTimeout(r, opts.shopDelay));   // a slow Worker
+        if (opts.shopFail === 'net') return route.abort('failed');
+        if (typeof opts.shopFail === 'number') return json({ error: 'boom' }, opts.shopFail);
+        if (!shareTok || state.project.archived_at) return json({ error: 'Unauthorized' }, 401);
+        const noStore = { 'Cache-Control': 'private, no-store', 'Vary': 'X-Share-Token' };
+        const send = (data, status, extra) => route.fulfill({ status, contentType: 'application/json', headers: { ...noStore, ...(extra || {}) }, body: JSON.stringify(data) });
+        if (method !== 'GET') return send({ error: 'Method not allowed' }, 405, { Allow: 'GET' });
+        if (pickScopeFake(state.project).mode !== 'delivered') return send({ error: '尚未交件', code: 'not_delivered' }, 409);
+        if (opts.shopUnavailable) return send({ error: '商品資訊暫時無法顯示', code: 'shop_unavailable' }, 500);
+        return send({ products: opts.shopProducts || [] }, 200);
+      }
+
       if (u.pathname === '/api/pick/claim' && method === 'POST') {
         const name = typeof body?.name === 'string' ? body.name.trim() : '';
         if (!name || name.length > 50) return json({ error: '請輸入 1–50 字的名字' }, 400);
@@ -741,3 +762,21 @@ export function pickFakeWorker(opts = {}) {
   };
   return { state, attach, requests, findByKey };
 }
+
+// The shape worker.js readGuestShop answers (docs/guest-shop.md, "S1 trimmed"), as the Worker's own test
+// pins it (worker/test/guest-shop-read.test.mjs): a print first (sort 1), then an album with a page range
+// and an image. min_pages / max_pages are SPREADS and null on a print; image_url is RELATIVE to the Worker
+// origin; price is the photographer's option price (an integer, NT$); label is '' on a single option.
+export const SHOP_PRINT_FAKE = {
+  id: 'prod-print', kind: 'print', name: '無框畫', description: '木框', photo_count: null, min_pages: null, max_pages: null, image_url: null,
+  options: [{ id: 'opt-print-1', label: '16×20', price: 3000 }],
+};
+export const SHOP_ALBUM_FAKE = {
+  id: 'prod-album', kind: 'album', name: '相本書', description: '精裝 20×20', photo_count: 20, min_pages: 10, max_pages: 30,
+  image_url: '/api/platform/products/pp-album/image?v=2026-10-05T00%3A00%3A00.000Z',
+  options: [{ id: 'opt-album-1', label: '20×20', price: 5000 }, { id: 'opt-album-2', label: '30×30', price: 7000 }],
+};
+export const shopProductsFake = (over = {}) => [
+  { ...SHOP_PRINT_FAKE, ...(over.print || {}) },
+  { ...SHOP_ALBUM_FAKE, ...(over.album || {}) },
+];
