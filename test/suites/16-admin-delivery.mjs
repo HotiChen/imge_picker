@@ -53,7 +53,7 @@ const pfWaitFinalsLink = page => page.waitForSelector('#pd-upload-final-btn[data
         !!(await page.$('#pd-replace-final-btn')) && !!(await page.$('#pd-undeliver-btn')) && (await page.$('#pd-deliver-btn')) === null);
       ok('the detail header and the project list both show the 已交件 badge',
         (await page.$('.pd-head [data-delivered-badge]')) !== null &&
-        await page.waitForSelector('#proj-recent-list [data-delivered-badge]', { timeout: 3000 }).then(() => true, () => false));
+        await page.waitForSelector('#proj-recent-list [data-delivered-badge]', { state: 'attached', timeout: 3000 }).then(() => true, () => false));
       const firstStamp = m.state.project.delivered_at;
 
       // repeat deliver: the picker opens with the current finals ticked
@@ -226,7 +226,7 @@ const pfWaitFinalsLink = page => page.waitForSelector('#pd-upload-final-btn[data
       ok('NOT shown as delivered (no status, no replace/undeliver buttons, no header badge)',
         (await page.$('[data-delivered-status]')) === null && (await page.$('#pd-replace-final-btn')) === null &&
         (await page.$('#pd-undeliver-btn')) === null && (await page.$('.pd-head [data-delivered-badge]')) === null);
-      await page.waitForSelector('#proj-recent-list [data-project-row]', { timeout: 5000 });
+      await page.waitForSelector('#proj-recent-list [data-project-row]', { state: 'attached', timeout: 5000 });   // the list is hidden behind the open detail
       ok('the project list row is rendered and has no 已交件 badge',
         (await page.$('#proj-recent-list [data-project-row]')) !== null && (await page.$('#proj-recent-list [data-delivered-badge]')) === null);
       ok('the last finals are pre-filled as chips in the delivery block',

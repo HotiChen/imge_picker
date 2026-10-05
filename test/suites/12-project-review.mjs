@@ -233,6 +233,9 @@ await suite('index.html — 專案選片：沒有 ?project= 時，攝影師模�
       await page.waitForFunction(
         () => document.querySelector('.pd-head .badge')?.textContent === '精修中',
         null, { timeout: 5000 });
+      // the list is hidden while the detail is open (admin detail view) but is still kept
+      // current; it is refreshed in the same step as the detail, so wait for it, not a fixed beat
+      await page.waitForFunction(() => document.querySelector('[data-project-row]')?.textContent.includes('精修中'), null, { timeout: 5000 }).catch(() => {});
       const listText = await page.evaluate(() => document.querySelector('[data-project-row]').textContent);
       ok('the list row picks up 精修中 too, not just the detail panel', listText.includes('精修中'), listText);
       return out;

@@ -206,6 +206,9 @@
   #project-detail-panel .err:empty, #project-detail-panel .ok-msg:empty { display: none; }
   #project-detail-panel .empty { padding: 8px 0; text-align: left; }
   #project-detail-panel.panel { margin-bottom: 12px; }
+  .pd-back-bar { padding: 14px 18px 0; }
+  #pd-back-btn { min-height: 36px; padding: 6px 16px; font-size: 13px; }
+  .proj-notice { margin: 0 0 14px; padding: 10px 14px; border-radius: 10px; background: var(--accent-dim); color: var(--ink-90); font-size: 13px; line-height: 1.6; }
   .pd-head { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
   .pd-owner { color: var(--ink-55); font-size: 13px; margin-bottom: 14px; }
   .pd-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; }
@@ -318,7 +321,12 @@
   <aside id="sideNav" class="side-nav"></aside>
   <main>
     <section id="view-projects" class="view-section">
+    <!-- Two views in one section: this list/create area, or ONE project's detail
+         (#project-detail-panel below). Opening a project shows the detail and hides
+         everything in here; 「← 返回專案列表」 undoes it (setProjectsMode). -->
+    <div id="projects-list-area">
     <h2>選片專案（Guest Picking）</h2>
+    <div id="proj-notice" class="proj-notice" role="status" style="display:none;"></div>
     <div id="project-create-panel" class="panel">
       <div class="panel-body">
         <div class="pick-admin-row">
@@ -366,8 +374,10 @@
       <input type="checkbox" id="proj-show-archived-toggle"> 顯示已封存
     </label>
     <div id="proj-recent-list" style="margin-bottom:24px;"></div>
+    </div>
 
     <div id="project-detail-panel" class="panel" style="display:none;">
+      <div class="pd-back-bar"><button id="pd-back-btn" class="btn btn-outline" type="button">← 返回專案列表</button></div>
       <div class="panel-body" id="project-detail-body"></div>
     </div>
 
@@ -485,10 +495,9 @@
       if (/^#project=(.+)$/.test(location.hash)) {
         restoreProjectFromHash();
       } else {
-        // Menu click on 選片專案 while a detail is open → back to the list.
-        const panel = document.getElementById('project-detail-panel');
-        if (panel) panel.style.display = 'none';
-        currentProjectId = null;
+        // No project in the hash (menu click on 選片專案, browser Back from a detail,
+        // 返回): the list.
+        setProjectsMode(false);
       }
     }
   }
@@ -519,10 +528,60 @@
   // sets it). Reopens that same project's detail on the way back in, whether
   // this is a fresh load after Back/the phone back gesture, or just this
   // browser still holding an old link from earlier.
-  function restoreProjectFromHash() {
+  function projectIdFromHash() {
     const m = /^#project=(.+)$/.exec(location.hash);
-    if (m) openProjectDetail(decodeURIComponent(m[1]));
+    if (!m) return null;
+    try { return decodeURIComponent(m[1]); } catch (e) { return m[1]; }
   }
+  function restoreProjectFromHash() {
+    const id = projectIdFromHash();
+    if (id) openProjectDetail(id);
+  }
+
+  // ── Projects view: the list, or one project's detail ──────────────────────
+  // Never both: the detail used to open under the whole list, so on a phone 開啟
+  // looked like it did nothing. The address says which one is up (#project=<id>
+  // is the detail), so reload, a link from another page and the browser's Back all
+  // land in the right one. Opening pushes ONE history entry (marked pdDetail), so
+  // Back is "close the detail"; 返回 uses that same entry (history.back) and only
+  // rewrites the address when the page was entered on the detail (a link, a reload
+  // with no entry behind it), where Back would leave the page instead.
+  let detailMode = false;
+  let detailShownId = null;    // the project whose detail is drawn in the panel right now
+  let listScrollY = 0;         // where the list was scrolled to when a project was opened
+  let openSeq = 0;             // the newest openProjectDetail wins; an older answer is dropped
+
+  function setProjectsMode(detail) {
+    const area = document.getElementById('projects-list-area');
+    const panel = document.getElementById('project-detail-panel');
+    if (!area || !panel) return;
+    const was = detailMode;
+    detailMode = detail;
+    area.style.display = detail ? 'none' : '';
+    panel.style.display = detail ? 'block' : 'none';
+    if (detail && !was) {
+      listScrollY = window.scrollY;
+      window.scrollTo(0, 0);
+    } else if (!detail && was) {
+      detailShownId = null;
+      currentProjectId = null;
+      window.scrollTo(0, listScrollY);
+    }
+  }
+  function showProjectNotice(text) {
+    const el = document.getElementById('proj-notice');
+    if (!el) return;
+    el.textContent = text || '';
+    el.style.display = text ? 'block' : 'none';
+  }
+  // Leave the detail for the list. Also what an action that takes the project out of
+  // the list (封存, 刪除) does.
+  function leaveProjectDetail() {
+    if (history.state && history.state.pdDetail) { history.back(); return; }   // hashchange → applyView → list
+    history.replaceState(null, '', location.pathname + location.search);
+    setProjectsMode(false);
+  }
+  document.getElementById('pd-back-btn')?.addEventListener('click', leaveProjectDetail);
 
   document.getElementById('admin-login-btn').addEventListener('click', tryAdminLogin);
   document.getElementById('admin-token-input').addEventListener('keydown', e => { if (e.key === 'Enter') tryAdminLogin(); });
@@ -974,7 +1033,8 @@
       document.getElementById('proj-extra-max').value = '';
       loadProjectDefaults();
       updateCreateForm();
-      await openProjectDetail(data.project.id);
+      // Stay on the list: the 連結已建立 box with the link to send is up here, and
+      // opening the detail now would hide it. The new project is the first row.
     } catch (e) {
       errEl.textContent = '無法連線到 Worker';
     } finally {
@@ -1020,26 +1080,47 @@
       .filter(k => norm(a[k]) !== norm(b[k])).sort();
   }
 
+  // Opens a project's detail view, or — when that project is already the one on
+  // screen — re-reads it and redraws in place (every action calls this to refresh).
+  // A refresh keeps the old drawing until the new one replaces it in one step: no
+  // 載入中… in between, so nothing on the page disappears and the scroll position stays.
   async function openProjectDetail(id) {
-    currentProjectId = id;
-    const panel = document.getElementById('project-detail-panel');
+    if (!id) return;
     const body = document.getElementById('project-detail-body');
-    if (!panel || !body) return;
-    // index.html?project=<id> links back here with a plain <a> (same tab),
-    // so the browser Back button / phone back gesture returns to admin.html
-    // rather than closing it. The hash is what lets this page reopen the same
-    // detail on that return, whether the browser replays it from bfcache or
-    // does a fresh load (restoreProjectFromHash, called from showAdmin()).
-    history.replaceState(null, '', '#project=' + encodeURIComponent(id));
-    panel.style.display = 'block';
-    body.innerHTML = '<div class="empty">載入中…</div>';
+    if (!document.getElementById('project-detail-panel') || !body) return;
+    const entering = detailShownId !== id;
+    const seq = ++openSeq;
+    currentProjectId = id;
+    // The hash is the detail view's address. index.html?project=<id> links back to it
+    // with a plain <a> (same tab), so the browser Back / phone back gesture returns to
+    // admin.html on that project; the hash is what lets this page reopen it, whether
+    // the browser replays the page from bfcache or does a fresh load.
+    if (projectIdFromHash() !== id) history.pushState({ pdDetail: 1 }, '', '#project=' + encodeURIComponent(id));
+    showProjectNotice('');
+    setProjectsMode(true);
+    if (entering) {
+      detailShownId = id;
+      body.innerHTML = '<div class="empty">載入中…</div>';
+    }
     try {
       const r = await fetch(`${WORKER_URL}/api/admin/projects/${encodeURIComponent(id)}`, {
         headers: { 'Authorization': `Bearer ${getToken()}` },
       });
+      if (seq !== openSeq || !detailMode) return;   // another project was opened, or 返回 was pressed
+      if (r.status === 404) {
+        // a deleted project, a mistyped or stale link: say so on the list instead of a blank page
+        history.replaceState(null, '', location.pathname + location.search);
+        body.innerHTML = '';
+        setProjectsMode(false);
+        showProjectNotice('找不到這個專案，可能已被刪除。');
+        return;
+      }
       if (!r.ok) { body.innerHTML = `<div class="empty">讀取失敗（${r.status}）</div>`; return; }
-      renderProjectDetail(await r.json());
+      const data = await r.json();
+      if (seq !== openSeq || !detailMode) return;
+      renderProjectDetail(data);
     } catch (e) {
+      if (seq !== openSeq || !detailMode) return;
       body.innerHTML = '<div class="empty">無法連線到 Worker</div>';
     }
   }
@@ -1312,9 +1393,7 @@
             ? '已有送出紀錄，無法刪除，請改用封存' : (data.error || `失敗（${r.status}）`);
           return;
         }
-        document.getElementById('project-detail-panel').style.display = 'none';
-        currentProjectId = null;
-        history.replaceState(null, '', location.pathname + location.search);
+        leaveProjectDetail();
         await loadProjectList();
       } catch (e) {
         if (errEl) errEl.textContent = '無法連線到 Worker';
@@ -1788,6 +1867,8 @@
       });
       const data = await r.json().catch(() => ({}));
       if (!r.ok) { if (errEl) errEl.textContent = data.error || `失敗（${r.status}）`; return; }
+      // 封存 takes the project out of the list (unless 顯示已封存): back to the list.
+      if (action === 'archive') { leaveProjectDetail(); await loadProjectList(); return; }
       // The list shows the same phase/modified badges as the detail panel —
       // refreshing only the panel left the list showing 已送出 while the
       // detail already said 精修中. Every action that can change them has to

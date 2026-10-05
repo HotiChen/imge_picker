@@ -281,6 +281,13 @@ await suite('desktop preview — arrow keys and mouse click still navigate/open 
 
       page.once('dialog', d => d.accept());
       await page.click('#pd-archive-btn');
+      // 封存 takes the project out of the list, so the page goes back to the list view
+      // (test/suites/30-admin-detail-view.mjs); the archived project is opened again from
+      // 顯示已封存 to look at what 封存 did.
+      await page.waitForFunction(() => document.getElementById('proj-recent-list').textContent.includes('尚未建立過專案'), null, { timeout: 5000 });
+      await page.check('#proj-show-archived-toggle');
+      await page.waitForSelector('[data-open-project]', { state: 'visible', timeout: 5000 });
+      await page.click('[data-open-project]');
       await page.waitForSelector('#pd-unarchive-btn', { timeout: 5000 });
       const after = await page.evaluate(() => ({
         badge: document.querySelector('.pd-head')?.textContent.includes('已封存'),
@@ -323,7 +330,10 @@ await suite('desktop preview — arrow keys and mouse click still navigate/open 
       await page.waitForSelector('#pd-archive-btn', { timeout: 5000 });
       page.once('dialog', d => d.accept());
       await page.click('#pd-archive-btn');
-      await page.waitForSelector('#pd-unarchive-btn', { timeout: 5000 });
+      // 封存 returns to the list view (test/suites/30-admin-detail-view.mjs)
+      await page.waitForFunction(() => document.getElementById('proj-recent-list').textContent.includes('尚未建立過專案'), null, { timeout: 5000 });
+      ok('封存 went back to the list: the toggle is shown and the detail panel is not',
+        await page.isVisible('#proj-show-archived-toggle') && !(await page.isVisible('#project-detail-panel')));
 
       const listEmpty = await page.evaluate(() =>
         document.getElementById('proj-recent-list').textContent.includes('尚未建立過專案'));

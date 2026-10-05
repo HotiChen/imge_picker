@@ -516,6 +516,8 @@ export function pickFakeWorker(opts = {}) {
         }, 201);
       }
       if (/^\/api\/admin\/projects\/[^/]+$/.test(u.pathname) && method === 'GET') {
+        // worker.js: an unknown (or deleted) project id is a 404, not somebody else's project
+        if (state.deleted || decodeURIComponent(u.pathname.split('/')[4]) !== state.project.id) return json({ error: 'Not found' }, 404);
         const pickers = Array.from(state.pickers.values()).map(p => ({
           id: p.id, name: p.name, relationship: p.relationship || null,
           email: p.email || null, user_id: null, created_at: '2026-01-01T00:00:00.000Z',

@@ -194,7 +194,8 @@ for (const [tag, ctx] of [['1280', DESKTOP], ['390', PHONE]]) {
       const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
       await page.waitForSelector('#pd-orders .ord-card', { timeout: 5000 });
       await page.waitForSelector('#pd-delivery #pd-final-pick-btn', { timeout: 5000 });
-      await page.waitForSelector('[data-project-row]', { timeout: 5000 });
+      // (the project list is hidden while a detail is open — its badges and create form are scanned by the
+      // 建立表單與專案列表 suite below, in the list view)
       // (every section is open: ADMIN stores that preference; 目前選取 used to be a <details> opened here)
       ok('the fixture reached the places under test: pins line, 加挑 warning, a cancelled order, selections table',
         await page.evaluate(() => /標示變更 1 張/.test(document.getElementById('pd-submissions').textContent) &&
@@ -202,10 +203,10 @@ for (const [tag, ctx] of [['1280', DESKTOP], ['390', PHONE]]) {
           document.querySelectorAll('#pd-selections-details tbody tr').length === 2));
       await tokenChecks(page, ok, 'admin');
       await brightChecks(page, ok, 'admin 詳情', { minItems: 80,
-        named: ['header .subtitle', '.side-nav-item', '.side-nav-item.active', 'h2', '#proj-recent-list .badge-approved', '.pd-head .badge-pending',
+        named: ['header .subtitle', '.side-nav-item', '.side-nav-item.active', '#pd-back-btn', '.pd-head .badge-approved', '.pd-head .badge-pending',
           '#pd-submissions .badge-pending', '.pd-owner', '.pd-diff', '#project-detail-panel a.pd-link', '#pd-start-retouch-btn', '#pd-reset-seat-btn',
           '#pd-download-btn', '#pd-archive-btn', '#pd-final-pick-btn', 'th', '.field', '.panel-note, .pd-note', '.ord-warn',
-          '.ord-card .ord-status', '.ord-owed', '.ord-actions .btn', '#proj-create-btn', '#proj-copy-link-btn, [data-copy-link]', '[data-open-project]',
+          '.ord-card .ord-status', '.ord-owed', '.ord-actions .btn', '[data-copy-link]',
           '.pd-switch'],
         }).then(r => {
           ok('the cancelled order stays legible (positive: it was scanned, and no failure names it)',
@@ -278,7 +279,7 @@ for (const [tag, ctx] of [['1280', DESKTOP], ['390', PHONE]]) {
         const out = [];
         const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
         await page.waitForSelector('#pd-revisions .pd-rev', { timeout: 5000 });
-        await page.waitForSelector('#proj-recent-list [data-confirm-badge], .pd-head [data-confirm-badge]', { timeout: 5000 });
+        await page.waitForSelector('.pd-head [data-confirm-badge]', { timeout: 5000 });
         const open = state === 'open requests';
         ok('the fixture reached the places under test (list of 3, one resolved, status line, a badge in the head)',
           await page.evaluate(() => document.querySelectorAll('#pd-revisions .pd-rev').length === 3 && !!document.getElementById('pd-confirm-status') && !!document.querySelector('.pd-head [data-confirm-badge]')));
@@ -287,12 +288,16 @@ for (const [tag, ctx] of [['1280', DESKTOP], ['390', PHONE]]) {
         await tokenChecks(page, ok, 'admin');
         await brightChecks(page, ok, `admin 確認區 (${state})`, { minItems: 60,
           named: ['#pd-confirm-status', '.pd-rev-meta', '.pd-rev-msg', '.pd-rev.resolved .pd-rev-msg', '.pd-rev-done', '.pd-head [data-confirm-badge]',
-            '#proj-recent-list [data-confirm-badge]', ...(open ? ['#pd-mark-done-btn', '#pd-revision-hint'] : [])] });
+            ...(open ? ['#pd-mark-done-btn', '#pd-revision-hint'] : [])] });
         const card = await page.$eval('.pd-rev:not(.resolved), .pd-rev', e => { const c = getComputedStyle(e); return { bg: c.backgroundColor }; });
         ok('a request is a light card (not a dark box)', /^rgb\(2[0-9]{2}, 2[0-9]{2}, 2[0-9]{2}\)$/.test(card.bg), JSON.stringify(card));
         if (tag === '390') ok('no horizontal scroll', await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
         await shot(page, `admin-confirm-${state.split(' ')[0]}-${tag}`);
         if (process.env.SHOTS_DONE) await page.screenshot({ path: `${process.env.SHOTS_DONE}/admin-detail-${state.split(' ')[0]}-${tag}.png`, fullPage: true });
+        // the list row's badge is on the list view, one 返回 away (it is hidden behind an open detail)
+        await page.click('#pd-back-btn');
+        await page.waitForSelector('#proj-recent-list [data-confirm-badge]', { state: 'visible', timeout: 5000 });
+        await brightChecks(page, ok, `admin 列表的確認徽章 (${state})`, { minItems: 20, named: ['#proj-recent-list [data-confirm-badge]'] });
         return out;
       },
       { before: m.attach, initScript: ADMIN, contextOptions: ctx });
