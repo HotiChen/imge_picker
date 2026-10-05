@@ -13,6 +13,10 @@
 //     batched (one animation frame, at most one per MIN_GAP_MS), so 300 photos
 //     cost a handful of layouts, not 300;
 //   - a full-screen lightbox: ‹ ›, ← → Esc, swipe, n / total, preload ±1.
+// Two options of mount() serve the light 完成頁 (js/completion-page.js, which has its own
+// hero): `hero: false` keeps the hero element detached (no cover is loaded, nothing of it is
+// on the page) and `theme: 'light'` puts `fg--light` on the root and `fg-lightbox--light` on
+// the lightbox, the hooks css/completion-page.css styles. Without them nothing changes.
 //
 // Every string that came from outside (file and folder names, title, studio
 // name) only reaches the DOM through textContent / setAttribute / property
@@ -91,7 +95,7 @@
 
         // Build (or refresh) the shell: hero, the rows host. `host` is the page's
         // content column; `cfg` = { title, studio: {name, hasLogo, logoUrl}, drive,
-        // onShare(), onDownload(e, photo), onFolder(path) }.
+        // onShare(), onDownload(e, photo), onFolder(path), hero?: false, theme?: 'light' }.
         mount(host, cfg) {
             this.ctx = cfg;
             if (this.root && this.root.isConnected) {
@@ -110,7 +114,10 @@
             body.append(el('h1', 'fg-title', null, 'fgTitle'), el('div', 'fg-count', null, 'fgCount'));
             hero.append(media, shade, body, share);
             const rows = el('div', 'fg-rows', null, 'fgRows');
-            root.append(hero, rows);
+            // hero: false: the hero stays a detached element (the code below keeps writing to it,
+            // harmlessly) and never reaches the page
+            if (cfg.hero === false) root.append(rows); else root.append(hero, rows);
+            if (cfg.theme === 'light') root.classList.add('fg--light');
             host.insertBefore(root, host.firstChild);
             this.root = root; this.hero = hero; this.rowsEl = rows; this.countEl = body.lastChild;
             document.body.classList.add('fg-mode');
@@ -172,7 +179,7 @@
             if (!this.chipsEl) {
                 this.chipsEl = el('nav', 'fg-chips', null, 'fgChips');
                 this.chipsEl.setAttribute('aria-label', '資料夾');
-                this.hero.after(this.chipsEl);
+                if (this.hero.parentNode) this.hero.after(this.chipsEl); else this.root.insertBefore(this.chipsEl, this.root.firstChild);
             }
             const chips = list.map(c => {
                 const b = btn(null, `fg-chip${c.sub ? ' fg-chip--sub' : ''}`, c.label);
@@ -196,7 +203,7 @@
             this.photos = photos.slice();
             this.countEl.textContent = photos.length ? `${photos.length} 張照片` : '';
             // the cover is the first photo of the first folder that has any, and stays
-            if (!this.coverKey && photos.length) this._setCover(photos[0]);
+            if (!this.coverKey && photos.length && !(this.ctx && this.ctx.hero === false)) this._setCover(photos[0]);
             this.hero.classList.toggle('fg-hero--bare', !this.coverKey && !photos.length);
             this._buildTiles();
             if (!photos.length) {
@@ -359,6 +366,7 @@
             root.setAttribute('role', 'dialog');
             root.setAttribute('aria-modal', 'true');
             root.setAttribute('aria-label', '照片檢視');
+            if (this.ctx && this.ctx.theme === 'light') root.classList.add('fg-lightbox--light');
             root.tabIndex = -1;
             const bar = el('div', 'fg-lb-bar');
             const dl = el('a', 'fg-lb-btn fg-lb-dl', '下載', 'fgLbDownload');

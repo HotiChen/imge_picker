@@ -22,6 +22,11 @@
 // white paper, never cropped, never stretched; Tim's check in the LINE browser: cropping "cuts off heads"). A plan with
 // fit: 'cover' (AlbumPreview.PLAN_OPTS = { fit: 'cover' }) is still drawn the old way, filling its frame with crop.
 //
+// Spread-count bounds (docs/album-preview.md "Spread-count bounds"): AlbumPreview.PLAN_OPTS may carry
+// { minSpreads, maxSpreads } (js/completion-page.js sets them from the shop's album product). The plan's
+// own report says whether they were met; boundsHint() turns "not met" into one kind sentence, shown in
+// the viewer's footer and handed to AlbumPreview.onResult for the page behind it.
+//
 // Every string that came from outside (photo keys) only ever reaches
 // img.src as a property — no innerHTML anywhere in this file, so a file name
 // that is markup stays text. book_editor.js / exporter.js are not loaded.
@@ -179,6 +184,24 @@
         return [...ids];
     }
 
+    // ── the spread-count bounds, in words ─────────────────────────────────
+    // `plan` = AutoLayout.planSpreads' result, `photoCount` = the photos that were laid out. Only a bound that was
+    // asked for AND not met says anything; a caller error (min > max: the report carries `error`) says nothing, it
+    // is not the guest's to fix. photosNeeded / photosAllowed can be null: the number is then left out.
+    // photosNeeded is the bare minimum the planner can reach the spread count with (docs/album-preview.md).
+    function boundsHint(plan, photoCount) {
+        const parts = [];
+        const min = plan && plan.minSpreads, max = plan && plan.maxSpreads;
+        if (min && min.met === false && !min.error) {
+            const need = Number.isFinite(min.photosNeeded) ? `；建議至少 ${min.photosNeeded} 張` : '';
+            parts.push(`這本相本至少要 ${min.wanted} 個跨頁，目前 ${photoCount} 張照片只排得出 ${min.achieved} 個${need}`);
+        }
+        if (max && max.met === false && !max.error) {
+            parts.push(Number.isFinite(max.photosAllowed) ? `照片超過這本相本能放的 ${max.photosAllowed} 張` : '照片超過這本相本能放的數量');
+        }
+        return parts.length ? `${parts.join('。')}。` : null;
+    }
+
     // ── the pipeline: finals -> plan ──────────────────────────────────────
     // Resolves { kind: 'ready', plan, notes } | { kind: 'few' }; rejects with
     // an Error carrying .kind = 'list' | 'photos' for the error panel, or with
@@ -222,7 +245,7 @@
         if (dup > 0) notes.push(`已略過 ${dup} 張相近的照片`);
         if (capped) notes.push(`已先用前 ${cfg.MAX_PHOTOS} 張排版`);
         if (failed > 0) notes.push(`${failed} 張照片讀取失敗，未放入相本`);
-        return { kind: 'ready', plan, notes };
+        return { kind: 'ready', plan, notes, hint: boundsHint(plan, ok - dup) };
     }
 
     // ── the viewer ────────────────────────────────────────────────────────
@@ -308,7 +331,8 @@
             build(this.folders, ctl.signal, onProgress, AlbumPreview).then(res => {
                 if (id !== this.runId) return;
                 if (res.kind === 'few') this.showFew();
-                else this.showAlbum(res.plan, res.notes);
+                else this.showAlbum(res.plan, res.notes, res.hint);
+                AlbumPreview.reportHint(res.kind === 'few' ? null : res.hint);
             }, err => {
                 if (id !== this.runId || isAbort(err) || ctl.signal.aborted) return;
                 this.showError(err && err.kind === 'photos'
@@ -378,7 +402,7 @@
             retry.focus();
         },
 
-        showAlbum(plan, notes) {
+        showAlbum(plan, notes, hint) {
             this.setState('ready');
             this.stage.dataset.zoomable = 'true';       // CSS: the stage takes the touches itself (touch-action: none)
             this.pages = [
@@ -393,11 +417,15 @@
             }
             const note = text('div', 'album-note', notes.join('・'), 'albumNote');
             note.hidden = notes.length === 0;
+            // the bounds could not be met: said plainly, above the page buttons (present only then)
+            const bounds = hint ? text('div', 'album-bounds', hint, 'albumBounds') : null;
+            if (bounds) bounds.setAttribute('role', 'status');
             const prev = button('albumPrev', 'album-nav-btn', '‹', '上一頁');
             const next = button('albumNext', 'album-nav-btn', '›', '下一頁');
             const label = text('div', 'album-label', '', 'albumLabel');
             label.setAttribute('aria-live', 'polite');
             const row = text('div', 'album-nav'); row.append(prev, label, next);
+            if (bounds) this.foot.append(bounds);
             this.foot.append(note, row);
             prev.addEventListener('click', () => this.go(-1));
             next.addEventListener('click', () => this.go(1));
@@ -754,8 +782,21 @@
         MAX_PHOTOS: 240,          // more than this: the first 240 in shooting order, and it says so
         CHUNK: 24,                // photos analysed per call: the progress granularity
         LIST_MAX_FOLDERS: 200,    // the listing never walks more folders than this
-        PLAN_OPTS: {},            // extra options for AutoLayout.planSpreads (e.g. { back: true }); the shapes above always win
+        PLAN_OPTS: {},            // extra options for AutoLayout.planSpreads (e.g. { back: true, minSpreads, maxSpreads }); the shapes above always win
         folders: [],
+        onResult: null,           // optional (hint: string | null) => void, called after every run (the page behind the viewer shows the hint)
+        boundsHint,
+
+        reportHint(hint) {
+            if (typeof this.onResult !== 'function') return;
+            try { this.onResult(hint); } catch (e) { /* a page's own callback never breaks the viewer */ }
+        },
+
+        // Every photo under the final folders (subfolders included), as ids, in listing order. Rejects when
+        // a listing fails. For the 下載全部精修 button; the same walk the preview uses.
+        listFinalIds(folders, signal) {
+            return listFinals(Array.isArray(folders) ? folders : [], signal || new AbortController().signal, this);
+        },
 
         // Show the entry right after `after` (a delivered finals view with at
         // least one final folder), or remove it — and close the viewer if it

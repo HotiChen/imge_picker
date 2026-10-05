@@ -22,6 +22,7 @@
     if (token) document.documentElement.classList.add('guest-mode');
 
     // Retouch pins (docs/guest-picking.md "Retouch pins — the save contract").
+    const SHOP_TIMEOUT_MS = 8000;   // the 完成頁's shop read
     const PIN_MAX = 10;         // per photo (server PICK_MARKS_MAX)
     const PIN_NOTE_MAX = 100;   // characters (server PICK_MARK_NOTE_MAX)
     // control / line-separator characters the server refuses in a note
@@ -121,6 +122,14 @@
 
         fetchState() {
             return this._json('/api/pick/state', { headers: this.headers() });
+        },
+        // GET /api/pick/shop (docs/guest-shop.md): what the 完成頁 may offer. Information only; a slow
+        // Worker is given up on after SHOP_TIMEOUT_MS (the page behind it must not wait for it).
+        fetchShop() {
+            const ctl = typeof AbortController === 'function' ? new AbortController() : null;
+            const timer = ctl ? setTimeout(() => ctl.abort(), SHOP_TIMEOUT_MS) : 0;
+            return this._json('/api/pick/shop', { headers: this.headers(), signal: ctl ? ctl.signal : undefined })
+                .finally(() => clearTimeout(timer));
         },
         claim(name) {
             return this._json('/api/pick/claim', {
@@ -241,6 +250,7 @@
                 this._galleryUIRemoved = true;
             }
             this._renderDeliveryBar();
+            this._syncCompletion();
             this._syncFinals();
             this._renderDone();
             this._renderAlbumEntry();
@@ -253,7 +263,7 @@
             if (!el) return;
             const titleEl = document.getElementById('deliveryTitle');
             const btn = document.getElementById('deliveryProofsBtn');
-            if (this.mode !== 'delivered') { el.hidden = true; return; }
+            if (this.mode !== 'delivered' || this._completionWanted()) { el.hidden = true; return; }
             // in the finals gallery the bar is a thin strip, and only there when it
             // carries the 下載毛片原檔 entry (the hero already has the title)
             el.classList.toggle('fg-bar-proofs', this.allowProofDownload);
@@ -285,8 +295,15 @@
             if (!window.FinalsGallery) return;
             const want = this.active && this.mode === 'delivered' && this.view === 'finals';
             if (!want) { FinalsGallery.unmount(); return; }
-            const content = document.querySelector('main.main-content > .content');
+            // the confirmed delivery has its own light page: the gallery is mounted into it (no hero of
+            // its own, light theme); otherwise into the dark page's content column, as always
+            const cp = this._completionWanted() && CompletionPage.isMounted();
+            const content = cp ? CompletionPage.galleryHost() : document.querySelector('main.main-content > .content');
             if (!content) return;
+            // the other kind of host (a confirmation just came in, or went): rebuild the gallery there
+            const switched = FinalsGallery.isMounted() && this._finalsInCp !== cp;
+            if (switched) FinalsGallery.unmount();
+            this._finalsInCp = cp;
             const studio = this.studio || {};
             FinalsGallery.mount(content, {
                 title: this.projectTitle,
@@ -295,7 +312,71 @@
                 onShare: () => this.shareLink(),
                 onDownload: (e, photo) => this.download(e, photo),
                 onFolder: folder => this.app && this.app.handleLoadPhotos(folder),
+                ...(cp ? { hero: false, theme: 'light' } : {}),
             });
+            // a fresh gallery has no photos yet; the open folder's are already loaded
+            if (switched && this.app && this.app.filteredPhotos) this.renderFinals(this.app.filteredPhotos);
+        },
+
+        // ── the 完成頁 (js/completion-page.js, docs/delivery.md) ─────────────
+        // A delivered project the client CONFIRMED (confirmed_at, owner and viewers alike) shows the light
+        // completion page instead of the 驗收頁, at the same URL. Never outside the delivered finals view; a
+        // page without the scripts keeps the 驗收頁. The switch is in place (a re-render, no reload):
+        // everything the page needs is already here, a reload would only add a blank flash and a second state
+        // read, and the confirmation that triggers it has just been written to the Worker.
+        _completionWanted() {
+            return this.active && this.mode === 'delivered' && this.view === 'finals' && !!this.confirmedAt &&
+                !!window.CompletionPage && !!window.FinalsGallery;
+        },
+
+        _syncCompletion() {
+            if (!window.CompletionPage) return;
+            if (!this._completionWanted()) {
+                if (CompletionPage.isMounted()) CompletionPage.unmount();
+                return;
+            }
+            const studio = this.studio || {};
+            const when = this._fmtDate(this.confirmedAt);
+            const cfg = {
+                title: this.projectTitle,
+                studio: { name: studio.name || '', hasLogo: !!studio.has_logo, logoUrl: `${CONFIG.WORKER_URL}/api/studio/logo`, bookingUrl: studio.booking_url || null },
+                confirmedText: `已確認完成${when ? `（${when}）` : ''}`,
+                workerUrl: CONFIG.WORKER_URL,
+                onShare: () => this.shareLink(),
+                onDownloadAll: () => this.downloadAllFinals(),
+                fetchShop: () => this.fetchShop(),
+                onShopSettled: () => this._renderAlbumEntry(),
+            };
+            const fresh = !CompletionPage.isMounted();
+            CompletionPage.mount(cfg);
+            if (fresh) {
+                // the gallery of the dark page (if it was up) is rebuilt in the new host by _syncFinals; the
+                // page starts at the top and takes the focus the closed modal left behind
+                window.scrollTo(0, 0);
+                try { document.getElementById('completionPage').focus({ preventScroll: true }); } catch (e) { /* no focus: fine */ }
+            }
+        },
+
+        // 下載全部精修: every final (all final folders, subfolders included) as one zip named
+        // <title>_精修_<N>張.zip. The finals are the deliverable (pickReadScope: delivered originals), so the
+        // same rule as the per-photo 下載. The listing is the album preview's own walk.
+        async downloadAllFinals() {
+            let ids;
+            try {
+                ids = window.AlbumPreview && AlbumPreview.listFinalIds
+                    ? await AlbumPreview.listFinalIds(this.finalFolders)
+                    : (this.app ? this.app.photos.map(p => p.id) : []);
+            } catch (e) {
+                if (typeof toast !== 'undefined') toast.error('無法取得照片清單，請稍後再試');
+                return;
+            }
+            const photos = ids.map(id => ({ id, name: String(id).split('/').pop() }));
+            if (!photos.length) {
+                if (typeof toast !== 'undefined') toast.warning('目前沒有照片可供下載');
+                return;
+            }
+            const zipName = `${driveManager.sanitizeFileTitle(this.projectTitle)}_精修_${photos.length}張.zip`;
+            await driveManager.downloadPhotos(photos, zipName);
         },
 
         // The finals folders as chips, plus (when the open folder has subfolders, or
@@ -323,6 +404,10 @@
             if (!this._finalsOn()) return false;
             FinalsGallery.setChips(this._finalsChips());
             FinalsGallery.setPhotos(photos, driveManager.currentFolderId);
+            if (window.CompletionPage && CompletionPage.isMounted()) {
+                if (photos.length) CompletionPage.setCover(photos[0], driveManager);
+                CompletionPage.setCount(photos.length);
+            }
             return true;
         },
 
@@ -386,10 +471,12 @@
         // js/album-preview.js does the rest; a page without it just has no entry.
         _renderAlbumEntry() {
             if (!window.AlbumPreview) return;
+            const cp = this._completionWanted() && !!window.CompletionPage && CompletionPage.isMounted();
             AlbumPreview.syncEntry({
-                show: this.mode === 'delivered' && this.view === 'finals' && this.finalFolders.length > 0,
-                // the gallery's last row: the entry is the last thing on the page
-                after: (this._finalsOn() && FinalsGallery.afterEl()) || document.getElementById('deliveryDone'),
+                show: this.mode === 'delivered' && this.view === 'finals' && this.finalFolders.length > 0 && (!cp || CompletionPage.shopSettled()),
+                // the gallery's last row: the entry is the last thing on the page (on the 完成頁: in its own
+                // album section, once the shop has answered so the spread bounds are already set)
+                after: cp ? CompletionPage.albumAnchor() : ((this._finalsOn() && FinalsGallery.afterEl()) || document.getElementById('deliveryDone')),
                 folders: this.finalFolders,
             });
         },
@@ -420,7 +507,8 @@
         _renderDone() {
             let el = document.getElementById('deliveryDone');
             const bar = document.getElementById('deliveryBar');
-            if (this.mode !== 'delivered' || !bar) {
+            // the completion page has no status block, no 確認完成, no modals
+            if (this.mode !== 'delivered' || !bar || this._completionWanted()) {
                 el?.remove();
                 this._removeDoneModals();
                 return;
@@ -644,7 +732,7 @@
                     this._applyConfirmFields(guard.data);
                     this._doneBusy = false;
                     this._closeDoneModal(kind);
-                    this._renderDone();
+                    this._applyView();   // re-renders the block, and switches to the completion page when this confirmed
                     if (typeof toast !== 'undefined') toast.success('此相簿已確認完成');
                     return;
                 }
@@ -662,7 +750,7 @@
                     }
                     this._doneBusy = false;
                     this._closeDoneModal(kind);
-                    this._renderDone();
+                    this._applyView();   // re-renders the block, and switches to the completion page when this confirmed
                     if (typeof toast !== 'undefined') toast.success(revision ? '已通知攝影師' : '已確認完成');
                     return;
                 }
@@ -674,7 +762,7 @@
                     else { this.confirmedAt = this.confirmedAt || new Date().toISOString(); this.revisionOpen = false; this.revisionMessage = null; }
                     this._doneBusy = false;
                     this._closeDoneModal(kind);
-                    this._renderDone();
+                    this._applyView();   // re-renders the block, and switches to the completion page when this confirmed
                     if (typeof toast !== 'undefined') toast.success('此相簿已確認完成');
                     return;
                 }
