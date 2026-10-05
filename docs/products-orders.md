@@ -483,33 +483,57 @@ CREATE TABLE IF NOT EXISTS platform_product_options (
   The public route serves a retired product's image too (old orders show it);
   non-GET is 405, anything else under `/api/platform/` 404.
 
-## min_pages — album minimum (decided by Tim 2026-10-05)
+## min_pages / max_pages — album page range (decided by Tim 2026-10-05)
 
-「我們的相本最少 10 頁，在 operator 設定，綁在商品上。」
+「我們的相本最少 10 頁，在 operator 設定，綁在商品上。」 Then: an order below
+the minimum is **refused** (no per-extra-spread charge), and the operator sets
+both a **minimum and a maximum** per album product.
 
-- `platform_products.min_pages INTEGER`, nullable: the fewest **inside
-  spreads** an album may have. One spread = 1 P; cover and back are not
-  counted, so 相本書 with `min_pages = 10` needs at least 10 spreads.
-  NULL = no minimum.
+- `platform_products.min_pages` / `max_pages INTEGER`, nullable: the fewest
+  and the most **inside spreads** an album may have. One spread = 1 P; cover
+  and back are not counted, so 相本書 with `min_pages = 10` needs at least 10
+  spreads. NULL = no bound.
 - **Operator only.** `POST /api/operator/products` and
-  `PUT /api/operator/products/:id` take `min_pages`: a safe integer 1–200 or
-  `null`, else 400 `invalid_min_pages` with nothing written (a bad value is
-  refused on any kind). Albums only, like `photo_count`: on a print it is
-  stored as NULL; a product changed from album to print loses it. A PUT
-  without the field keeps it.
-- **Reads:** every product shape that carries `photo_count` carries
-  `min_pages` too — the operator's list and responses, the photographer's
+  `PUT /api/operator/products/:id` take `min_pages` and `max_pages`: each a
+  safe integer 1–200 or `null`, else 400 `invalid_min_pages` /
+  `invalid_max_pages` (a bad value is refused on any kind). When both are set
+  on an album, `max_pages ≥ min_pages`, else 400 `invalid_page_range`, judged
+  on the **merged row**: a PUT naming one bound is checked against the stored
+  other. Nothing is written on any 400. Albums only, like `photo_count`: on a
+  print both are stored as NULL (and no range is judged); a PUT leaving album
+  clears both, and coming back does not restore them. A PUT without a field
+  keeps it.
+- **Reads:** every product shape that carries `photo_count` carries both —
+  the operator's list and responses, the photographer's
   `GET /api/admin/products` (adopted products show the platform's live value;
   custom products `null`), every product response of create / adopt / PUT,
   `GET /api/admin/platform-products`, and the guest shop
   (`docs/guest-shop.md`). Always `null` on a non-album, whatever the row says.
-- The photographer cannot set it: `min_pages` on an adopted product's PUT is
-  400 `platform_managed`; on a custom product (service) it is ignored.
-- **Migration** `worker/migrations/2026-10-06-product-min-pages.sql`
-  (`ALTER TABLE platform_products ADD COLUMN min_pages INTEGER`), hand-run
-  before the merge. Before it runs every read says `null`; an operator
-  create/PUT that sets a number answers 500 `min_pages_unavailable` and writes
-  nothing (`null`, or no field, still works).
-- Not enforced anywhere yet (no order or album check reads it): the album
-  editor / guest album flow will use it. Whether an order below the minimum
-  is refused or charged per extra spread is still open.
+- The photographer cannot set them: either on an adopted product's PUT is
+  400 `platform_managed`; on a custom product (service) they are ignored.
+- **Two migrations, independent**, both hand-run before the merge, in order:
+  `worker/migrations/2026-10-06-product-min-pages.sql`
+  (`ALTER TABLE platform_products ADD COLUMN min_pages INTEGER`) and
+  `…-product-max-pages.sql` (`ALTER TABLE platform_products ADD COLUMN
+  max_pages INTEGER`). Every read first runs as if both columns exist (one
+  query on a migrated database); only when that fails on a missing column
+  does the Worker check which exist (`pageColumns`, a `SELECT <col> … LIMIT 0`
+  each) and read again (`withPageColumns`). A missing column reads `null`
+  everywhere; an operator create/PUT that sets a number for it answers 500
+  `min_pages_unavailable` / `max_pages_unavailable` (min checked first) before
+  anything is written; `null`, or no field, still works. A create probes only
+  when its body names a bound; a PUT reuses what its own read found. Tested
+  in all four states (both, min only, max only, neither).
+- A PUT that stays album writes only the bounds it names. One entering album
+  (print → album) also clears the bound it does not name, and the range is
+  judged against the stored values as reads show them (a print's leftover
+  value from a hand edit counts for nothing and is not inherited).
+- **Enforcement is not wired yet**: no order path carries an album layout
+  (admin orders have none; guest ordering S2/S3 is not built). The check is
+  ready as `albumPagesProblem(spreads, product)` in `worker.js`; where it
+  will be called is in `docs/guest-shop.md` (S3).
+- Known, accepted: two operator PUTs racing (one raising min, one lowering
+  max) can each pass against the other's old value and leave min > max. Only
+  the operator writes these; such an album fits no count, so
+  `albumPagesProblem` refuses every order on it rather than letting one
+  through, and the operator sees both values in the list.

@@ -955,9 +955,10 @@ test('the migration carries the platform tables and link columns, is re-runnable
     db._db.prepare(`PRAGMA table_info(${t})`).all(),
     db._db.prepare(`PRAGMA index_list(${t})`).all().map(i => i.name).sort(),
   ]);
-  // platform_products.min_pages comes from its own later migration on top
+  // platform_products.min_pages / max_pages come from their own later migrations on top
   const minPages = readFileSync(new URL('../migrations/2026-10-06-product-min-pages.sql', import.meta.url), 'utf8');
-  assert.deepEqual(shape(fakeDB({ schema: deployed + '\n' + migration + '\n' + minPages })), shape(fakeDB({ schema: fresh })));
+  const maxPages = readFileSync(new URL('../migrations/2026-10-06-product-max-pages.sql', import.meta.url), 'utf8');
+  assert.deepEqual(shape(fakeDB({ schema: deployed + '\n' + migration + '\n' + minPages + '\n' + maxPages })), shape(fakeDB({ schema: fresh })));
   const migrated = fakeDB({ schema: deployed + '\n' + migration });
   const cols = t => migrated._db.prepare(`PRAGMA table_info(${t})`).all().map(c => c.name);
   assert.ok(cols('products').includes('platform_product_id'));

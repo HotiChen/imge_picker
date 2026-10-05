@@ -7,7 +7,7 @@
 // on a guest route.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { NO_PAGES } from './page-schemas.mjs';
 import worker from '../worker.js';
 import { fakeDB, req, ctx } from './fakes.mjs';
 import {
@@ -47,11 +47,11 @@ async function adopt(env, pp, prices, extra = {}) {
   return (await res.json()).product;
 }
 
-// an album (two options, min_pages 10, with an image) and a print, both
+// an album (two options, min_pages 10, max_pages 30, with an image) and a print, both
 // adopted and shown to guests; the print sorts first
 async function catalogue(env) {
   const ppAlbum = await platformProduct(env, {
-    kind: 'album', name: '相本書', description: '精裝 20×20', photo_count: 20, min_pages: 10, options: [
+    kind: 'album', name: '相本書', description: '精裝 20×20', photo_count: 20, min_pages: 10, max_pages: 30, options: [
       { label: '20×20', vendor_cost: VENDOR, platform_price: PLATFORM },
       { label: '30×30', vendor_cost: VENDOR + 1, platform_price: PLATFORM + 1 },
     ],
@@ -121,11 +121,11 @@ test('delivered: the shop lists the guest-visible products, sorted, in the exact
   assert.deepEqual(json, {
     products: [
       {
-        id: c.print.id, kind: 'print', name: '無框畫', description: '木框', photo_count: null, min_pages: null, image_url: null,
+        id: c.print.id, kind: 'print', name: '無框畫', description: '木框', photo_count: null, min_pages: null, max_pages: null, image_url: null,
         options: [{ id: c.print.options[0].id, label: '16×20', price: 3000 }],
       },
       {
-        id: c.album.id, kind: 'album', name: '相本書', description: '精裝 20×20', photo_count: 20, min_pages: 10,
+        id: c.album.id, kind: 'album', name: '相本書', description: '精裝 20×20', photo_count: 20, min_pages: 10, max_pages: 30,
         image_url: `/api/platform/products/${c.ppAlbum.id}/image?v=${encodeURIComponent(c.imageStamp)}`,
         options: [
           { id: c.album.options[0].id, label: '20×20', price: 5000 },
@@ -159,7 +159,7 @@ test('no cost leaks: no cost, platform_price, vendor_cost or platform option id 
   const p = await delivered(env);
   const json = await okShop(env, p.token);
   const { keys, values } = walk(json);
-  assert.deepEqual([...keys].sort(), ['description', 'id', 'image_url', 'kind', 'label', 'min_pages', 'name', 'options', 'photo_count', 'price', 'products'].sort());
+  assert.deepEqual([...keys].sort(), ['description', 'id', 'image_url', 'kind', 'label', 'max_pages', 'min_pages', 'name', 'options', 'photo_count', 'price', 'products'].sort());
   for (const forbidden of [VENDOR, VENDOR + 1, PLATFORM, PLATFORM + 1]) assert.ok(!values.includes(forbidden), `value ${forbidden}`);
   const text = JSON.stringify(json);
   assert.doesNotMatch(text, /987651|987652|2987|2988|cost|platform_price|vendor|guest_visible|photographer/);
@@ -439,34 +439,34 @@ test('an empty catalogue is {products: []}', async () => {
   assert.deepEqual(await okShop(env, p.token), { products: [] });
 });
 
-test('min_pages: the album carries it, the print null; photo_count is album-only too', async () => {
+test('min_pages / max_pages: the album carries them, the print null; photo_count is album-only too', async () => {
   const env = envOp();
   const c = await catalogue(env);
   const p = await delivered(env);
   // a hand-edited print with values still reads null
-  env.DB._db.prepare('UPDATE platform_products SET min_pages = 7, photo_count = 7 WHERE id = ?').run(c.ppPrint.id);
+  env.DB._db.prepare('UPDATE platform_products SET min_pages = 7, max_pages = 8, photo_count = 7 WHERE id = ?').run(c.ppPrint.id);
   const json = await okShop(env, p.token);
   const byId = Object.fromEntries(json.products.map(x => [x.id, x]));
   assert.equal(byId[c.album.id].min_pages, 10);
   assert.equal(byId[c.album.id].photo_count, 20);
+  assert.equal(byId[c.album.id].max_pages, 30);
   assert.equal(byId[c.print.id].min_pages, null);
+  assert.equal(byId[c.print.id].max_pages, null);
   assert.equal(byId[c.print.id].photo_count, null);
-  await op(env, 'PUT', `/api/operator/products/${c.ppAlbum.id}`, { min_pages: 12 });
-  assert.equal((await okShop(env, p.token)).products.find(x => x.id === c.album.id).min_pages, 12);
+  await op(env, 'PUT', `/api/operator/products/${c.ppAlbum.id}`, { min_pages: 12, max_pages: 24 });
+  const album = (await okShop(env, p.token)).products.find(x => x.id === c.album.id);
+  assert.deepEqual([album.min_pages, album.max_pages], [12, 24]);
 });
 
 // ─── missing migrations ─────────────────────────────────────────────────────
 
-test('before the min_pages migration the shop still answers, min_pages null', async () => {
-  const FRESH = readFileSync(new URL('../schema.sql', import.meta.url), 'utf8');
-  const PRE = FRESH.replace(/(updated_at\s+TEXT NOT NULL),\n(?:\s*--[^\n]*\n)*\s*min_pages\s+INTEGER\n\);/, '$1\n);');
-  assert.notEqual(PRE, FRESH);
-  const env = envOp({ DB: fakeDB({ schema: PRE }) });
+test('before both page migrations the shop still answers, min_pages and max_pages null', async () => {
+  const env = envOp({ DB: fakeDB({ schema: NO_PAGES }) });
   const ppAlbum = await platformProduct(env, { kind: 'album', name: '相本書', photo_count: 20 });
   const album = await adopt(env, ppAlbum, [5000]);
   const p = await delivered(env);
   const json = await okShop(env, p.token);
-  assert.deepEqual(json.products.map(x => [x.id, x.min_pages, x.photo_count, x.options.map(o => o.price)]), [[album.id, null, 20, [5000]]]);
+  assert.deepEqual(json.products.map(x => [x.id, x.min_pages, x.max_pages, x.photo_count, x.options.map(o => o.price)]), [[album.id, null, null, 20, [5000]]]);
 });
 
 test('without the catalogue tables the shop is 500 shop_unavailable, no list, no detail', async () => {

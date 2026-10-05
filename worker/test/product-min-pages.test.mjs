@@ -9,15 +9,16 @@ import assert from 'node:assert/strict';
 import { readFileSync, existsSync } from 'node:fs';
 import { fakeDB } from './fakes.mjs';
 import { SECRET, CUSTOM_ON, setup, call, rows, one } from './pick-helpers.mjs';
+import { FRESH, NO_PAGES, MAX_SQL } from './page-schemas.mjs';
 
 const OP = 'operator-secret';
 const envOp = (extra = {}) => setup({ OPERATOR_TOKEN: OP, ...extra });
 const op = (env, method, path, body, token = OP) => call(env, path, { method, token, body });
 const admin = (env, method, path, body, token = SECRET) => call(env, path, { method, token, body });
 
-const FRESH = readFileSync(new URL('../schema.sql', import.meta.url), 'utf8');
-// schema.sql as a database that has not had the min_pages migration
-const PRE_MIGRATION = FRESH.replace(/(updated_at\s+TEXT NOT NULL),\n(?:\s*--[^\n]*\n)*\s*min_pages\s+INTEGER\n\);/, '$1\n);');
+// schema.sql as a database that has had neither page-bound migration (the
+// max_pages one comes after; product-max-pages.test.mjs covers every state)
+const PRE_MIGRATION = NO_PAGES;
 const preEnv = (extra = {}) => setup({ OPERATOR_TOKEN: OP, DB: fakeDB({ schema: PRE_MIGRATION }), ...extra });
 
 const ALBUM = { kind: 'album', name: '相本書', description: '精裝', photo_count: 20, options: [{ label: '20×20', vendor_cost: 900, platform_price: 1000 }] };
@@ -57,7 +58,7 @@ test('migration: one append-only ALTER, noted in schema.sql; the fixture really 
   const old = fakeDB({ schema: PRE_MIGRATION });
   assert.throws(() => old._db.prepare('SELECT min_pages FROM platform_products').all(), /no such column/);
   const shape = db => db._db.prepare('PRAGMA table_info(platform_products)').all();
-  assert.deepEqual(shape(fakeDB({ schema: PRE_MIGRATION + '\n' + sql })), shape(fakeDB()));
+  assert.deepEqual(shape(fakeDB({ schema: PRE_MIGRATION + '\n' + sql + '\n' + MAX_SQL })), shape(fakeDB()));
   const twice = fakeDB({ schema: PRE_MIGRATION + '\n' + sql });
   assert.throws(() => twice._db.exec(sql), /duplicate column/);
 });

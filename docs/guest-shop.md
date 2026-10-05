@@ -438,6 +438,7 @@ last-seen stamp).
     "description": "精裝 20×20",       // plain text, ≤ 500, '' when none
     "photo_count": 20 | null,         // album only, advisory
     "min_pages": 10 | null,           // album only: fewest inside spreads (1 spread = 1 P, cover/back not counted)
+    "max_pages": 30 | null,           // album only: most inside spreads, same unit, >= min_pages
     "image_url": "/api/platform/products/<id>/image?v=<stamp>" | null,  // relative to the Worker origin, public
     "options": [ { "id": "<product_options.id>", "label": "20×20", "price": 5000 } ]  // label '' when single
 } ] }
@@ -458,4 +459,39 @@ last-seen stamp).
   product id appears only inside `image_url`.
 - **Sorted** by the photographer's `sort` (then created), options in their
   set order. **Capped** at 50 products (sellable ones, by sort) × 20 options.
-- Before the `min_pages` migration everything works with `min_pages: null`.
+- Before the `min_pages` / `max_pages` migrations everything works with that
+  field `null` (each column on its own).
+
+## Album page range — where the refusal lives (S3, not built yet)
+
+Tim (2026-10-05): an album outside its platform product's page range is
+**refused**, never charged per extra spread. The range is
+`platform_products.min_pages` / `max_pages` (`docs/products-orders.md`),
+inside spreads, both nullable.
+
+Nothing refuses anything today, on purpose: admin orders carry no layout and
+guest ordering (S2/S3) does not exist, so there is no page count to judge. Do
+not add a check to the admin order routes.
+
+When S3 builds `POST /api/pick/orders` with an album `layout`:
+
+- For each album line in `mode: 'auto'`, spreads = `layout.pages.length`
+  (one layout page = one spread = 1 P; cover and back are not layout pages).
+- Read the line's platform product live (`pp.kind`, `pp.min_pages`,
+  `pp.max_pages`) the way every read here does:
+  `withPageColumns(env, cols => …${pageSelect(cols)}…)` — one query on a
+  migrated database, a probe only after a missing-column failure, and a
+  missing column reads as no bound, never an error. Then call
+  `albumPagesProblem(spreads, product)` (`worker.js`, pure, unit-tested in
+  `worker/test/product-max-pages.test.mjs`). It returns `null` (fits, or not
+  an album), `'pages_below_min'`, `'pages_above_max'` or `'invalid_layout'`
+  (spreads not a whole number ≥ 0). Any non-null → 400 `{error, code}` with
+  that code, nothing written — together with the other S3 layout checks,
+  before the order insert.
+- `mode: 'photographer'` (請攝影師排版, `pages: []`) has no page count: skip
+  the check; the photographer lays it out within the range.
+- The guest page uses `min_pages` / `max_pages` from `GET /api/pick/shop` to
+  guide the layout, but the Worker's check is the only one that counts.
+- New error codes for the S2 list: `pages_below_min`, `pages_above_max`.
+- The test `albumPagesProblem is not wired to any route yet` fails once the
+  helper is called; update it then.
