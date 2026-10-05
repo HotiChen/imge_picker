@@ -214,6 +214,28 @@ const successToast = page => page.evaluate(() => [...document.querySelectorAll('
 }
 
 {
+  const m = pickFakeWorker({ ownerName: 'Rex', projectId: 'proj-zip3', title: '壞檔' });
+  m.state.selections.set('20260819/a.jpg', { rating: 5, note: '', updated_by: 'picker-0', updated_at: '2026-01-01T00:00:00Z' });
+  m.state.selections.set('20260819/b.jpg', { rating: 5, note: '', updated_by: 'picker-0', updated_at: '2026-01-01T00:00:00Z' });
+  await suite('zip names — a photo the Worker refuses is not zipped as an error body: no download, an error toast',
+    `${base}/index.html?project=proj-zip3`,
+    async page => {
+      const out = [], ok = line(out);
+      await page.waitForSelector('.photo-card', { timeout: 5000 });
+      await page.route(/imagepicker\.hotichen\.workers\.dev\/\d{8}\/b\.jpg$/, route =>
+        route.fulfill({ status: 404, contentType: 'application/json', headers: { 'Access-Control-Allow-Origin': '*' }, body: '{"error":"gone"}' }));
+      await page.evaluate(FAKE_JSZIP);
+      await page.click('#downloadAllBtn');
+      await page.waitForSelector('.toast.error', { timeout: 5000 });
+      ok('positive: the error toast appeared', true);
+      ok('no zip was handed out', (await page.evaluate(() => window.__dlNames.length)) === 0);
+      ok('and no 已打包 success toast', (await successToast(page)).every(t => !t.includes('已打包')));
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN });
+}
+
+{
   const m = pickFakeWorker({});
   await suite('zip names — sanitiser edge cases and unique names (driveManager), other zip names untouched',
     `${base}/index.html`,
