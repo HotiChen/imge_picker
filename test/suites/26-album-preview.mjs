@@ -22,7 +22,7 @@ const ALB_STAMP = /js\/pick\.js\?v=([^"]+)"/.exec(readFileSync(join(ROOT, 'index
 const albCur = s => s.slides.find(x => x.cur);
 const albExpected = (page, ids) => page.evaluate(async ids => {
   const items = await AutoLayout.analyze(ids, { urlFor: id => driveManager.getImageUrl({ id }, 400) });
-  const p = AutoLayout.planSpreads(items, { coverAspect: 210 / 297, spreadAspect: 420 / 297 });
+  const p = AutoLayout.planSpreads(items, { ...AlbumPreview.PLAN_OPTS, coverAspect: 210 / 297, spreadAspect: 420 / 297 });   // the options the preview itself passes
   return { cover: p.cover && p.cover.photoId, pages: p.spreads.map(x => ({ layout: x.template, ids: x.slots.map(s => s.photoId) })), dropped: p.dropped };
 }, ids);
 const albEngineLoads = world => world.assets.filter(p => /\/book_editor\/js\/(layouts|spread_templates|auto_layout)\.js/.test(p));
@@ -122,6 +122,9 @@ for (const [name, opts] of [
       const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
       await page.waitForSelector('#albumPreviewBtn', { timeout: 5000 });
       await albGalleryReady(page);   // the finals gallery (was .photo-card)
+      // the planner no longer drops near-duplicates by default (dedupe 'separate'); this suite
+      // covers the legacy drop path and its note, so it asks for it explicitly
+      await page.evaluate(() => { AlbumPreview.PLAN_OPTS = { ...AlbumPreview.PLAN_OPTS, dedupe: 'drop' }; });
       const logStart = w.log.length;
       const storageStart = await page.evaluate(() => window.__storageWrites.length);
       const aliveStart = await page.evaluate(() => window.__alive.length);
@@ -340,6 +343,37 @@ for (const [name, opts] of [
     { before: w.before, initScript: ALB_OWNER, contextOptions: ALB_DESK });
 }
 
+// ── 3b. the default keeps look-alikes (dedupe 'separate'): every photo is laid out, no 已略過 note
+{
+  const w = albumWorld({ n: 12, dup: { 4: 3 } });
+  await suite('album preview — by default a repeated shot is kept (apart, not dropped): every photo is in the album, no 已略過 note',
+    `${base}/index.html?t=TOK`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('#albumPreviewBtn', { timeout: 5000 });
+      await albGalleryReady(page);
+      await page.click('#albumPreviewBtn');
+      await albReady(page);
+      const seen = new Set();
+      let snap = await albSnap(page), guard = 0;
+      for (const id of albCur(snap).ids) seen.add(id);
+      while (!snap.nextDis && guard++ < 40) {
+        await page.keyboard.press('ArrowRight');
+        const i = (snap.slides.find(s => s.cur) || {}).i + 1;
+        await page.waitForFunction(i2 => document.querySelector('.album-slide[data-current="true"]')?.dataset.index === String(i2), i, { timeout: 4000 });
+        snap = await albSnap(page);
+        for (const id of albCur(snap).ids) seen.add(id);
+      }
+      const missing = w.files.filter(k => !seen.has(k));
+      ok('all 12 photos are laid out, the repeated one included (positive: 12 files in the world)', w.files.length === 12 && missing.length === 0, missing.join());
+      const note = await page.evaluate(() => document.getElementById('albumViewer')?.textContent ?? '');
+      ok('no 「已略過」 note: nothing was dropped', !/已略過/.test(note), note.slice(0, 120));
+      return out;
+    },
+    { before: w.before, initScript: ALB_OWNER, contextOptions: ALB_DESK });
+}
+
 // ── 4. few photos, errors, retry, the cap
 for (const [name, n, dup, expectRe] of [
   ['one photo', 1, {}, /至少需要 2 張/],
@@ -353,6 +387,8 @@ for (const [name, n, dup, expectRe] of [
       const ok = (n2, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n2}${c ? '' : `   [${d}]`}`);
       await page.waitForSelector('#albumPreviewBtn', { timeout: 5000 });
       await albGalleryReady(page);   // the finals gallery (was .photo-card)
+      // identical photos only "collapse to one" on the legacy drop path (the default now keeps them all)
+      if (Object.keys(dup).length) await page.evaluate(() => { AlbumPreview.PLAN_OPTS = { ...AlbumPreview.PLAN_OPTS, dedupe: 'drop' }; });
       await page.click('#albumPreviewBtn');
       await page.waitForFunction(() => document.getElementById('albumViewer')?.dataset.state === 'few', null, { timeout: 15000 });
       const s = await page.evaluate(() => ({ text: document.getElementById('albumFew')?.textContent ?? null, pages: document.querySelectorAll('.album-page').length,

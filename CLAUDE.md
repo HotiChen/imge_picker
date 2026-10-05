@@ -126,8 +126,14 @@ empty scan passes.
 - Retouch pins are `selections.marks` = `[{x,y,note}]`, x/y as 0–1 fractions of
   the photo. An empty note is allowed on purpose (a bare pin can be the message).
 - Photographer pages use home.html's cream theme (`--bg:#fff8ee`); client pages stay
-  dark. Never change `css/styles.css`'s global `:root`: `index.html` serves guests
-  and the photographer's review view.
+  dark, except the 完成頁 (a delivered project the client has confirmed): light,
+  scoped under `.cp` in `css/completion-page.css` (`js/completion-page.js`). Never
+  change `css/styles.css`'s global `:root`: `index.html` serves guests and the
+  photographer's review view.
+- Album page counts are in SPREADS (one spread = 1 P; cover and back not counted):
+  `platform_products.min_pages` / `max_pages`, `planSpreads` `minSpreads` / `maxSpreads`.
+  Not enforced on any order yet (no guest order path): `albumPagesProblem` in the
+  Worker is the ready helper for S3 (`docs/guest-shop.md`).
 
 ## Decided not to do (do not re-propose without new evidence)
 - Service / Package / Template, quotes, contracts, booking, CRM: scope creep.
