@@ -2,15 +2,11 @@
 // Registered by test/run.mjs in file-name order; see test/README.md.
 import { base, suite } from '../lib/harness.mjs';
 import { SEED_TOKEN_ALWAYS } from '../lib/dashboard-mocks.mjs';
-import { PLAT_ALBUM, PLAT_PRINT, RED, T, clone, disp, ordersFake, waitText } from '../lib/orders-fake.mjs';
+import { OP_KEY, OP_SEED, PLAT_ALBUM, PLAT_PRINT, RED, T, clone, disp, ordersFake, waitText } from '../lib/orders-fake.mjs';
 
 export default async function register() {
 
 // ── operator.html — the operator's console (platform catalogue) ────────────
-const OP_KEY = 'imhoti_operator_token';
-// seeds the operator token once per tab (sessionStorage marks it), so a later
-// sign-out or reload is not undone by the init script running again
-const OP_SEED = () => { if (!sessionStorage.getItem('__seeded')) { localStorage.setItem('imhoti_operator_token', 'op'); sessionStorage.setItem('__seeded', '1'); } };
 const opFx = () => [clone(PLAT_ALBUM), clone(PLAT_PRINT)];
 const PNG_BYTES = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
 
@@ -205,7 +201,7 @@ const PNG_BYTES = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAD
       const post = o.st.calls.find(c => c.method === 'POST' && c.path === '/api/operator/products');
       ok('POST carries kind, name, description, photo_count and options with vendor_cost and platform_price',
         JSON.stringify(post?.body) === JSON.stringify({
-          kind: 'album', name: '相本書', description: '20 頁精裝', photo_count: 20,
+          kind: 'album', name: '相本書', description: '20 頁精裝', photo_count: 20, min_pages: null, max_pages: null,
           options: [{ label: '8×8 吋', vendor_cost: 1400, platform_price: 1500 }, { label: '12×12 吋', vendor_cost: 2300, platform_price: 2400 }],
         }), JSON.stringify(post?.body));
       ok('after creating, the form stays open on the new product in edit mode, now with the image section', (await page.$('#opf-file')) !== null && (await T(page, '#op-ok')).includes('已建立'));
@@ -261,7 +257,7 @@ const PNG_BYTES = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAD
       const put = o.st.calls.find(c => c.method === 'PUT');
       ok('PUT goes to the product; the kept option carries its id, the new one none, the dropped one is absent; blank count = null',
         put?.path === '/api/operator/products/plat-album' && put.auth === 'Bearer op' && JSON.stringify(put.body) === JSON.stringify({
-          kind: 'album', name: '相本書', description: '20 頁精裝', photo_count: null,
+          kind: 'album', name: '相本書', description: '20 頁精裝', photo_count: null, min_pages: null, max_pages: null,
           options: [{ label: '8×8 吋', vendor_cost: 1400, platform_price: 1600, id: 'popt-album-s' }, { label: '10×10 吋', vendor_cost: 1800, platform_price: 1900 }],
         }), JSON.stringify(put));
       await page.waitForFunction(() => document.querySelector('[data-product-id="plat-album"]')?.textContent.includes('NT$1,900'), null, { timeout: 3000 });
