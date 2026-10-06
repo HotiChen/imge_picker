@@ -258,6 +258,7 @@ export function pickFakeWorker(opts = {}) {
         };
         if (isOwner) resp.modified_after_submit = state.project.modified_after_submit;
         if (state.studio) resp.studio = state.studio;
+        if (opts.decorateState) opts.decorateState(resp, { isOwner, scope, picker });   // a suite's own additions to the answer
         return json(resp);
       }
 

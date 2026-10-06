@@ -1,0 +1,116 @@
+/* Pins on the delivered finals (js/revision-pins.js, js/revision-history.js, js/pin-layer.js;
+   docs/revision-pins.md §6.1). The 驗收頁 and its lightbox are the dark client page: tokens from
+   css/styles.css only, no new :root. Every rule is scoped to a class these files create. */
+
+/* ── the pin layer: numbered pins over an <img> (PinLayer.attach) ───────────── */
+.pin-layer { position: absolute; inset: 0; z-index: 1; pointer-events: none; }
+.pin-layer--edit { pointer-events: auto; cursor: crosshair; touch-action: manipulation; }
+.pin-layer-pin {
+  position: absolute; transform: translate(-50%, -50%); pointer-events: auto;
+  width: 26px; height: 26px; min-width: 24px; padding: 0; border-radius: 50%;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--accent); color: #1a1408; border: 2px solid #fff;
+  font: 600 13px/1 var(--font-sans); font-variant-numeric: tabular-nums;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, .55); cursor: pointer; -webkit-tap-highlight-color: transparent;
+}
+.pin-layer-pin.on { background: #fff; color: #1a1408; border-color: var(--accent); transform: translate(-50%, -50%) scale(1.15); }
+.pin-layer-pin:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+
+/* guest strings: shown as text, isolated from the surrounding direction */
+.rp-note, .rp-text, .rh-note, .rh-name, .rh-pinnote, .done-round-name { unicode-bidi: isolate; overflow-wrap: anywhere; }
+
+/* ── tile badge ─────────────────────────────────────────────────────────────── */
+.fg-badge {
+  position: absolute; right: 6px; bottom: 6px; z-index: 1; min-width: 22px; height: 22px; padding: 0 6px; border-radius: 11px;
+  display: inline-flex; align-items: center; justify-content: center; pointer-events: none;
+  background: var(--accent); color: #1a1408; font: 600 12px/1 var(--font-sans); font-variant-numeric: tabular-nums;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, .5);
+}
+
+/* ── the lightbox: toggle and drawer ────────────────────────────────────────── */
+.rp-toggle { border-color: var(--ink-35); }
+.rp-toggle[aria-pressed="true"] { background: var(--accent); color: #1a1408; border-color: var(--accent); }
+.rp-drawer {
+  flex: 0 0 auto; height: min(190px, 36%); overflow-y: auto; padding: 8px 16px 10px;   /* fixed: the photo must not move under a tapping finger */ background: var(--surface);
+  border-bottom: 1px solid var(--border); color: var(--ink); font-size: 14px;
+}
+.rp-hint { color: var(--ink-70); font-size: 13px; margin-bottom: 6px; }
+.rp-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.rp-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.rp-row[aria-current="true"] .rp-num { background: #fff; }
+.rp-num {
+  flex: 0 0 auto; width: 24px; height: 24px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center;
+  background: var(--accent); color: #1a1408; font: 600 12px/1 var(--font-sans);
+}
+.rp-note {
+  flex: 1 1 auto; min-width: 0; min-height: 40px; padding: 6px 10px; font: inherit; font-size: 16px;   /* 16px: iOS does not zoom */
+  background: var(--bg); color: var(--ink); border: 1px solid var(--border); border-radius: 4px;
+}
+.rp-note:focus { outline: 2px solid var(--accent); outline-offset: 0; }
+.rp-text { flex: 1 1 auto; min-width: 0; color: var(--ink); white-space: pre-wrap; }
+.rp-count { flex: 0 0 auto; color: var(--ink-55); font: 12px var(--font-mono); }
+.rp-del {
+  flex: 0 0 auto; width: 40px; height: 40px; padding: 0; background: transparent; color: var(--ink-70);
+  border: 1px solid var(--border); border-radius: 4px; font-size: 18px; cursor: pointer;
+}
+.rp-del:hover { color: var(--ink); border-color: var(--ink-55); }
+.rp-status { min-height: 0; margin-top: 6px; font-size: 12px; color: var(--ink-55); }
+.rp-status:empty { display: none; }
+.rp-status[data-kind="error"] { color: var(--reject); }
+.rp-status[data-kind="offline"] { color: var(--review); }
+
+/* ── the status block and the round dialog ──────────────────────────────────── */
+.delivery-done-save { flex-basis: 100%; order: 4; font-size: 12px; color: var(--review); }
+.delivery-done-hint { align-self: center; font-size: 12px; color: var(--ink-55); }
+.done-round-list { list-style: none; margin: 8px 0; padding: 0; display: flex; flex-direction: column; gap: 6px; max-height: 32dvh; overflow-y: auto; }
+.done-round-item { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.done-round-item img { flex: 0 0 auto; width: 56px; height: 40px; object-fit: cover; background: var(--bg-deep); border-radius: 3px; }
+.done-round-name { flex: 1 1 auto; min-width: 0; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.done-round-count { flex: 0 0 auto; color: var(--ink-55); font-size: 12px; }
+.done-round-warn { color: var(--review); font-size: 13px; margin: 6px 0; }
+
+/* ── the history panel ──────────────────────────────────────────────────────── */
+html.rh-open, html.rh-open body { overflow: hidden; }
+.rh {
+  position: fixed; inset: 0; z-index: 3600; display: flex; flex-direction: column; background: var(--bg); color: var(--ink);
+  box-sizing: border-box; max-width: 100vw; overscroll-behavior: contain;
+}
+.rh-bar { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; min-height: 56px; padding: env(safe-area-inset-top, 0px) 8px 0 16px; border-bottom: 1px solid var(--border); }
+.rh-title { flex: 1 1 auto; min-width: 0; margin: 0; font-size: 16px; font-weight: 600; overflow-wrap: anywhere; }
+.rh-btn {
+  flex: 0 0 auto; min-width: 44px; min-height: 44px; padding: 0 14px; background: transparent; color: var(--ink);
+  border: 1px solid var(--ink-35); font: inherit; font-size: 14px; cursor: pointer;
+}
+.rh-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; padding: 12px 16px calc(24px + env(safe-area-inset-bottom, 0px)); }
+.rh-note { margin: 0 0 12px; padding-left: 10px; border-left: 2px solid var(--border); color: var(--ink-70); white-space: pre-wrap; font-size: 14px; }
+.rh-msg { color: var(--ink-70); font-size: 14px; margin: 8px 0; }
+.rh-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; }
+.rh-photo {
+  position: relative; display: flex; flex-direction: column; min-width: 0; padding: 0; background: var(--surface);
+  border: 1px solid var(--border); color: var(--ink); cursor: pointer; text-align: left; font: inherit;
+}
+.rh-thumb { position: relative; aspect-ratio: 3 / 2; background: var(--bg-deep); overflow: hidden; }
+.rh-thumb img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; }
+.rh-gone { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; padding: 8px; text-align: center; font-size: 12px; color: var(--ink-55); }
+.rh-name { padding: 6px 8px; font-size: 12px; color: var(--ink-70); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rh-pins {
+  position: absolute; right: 6px; top: 6px; z-index: 1; min-width: 22px; height: 22px; padding: 0 6px; border-radius: 11px;
+  display: inline-flex; align-items: center; justify-content: center; background: var(--accent); color: #1a1408; font: 600 12px/1 var(--font-sans);
+}
+.rh-more { margin: 12px 0 0; }
+.rh-earlier-box { margin-top: 24px; border-top: 1px solid var(--border); padding-top: 12px; }
+.rh-earlier-box h3 { margin: 0 0 8px; font-size: 14px; color: var(--ink-70); font-weight: 500; }
+.rh-earlier { display: block; width: 100%; margin: 0 0 6px; text-align: left; justify-content: flex-start; overflow-wrap: anywhere; }
+.rh-view { position: absolute; inset: 0; z-index: 2; display: flex; flex-direction: column; background: var(--bg-deep); }
+.rh-stage { position: relative; flex: 1 1 auto; min-height: 0; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+.rh-big { display: block; width: 100%; height: 100%; object-fit: contain; }
+.rh-pinlist { flex: 0 0 auto; max-height: 36%; overflow-y: auto; margin: 0; padding: 8px 16px calc(10px + env(safe-area-inset-bottom, 0px)); list-style: none; background: var(--surface); border-top: 1px solid var(--border); }
+.rh-pinrow { display: flex; align-items: flex-start; gap: 8px; padding: 4px 0; font-size: 14px; }
+.rh-pinrow[aria-current="true"] .rp-num { background: #fff; }
+.rh-pinnote { flex: 1 1 auto; min-width: 0; white-space: pre-wrap; }
+
+@media (max-width: 768px) {
+  .rp-drawer { height: min(180px, 40%); padding: 6px 12px 8px; }
+  .rh-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (prefers-reduced-motion: reduce) { .pin-layer-pin { transition: none; } }

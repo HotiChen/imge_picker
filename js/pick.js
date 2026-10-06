@@ -23,15 +23,14 @@
 
     // Retouch pins (docs/guest-picking.md "Retouch pins — the save contract").
     const SHOP_TIMEOUT_MS = 8000;   // the 完成頁's shop read
-    const PIN_MAX = 10;         // per photo (server PICK_MARKS_MAX)
-    const PIN_NOTE_MAX = 100;   // characters (server PICK_MARK_NOTE_MAX)
-    // control / line-separator characters the server refuses in a note
-    const PIN_NOTE_BAD = /[\u0000-\u001F\u007F-\u009F\u2028\u2029]/g;
-    const pinSanitize = v => String(v == null ? '' : v).replace(PIN_NOTE_BAD, '');
-    const pinLen = v => Array.from(v).length;
+    // the pin rules (limits, note sanitising, shape guard) are js/pin-layer.js's
+    const PIN_MAX = PinLayer.PIN_MAX;           // per photo (server PICK_MARKS_MAX)
+    const PIN_NOTE_MAX = PinLayer.NOTE_MAX;     // characters (server PICK_MARK_NOTE_MAX)
+    const pinSanitize = PinLayer.sanitize;
+    const pinLen = PinLayer.len;
     // what the server sends is canonical already; this only keeps a bad row
     // from ever reaching the canvas
-    const cleanMarks = arr => window.cleanPinMarks(arr, PIN_MAX); // js/annotation.js
+    const cleanMarks = arr => PinLayer.clean(arr, PIN_MAX);
 
     const PickController = {
         active: !!token,
@@ -61,6 +60,10 @@
         confirmedAt: null,
         revisionOpen: false,
         revisionMessage: null,
+        // pins on the finals (docs/revision-pins.md): the seat holder's drafts [{photo_key, marks}] — null unless the
+        // feature is on — and the photo count of the open pins round
+        revisionDrafts: null,
+        revisionOpenPhotos: null,
         // What the page shows: 'picking' (today's view), 'finals' (the
         // delivery gallery) or 'proofs' (delivered + switch on: a
         // download-only list of the proofs).
@@ -160,6 +163,14 @@
                 body: '{}',
             });
         },
+        // POST /api/pick/revision-round (docs/revision-pins.md §13.1)
+        submitRevisionRound(body) {
+            return this._json('/api/pick/revision-round', {
+                method: 'POST',
+                headers: this.headers({ 'Content-Type': 'application/json' }),
+                body: JSON.stringify(body),
+            });
+        },
         requestRevision(message) {
             return this._json('/api/pick/revision', {
                 method: 'POST',
@@ -249,6 +260,7 @@
                 document.getElementById('pickModalTools')?.remove();
                 this._galleryUIRemoved = true;
             }
+            if (window.RevisionPins) RevisionPins.sync(this);   // before the gallery is mounted: it asks for the hooks
             this._renderDeliveryBar();
             this._syncCompletion();
             this._syncFinals();
@@ -313,7 +325,10 @@
                 onDownload: (e, photo) => this.download(e, photo),
                 onFolder: folder => this.app && this.app.handleLoadPhotos(folder),
                 ...(cp ? { hero: false, theme: 'light' } : {}),
+                // pins on the finals (js/revision-pins.js): nothing unless that feature is on for this page
+                ...(!cp && window.RevisionPins ? RevisionPins.galleryOpts() : {}),
             });
+            if (FinalsGallery.refreshBadges) FinalsGallery.refreshBadges();
             // a fresh gallery has no photos yet; the open folder's are already loaded
             if (switched && this.app && this.app.filteredPhotos) this.renderFinals(this.app.filteredPhotos);
         },
@@ -482,9 +497,8 @@
         },
 
         // ── client confirmation: 確認完成 / 需要修改 (docs/delivery.md) ─────
-        // Only in the delivered mode: outside it neither the block nor its
-        // modals exist (removed, never hidden). Every string that came from
-        // the server (the revision text) goes through textContent.
+        // The block, its modals and the two requests' flow are js/delivery-done.js;
+        // this file keeps the state they read and write (confirmedAt, revisionOpen ...).
         _fmtDate(iso) {
             return Util.fmtDate(iso, 'ymd');
         },
@@ -498,275 +512,24 @@
             this.revisionOpen = delivered && !this.confirmedAt && data.revision_open === true;
             // only the seat holder is sent the text (a viewer: null, always)
             this.revisionMessage = this.isOwner && this.revisionOpen && typeof data.revision_message === 'string' ? data.revision_message : null;
+            // pins on the finals (docs/revision-pins.md §4.1): the seat holder's drafts, an array only when the feature
+            // is on — null (migration not run) and absent (a viewer, an old Worker) both leave the old 需要修改 flow
+            this.revisionDrafts = delivered && this.isOwner && !this.confirmedAt && Array.isArray(data.revision_drafts) ? data.revision_drafts : null;
+            this.revisionOpenPhotos = this.revisionOpen && this.isOwner && typeof data.revision_open_photos === 'number' ? data.revision_open_photos : null;
+        },
+
+        // re-read the state and bring the page up to date with it (the drafts are the server's)
+        async refreshState() {
+            const r = await this.fetchState();
+            if (!r.ok) return r;
+            this._applyConfirmFields(r.data);
+            if (window.RevisionPins && Array.isArray(this.revisionDrafts)) RevisionPins.adopt(this.revisionDrafts);
+            this._applyView();
+            return r;
         },
 
         _renderDone() {
-            let el = document.getElementById('deliveryDone');
-            const bar = document.getElementById('deliveryBar');
-            // the completion page has no status block, no 確認完成, no modals
-            if (this.mode !== 'delivered' || !bar || this._completionWanted()) {
-                el?.remove();
-                this._removeDoneModals();
-                return;
-            }
-            if (!el) {
-                el = document.createElement('div');
-                el.id = 'deliveryDone';
-                el.className = 'delivery-done';
-                bar.after(el);
-            }
-            const confirmed = !!this.confirmedAt;
-            const revising = !confirmed && this.revisionOpen;
-            el.dataset.state = confirmed ? 'confirmed' : (revising ? 'revising' : 'open');
-
-            const text = (cls, id, t) => {
-                const d = document.createElement('div');
-                d.className = cls;
-                if (id) d.id = id;
-                d.textContent = t;
-                return d;
-            };
-            const kids = [];
-            if (confirmed) {
-                const when = this._fmtDate(this.confirmedAt);
-                kids.push(text('delivery-done-status', 'deliveryDoneStatus', `✓ 已確認完成${when ? `（${when}）` : ''}`));
-            } else if (revising) {
-                // a viewer sees that changes are in progress, never the text
-                kids.push(text('delivery-done-status', 'deliveryDoneStatus', this.isOwner ? '已通知攝影師，修改中' : '攝影師修改中'));
-                if (this.isOwner && this.revisionMessage) kids.push(text('delivery-done-msg', 'deliveryDoneMsg', this.revisionMessage));
-            } else {
-                kids.push(text('delivery-done-status', 'deliveryDoneStatus',
-                    this.isOwner ? '滿意的話請按「確認完成」，需要調整請按「需要修改」' : '尚待選片人確認完成'));
-            }
-            // buttons: the seat holder only, and none once confirmed
-            if (this.isOwner && !confirmed) {
-                const actions = document.createElement('div');
-                actions.className = 'delivery-done-actions';
-                const ok = document.createElement('button');
-                ok.id = 'doneConfirmBtn';
-                ok.type = 'button';
-                ok.className = 'btn btn-success';
-                ok.textContent = '確認完成';
-                ok.addEventListener('click', () => this._openDoneModal('confirm'));
-                const rev = document.createElement('button');
-                rev.id = 'doneReviseBtn';
-                rev.type = 'button';
-                rev.className = 'btn btn-outline';
-                rev.textContent = '需要修改';
-                rev.addEventListener('click', () => this._openDoneModal('revision'));
-                actions.append(ok, rev);
-                kids.push(actions);
-                this._ensureDoneModals();
-            } else {
-                this._removeDoneModals();
-            }
-            el.replaceChildren(...kids);
-        },
-
-        _removeDoneModals() {
-            document.getElementById('doneConfirmModal')?.remove();
-            document.getElementById('doneReviseModal')?.remove();
-            if (this._doneKeyHandler) {
-                document.removeEventListener('keydown', this._doneKeyHandler);
-                this._doneKeyHandler = null;
-            }
-        },
-
-        _ensureDoneModals() {
-            if (document.getElementById('doneConfirmModal')) return;
-            const mk = (tag, cls, props) => Object.assign(document.createElement(tag), { className: cls || '' }, props || {});
-            const modal = (id, title, ...body) => {
-                const m = mk('div', 'modal done-modal', { id });
-                m.setAttribute('role', 'dialog');
-                m.setAttribute('aria-modal', 'true');
-                m.setAttribute('aria-labelledby', `${id}Title`);
-                const content = mk('div', 'modal-content pick-submit-content pick-over-content');
-                content.append(mk('h3', '', { id: `${id}Title`, textContent: title }), ...body);
-                m.append(mk('div', 'modal-overlay'), content);
-                return m;
-            };
-            const errBox = id => {
-                const e = mk('div', 'pick-claim-err done-err', { id });
-                e.setAttribute('role', 'alert');
-                return e;
-            };
-            const btn = (id, cls, label) => mk('button', cls, { id, type: 'button', textContent: label });
-
-            const confirmModal = modal('doneConfirmModal', '確認完成？',
-                mk('p', 'pick-over-line', { textContent: '確認後攝影師會收到通知；之後若要再修改，需聯絡攝影師。' }),
-                errBox('doneConfirmErr'),
-                (() => {
-                    const a = mk('div', 'pick-submit-actions');
-                    a.append(btn('doneConfirmCancel', 'btn btn-outline', '取消'), btn('doneConfirmSubmit', 'btn btn-success', '確認完成'));
-                    return a;
-                })());
-
-            const ta = mk('textarea', 'input done-textarea', { id: 'doneReviseText', rows: 5, maxLength: 1000 });
-            ta.setAttribute('aria-label', '修改內容');
-            ta.placeholder = '請說明哪裡需要修改（可寫照片檔名）';
-            const count = mk('div', 'done-count', { id: 'doneReviseCount', textContent: '0 / 1000' });
-            const reviseModal = modal('doneReviseModal', '需要修改',
-                mk('p', 'pick-over-line', { textContent: '請寫下需要修改的地方，送出後會通知攝影師。' }),
-                ta, count, errBox('doneReviseErr'),
-                (() => {
-                    const a = mk('div', 'pick-submit-actions');
-                    const send = btn('doneReviseSubmit', 'btn btn-success', '送出');
-                    send.disabled = true;
-                    a.append(btn('doneReviseCancel', 'btn btn-outline', '取消'), send);
-                    return a;
-                })());
-            document.body.append(confirmModal, reviseModal);
-
-            const sync = () => {
-                count.textContent = `${ta.value.length} / 1000`;
-                if (!this._doneBusy) document.getElementById('doneReviseSubmit').disabled = !ta.value.trim();
-            };
-            ta.addEventListener('input', sync);
-            for (const [m, kind] of [[confirmModal, 'confirm'], [reviseModal, 'revision']]) {
-                m.querySelector('.modal-overlay').addEventListener('click', () => this._closeDoneModal(kind));
-            }
-            document.getElementById('doneConfirmCancel').addEventListener('click', () => this._closeDoneModal('confirm'));
-            document.getElementById('doneReviseCancel').addEventListener('click', () => this._closeDoneModal('revision'));
-            document.getElementById('doneConfirmSubmit').addEventListener('click', () => this._doneSubmit('confirm'));
-            document.getElementById('doneReviseSubmit').addEventListener('click', () => this._doneSubmit('revision'));
-            this._doneKeyHandler = e => {
-                if (e.key !== 'Escape') return;
-                if (confirmModal.classList.contains('active')) this._closeDoneModal('confirm');
-                if (reviseModal.classList.contains('active')) this._closeDoneModal('revision');
-            };
-            document.addEventListener('keydown', this._doneKeyHandler);
-        },
-
-        _doneModal(kind) {
-            return document.getElementById(kind === 'revision' ? 'doneReviseModal' : 'doneConfirmModal');
-        },
-        _doneErr(kind) {
-            return document.getElementById(kind === 'revision' ? 'doneReviseErr' : 'doneConfirmErr');
-        },
-        _openDoneModal(kind) {
-            const m = this._doneModal(kind);
-            if (!m) return;
-            this._doneShowErr(kind, '');
-            m.classList.add('active');
-            if (kind === 'revision') setTimeout(() => document.getElementById('doneReviseText')?.focus(), 30);
-        },
-        _closeDoneModal(kind) {
-            if (this._doneBusy) return;
-            this._doneModal(kind)?.classList.remove('active');
-        },
-
-        // The error line of a modal; `reload` adds a 重新載入 button next to it
-        // (a page that shows an old version must be reloaded, not retried).
-        _doneShowErr(kind, text, reload) {
-            const el = this._doneErr(kind);
-            if (!el) return;
-            el.replaceChildren();
-            if (text) el.append(document.createTextNode(text));
-            if (reload) {
-                const b = document.createElement('button');
-                b.type = 'button';
-                b.className = 'btn btn-outline done-reload';
-                b.textContent = '重新載入';
-                b.addEventListener('click', () => window.location.reload());
-                el.append(b);
-            }
-        },
-
-        _doneErrorText(status, data) {
-            const code = data && data.code;
-            if (code === 'revision_open_cap' || code === 'revision_cap') return '修改要求已達上限，請直接聯絡攝影師';
-            if (code === 'not_delivered') return '攝影師已更新或收回成品，請重新整理頁面';
-            if (code === 'invalid_message') return '請輸入 1–1000 字的修改內容';
-            if (code === 'too_large') return '內容太長，請縮短後再送出';
-            if (status === 403) return '只有選片人可以操作';
-            if (status === 401) return '連結已失效，請向攝影師索取新的連結';
-            if (status === 0) return '無法連線，請檢查網路後再試';
-            return '暫時無法處理，請稍後再試';
-        },
-
-        // Re-reads the state right before sending: the page may be showing a
-        // version the photographer has since replaced (docs/delivery.md,
-        // "Known limit"). 'ok' = nothing moved; 'confirmed' = it was confirmed
-        // meanwhile (by the photographer); 'stale' = finals, delivery or the
-        // open request changed; 'error' = the read itself failed.
-        async _doneGuard() {
-            const r = await this.fetchState();
-            if (!r.ok) return { kind: 'error', status: r.status, data: r.data };
-            const d = r.data;
-            if (d.mode !== 'delivered') return { kind: 'stale' };
-            const finals = Array.isArray(d.final_folders) ? d.final_folders : [];
-            if (JSON.stringify(finals) !== JSON.stringify(this.finalFolders) || (d.delivered_at || null) !== this.deliveredAt) {
-                return { kind: 'stale' };
-            }
-            if (typeof d.confirmed_at === 'string') return { kind: 'confirmed', data: d };
-            const msg = typeof d.revision_message === 'string' ? d.revision_message : null;
-            if ((d.revision_open === true) !== this.revisionOpen || msg !== this.revisionMessage) return { kind: 'stale' };
-            return { kind: 'ok' };
-        },
-
-        async _doneSubmit(kind) {
-            if (this._doneBusy) return;
-            const revision = kind === 'revision';
-            const submit = document.getElementById(revision ? 'doneReviseSubmit' : 'doneConfirmSubmit');
-            const ta = document.getElementById('doneReviseText');
-            const message = revision ? ta.value.trim() : '';
-            if (revision && !message) { this._doneShowErr(kind, '請輸入修改內容'); return; }
-            this._doneShowErr(kind, '');
-            this._doneBusy = true;
-            submit.disabled = true;
-            try {
-                const guard = await this._doneGuard();
-                if (guard.kind === 'stale') {
-                    this._doneShowErr(kind, '攝影師剛更新了照片，請重新整理後再確認', true);
-                    return;
-                }
-                if (guard.kind === 'error') {
-                    this._doneShowErr(kind, this._doneErrorText(guard.status, guard.data));
-                    return;
-                }
-                if (guard.kind === 'confirmed') {
-                    this._applyConfirmFields(guard.data);
-                    this._doneBusy = false;
-                    this._closeDoneModal(kind);
-                    this._applyView();   // re-renders the block, and switches to the completion page when this confirmed
-                    if (typeof toast !== 'undefined') toast.success('此相簿已確認完成');
-                    return;
-                }
-                const { ok, status, data } = revision ? await this.requestRevision(message) : await this.confirmDelivery();
-                if (ok) {
-                    if (revision) {
-                        this.revisionOpen = true;
-                        this.revisionMessage = typeof data.message === 'string' ? data.message : message;
-                        ta.value = '';
-                        document.getElementById('doneReviseCount').textContent = '0 / 1000';
-                    } else {
-                        this.confirmedAt = typeof data.confirmed_at === 'string' ? data.confirmed_at : new Date().toISOString();
-                        this.revisionOpen = false;
-                        this.revisionMessage = null;
-                    }
-                    this._doneBusy = false;
-                    this._closeDoneModal(kind);
-                    this._applyView();   // re-renders the block, and switches to the completion page when this confirmed
-                    if (typeof toast !== 'undefined') toast.success(revision ? '已通知攝影師' : '已確認完成');
-                    return;
-                }
-                if (data && data.code === 'already_confirmed') {
-                    // confirmed in the meantime (another tab, or the photographer):
-                    // show it as it is
-                    const r = await this.fetchState();
-                    if (r.ok) this._applyConfirmFields(r.data);
-                    else { this.confirmedAt = this.confirmedAt || new Date().toISOString(); this.revisionOpen = false; this.revisionMessage = null; }
-                    this._doneBusy = false;
-                    this._closeDoneModal(kind);
-                    this._applyView();   // re-renders the block, and switches to the completion page when this confirmed
-                    if (typeof toast !== 'undefined') toast.success('此相簿已確認完成');
-                    return;
-                }
-                this._doneShowErr(kind, this._doneErrorText(status, data), data && data.code === 'not_delivered');
-            } finally {
-                this._doneBusy = false;
-                if (submit.isConnected) submit.disabled = revision ? !ta.value.trim() : false;
-            }
+            if (window.DeliveryDone) DeliveryDone.render(this);
         },
 
         // ── autosave: debounced, batched ─────────────────────────────────
