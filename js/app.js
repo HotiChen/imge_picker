@@ -802,7 +802,7 @@ class App {
             ? (canEdit
                 ? `<button type="button" class="pick-heart-btn${isPicked ? ' on' : ''}" title="選">♥</button>`
                 : `<span class="pick-heart-btn${isPicked ? ' on' : ''}" title="選">♥</span>`)
-            : (projectMode ? `<span class="pick-heart-btn on" title="已選">♥</span>` : '');
+            : (projectMode ? (isPicked ? `<span class="pick-heart-btn on" title="已選">♥</span>` : '') : '');
         const pinCount = projectMode && Array.isArray(photo.marks) ? photo.marks.length : 0;
         const pinBadge = pinCount > 0
             ? `<span class="pv-pin-badge" title="有 ${pinCount} 個標示">📍${pinCount}</span>` : '';

@@ -26,6 +26,12 @@
         app: null,
         photos: [],
         projectTitle: '',
+        // 'picks' (the client's picks, the default) or 'all' (every proof in the
+        // project's folders, read-only). ?mode=all opens straight into the second.
+        mode: params.get('mode') === 'all' ? 'all' : 'picks',
+        proofFolders: [],
+        allPhotos: null,        // every proof, once listed (null = not loaded yet)
+        _selByKey: new Map(),   // photo_key -> the client's selection row
         ownerName: null,
         tokens: [],
 
@@ -38,6 +44,7 @@
             this._wireViewToggle();
             this._wireDownloads();
             this._wireCopyLinkBtn();
+            this._buildModeToggle();
             const admin = (typeof CONFIG !== 'undefined' && CONFIG.PHOTOGRAPHER_TOKEN) || '';
             if (!admin) {
                 // Not a second login path: js/client-auth-check.js already
@@ -71,7 +78,110 @@
             const data = await res.json().catch(() => ({}));
             this._applyState(data);
             this.renderBanner();
+            if (this.mode === 'all') { await this._ensureAllLoaded(); this.renderBanner(); }
             this.loadGrid();
+        },
+
+        // ── 客人選的 / 全部毛片 ────────────────────────────────────────────────
+        // The picks view is the default. 全部毛片 lists every photo in the
+        // project's proof folders (and the subfolders under them) with the same
+        // listing route and credential a studio folder view uses — no new route.
+        // Read-only: nothing here writes. A picked photo keeps its ♥ / 💬 / 📍
+        // flags; the rest show none.
+        currentPhotos() {
+            return this.mode === 'all' && this.allPhotos ? this.allPhotos : this.photos;
+        },
+
+        _buildModeToggle() {
+            const banner = document.getElementById('projectViewBanner');
+            if (!banner || document.getElementById('pvModeToggle')) return;
+            const wrap = document.createElement('div');
+            wrap.id = 'pvModeToggle';
+            wrap.className = 'pv-mode-toggle';
+            wrap.setAttribute('role', 'group');
+            wrap.setAttribute('aria-label', '顯示範圍');
+            [['picks', '客人選的'], ['all', '全部毛片']].forEach(([mode, label]) => {
+                const b = document.createElement('button');
+                b.type = 'button';
+                b.className = 'btn btn-outline pv-banner-btn pv-mode-btn';
+                b.dataset.pvMode = mode;
+                b.textContent = label;
+                b.addEventListener('click', () => this.setMode(mode));
+                wrap.appendChild(b);
+            });
+            const text = document.getElementById('pvBannerText');
+            banner.insertBefore(wrap, text || null);
+            this._syncModeToggle();
+        },
+
+        _syncModeToggle() {
+            document.querySelectorAll('#pvModeToggle [data-pv-mode]').forEach(b => {
+                const on = b.dataset.pvMode === this.mode;
+                b.setAttribute('aria-pressed', on ? 'true' : 'false');
+                b.classList.toggle('on', on);
+            });
+        },
+
+        async setMode(mode) {
+            if (mode !== 'picks' && mode !== 'all') return;
+            if (mode === this.mode) return;
+            this.mode = mode;
+            this._syncModeToggle();
+            try {
+                const u = new URL(location.href);
+                if (mode === 'all') u.searchParams.set('mode', 'all'); else u.searchParams.delete('mode');
+                history.replaceState(history.state, '', u.pathname + u.search + u.hash);
+            } catch (e) { /* the address is a convenience only */ }
+            if (mode === 'all') await this._ensureAllLoaded();
+            if (this.mode !== mode) return;   // toggled again while listing
+            this.renderBanner();
+            this.loadGrid();
+        },
+
+        async _ensureAllLoaded() {
+            if (this.allPhotos) return;
+            const textEl = document.getElementById('pvBannerText');
+            if (textEl) textEl.textContent = '載入全部毛片中…';
+            try {
+                this.allPhotos = await this._listAllProofs();
+                this.allError = false;
+            } catch (e) {
+                this.allPhotos = [];
+                this.allError = true;
+                if (typeof toast !== 'undefined') toast.error('無法讀取毛片資料夾');
+            }
+        },
+
+        // Every file under the project's folders: the same `?list=` call
+        // driveManager.loadPhotosFromFolder makes (same headers), repeated into the
+        // subfolders (photos can sit one or two levels down, docs/backlog.md),
+        // without touching driveManager's own state.
+        async _listAllProofs() {
+            const seen = new Map();
+            const walk = async (prefix, depth) => {
+                const res = await fetch(`${CONFIG.WORKER_URL}/?list=${encodeURIComponent(prefix)}`,
+                    { headers: driveManager._authHeaders() });
+                const r = await res.json().catch(() => null);
+                if (!res.ok || !r || r.status !== 'success') throw new Error('list failed');
+                (r.data || []).forEach(f => {
+                    if (!f || !f.id || seen.has(f.id)) return;
+                    const sel = this._selByKey.get(f.id);
+                    seen.set(f.id, {
+                        id: f.id,
+                        name: f.name || f.id.split('/').pop(),
+                        size: f.size,
+                        uploaded: f.uploaded || null,
+                        rating: sel ? sel.rating : 0,
+                        note: sel ? sel.note : '',
+                        updatedAt: sel ? sel.updatedAt : null,
+                        hasAnnotations: false,
+                        marks: sel ? sel.marks : [],
+                    });
+                });
+                if (depth < 3) await Promise.all((r.folders || []).map(f => walk(f, depth + 1)));
+            };
+            for (const f of this.proofFolders) await walk(f.endsWith('/') ? f : f + '/', 0);
+            return [...seen.values()].sort((a, b) => a.id.localeCompare(b.id));
         },
 
         _applyState(data) {
@@ -82,6 +192,12 @@
             // status — so the first 'live' one found here is the newest live
             // link (task: 專案選片 — 複製選片連結).
             this.tokens = Array.isArray(data.tokens) ? data.tokens : [];
+            this.proofFolders = data.project && Array.isArray(data.project.folders)
+                ? data.project.folders.filter(f => typeof f === 'string' && f) : [];
+            this._selByKey = new Map((data.selections || []).map(s => [s.photo_key, {
+                rating: s.rating, note: s.note || '', updatedAt: s.updated_at || null,
+                marks: window.cleanPinMarks(s.marks),
+            }]));
             this.photos = (data.selections || [])
                 .filter(s => s.rating > 0)
                 .map(s => ({
@@ -235,13 +351,15 @@
         // — the markup and the hook below stay, so it can come back.
         _wireDownloads() {
             const self = this;
-            const zipName = () =>
-                `${driveManager.sanitizeFileTitle(self.projectTitle)}_選片_${self.photos.length}張.zip`;
+            const zipName = () => {
+                const list = self.currentPhotos();
+                return `${driveManager.sanitizeFileTitle(self.projectTitle)}_${self.mode === 'all' ? '毛片' : '選片'}_${list.length}張.zip`;
+            };
             driveManager.downloadAllPhotos = function () {
-                return this.downloadPhotos(self.photos, zipName());
+                return this.downloadPhotos(self.currentPhotos(), zipName());
             };
             this.app.downloadSelected = function () {
-                return driveManager.downloadPhotos(self.photos, zipName());
+                return driveManager.downloadPhotos(self.currentPhotos(), zipName());
             };
         },
 
@@ -331,7 +449,11 @@
             if (!el) return;
             const textEl = document.getElementById('pvBannerText');
             const link = document.getElementById('pvBackLink');
-            if (textEl) textEl.textContent = `${this.ownerName || '（尚無人認領）'} 的選片 · ${this.photos.length} 張`;
+            if (textEl) {
+                textEl.textContent = this.mode === 'all' && this.allPhotos
+                    ? `全部毛片 · ${this.allPhotos.length} 張（客人選了 ${this.photos.length} 張）`
+                    : `${this.ownerName || '（尚無人認領）'} 的選片 · ${this.photos.length} 張`;
+            }
             if (link) link.href = `admin.html#project=${encodeURIComponent(this.projectId)}`;
             el.hidden = false;
         },
@@ -367,13 +489,17 @@
         },
 
         loadGrid() {
-            if (!this.photos.length) {
-                const h2 = document.querySelector('#emptyState h2');
-                const p = document.querySelector('#emptyState p');
+            const list = this.currentPhotos();
+            const h2 = document.querySelector('#emptyState h2');
+            const p = document.querySelector('#emptyState p');
+            if (this.mode === 'all') {
+                if (h2) h2.textContent = this.allError ? '無法讀取毛片' : '沒有毛片';
+                if (p) p.textContent = this.allError ? '毛片資料夾暫時讀不到，請稍後再試' : '這個專案的毛片資料夾裡還沒有照片';
+            } else if (!this.photos.length) {
                 if (h2) h2.textContent = '尚無選取的照片';
                 if (p) p.textContent = '這個專案目前還沒有人選片';
             }
-            this.app.photos = this.photos;
+            this.app.photos = list;
             this.app.currentFolders = [];
             this.app.applyFilters();
             this.app.renderPhotoGrid();

@@ -2237,6 +2237,9 @@ span.pick-heart-btn { cursor: default; }
    clickable, not stray underlined words (task: 專案選片 — banner button
    visibility). */
 .pv-banner-btn { flex-shrink: 0; }
+/* 客人選的 / 全部毛片 — the review view's two-way toggle (js/project-view.js) */
+.pv-mode-toggle { display: inline-flex; gap: 6px; flex-shrink: 0; }
+.pv-mode-btn.on { background: var(--accent); color: var(--bg); border-color: var(--accent); font-weight: 600; }
 
 @media (max-width: 768px) {
   .pick-banner { padding: 8px 12px; font-size: 12px; }

@@ -45,6 +45,7 @@ const pfWaitFinalsLink = page => page.waitForSelector('#pd-upload-final-btn[data
 
       await page.click('#pd-deliver-btn');
       await page.waitForSelector('[data-delivered-status]', { timeout: 3000 });
+      await page.click('#dn-close-btn');   // the 交付通知 dialog (item 2) opens after every successful 交件
       ok('the deliver call carried final_folders', JSON.stringify(deliverBodies(m)) === '[{"final_folders":["shoot/精修/"]}]', JSON.stringify(deliverBodies(m)));
       ok('the block says 已交件 and lists the final folder',
         (await page.$eval('[data-delivered-status]', e => e.textContent)) === '已交件' &&
@@ -73,6 +74,7 @@ const pfWaitFinalsLink = page => page.waitForSelector('#pd-upload-final-btn[data
       ok('the button now reads 確定更換', (await page.textContent('#pd-deliver-btn')) === '確定更換');
       await page.click('#pd-deliver-btn');
       await page.waitForFunction(() => document.querySelector('#pd-delivered-folders [data-final-chip]')?.dataset.finalChip === 'shoot/精修二/', null, { timeout: 3000 });
+      await page.click('#dn-close-btn');
       ok('the second deliver replaced the finals', JSON.stringify(deliverBodies(m)[1]) === '{"final_folders":["shoot/精修二/"]}', JSON.stringify(deliverBodies(m)));
       ok('and kept the first delivered_at', m.state.project.delivered_at === firstStamp);
       ok('the chooser is closed again (更換 offered)', !!(await page.$('#pd-replace-final-btn')));
@@ -269,6 +271,7 @@ const pfWaitFinalsLink = page => page.waitForSelector('#pd-upload-final-btn[data
       await page.waitForSelector('#pd-final-chips [data-final-chip]', { timeout: 3000 });
       await page.click('#pd-deliver-btn');
       await page.waitForSelector('[data-delivered-status]', { timeout: 3000 });
+      await page.click('#dn-close-btn');
       ok('delivered', m.state.project.delivered_at !== null);
       ok('while delivered the finals are listed as delivered chips (no prefill hint)',
         JSON.stringify(await chipTexts(page, '#pd-delivered-folders [data-final-chip]')) === '["shoot/精修/"]' &&
@@ -296,6 +299,7 @@ const pfWaitFinalsLink = page => page.waitForSelector('#pd-upload-final-btn[data
       const before = deliverBodies(m).length;
       await page.click('#pd-deliver-btn');
       await page.waitForSelector('[data-delivered-status]', { timeout: 3000 });
+      await page.click('#dn-close-btn');
       ok('pressing 交件 again re-delivers the same folders', deliverBodies(m).length === before + 1 &&
         JSON.stringify(deliverBodies(m)[before]) === '{"final_folders":["shoot/精修/"]}', JSON.stringify(deliverBodies(m)));
       return out;
@@ -317,6 +321,7 @@ const pfWaitFinalsLink = page => page.waitForSelector('#pd-upload-final-btn[data
       await page.waitForSelector('#pd-final-chips [data-final-chip]', { timeout: 3000 });
       await page.click('#pd-deliver-btn');
       await page.waitForSelector('[data-delivered-status]', { timeout: 3000 });
+      await page.click('#dn-close-btn');
       ok('delivered first (positive case)', m.state.project.delivered_at !== null && (await page.$('.pd-head [data-delivered-badge]')) !== null);
       await page.click('#pd-reopen-btn');
       // the detail re-rendered in picking (載入中… in between has no #pd-delivery)
