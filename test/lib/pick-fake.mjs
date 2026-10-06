@@ -167,6 +167,11 @@ export function pickFakeWorker(opts = {}) {
     revisions: (opts.revisions || []).map((r, i) => ({
       id: r.id || `rev-${i + 1}`, picker_id: r.picker_id ?? null, message: r.message,
       created_at: r.created_at || new Date(Date.UTC(2026, 8, 21, 0, i)).toISOString(), resolved_at: r.resolved_at || null,
+      // docs/revision-pins.md 13.1: a text round (the default) has no marks; a pins round carries
+      // marks {photo_key: [{x,y,note}]}, finals [folder...], message_auto, photo_count
+      kind: r.kind || 'text', marks: r.marks || null, finals: r.finals || null,
+      message_auto: !!r.message_auto,
+      photo_count: r.photo_count ?? (r.marks ? Object.keys(r.marks).length : 0),
     })),
     // GET /api/pick/state's studio.{name, booking_url, has_logo}
     // (docs/dashboard-settings.md) — omitted from the response unless a test
@@ -556,6 +561,7 @@ export function pickFakeWorker(opts = {}) {
         const revision_requests = state.revisions.slice().reverse().slice(0, 50).map(r => ({
           id: r.id, message: r.message, created_at: r.created_at, resolved_at: r.resolved_at,
           picker_id: r.picker_id, picker_name: state.pickers.get(r.picker_id)?.name ?? null,
+          kind: r.kind, marks: r.marks, finals: r.finals, message_auto: r.message_auto, photo_count: r.photo_count,
         }));
         return json({
           project: { ...state.project, open_revision_count: openRevisions().length },

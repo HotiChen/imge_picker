@@ -1,0 +1,54 @@
+/* The photographer's view of the revision rounds (js/revision-rounds-view.js; docs/revision-pins.md 6.2).
+   Used by admin.html (cream theme) and the review view in index.html. No new :root: the card keeps the
+   host page's .pd-rev look in admin.html; #pvRevisions below gives the review view its own light panel.
+   Every rule is scoped to a class the script creates. */
+
+.rrv-text, .rrv-who { unicode-bidi: isolate; overflow-wrap: anywhere; }
+.rrv-open { display: inline-block; margin-left: 8px; padding: 1px 8px; border-radius: 999px; background: #ffe3b8; color: #6b3a00; font-size: 11px; }
+.rrv-auto { font-style: italic; }
+
+.rrv-photos { margin-top: 8px; }
+.rrv-photos > summary { cursor: pointer; font-size: 13px; padding: 4px 0; }
+.rrv-photo-list { display: flex; flex-direction: column; gap: 10px; margin-top: 6px; }
+.rrv-photo { display: flex; gap: 12px; align-items: flex-start; }
+.rrv-side { min-width: 0; flex: 1; font-size: 13px; }
+.rrv-name { font-family: 'IBM Plex Mono', monospace; font-size: 12px; display: block; margin-bottom: 4px; }
+.rrv-pins { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.rrv-num { display: inline-block; min-width: 1.6em; font-weight: 600; }
+
+/* the photo box: pins are positioned over it by PinLayer (object-fit: contain) */
+.rrv-frame { position: relative; background: #1b1b1b; border-radius: 8px; overflow: hidden; }
+.rrv-thumb { width: 200px; height: 140px; flex: 0 0 auto; cursor: zoom-in; }
+.rrv-frame img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.rrv-frame .pin-layer { position: absolute; inset: 0; z-index: 1; pointer-events: none; }
+.rrv-frame .pin-layer-pin {
+  position: absolute; transform: translate(-50%, -50%); width: 22px; height: 22px; min-width: 0; padding: 0; border-radius: 50%;
+  display: inline-flex; align-items: center; justify-content: center; pointer-events: none;
+  background: #f5a13b; color: #1a1408; border: 2px solid #fff; font: 600 12px/1 'IBM Plex Sans', sans-serif;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, .55);
+}
+.rrv-fail { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: #f3e6d0; font-size: 12px; text-align: center; padding: 6px; }
+.rrv-csv { margin-top: 8px; }
+
+/* the 1200 look */
+.rrv-modal { position: fixed; inset: 0; z-index: 3000; background: rgba(20, 14, 6, .72); display: flex; align-items: center; justify-content: center; padding: 16px; }
+.rrv-modal-box { background: #fff; color: #231b12; border-radius: 12px; max-width: min(960px, 100%); max-height: 100%; overflow: auto; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
+.rrv-modal-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.rrv-modal-close { border: 1px solid #d8cdbb; background: #fff8ee; color: #231b12; border-radius: 8px; padding: 6px 14px; font-size: 14px; cursor: pointer; min-height: 36px; }
+.rrv-modal-close:focus-visible { outline: 2px solid #8a4b00; outline-offset: 2px; }
+.rrv-frame-big { width: min(880px, 100%); height: min(70vh, 640px); }
+.rrv-frame-big .pin-layer-pin { width: 26px; height: 26px; font-size: 13px; }
+
+/* the review view (index.html?project=): a light panel on the dark page */
+#pvRevisions { margin: 12px 16px; padding: 12px; border-radius: 12px; background: #fff8ee; color: #231b12; --ink-70: #5b4f42; --ink-90: #231b12; }
+#pvRevisions h3 { margin: 0 0 8px; font-size: 14px; }
+#pvRevisions .rrv-card { background: #fff; border: 1px solid #efe6d8; border-radius: 10px; padding: 8px 12px; font-size: 13px; margin-bottom: 8px; }
+#pvRevisions .rrv-card.resolved { border-style: dashed; }
+#pvRevisions .pd-rev-meta { color: #5b4f42; font-size: 12px; font-family: 'IBM Plex Mono', monospace; margin-bottom: 3px; }
+#pvRevisions .pd-rev-msg { white-space: pre-wrap; overflow-wrap: anywhere; }
+#pvRevisions .pd-rev-done { display: inline-block; margin-left: 8px; padding: 1px 8px; border-radius: 999px; background: #d6f0e3; color: #1f6b4f; font-size: 11px; }
+
+@media (max-width: 600px) {
+  .rrv-photo { flex-direction: column; }
+  .rrv-thumb { width: 100%; max-width: 320px; height: 200px; }
+}

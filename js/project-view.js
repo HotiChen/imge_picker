@@ -78,6 +78,7 @@
             const data = await res.json().catch(() => ({}));
             this._applyState(data);
             this.renderBanner();
+            this.renderRevisions(data.revision_requests);
             if (this.mode === 'all') { await this._ensureAllLoaded(); this.renderBanner(); }
             this.loadGrid();
         },
@@ -456,6 +457,34 @@
             }
             if (link) link.href = `admin.html#project=${encodeURIComponent(this.projectId)}`;
             el.hidden = false;
+        },
+
+        // ── 修改標示 (docs/revision-pins.md 6.2): the client's pins on the delivered finals ──
+        // One card per pins round (newest first), the same cards admin.html shows
+        // (js/revision-rounds-view.js): the note, open / handled, and the photos with
+        // read-only pins so the photographer sees where to retouch. Text rounds have no
+        // photos and stay in admin.html. No pins round, no section at all. Nothing here
+        // writes; the photos are read with the admin credential in a header.
+        renderRevisions(rows) {
+            document.getElementById('pvRevisions')?.remove();
+            const view = window.RevisionRoundsView;
+            const all = Array.isArray(rows) ? rows : [];
+            if (!view || !window.PinLayer || !all.some(r => view.kindOf(r) === 'pins')) return;
+            const banner = document.getElementById('projectViewBanner');
+            if (!banner) return;
+            const section = document.createElement('section');
+            section.id = 'pvRevisions';
+            const head = document.createElement('h3');
+            head.textContent = '客人在精修照片上的修改標示';
+            section.appendChild(head);
+            const ctx = {
+                workerUrl: CONFIG.WORKER_URL,
+                token: () => (typeof CONFIG !== 'undefined' && CONFIG.PHOTOGRAPHER_TOKEN) || '',
+                fmtTime: iso => Util.fmtDate(iso, 'mdhm') || String(iso || ''),
+            };
+            // the rows are newest first: the oldest round is 第 1 輪, text rounds count too
+            all.forEach((r, i) => { if (view.kindOf(r) === 'pins') section.appendChild(view.renderRound(r, all.length - i, ctx)); });
+            banner.after(section);
         },
 
         // ── 複製選片連結 (task: 專案選片) — shares the project's own pick

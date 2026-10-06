@@ -38,7 +38,30 @@
     return BOM + [HEADER.map(csvCell).join(',')].concat(rows).join('\r\n') + '\r\n';
   }
 
-  const api = { selectionsToCsv, pinsText, csvCell };
+  // 下載此輪需求表: one pins round of revision requests on the delivered finals
+  // (docs/revision-pins.md 6.2). `round` is a GET /api/admin/projects/:id
+  // revision_requests row: {marks: {photo_key: [{x, y, note}]} | null, message,
+  // message_auto}. One row per pin: file name (the last path segment of the key),
+  // pin number, x / y as the stored 0-1 fractions of the photo, the pin's note.
+  // 總說明 is the client's own overall note, on the first row only; a
+  // message_auto round has none (its `message` is the Worker's fixed string).
+  // Every cell goes through csvCell, so guest text cannot start a formula.
+  const REVISION_HEADER = ['檔名', '標示', 'x', 'y', '備註', '總說明'];
+  function revisionToCsv(round) {
+    const marks = round && round.marks && typeof round.marks === 'object' && !Array.isArray(round.marks) ? round.marks : {};
+    const overall = round && !round.message_auto && typeof round.message === 'string' ? round.message : '';
+    const rows = [];
+    Object.keys(marks).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)).forEach(key => {
+      const name = key.slice(key.lastIndexOf('/') + 1);
+      (Array.isArray(marks[key]) ? marks[key] : []).forEach((m, i) => {
+        if (!m || !Number.isFinite(m.x) || !Number.isFinite(m.y)) return;
+        rows.push([name, i + 1, m.x, m.y, typeof m.note === 'string' ? m.note : '', rows.length === 0 ? overall : ''].map(csvCell).join(','));
+      });
+    });
+    return BOM + [REVISION_HEADER.map(csvCell).join(',')].concat(rows).join('\r\n') + '\r\n';
+  }
+
+  const api = { selectionsToCsv, revisionToCsv, pinsText, csvCell };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   root.SelectionExport = api;
 })(typeof window !== 'undefined' ? window : globalThis);

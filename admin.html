@@ -7,6 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@600;900&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/revision-rounds-view.css?v=20261006b">
 <style>
   /* Bright theme, shared with home.html / dashboard.html / settings.html — cream
      ground, white cards, dark ink, warm accent, soft pastel pills. The photographer's
@@ -437,6 +438,8 @@
 <script src="js/side-nav.js?v=20261006b"></script>
 <script src="js/orders-common.js?v=20261006b"></script>
 <script src="js/selection-export.js?v=20261006b"></script>
+<script src="js/pin-layer.js?v=20261006b"></script>
+<script src="js/revision-rounds-view.js?v=20261006b"></script>
 <script>
 (function() {
   const WORKER_URL = 'https://imagepicker.hotichen.workers.dev';
@@ -1619,27 +1622,19 @@
       </div>`;
   }
 
+  // One card per round (js/revision-rounds-view.js): kind, photos, time, the client's note, open or
+  // handled; a pins round also lists its photos with read-only pins. Guest strings are textContent only.
   function fillRevisionList(box) {
     const list = box.querySelector('#pd-revisions');
     if (!list) return;
-    list.replaceChildren(...currentRevisions.map(r => {
-      const item = document.createElement('div');
-      item.className = 'pd-rev' + (r.resolved_at ? ' resolved' : '');
-      const meta = document.createElement('div');
-      meta.className = 'pd-rev-meta';
-      meta.textContent = `${fmtTime(r.created_at)} · ${r.picker_name || '（客人）'}`;
-      if (r.resolved_at) {
-        const tag = document.createElement('span');
-        tag.className = 'pd-rev-done';
-        tag.textContent = '已處理';
-        meta.append(tag);
-      }
-      const msg = document.createElement('div');
-      msg.className = 'pd-rev-msg';
-      msg.textContent = r.message == null ? '' : String(r.message);
-      item.append(meta, msg);
-      return item;
-    }));
+    const ctx = { workerUrl: WORKER_URL, token: getToken, fmtTime, onCsv: downloadRoundCsv };
+    // currentRevisions is newest first: the oldest round is 第 1 輪
+    list.replaceChildren(...currentRevisions.map((r, i) => window.RevisionRoundsView.renderRound(r, currentRevisions.length - i, ctx)));
+  }
+
+  // 下載此輪需求表: the pins of one round for the retoucher (js/selection-export.js revisionToCsv)
+  function downloadRoundCsv(round, k) {
+    saveBlobAs(new Blob([window.SelectionExport.revisionToCsv(round)], { type: 'text/csv;charset=utf-8' }), currentProject || {}, 'csv', `修改第${k}輪`);
   }
 
   const MARK_DONE_ERRORS = {
@@ -2404,11 +2399,11 @@
     saveBlobAs(new Blob([window.SelectionExport.selectionsToCsv(selected)], { type: 'text/csv;charset=utf-8' }), project, 'csv');
   }
 
-  function saveBlobAs(blob, project, ext) {
+  function saveBlobAs(blob, project, ext, label = 'selected') {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `${(project.title || 'project').replace(/[\\/:*?"<>|]/g, '_')}-selected.${ext}`;
+    a.download = `${(project.title || 'project').replace(/[\\/:*?"<>|]/g, '_')}-${label}.${ext}`;
     // attached, and the URL outlives the click by a beat — revoking it (or an
     // unattached anchor) immediately can lose the download's filename in some
     // engines, since the click only schedules the download asynchronously
