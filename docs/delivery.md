@@ -304,7 +304,7 @@ built). The text route `POST /api/pick/revision` stays for one version.
 **Not done, on purpose** (CLAUDE.md "Decided not to do"): a limit on rounds,
 a reply deadline, auto-complete on expiry (a client who did nothing must
 never read as confirmed), a version table (versions
-are folders). Also not done: emailing the guest when 精修二 is up; the stale
+are folders). Per-photo pins on the finals are built (`docs/revision-pins.md`). Also not done: emailing the guest when 精修二 is up; the stale
 page case below.
 
 **Known limits** (security review 2026-10-04, accepted for now):

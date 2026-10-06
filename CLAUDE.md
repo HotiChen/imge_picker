@@ -135,6 +135,15 @@ empty scan passes.
   Not enforced on any order yet (no guest order path): `albumPagesProblem` in the
   Worker is the ready helper for S3 (`docs/guest-shop.md`).
 
+- Revision rounds are `revision_requests` rows. `marks` / `finals` / `message` / `message_auto` are written
+  once by the submit `INSERT` and never updated; the only `UPDATE revision_requests` allowed sets
+  `resolved_at` (a worker test scans for this). Draft pins (`revision_pins`) count only while their
+  `delivery_at` and `delivery_finals` equal the project's; at most one round is open at a time.
+- The one guest read outside `pickFinals`: `GET /api/pick/rounds/:id/photo` serves `_thumbs/400|1200/<key>.thumb`
+  (never an original, never a download) of a key at index `i` of one of this project's frozen snapshots, to the
+  seat owner only, only while delivered. It never takes a key from the request. `pickReadScope`, the object
+  route and `?list=` must not learn about old rounds. Thumbnails are served only as jpeg/png/webp/avif.
+
 ## Decided not to do (do not re-propose without new evidence)
 - Service / Package / Template, quotes, contracts, booking, CRM: scope creep.
   The studio defaults copied into each project already are the minimal template.
