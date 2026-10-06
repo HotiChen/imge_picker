@@ -292,10 +292,18 @@ works — list, detail, pick state (`null / false / null`), claim, save,
 submit, start-retouch, deliver, undeliver, reopen, stats; the three new
 routes answer 500 `confirm_unavailable` and write nothing.
 
+**Revision pins (2026-10-06, supersedes "the text says which photo").** Per-photo
+pins on the finals are now a revision request: drafts (`revision_pins`, bound to
+the delivery) sent as one frozen round (a `revision_requests` row with `marks` /
+`finals` / `message_auto`; only `resolved_at` is ever updated), at most one open
+request at a time, history and a thumbnail-only route for the seat holder. The
+same clearing rules above apply unchanged (a round is a `revision_requests`
+row). Design, contract and migration: `docs/revision-pins.md` (§13 is what was
+built). The text route `POST /api/pick/revision` stays for one version.
+
 **Not done, on purpose** (CLAUDE.md "Decided not to do"): a limit on rounds,
 a reply deadline, auto-complete on expiry (a client who did nothing must
-never read as confirmed), per-photo marks on a revision request (the text
-says which photo; pins stay a picking feature), a version table (versions
+never read as confirmed), a version table (versions
 are folders). Also not done: emailing the guest when 精修二 is up; the stale
 page case below.
 

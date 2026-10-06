@@ -1,7 +1,8 @@
 # 交件後的修改標示（Revision pins）— 設計稿
 
-狀態：**設計稿，尚未實作**（2026-10-06，等 Tim 審閱後決定）。
-基準：`main` a645be2（已部署版本）。本文只描述設計，不含任何程式改動。
+狀態：**Worker 已實作（WP1，2026-10-06）**；前端（WP3–WP5）未做。Tim 已決定 §11 全部照建議。
+實作與本稿不同的地方集中列在 **§13**（以 §13 與程式為準）。
+基準：`main` a645be2（已部署版本）。
 相關文件：`docs/delivery.md`（交件、客戶確認、要求修改）、`docs/guest-picking.md`（毛片標示的存檔規則）、
 `docs/backlog.md`（THE ORDER）、`CLAUDE.md`（不變量、不做清單、風險分級）。
 
@@ -76,7 +77,7 @@ undeliver / reopen / redeliver 之後：
 
 ### 3.1 Migration（append-only，Tim 在 D1 Console 一句一句執行，合併前）
 
-建議檔名 `worker/migrations/2026-10-xx-revision-pins.sql`（日期以實作當天為準），
+檔名 `worker/migrations/2026-10-07-revision-pins.sql`，
 `worker/schema.sql` 的 `revision_requests`（約第 413 行）後面照既有慣例加 `-- ALTER …` 註解與新欄位，並新增 `revision_pins`。
 
 ```sql
@@ -91,8 +92,8 @@ CREATE TABLE IF NOT EXISTS revision_pins (
   project_id    TEXT NOT NULL,
   photo_key     TEXT NOT NULL,      -- 目前精修裡的一張
   marks         TEXT NOT NULL,      -- JSON [{x,y,note}]，1–10 個；沒有標示就沒有這一列（永不存 '[]'）
-  delivered_at  TEXT NOT NULL,      -- 存檔當下的 projects.delivered_at
-  final_folders TEXT NOT NULL,      -- 存檔當下的 projects.final_folders（原字串）
+  delivery_at     TEXT NOT NULL,    -- 存檔當下的 projects.delivered_at（實作改名，見 §13）
+  delivery_finals TEXT NOT NULL,    -- 存檔當下的 projects.final_folders（原字串）
   updated_by    TEXT NOT NULL,      -- picker id
   updated_at    TEXT NOT NULL,
   PRIMARY KEY (project_id, photo_key)
@@ -217,7 +218,7 @@ gate = EXISTS (SELECT 1 FROM projects p WHERE p.id = ?1 AND p.owner_picker_id = 
   AND NOT EXISTS (SELECT 1 FROM revision_requests r WHERE r.project_id = ?1 AND r.resolved_at IS NULL)
   AND <存完後的有效草稿照片數 ≤ REVISION_PHOTOS_MAX 或不多於現在>
   AND <存完後的標示總數 ≤ PICK_MARKS_TOTAL_MAX 或不多於現在>)
-1) DELETE FROM revision_pins WHERE project_id = ?1 AND (delivered_at IS NOT ?3 OR final_folders IS NOT ?4) AND gate   -- 清失效
+1) DELETE FROM revision_pins WHERE project_id = ?1 AND (delivery_at IS NOT ?3 OR delivery_finals IS NOT ?4) AND gate   -- 清失效
 2) INSERT … ON CONFLICT(project_id, photo_key) DO UPDATE …（marks 非空的項目） WHERE gate
 3) DELETE FROM revision_pins WHERE project_id = ?1 AND photo_key IN (marks 為空的項目) AND gate
 ```
@@ -260,7 +261,7 @@ Body：`{note?: string, expect: [{k: photo_key, n: 標示數}]}`。`expect` 是�
      AND <有效草稿的 json_group_array(json_object('k',photo_key,'n',json_array_length(marks)))> = ?expectJson
      AND length(CAST(<snapshot> AS BLOB)) <= PICK_MARKS_SNAPSHOT_MAX
    snapshot = (SELECT json_group_object(photo_key, json(marks)) FROM (有效草稿 ORDER BY photo_key))
-   有效草稿 = revision_pins d WHERE d.project_id = p.id AND d.delivered_at = p.delivered_at AND d.final_folders = p.final_folders
+   有效草稿 = revision_pins d WHERE d.project_id = p.id AND d.delivery_at = p.delivered_at AND d.delivery_finals = p.final_folders
 2) DELETE FROM revision_pins WHERE project_id = ? AND EXISTS (SELECT 1 FROM revision_requests WHERE id = ?id)
 ```
 
@@ -624,3 +625,64 @@ Tim 要手動做的：
 - **180 天 R2 生命週期**：較舊的輪次縮圖可能已被刪，歷史面板會出現「照片已不在雲端」；標示文字仍在。
 - **blob fetch 的記憶體**：挑片輪最多 500 張縮圖，靠延遲載入與 revoke 控制；舊 iPhone 上沒有實測。
 - **Token 估計**：`worker.js` 4,400 行、`pick.js` 2,100 行，agent 光讀上下文就很貴；估計誤差可能超過 ±40%。
+
+---
+
+## 13. 實作紀錄（Worker，2026-10-06）與本稿的差異
+
+以下以程式與測試為準（`worker/worker.js`，`worker/test/revision-pins.test.mjs`、
+`revision-rounds-gate.test.mjs`、`revision-security.test.mjs`）。
+
+1. **草稿表欄位改名**：`revision_pins.delivery_at` / `delivery_finals`（本稿寫 `delivered_at` / `final_folders`）。
+   原因：既有的 `pick-archive.test.mjs` 用整份 schema.sql 檢查「沒有 `delivered_at|final_folders`」來確認 fixture，
+   用同名欄位會讓這個與本功能無關的檢查失效。意思不變：存檔當下專案的交件時間與 finals 原字串。
+2. **`expect` 比對方式**：不比對 `json_group_array` 與 `JSON.stringify` 的逐字輸出（§12 的風險），
+   改在 SQL 裡用集合比對：有效草稿數 = `expect` 項數，且每一項 `{k, n}` 都有一張草稿 key 相同、標示數相同。
+   與順序無關、不靠序列化。`expect` 內 key 重複 → 400 `invalid_body`；`expect: []` 合法（→ `no_pins` 或 `draft_changed`）。
+   `n` 必須是 1–10 的整數。
+3. **送出 body 上限 128 KB**（`REVISION_ROUND_BODY_MAX`）：100 個 256 字元的 key（最壞 4 bytes/字）+ 1000 字總說明約 110 KB，
+   16 KB / 64 KB 都不夠。
+4. **寫入綁「路由讀到的那次交件」**：草稿存檔與送出的 SQL 都要求 `delivered_at` 與 `final_folders` 等於路由讀到的值。
+   送出途中攝影師換資料夾／取消交件 → 409 `not_delivered`（本稿 §8 寫 `no_pins`/`draft_changed`；前端照 `not_delivered` 處理：請重新整理）。
+5. **方法不對 → 405**（帶 `Allow`）；403 帶 `code: 'not_owner'`；404 帶 `code: 'not_found'`；
+   縮圖路由的 `download` 參數（任何值）→ 400 `invalid_request`；`w` 出現兩次 → 400 `invalid_width`；`i` 出現兩次 → 404。
+6. **總說明**：`note` 缺、`null`、空字串或只有空白 = 沒寫（存固定字、`message_auto = 1`）；非字串或超過 1000 字 → 400 `invalid_message`。
+7. **原始碼掃描找到 2 處** `UPDATE revision_requests SET`（本稿 §3.4 寫至少 3 處）：兩種確認共用 `resolveRevisionsIfConfirmed`，
+   所以原始碼只有它與 deliver 兩處；測試斷言 ≥ 2 處且每處只設 `resolved_at`，並斷言沒有 `DELETE FROM` / `REPLACE INTO` / `INSERT OR … INTO revision_requests`。
+8. **縮圖 Content-Type 白名單**（安全審查新增）：只送 `image/jpeg|png|webp|avif`，其他（例如 `image/svg+xml`、`text/html`）一律標成
+   `image/jpeg`，加 `nosniff`。不傳任何其他 R2 metadata（不會帶出 `Content-Disposition`）。
+9. **`revision_open_photos`** 是「最新一個開著的**標示輪**」的照片數（舊文字需求同時開著也不影響）；沒有開著的標示輪 → `null`。
+10. **歷史列表排序**：`selection`（最新一筆 submission）依 `created_at` 插入請求列之間；同時間時請求排前面。
+11. **migration 偵測**：新路由用一個探測查詢同時確認 `revision_pins` 表與三個欄位都在，缺任何一個 → 500 `revision_pins_unavailable`
+    （包含「只跑了 CREATE TABLE」與「只跑了 ALTER」兩種半套狀態）。state 在同樣情況下回 `revision_drafts: null`。
+12. **排序**：`i` 用的 key 順序是 code point 順序（= SQLite BINARY 對 UTF-8 的順序），去重；列表、單輪、縮圖共用 `roundPhotoKeys`。
+13. **既有測試的修改**（只因 schema / 契約擴充）：`client-confirm.test.mjs` 的 migration 測試（revision_requests 欄位比較排除三個新欄位）
+    與 admin 列的欄位清單（加 `kind/marks/finals/message_auto/photo_count`）；`pick-projects.test.mjs` 的 migration 串列加上本檔。
+
+### 13.1 API 契約（前端照這個寫）
+
+共同：全部 `SHARED_LINK_HEADERS`（`Cache-Control: private, no-store`）。檢查順序：
+401 連結 → 405 方法 → 403 座位 → 409 `not_delivered` → 413/400 body → （縮圖：400 `invalid_request`/`invalid_width`）→ 500 `revision_pins_unavailable` → 409 狀態/上限 → 寫入。
+
+| 路由 | 成功 | 錯誤碼 |
+|---|---|---|
+| `PUT /api/pick/revision-pins` `{items:[{photo_key, marks}]}`（1–20 項，`marks: []` = 刪除） | 200 `{ok:true}` | 401；403 `not_owner`；409 `not_delivered`；413 `too_large`；400 `Invalid JSON`（無 code）/ `invalid_body` / `invalid_photo_key` / `invalid_marks`；403 `not_in_finals`；500；409 `already_confirmed` / `revision_open` / `revision_photos_cap`（`max:100`）/ `marks_cap`（`max:300`） |
+| `POST /api/pick/revision-round` `{note?, expect:[{k, n}]}` | 200 `{ok, id, created_at, photo_count}` | 401；403；409 `not_delivered`；413；400 `Invalid JSON` / `invalid_body` / `invalid_message`（`max:1000`）；500；409 `already_confirmed` / `revision_open` / `no_pins` / `draft_changed` / `revision_cap`（`max:50`）/ `marks_cap` |
+| `GET /api/pick/rounds` | 200 `{rounds:[{id, kind:'selection'\|'pins'\|'text', created_at, open, photo_count, has_note}]}`（新到舊，≤ 51） | 401；405；403；409 `not_delivered`；500 |
+| `GET /api/pick/rounds/:id`（`selection` 或 UUID） | 200 `{id, kind, created_at, open, note, photos:[{i, name, pins:[{x,y,note}]}]}` | 同上 + 404 `not_found` |
+| `GET /api/pick/rounds/:id/photo?i=<0–9999>&w=400\|1200` | 200 圖片（`Cache-Control: private, no-store`、`Vary: X-Share-Token, X-Picker-Key`、`nosniff`，不支援 Range） | 同上 + 400 `invalid_request`（有 `download`）/ `invalid_width`；404 `not_found` / `no_thumbnail` |
+
+`GET /api/pick/state`（交件中、座位持有人才有）：`revision_drafts: [{photo_key, marks}] | null`（null = migration 未跑），
+`revision_open_photos: number | null`；`revision_message` 在 `message_auto = 1` 時為 `null`。觀看者與非交件模式沒有這兩個 key。
+
+`GET /api/admin/projects/:id` 的 `revision_requests[]` 多 `kind`（`'pins'|'text'`）、`marks`（`{key:[pins]}` 或 null）、
+`finals`（陣列或 null）、`message_auto`（boolean）、`photo_count`。`message_auto` 為 true 時 `message` 是固定字，不要當客人的話顯示。
+
+客人寫的字（`note`、pin 的 `note`、`name`）可能含 bidi 字元（U+202E 等，Worker 允許存）：顯示一律 `textContent` + `dir="auto"` +
+`unicode-bidi: isolate`。
+
+### 13.2 沒有驗證到的
+
+- 真的 D1：`json_each` / `json_group_object` / 巢狀 `NOT EXISTS` 在 D1 上的行為只在 node:sqlite 上測過（D1 也是 SQLite，現有路由已用同類語法）。
+- 接近 446,400 bytes 快照的 INSERT 在真 D1 上沒測過。
+- `UPDATE projects SET id = id` 在 D1 上的 `meta.changes`（SQLite 語意是算到列；selections 存檔用的是同類寫法）。

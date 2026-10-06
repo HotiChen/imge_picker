@@ -1650,6 +1650,8 @@ const REVISION_PINS_MESSAGE = '請見照片上的標示';
 const REVISION_EMAIL_PHOTOS_MAX = 20;
 // the only thumbnail widths the history serves; never an original
 const REVISION_THUMB_WIDTHS = ['400', '1200'];
+// the types a history thumbnail is sent as; anything else goes as image/jpeg
+const REVISION_THUMB_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/avif'];
 const REVISION_ROUND_ID = /^[0-9a-f-]{36}$/;
 const REVISION_PINS_UNAVAILABLE = { error: '照片標示修改功能尚未啟用', code: 'revision_pins_unavailable' };
 const PIN_NUMBERS = ['①', '②', '③', '④', '⑤', '⑥', '⑦', '⑧', '⑨', '⑩'];
@@ -4510,11 +4512,15 @@ export default {
         if (!pickKeyValid(key) || !pickKeyAllowed({ folders: found.folders }, key)) return notFound();
         const object = await env.imagepicker.get(`${THUMB_PREFIX}${params.get('w')}/${key}.thumb`);
         if (!object || !('body' in object)) return out({ error: '縮圖不存在', code: 'no_thumbnail' }, 404);
-        const type = object.httpMetadata?.contentType;
+        // the stored type only when it is a raster image (an SVG is a
+        // script); nothing else the object's metadata says is passed on
+        const stored = new Headers();
+        object.writeHttpMetadata?.(stored);
+        const type = (stored.get('Content-Type') || '').toLowerCase();
         return new Response(object.body, {
           headers: {
             ...corsHeaders,
-            'Content-Type': typeof type === 'string' && /^image\//.test(type) ? type : 'image/jpeg',
+            'Content-Type': REVISION_THUMB_TYPES.includes(type) ? type : 'image/jpeg',
             'Cache-Control': 'private, no-store',
             'Vary': 'X-Share-Token, X-Picker-Key',
             'X-Content-Type-Options': 'nosniff',
