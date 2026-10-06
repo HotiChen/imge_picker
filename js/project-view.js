@@ -310,26 +310,18 @@
             row.dataset.photoId = photo.id;
             const thumbUrl = driveManager.getImageUrl(photo, 100);
             row.innerHTML = `
-                <img src="${escapeHtml(thumbUrl)}" class="pv-list-thumb" loading="lazy" decoding="async" alt="">
-                <span class="pv-list-name">${escapeHtml(photo.name)}</span>
-                <span class="pv-list-note">${escapeHtml(photo.note || '')}</span>
-                <span class="pv-list-time">${escapeHtml(this._fmtTime(photo.updatedAt))}</span>
+                <img src="${escHtml(thumbUrl)}" class="pv-list-thumb" loading="lazy" decoding="async" alt="">
+                <span class="pv-list-name">${escHtml(photo.name)}</span>
+                <span class="pv-list-note">${escHtml(photo.note || '')}</span>
+                <span class="pv-list-time">${escHtml(this._fmtTime(photo.updatedAt))}</span>
             `;
             row.addEventListener('click', () => this.app.openModal(index));
             return row;
         },
 
-        // The same Taipei "9/27 22:52" format admin.html's own fmtTime uses —
-        // duplicated rather than shared, since the two pages load independent
-        // script bundles.
+        // The Taipei "9/27 22:52" format, shared with admin.html (js/util.js).
         _fmtTime(iso) {
-            if (!iso) return '';
-            const d = new Date(iso);
-            if (isNaN(d.getTime())) return '';
-            return new Intl.DateTimeFormat('zh-TW', {
-                timeZone: 'Asia/Taipei', month: 'numeric', day: 'numeric',
-                hour: '2-digit', minute: '2-digit', hour12: false,
-            }).format(d);
+            return Util.fmtDate(iso, 'mdhm');
         },
 
         // The owner's name is guest-supplied — textContent only, never

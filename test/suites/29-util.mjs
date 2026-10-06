@@ -51,7 +51,8 @@ await suite('escHtml — the shared helper escapes & < > " \' ` and treats null 
       arr: window.escHtml(['<b>']),
     }));
     ok('window.escHtml is a function', r.hasFn);
-    ok('window.Util = { escHtml } exposes the same function and nothing else', r.same && JSON.stringify(r.keys) === '["escHtml"]', JSON.stringify([r.same, r.keys]));
+    // EDITED with suite 34: Util now also carries fmtDate / todayTaipei / formatPrice (asserted in 34-shared-helpers.mjs)
+    ok('window.Util.escHtml is the same function as window.escHtml, and Util carries the shared helpers', r.same && JSON.stringify(r.keys) === '["escHtml","fmtDate","todayTaipei","formatPrice"]', JSON.stringify([r.same, r.keys]));
     ok('& → &amp;', r.amp === '&amp;', r.amp);
     ok('< → &lt;', r.lt === '&lt;', r.lt);
     ok('> → &gt;', r.gt === '&gt;', r.gt);

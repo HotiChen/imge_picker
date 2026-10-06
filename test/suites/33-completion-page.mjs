@@ -297,7 +297,7 @@ for (const [label, co] of [['390px', MOBILE], ['1280px', ALB_DESK]]) {
       ok('...and nothing ran or was built: no <b>, <i>, <script>, <img src=x> in the shop, window.__xss unset',
         await page.evaluate(() => !document.querySelector('#cpShop b, #cpShop i, #cpShop script, #cpShop img[src="x"]') && window.__xss === undefined));
       ok('options show their label and NT$ price (thousands separated); a single option (label "") shows the price only',
-        JSON.stringify(cards[0].options) === JSON.stringify([['<i>16×20</i>', 'NT$ 3,000'], [null, 'NT$ 12']]) && cards[1].options.length === 2 && cards[1].options[1][1] === 'NT$ 7,000', JSON.stringify(cards[0].options) + JSON.stringify(cards[1].options));
+        JSON.stringify(cards[0].options) === JSON.stringify([['<i>16×20</i>', 'NT$3,000'], [null, 'NT$12']]) && cards[1].options.length === 2 && cards[1].options[1][1] === 'NT$7,000', JSON.stringify(cards[0].options) + JSON.stringify(cards[1].options));
       ok('album range (spreads): both bounds, only a minimum, only a maximum, neither',
         cards[1].range === '10–30 跨頁' && cards[2].range === '至少 10 跨頁' && cards[3].range === '最多 30 跨頁' && cards[4].range === null, JSON.stringify(cards.slice(1, 5).map(c => c.range)));
       ok('a print has no page range even if the Worker sent numbers', cards[0].range === null && cards[7].range === null, JSON.stringify([cards[0].range, cards[7].range]));
@@ -331,7 +331,7 @@ for (const [name, products, expectCards] of [
       ok('positive: the shop was asked', w.m.requests.some(r => r.path === '/api/pick/shop'));
       const n = await page.evaluate(() => ({ cards: document.querySelectorAll('#cpShop .cp-product').length, sec: !!document.getElementById('cpShop'), opts: [...document.querySelectorAll('#cpShop .cp-option-price')].map(e => e.textContent) }));
       ok(`${expectCards} card(s)${expectCards ? ' and only the integer prices >= 0' : ' and the whole section removed from the DOM'}`,
-        n.cards === expectCards && n.sec === !!expectCards && (!expectCards || JSON.stringify(n.opts) === '["NT$ 100"]'), JSON.stringify(n));
+        n.cards === expectCards && n.sec === !!expectCards && (!expectCards || JSON.stringify(n.opts) === '["NT$100"]'), JSON.stringify(n));
       return out;
     },
     { before: w.before, initScript: OWNER, contextOptions: ALB_DESK });

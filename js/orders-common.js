@@ -70,11 +70,8 @@
   // The one shared escaper (js/util.js, loaded before this file).
   const esc = window.escHtml;
 
-  // NT$1,234 — money is an integer, tax included.
-  function money(n) {
-    const v = Number(n);
-    return 'NT$' + (Number.isFinite(v) ? Math.round(v) : 0).toLocaleString('en-US');
-  }
+  // NT$1,234 — money is an integer, tax included (js/util.js).
+  const money = n => window.Util.formatPrice(n);
 
   // A friendly sentence for a failed call: the code's own text first, then
   // whatever the Worker said, then the bare status.

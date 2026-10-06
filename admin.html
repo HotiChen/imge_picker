@@ -1203,9 +1203,7 @@
 
   // 'M/D' in Taipei time, for the one-line summaries
   function fmtDay(iso) {
-    const d = iso ? new Date(iso) : null;
-    if (!d || isNaN(d.getTime())) return '';
-    return new Intl.DateTimeFormat('zh-TW', { timeZone: 'Asia/Taipei', month: 'numeric', day: 'numeric' }).format(d);
+    return Util.fmtDate(iso, 'md');
   }
 
   function secSummaries() {
@@ -1888,14 +1886,9 @@
   // (read when an editor opens) and which form is open.
   let oc = null;
 
-  function todayTaipei() {
-    // en-CA formats as YYYY-MM-DD; the studio's dates are Taipei dates
-    return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Taipei', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
-  }
+  function todayTaipei() { return Util.todayTaipei(); }   // the studio's dates are Taipei dates
   function dateTaipei(iso) {
-    const d = iso ? new Date(iso) : null;
-    if (!d || isNaN(d.getTime())) return todayTaipei();
-    return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Taipei', year: 'numeric', month: '2-digit', day: '2-digit' }).format(d);
+    return Util.fmtDate(iso, 'iso') || todayTaipei();
   }
 
   async function initOrders(project, picks) {
@@ -2413,12 +2406,7 @@
   // of these is recent) and no seconds (nobody needs them here).
   function fmtTime(iso) {
     if (!iso) return '';
-    const d = new Date(iso);
-    if (isNaN(d.getTime())) return String(iso);
-    return new Intl.DateTimeFormat('zh-TW', {
-      timeZone: 'Asia/Taipei', month: 'numeric', day: 'numeric',
-      hour: '2-digit', minute: '2-digit', hour12: false,
-    }).format(d);
+    return Util.fmtDate(iso, 'mdhm') || String(iso);
   }
 
   // Runs last, now that every function and `let` above it is initialised —
