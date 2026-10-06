@@ -416,6 +416,41 @@ CREATE TABLE IF NOT EXISTS revision_requests (
   picker_id   TEXT,                      -- the seat holder who asked; NULL if unknown
   message     TEXT NOT NULL CHECK (length(message) BETWEEN 1 AND 1000),
   created_at  TEXT NOT NULL,
-  resolved_at TEXT                       -- NULL = open
+  resolved_at TEXT,                      -- NULL = open
+  -- Revision pins (docs/revision-pins.md): a request sent from pins on the
+  -- finals is a round. marks = the frozen pins, JSON {photo_key: [{x,y,note}]}
+  -- (NULL = an old text request); finals = the project's finals snapshot (the
+  -- raw string) as it was when sent; message_auto = 1 when message is the Worker's fixed text
+  -- (the guest wrote no overall note). Written once by the submit INSERT and
+  -- never updated (only resolved_at ever is). Added to a deployed database by
+  --   ALTER TABLE revision_requests ADD COLUMN marks TEXT;
+  --   ALTER TABLE revision_requests ADD COLUMN finals TEXT;
+  --   ALTER TABLE revision_requests ADD COLUMN message_auto INTEGER NOT NULL DEFAULT 0;
+  -- (worker/migrations/2026-10-07-revision-pins.sql).
+  marks        TEXT,
+  finals       TEXT,
+  message_auto INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_revision_requests_project ON revision_requests(project_id, resolved_at);
+
+-- ─── Revision pins (docs/revision-pins.md) ─────────────────────────────────
+-- From the same hand-run file as the three columns above:
+-- worker/migrations/2026-10-07-revision-pins.sql.
+-- Draft pins the seat holder put on the current finals, one row per photo
+-- (1–10 pins; a photo without pins has no row, never '[]'). Bound to the
+-- delivery they were made on: a row counts only while its delivery_at and
+-- delivery_finals equal the project's stamp and finals snapshot (a deliver to other folders, or an
+-- undeliver / reopen and a new deliver, leave it stale; the next save clears
+-- stale rows). Sending a round freezes them into revision_requests.marks and
+-- deletes them in the same batch. At most 100 photos and 300 pins, checked
+-- inside the save's writes.
+CREATE TABLE IF NOT EXISTS revision_pins (
+  project_id      TEXT NOT NULL,
+  photo_key       TEXT NOT NULL,    -- a photo of the current finals
+  marks           TEXT NOT NULL,    -- JSON [{x,y,note}], 1–10
+  delivery_at     TEXT NOT NULL,    -- the project's delivery stamp when saved
+  delivery_finals TEXT NOT NULL,    -- the project's finals snapshot when saved (the raw string)
+  updated_by      TEXT NOT NULL,    -- picker id
+  updated_at      TEXT NOT NULL,
+  PRIMARY KEY (project_id, photo_key)
+);

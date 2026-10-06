@@ -139,7 +139,8 @@ test('migration: two ALTERs, one CREATE TABLE IF NOT EXISTS and its index, one s
   const fresh = fakeDB();
   const freshCols = t => fresh._db.prepare(`PRAGMA table_info(${t})`).all().map(c => c.name);
   assert.deepEqual(cols('projects'), freshCols('projects'));
-  assert.deepEqual(cols('revision_requests'), freshCols('revision_requests'));
+  // (the three revision-pins columns come later, from 2026-10-07-revision-pins.sql)
+  assert.deepEqual(cols('revision_requests'), freshCols('revision_requests').filter(c => !['marks', 'finals', 'message_auto'].includes(c)));
   assert.deepEqual(cols('revision_requests'), ['id', 'project_id', 'picker_id', 'message', 'created_at', 'resolved_at']);
   // a re-run of the ALTER says it already ran; the CREATEs are re-runnable
   assert.throws(() => db._db.exec(statements[0]), /duplicate column/);
@@ -363,7 +364,9 @@ test('revision: stored with the picker, the gallery stays open, owner and viewer
   const d = await detail(env, p.id);
   assert.equal(d.project.open_revision_count, 1);
   assert.equal(d.revision_requests.length, 1);
-  assert.deepEqual(Object.keys(d.revision_requests[0]).sort(), ['created_at', 'id', 'message', 'picker_id', 'picker_name', 'resolved_at']);
+  // (kind / marks / finals / message_auto / photo_count: docs/revision-pins.md §4.6)
+  assert.deepEqual(Object.keys(d.revision_requests[0]).sort(), ['created_at', 'finals', 'id', 'kind', 'marks', 'message', 'message_auto', 'photo_count', 'picker_id', 'picker_name', 'resolved_at']);
+  assert.equal(d.revision_requests[0].kind, 'text');
   assert.equal(d.revision_requests[0].picker_name, '王小明');
   assert.equal(d.revision_requests[0].message, '第 3 張請把背景的路人修掉');
 });

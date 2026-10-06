@@ -1505,6 +1505,12 @@ const CONFIRM_UNAVAILABLE = { error: '確認完成功能尚未啟用', code: 'co
 const STUDIO_ADMIN_URL = 'https://imhoti.tw/studio/admin.html';
 // the characters a pin note refuses, every one of them
 const PICK_CONTROL_ALL = new RegExp(PICK_KEY_CONTROL.source, 'g');
+// the bidirectional marks / overrides / isolates that could make a name
+// reorder how a line reads
+const BIDI_ALL = /[\u200E\u200F\u202A-\u202E\u2066-\u2069]/g;
+// A guest string on one line of an email (the subject, a file name, a pin
+// note): control characters and bidi marks become spaces.
+const oneLine = v => String(v ?? '').replace(PICK_CONTROL_ALL, ' ').replace(BIDI_ALL, ' ');
 
 // A column or a table a hand-run migration adds is not there yet.
 function isMissingSchema(e) {
@@ -1537,13 +1543,14 @@ function resolveRevisionsIfConfirmed(env, projectId, at) {
   ).bind(at, projectId, projectId);
 }
 
-// The latest open request of a project ({message}) or null — also before the
-// migration.
+// The latest open request of a project ({message, message_auto}) or null —
+// also before the migrations (message_auto then reads as absent: the guest's).
 async function openRevision(env, projectId) {
+  const latest = cols => env.DB.prepare(
+    `SELECT message${cols} FROM revision_requests WHERE project_id = ? AND resolved_at IS NULL ORDER BY created_at DESC, rowid DESC LIMIT 1`
+  ).bind(projectId).first();
   try {
-    return await env.DB.prepare(
-      'SELECT message FROM revision_requests WHERE project_id = ? AND resolved_at IS NULL ORDER BY created_at DESC, rowid DESC LIMIT 1'
-    ).bind(projectId).first();
+    return await withoutMissingColumn(() => latest(', message_auto'), () => latest(''));
   } catch (e) {
     if (!isMissingSchema(e)) throw e;
     return null;
@@ -1552,16 +1559,32 @@ async function openRevision(env, projectId) {
 
 // The admin's view: the newest REVISION_TOTAL_MAX requests with the asker's
 // name when known, and how many are open. Empty before the migration.
+// Each row also says what kind of request it is (docs/revision-pins.md §4.6):
+// 'pins' (a round sent from pins on the finals: `marks` the frozen pins
+// parsed, `finals` the folders it was sent on, `photo_count`) or 'text' (the
+// old free text; marks / finals null). `message_auto`: the message is the
+// Worker's fixed text, not the guest's. Before the revision-pins migration
+// every row is 'text'.
 async function revisionRequestsFor(env, projectId) {
   try {
-    const { results } = await env.DB.prepare(
-      'SELECT r.id, r.message, r.created_at, r.resolved_at, r.picker_id, pk.name AS picker_name FROM revision_requests r ' +
+    const listed = cols => env.DB.prepare(
+      `SELECT r.id, r.message, r.created_at, r.resolved_at, r.picker_id, pk.name AS picker_name${cols} FROM revision_requests r ` +
       'LEFT JOIN pickers pk ON pk.id = r.picker_id AND pk.project_id = r.project_id ' +
       'WHERE r.project_id = ? ORDER BY r.created_at DESC, r.rowid DESC LIMIT ?'
     ).bind(projectId, REVISION_TOTAL_MAX).all();
+    const { results } = await withoutMissingColumn(() => listed(', r.marks, r.finals, r.message_auto'), () => listed(''));
     const counted = await env.DB.prepare('SELECT COUNT(*) AS open FROM revision_requests WHERE project_id = ? AND resolved_at IS NULL')
       .bind(projectId).first();
-    return { rows: results, open: counted?.open ?? 0 };
+    const rows = results.map(r => {
+      const marks = parseMarksSnapshot(r.marks);
+      let finals = null;
+      if (typeof r.finals === 'string') { try { finals = JSON.parse(r.finals); } catch {} }
+      return {
+        ...r, kind: r.marks == null ? 'text' : 'pins', marks, finals: Array.isArray(finals) ? finals : null,
+        message_auto: r.message_auto === 1, photo_count: marks ? Object.keys(marks).length : 0,
+      };
+    });
+    return { rows, open: counted?.open ?? 0 };
   } catch (e) {
     if (!isMissingSchema(e)) throw e;
     return { rows: [], open: 0 };
@@ -1583,9 +1606,7 @@ async function sendClientNotification(env, project, pickerName, message) {
     console.warn('client notification skipped: NOTIFY_EMAIL or PHOTOGRAPHER_EMAIL is not configured');
     return false;
   }
-  // control characters, and the bidirectional marks / overrides / isolates
-  // that could make a name reorder how the subject line reads
-  const oneLine = v => String(v ?? '').replace(PICK_CONTROL_ALL, ' ').replace(/[\u200E\u200F\u202A-\u202E\u2066-\u2069]/g, ' ');
+  // (oneLine: control characters and bidi marks out of the subject line)
   const title = oneLine(project.title || '未命名專案');
   const name = oneLine(pickerName || '客人');
   const link = `${STUDIO_ADMIN_URL}#project=${encodeURIComponent(project.id)}`;
@@ -1599,6 +1620,151 @@ async function sendClientNotification(env, project, pickerName, message) {
     fields.map(([k, v]) => `<tr><th align="left">${escapeHtml(k)}</th><td>${escapeHtml(v)}</td></tr>`).join('') +
     `</table><p>${escapeHtml(lead)}</p>` +
     (asked ? `<p style="white-space:pre-wrap">${escapeHtml(message)}</p>` : '') +
+    `<p><a href="${escapeHtml(link)}">打開專案</a></p>`;
+  await env.NOTIFY_EMAIL.send({
+    to: env.PHOTOGRAPHER_EMAIL,
+    from: env.NOTIFY_FROM || env.PHOTOGRAPHER_EMAIL,
+    subject, html, text,
+  });
+  return true;
+}
+
+// ─── Revision pins on the finals (docs/revision-pins.md) ─────────────────────
+// After delivery the seat holder pins the current finals (drafts, one
+// revision_pins row per photo, bound to the delivery they were made on) and
+// sends them as one round: a revision_requests row whose marks / finals /
+// message / message_auto are written once by the submit INSERT and never
+// updated (only resolved_at ever is). At most one request is open at a time.
+// The history routes read the rounds back; the thumbnail route is the one
+// guest read outside pickFinals. Change the limits here only.
+const REVISION_PHOTOS_MAX = 100;
+const REVISION_PINS_ITEMS_MAX = 20;
+const REVISION_PINS_BODY_MAX = 128 * 1024;
+// a submit's body: `expect` names up to REVISION_PHOTOS_MAX keys of up to
+// PICK_PHOTO_KEY_MAX characters (4 bytes each at worst) plus a 1000-character
+// note: ~110 KB, so PICK_SUBMIT_BODY_MAX (16 KB) is far too small
+const REVISION_ROUND_BODY_MAX = 128 * 1024;
+// what message holds when the guest wrote no overall note: the column is NOT
+// NULL with a 1–1000 CHECK, which an append-only migration cannot relax
+const REVISION_PINS_MESSAGE = '請見照片上的標示';
+const REVISION_EMAIL_PHOTOS_MAX = 20;
+// the only thumbnail widths the history serves; never an original
+const REVISION_THUMB_WIDTHS = ['400', '1200'];
+const REVISION_ROUND_ID = /^[0-9a-f-]{36}$/;
+const REVISION_PINS_UNAVAILABLE = { error: '照片標示修改功能尚未啟用', code: 'revision_pins_unavailable' };
+const PIN_NUMBERS = ['①', '②', '③', '④', '⑤', '⑥', '⑦', '⑧', '⑨', '⑩'];
+
+// Whether the revision-pins migration has fully run: the table and all three
+// columns. Every new route asks before it reads or writes either, so a
+// half-run paste answers 500 revision_pins_unavailable rather than half
+// working (and the thumbnail route never falls back to anything).
+async function revisionPinsReady(env) {
+  try {
+    await env.DB.prepare(
+      'SELECT (SELECT COUNT(*) FROM revision_pins WHERE 0) AS drafts, ' +
+      '(SELECT COUNT(marks) + COUNT(finals) + COUNT(message_auto) FROM revision_requests WHERE 0) AS rounds'
+    ).first();
+    return true;
+  } catch (e) {
+    if (!isMissingSchema(e)) throw e;
+    return false;
+  }
+}
+
+// Two strings in code point order: the order SQLite's BINARY collation puts
+// UTF-8 text in (plain `<` compares UTF-16 units, which differs past U+FFFF).
+function byCodePoint(a, b) {
+  const ia = a[Symbol.iterator]();
+  const ib = b[Symbol.iterator]();
+  for (;;) {
+    const x = ia.next();
+    const y = ib.next();
+    if (x.done || y.done) return (x.done ? 0 : 1) - (y.done ? 0 : 1);
+    const d = x.value.codePointAt(0) - y.value.codePointAt(0);
+    if (d) return d;
+  }
+}
+
+// The photos of one round in the one order its indexes (`i`) count in:
+// a pins round's snapshot keys, or the selection's photo keys, deduplicated
+// and in code point order. The list, one round and the thumbnail route all
+// go through this, so an index means the same photo everywhere.
+function roundPhotoKeys(keys) {
+  return [...new Set(keys.filter(k => typeof k === 'string'))].sort(byCodePoint);
+}
+
+// One round of a project, read for the history: {id, kind, created_at, open,
+// note, pins: {key: [pins]}, keys (roundPhotoKeys), folders (where its keys
+// may be)} or null. `id` is 'selection' (the project's LATEST submission
+// only) or a revision_requests id — always looked up with the link's own
+// project, never with anything from the request.
+async function loadRound(env, share, project, id) {
+  if (id === 'selection') {
+    const latest = cols => env.DB.prepare(
+      `SELECT photo_keys, created_at${cols} FROM submissions WHERE project_id = ? ORDER BY rowid DESC LIMIT 1`
+    ).bind(project.id).first();
+    const row = await withoutMissingColumn(() => latest(', marks'), () => latest(''));
+    if (!row) return null;
+    let own = null;
+    try { own = JSON.parse(project.folders); } catch {}
+    // the proofs: the project's folders and the link's own snapshot, each
+    // re-validated (a `_` or `/` folder names nothing)
+    const folders = [...(pickFolders(own) || []), ...(pickFolders(share.folders) || [])];
+    return {
+      id: 'selection', kind: 'selection', created_at: row.created_at, open: false, note: null,
+      pins: parseMarksSnapshot(row.marks) || {}, keys: roundPhotoKeys(parsePhotoKeys(row.photo_keys)), folders,
+    };
+  }
+  if (!REVISION_ROUND_ID.test(id)) return null;
+  const row = await env.DB.prepare(
+    'SELECT id, message, message_auto, marks, finals, created_at, resolved_at FROM revision_requests WHERE id = ? AND project_id = ?'
+  ).bind(id, project.id).first();
+  if (!row) return null;
+  const open = row.resolved_at == null;
+  if (row.marks == null) {
+    return { id: row.id, kind: 'text', created_at: row.created_at, open, note: row.message, pins: {}, keys: [], folders: [] };
+  }
+  const pins = parseMarksSnapshot(row.marks) || {};
+  let finals = null;
+  try { finals = finalFolders(JSON.parse(row.finals)); } catch {}
+  return {
+    id: row.id, kind: 'pins', created_at: row.created_at, open, note: row.message_auto === 1 ? null : row.message,
+    pins, keys: roundPhotoKeys(Object.keys(pins)), folders: finals || [],
+  };
+}
+
+// Tells the photographer the guest sent a round of pins. Same transport and
+// rules as sendClientNotification: the subject on one line, every file name
+// and pin note through oneLine (no control or bidi characters) in the text
+// part and escaped in the HTML part; the guest's own note in the body only.
+// `note` null = the guest wrote none (the fixed text is never mailed as
+// theirs); `pins` {photo_key: [pins]}. At most REVISION_EMAIL_PHOTOS_MAX
+// photos are listed.
+async function sendRevisionRoundNotification(env, project, pickerName, note, pins) {
+  if (!env.NOTIFY_EMAIL || !env.PHOTOGRAPHER_EMAIL) {
+    console.warn('revision notification skipped: NOTIFY_EMAIL or PHOTOGRAPHER_EMAIL is not configured');
+    return false;
+  }
+  const keys = roundPhotoKeys(Object.keys(pins));
+  const title = oneLine(project.title || '未命名專案');
+  const name = oneLine(pickerName || '客人');
+  const link = `${STUDIO_ADMIN_URL}#project=${encodeURIComponent(project.id)}`;
+  const subject = oneLine(`[要求修改] ${title} — ${name}（${keys.length} 張）`);
+  const lead = `客人在交件的精修照片上標示了要修改的地方（${keys.length} 張）：`;
+  const said = note == null ? null : String(note).replace(BIDI_ALL, ' ');
+  const lines = keys.slice(0, REVISION_EMAIL_PHOTOS_MAX).map(k =>
+    `${oneLine(k.split('/').pop())}：${pins[k].map((m, i) => PIN_NUMBERS[i] + oneLine(m.note)).join(' ')}`);
+  const more = keys.length - lines.length;
+  const moreText = more > 0 ? `…另 ${more} 張，請到後台查看` : '';
+  const fields = [['專案', title], ['客人', name]];
+  const text = fields.map(([k, v]) => `${k}：${v}`).join('\n') + `\n\n${lead}` +
+    (said ? `\n\n${said}` : '') + `\n\n${lines.join('\n')}` + (moreText ? `\n${moreText}` : '') + `\n\n打開專案：${link}`;
+  const html = '<table>' +
+    fields.map(([k, v]) => `<tr><th align="left">${escapeHtml(k)}</th><td>${escapeHtml(v)}</td></tr>`).join('') +
+    `</table><p>${escapeHtml(lead)}</p>` +
+    (said ? `<p style="white-space:pre-wrap">${escapeHtml(said)}</p>` : '') +
+    `<ul>${lines.map(l => `<li>${escapeHtml(l)}</li>`).join('')}</ul>` +
+    (moreText ? `<p>${escapeHtml(moreText)}</p>` : '') +
     `<p><a href="${escapeHtml(link)}">打開專案</a></p>`;
   await env.NOTIFY_EMAIL.send({
     to: env.PHOTOGRAPHER_EMAIL,
@@ -3541,6 +3707,33 @@ export default {
         // seat holder reads it back (never the list, never another's)
         const delivered = scope.mode === 'delivered';
         const revision = delivered ? await openRevision(env, project.id) : null;
+        // revision pins (docs/revision-pins.md §4.1): the seat holder's own
+        // drafts and how many photos the open round has — only while
+        // delivered and only to the seat holder (a viewer has neither key,
+        // as with notes and pins). revision_drafts null = the migration has
+        // not run (the page offers no pins then); [] once confirmed.
+        const pinsState = {};
+        if (delivered && isOwner) {
+          pinsState.revision_drafts = null;
+          pinsState.revision_open_photos = null;
+          try {
+            const { results: drafts } = await env.DB.prepare(
+              'SELECT photo_key, marks FROM revision_pins WHERE project_id = ? AND delivery_at = ? AND delivery_finals = ? ORDER BY photo_key'
+            ).bind(project.id, project.delivered_at, project.final_folders).all();
+            const openRound = await env.DB.prepare(
+              'SELECT marks FROM revision_requests WHERE project_id = ? AND resolved_at IS NULL AND marks IS NOT NULL ORDER BY created_at DESC, rowid DESC LIMIT 1'
+            ).bind(project.id).first();
+            // re-checked on the way out: in the finals, pins that parse
+            pinsState.revision_drafts = project.client_confirmed_at ? [] : drafts
+              .map(d => ({ photo_key: d.photo_key, marks: parseMarks(d.marks) }))
+              .filter(d => d.marks && pickKeyAllowed({ folders: scope.finals }, d.photo_key));
+            if (openRound) pinsState.revision_open_photos = Object.keys(parseMarksSnapshot(openRound.marks) || {}).length;
+          } catch (e) {
+            if (!isMissingSchema(e)) throw e;
+            pinsState.revision_drafts = null;
+            pinsState.revision_open_photos = null;
+          }
+        }
         return jsonOk({
           // extra_max / max_picks: the plan's cap as the submit enforces it
           // (null = none, also on a database without the column yet)
@@ -3556,7 +3749,9 @@ export default {
           delivered_at: scope.mode === 'delivered' ? project.delivered_at : null,
           confirmed_at: delivered ? project.client_confirmed_at ?? null : null,
           revision_open: !!revision,
-          revision_message: revision && isOwner ? revision.message : null,
+          // the fixed text of a round sent without a note is not the guest's
+          revision_message: revision && isOwner && revision.message_auto !== 1 ? revision.message : null,
+          ...pinsState,
           owner: await pickOwnerName(env, project.id),
           is_owner: isOwner,
           phase: project.phase,
@@ -4017,6 +4212,314 @@ export default {
           .catch(e => console.error('client notification failed:', e?.message || e));
         if (ctx?.waitUntil) ctx.waitUntil(notify); else await notify;
         return done(confirming ? { confirmed_at: at } : { message, created_at: at });
+      }
+
+      // ─── Revision pins (docs/revision-pins.md) ─────────────────────────
+      // PUT /api/pick/revision-pins {items: [{photo_key, marks}]} — draft
+      // pins on the current finals. POST /api/pick/revision-round {note?,
+      // expect} — send them as one frozen round. GET /api/pick/rounds,
+      // /rounds/:id, /rounds/:id/photo?i=&w= — the history. Every one: the
+      // link (401, above), the seat (403), delivered now (409 not_delivered,
+      // before the body), the body (413 / 400), the migration (500
+      // revision_pins_unavailable), then the state and the gated write.
+      if (route === 'revision-pins' || route === 'revision-round' || pathParts[2] === 'rounds') {
+        const out = (data, status = 200) => jsonOk(data, status, SHARED_LINK_HEADERS);
+        const isRounds = pathParts[2] === 'rounds';
+        const method = isRounds ? 'GET' : route === 'revision-pins' ? 'PUT' : 'POST';
+        if (request.method !== method) return jsonOk({ error: 'Method not allowed' }, 405, { ...SHARED_LINK_HEADERS, Allow: method });
+        if (!isOwner) return out({ error: '只有挑選人可以標示修改', code: 'not_owner' }, 403);
+        const scope = pickReadScope(s);
+        const notDelivered = () => out({ error: '尚未交件', code: 'not_delivered' }, 409);
+        if (scope.mode !== 'delivered') return notDelivered();
+        const unavailable = () => out(REVISION_PINS_UNAVAILABLE, 500);
+        const invalidBody = () => out({ error: 'Invalid body', code: 'invalid_body' }, 400);
+        const alreadyConfirmed = () => out({ error: '已確認完成，無法再要求修改', code: 'already_confirmed' }, 409);
+        const revisionOpen = () => out({ error: '已送出修改，請等攝影師更新照片', code: 'revision_open' }, 409);
+        const ready = async () => hasField(project, 'client_confirmed_at') && await revisionPinsReady(env);
+        const anyOpen = async () => !!(await env.DB.prepare(
+          'SELECT 1 AS open FROM revision_requests WHERE project_id = ? AND resolved_at IS NULL LIMIT 1'
+        ).bind(project.id).first());
+        // the delivery this request was checked against: a write is bound to
+        // it, so a 更換精修 / undeliver landing in between makes it a no-op
+        const sameDelivery = now => now.phase === 'retouching' && !!pickFinals(now) &&
+          now.delivered_at === project.delivered_at && now.final_folders === project.final_folders;
+        // a write that changed nothing, re-read: the link, the seat, the
+        // delivery, the confirmation, an open request — then `rest(now)`
+        const refusedBy = async rest => {
+          const now = await env.DB.prepare('SELECT * FROM projects WHERE id = ?').bind(project.id).first();
+          if (!now || now.archived_at) return jsonOk({ error: 'Unauthorized' }, 401, SHARED_LINK_HEADERS);
+          if (now.owner_picker_id !== picker.id) return out({ error: '只有挑選人可以標示修改', code: 'not_owner' }, 403);
+          if (!sameDelivery(now)) return notDelivered();
+          if (now.client_confirmed_at) return alreadyConfirmed();
+          if (await anyOpen()) return revisionOpen();
+          return rest(now);
+        };
+
+        if (route === 'revision-pins') {
+          const read = await readJsonCapped(request, REVISION_PINS_BODY_MAX);
+          if (read.refused) return read.refused;
+          const { body } = read;
+          if (!isPlainObject(body) || !Array.isArray(body.items) || !body.items.length || body.items.length > REVISION_PINS_ITEMS_MAX) {
+            return invalidBody();
+          }
+          // every item is checked before anything is written; a key named
+          // twice is written once, as its last mention
+          const byKey = new Map();
+          for (const item of body.items) {
+            if (!isPlainObject(item) || typeof item.photo_key !== 'string') return invalidBody();
+            if (!pickKeyValid(item.photo_key)) return pickKeyInvalid();
+            const marks = pickMarks(item.marks);
+            if (!marks) return pickMarksInvalid();
+            byKey.delete(item.photo_key);
+            byKey.set(item.photo_key, marks);
+          }
+          // the current finals only: never a proof, even with the proof
+          // originals switch on, never a `_` object
+          for (const key of byKey.keys()) {
+            if (!pickKeyAllowed({ folders: scope.finals }, key)) return out({ error: '只能標示這次交件的精修照片', code: 'not_in_finals' }, 403);
+          }
+          if (!await ready()) return unavailable();
+          if (project.client_confirmed_at) return alreadyConfirmed();
+          if (await anyOpen()) return revisionOpen();
+          // {k, m: the canonical JSON or null (= delete the draft), c: pins}
+          const items = [...byKey].map(([k, m]) => ({ k, m: m.length ? JSON.stringify(m) : null, c: m.length }));
+          // ?1 project, ?2 picker, ?3 delivered_at, ?4 final_folders (both as
+          // this request read them), ?5 the items, ?6 the time. A draft
+          // counts only while it belongs to this delivery. The caps the way
+          // the selections save has them: what this save leaves — its own
+          // items plus every other draft of this delivery — is at most the
+          // cap, or no more than there is now (so deleting and shrinking
+          // still work in a project already over). Every statement re-checks
+          // the whole gate inside the batch (one transaction): a deliver, an
+          // undeliver, a confirm, a round or a seat reset landing after the
+          // checks above wins, for the whole save.
+          const valid = 'project_id = ?1 AND delivery_at = ?3 AND delivery_finals = ?4';
+          const itemKeys = "SELECT json_extract(value, '$.k') FROM json_each(?5)";
+          const pinsOf = 'CASE WHEN json_valid(marks) THEN json_array_length(marks) ELSE 0 END';
+          const photosFit =
+            `((SELECT COUNT(*) FROM json_each(?5) WHERE json_extract(value, '$.c') > 0) + ` +
+            `(SELECT COUNT(*) FROM revision_pins WHERE ${valid} AND photo_key NOT IN (${itemKeys}))) ` +
+            `<= MAX(${REVISION_PHOTOS_MAX}, (SELECT COUNT(*) FROM revision_pins WHERE ${valid}))`;
+          const pinsFit =
+            `((SELECT COALESCE(SUM(json_extract(value, '$.c')), 0) FROM json_each(?5)) + ` +
+            `(SELECT COALESCE(SUM(${pinsOf}), 0) FROM revision_pins WHERE ${valid} AND photo_key NOT IN (${itemKeys}))) ` +
+            `<= MAX(${PICK_MARKS_TOTAL_MAX}, (SELECT COALESCE(SUM(${pinsOf}), 0) FROM revision_pins WHERE ${valid}))`;
+          const open = "id = ?1 AND owner_picker_id = ?2 AND archived_at IS NULL AND phase = 'retouching' " +
+            'AND delivered_at = ?3 AND final_folders = ?4 AND client_confirmed_at IS NULL ' +
+            'AND NOT EXISTS (SELECT 1 FROM revision_requests r WHERE r.project_id = ?1 AND r.resolved_at IS NULL)';
+          const gate = `EXISTS (SELECT 1 FROM projects WHERE ${open} AND ${photosFit} AND ${pinsFit})`;
+          const args = [project.id, picker.id, project.delivered_at, project.final_folders, JSON.stringify(items)];
+          let result;
+          try {
+            result = await env.DB.batch([
+              // the gate's own row count: it always touches the project when
+              // the save is allowed (a DELETE below may touch nothing)
+              env.DB.prepare(`UPDATE projects SET id = id WHERE ${open} AND ${photosFit} AND ${pinsFit}`).bind(...args),
+              // drafts of an earlier delivery go with the first save after it
+              env.DB.prepare(
+                `DELETE FROM revision_pins WHERE project_id = ?1 AND (delivery_at IS NOT ?3 OR delivery_finals IS NOT ?4) AND ${gate}`
+              ).bind(...args),
+              env.DB.prepare(
+                'INSERT INTO revision_pins (project_id, photo_key, marks, delivery_at, delivery_finals, updated_by, updated_at) ' +
+                "SELECT ?1, json_extract(value, '$.k'), json_extract(value, '$.m'), ?3, ?4, ?2, ?6 FROM json_each(?5) " +
+                `WHERE json_extract(value, '$.c') > 0 AND ${gate} ` +
+                'ON CONFLICT(project_id, photo_key) DO UPDATE SET marks = excluded.marks, delivery_at = excluded.delivery_at, ' +
+                'delivery_finals = excluded.delivery_finals, updated_by = excluded.updated_by, updated_at = excluded.updated_at'
+              ).bind(...args, new Date().toISOString()),
+              env.DB.prepare(
+                "DELETE FROM revision_pins WHERE project_id = ?1 AND photo_key IN (SELECT json_extract(value, '$.k') FROM json_each(?5) " +
+                `WHERE json_extract(value, '$.c') = 0) AND ${gate}`
+              ).bind(...args),
+            ]);
+          } catch (e) {
+            if (isMissingSchema(e)) return unavailable();
+            throw e;
+          }
+          if (!result[0].meta?.changes) {
+            return refusedBy(async () => {
+              const fit = await env.DB.prepare(`SELECT ${photosFit} AS photos_ok`).bind(...args).first();
+              if (!fit?.photos_ok) {
+                return out({ error: `一次最多標示 ${REVISION_PHOTOS_MAX} 張照片`, code: 'revision_photos_cap', max: REVISION_PHOTOS_MAX }, 409);
+              }
+              return out({ error: `標示總數已達上限（${PICK_MARKS_TOTAL_MAX} 個）`, code: 'marks_cap', max: PICK_MARKS_TOTAL_MAX }, 409);
+            });
+          }
+          return out({ ok: true });
+        }
+
+        if (route === 'revision-round') {
+          const read = await readJsonCapped(request, REVISION_ROUND_BODY_MAX);
+          if (read.refused) return read.refused;
+          const { body } = read;
+          // expect: the photos and pin counts the page believes it is
+          // sending, to catch another tab's change since it last read them
+          if (!isPlainObject(body) || !Array.isArray(body.expect) || body.expect.length > REVISION_PHOTOS_MAX) return invalidBody();
+          const expected = new Set();
+          for (const e of body.expect) {
+            if (!isPlainObject(e) || !pickKeyValid(e.k) || expected.has(e.k)) return invalidBody();
+            if (!Number.isInteger(e.n) || e.n < 1 || e.n > PICK_MARKS_MAX) return invalidBody();
+            expected.add(e.k);
+          }
+          // the overall note is optional: none, null or blank is none
+          let note = null;
+          if (body.note !== undefined && body.note !== null) {
+            if (typeof body.note !== 'string') {
+              return out({ error: `總說明最多 ${REVISION_MESSAGE_MAX} 字`, code: 'invalid_message', max: REVISION_MESSAGE_MAX }, 400);
+            }
+            if (body.note.trim()) {
+              note = revisionMessage(body.note);
+              if (!note) return out({ error: `總說明最多 ${REVISION_MESSAGE_MAX} 字`, code: 'invalid_message', max: REVISION_MESSAGE_MAX }, 400);
+            }
+          }
+          if (!await ready()) return unavailable();
+          const expectJson = JSON.stringify(body.expect.map(e => ({ k: e.k, n: e.n })));
+          // the drafts of project `p` that belong to its delivery now, as an
+          // SQL fragment over alias `d`, with the delivery named by `at`/`ff`
+          const draftsOf = (pid, at, ff) =>
+            `FROM revision_pins d WHERE d.project_id = ${pid} AND d.delivery_at = ${at} AND d.delivery_finals = ${ff} AND json_valid(d.marks)`;
+          // the round's snapshot {photo_key: [pins]} in key order, and
+          // whether the drafts are exactly what the page expects: the same
+          // set of photos, each with the same number of pins (compared as
+          // sets in SQL, so no serialisation has to match byte for byte)
+          const snapshotOf = drafts => `(SELECT json_group_object(photo_key, json(marks)) FROM (SELECT d.photo_key, d.marks ${drafts} ORDER BY d.photo_key))`;
+          const sameAs = (drafts, expectParam) => `((SELECT COUNT(*) ${drafts}) = json_array_length(${expectParam}) AND NOT EXISTS (` +
+            `SELECT 1 FROM json_each(${expectParam}) e WHERE NOT EXISTS (SELECT 1 ${drafts} ` +
+            "AND d.photo_key = json_extract(e.value, '$.k') AND json_array_length(d.marks) = json_extract(e.value, '$.n'))))";
+          const roundRefused = now => refusedBy(async () => {
+            const drafts = draftsOf('?1', '?2', '?3');
+            const st = await env.DB.prepare(
+              `SELECT (SELECT COUNT(*) ${drafts}) AS drafts, ${sameAs(drafts, '?4')} AS same, ` +
+              '(SELECT COUNT(*) FROM revision_requests WHERE project_id = ?1) AS total, ' +
+              `COALESCE(length(CAST(${snapshotOf(drafts)} AS BLOB)), 0) <= ${PICK_MARKS_SNAPSHOT_MAX} AS fits`
+            ).bind(project.id, now.delivered_at, now.final_folders, expectJson).first();
+            if (!st?.drafts) return out({ error: '還沒有標示任何照片', code: 'no_pins' }, 409);
+            if (!st.same) return out({ error: '標示已在其他頁面更改，請重新確認', code: 'draft_changed' }, 409);
+            if (st.total >= REVISION_TOTAL_MAX) {
+              return out({ error: `修改需求已達上限（${REVISION_TOTAL_MAX} 則），請直接聯絡攝影師`, code: 'revision_cap', max: REVISION_TOTAL_MAX }, 409);
+            }
+            if (!st.fits) return out({ error: `標示總數已達上限（${PICK_MARKS_TOTAL_MAX} 個）`, code: 'marks_cap', max: PICK_MARKS_TOTAL_MAX }, 409);
+            return null;
+          });
+          // the checks first, in order, so the guest is told why
+          const early = await roundRefused(project);
+          if (early) return early;
+          // One INSERT … SELECT holds every rule against the rows as they
+          // stand inside the write: the seat, the delivery this request
+          // checked (a 更換精修 / undeliver / reopen in between makes it a
+          // no-op), not confirmed, no open request, under REVISION_TOTAL_MAX,
+          // 1–REVISION_PHOTOS_MAX drafts exactly as expected, the snapshot
+          // within PICK_MARKS_SNAPSHOT_MAX. The drafts go in the same batch,
+          // only if the row landed. marks / finals / message / message_auto
+          // are written here once and never updated.
+          const drafts = draftsOf('p.id', 'p.delivered_at', 'p.final_folders');
+          const snapshot = snapshotOf(drafts);
+          const roundId = crypto.randomUUID();
+          const at = new Date().toISOString();
+          let landed;
+          try {
+            [landed] = await env.DB.batch([
+              env.DB.prepare(
+                'INSERT INTO revision_requests (id, project_id, picker_id, message, message_auto, marks, finals, created_at) ' +
+                `SELECT ?3, p.id, ?2, ?4, ?5, ${snapshot}, p.final_folders, ?6 FROM projects p ` +
+                "WHERE p.id = ?1 AND p.owner_picker_id = ?2 AND p.archived_at IS NULL AND p.phase = 'retouching' " +
+                'AND p.delivered_at = ?7 AND p.final_folders = ?8 AND p.client_confirmed_at IS NULL ' +
+                'AND NOT EXISTS (SELECT 1 FROM revision_requests r WHERE r.project_id = p.id AND r.resolved_at IS NULL) ' +
+                `AND (SELECT COUNT(*) FROM revision_requests r WHERE r.project_id = p.id) < ${REVISION_TOTAL_MAX} ` +
+                `AND (SELECT COUNT(*) ${drafts}) BETWEEN 1 AND ${REVISION_PHOTOS_MAX} ` +
+                `AND ${sameAs(drafts, '?9')} ` +
+                `AND length(CAST(${snapshot} AS BLOB)) <= ${PICK_MARKS_SNAPSHOT_MAX}`
+              ).bind(project.id, picker.id, roundId, note ?? REVISION_PINS_MESSAGE, note ? 0 : 1, at,
+                project.delivered_at, project.final_folders, expectJson),
+              env.DB.prepare(
+                'DELETE FROM revision_pins WHERE project_id = ?1 AND EXISTS (SELECT 1 FROM revision_requests WHERE id = ?2 AND project_id = ?1)'
+              ).bind(project.id, roundId),
+            ]);
+          } catch (e) {
+            if (isMissingSchema(e)) return unavailable();
+            throw e;
+          }
+          if (!landed.meta?.changes) {
+            return (await roundRefused(project)) || out({ error: '標示已在其他頁面更改，請重新確認', code: 'draft_changed' }, 409);
+          }
+          const row = await env.DB.prepare('SELECT marks FROM revision_requests WHERE id = ?').bind(roundId).first();
+          const pins = parseMarksSnapshot(row?.marks) || {};
+          const notify = Promise.resolve()
+            .then(() => sendRevisionRoundNotification(env, project, picker.name, note, pins))
+            .catch(e => console.error('revision notification failed:', e?.message || e));
+          if (ctx?.waitUntil) ctx.waitUntil(notify); else await notify;
+          return out({ ok: true, id: roundId, created_at: at, photo_count: Object.keys(pins).length });
+        }
+
+        // GET /api/pick/rounds[/:id[/photo]] — the history, read only
+        const id = pathParts[3];
+        const sub = pathParts[4];
+        const notFound = () => out({ error: 'Not found', code: 'not_found' }, 404);
+        if (pathParts.length > 5 || (sub !== undefined && sub !== 'photo')) return notFound();
+        if (sub === 'photo') {
+          // thumbnails only: never a download, never a width the list does
+          // not name (1600 and up are close to the original)
+          if (params.has('download')) return out({ error: 'Invalid Request', code: 'invalid_request' }, 400);
+          const widths = params.getAll('w');
+          if (widths.length !== 1 || !REVISION_THUMB_WIDTHS.includes(widths[0])) {
+            return out({ error: '縮圖寬度只能是 400 或 1200', code: 'invalid_width' }, 400);
+          }
+        }
+        if (!await ready()) return unavailable();
+        if (id === undefined) {
+          // newest first: the requests (≤ REVISION_TOTAL_MAX) and the latest
+          // submission as `selection`, by created_at (a tie goes to the
+          // request, which can only come after)
+          const { results } = await env.DB.prepare(
+            'SELECT id, message_auto, marks, created_at, resolved_at FROM revision_requests WHERE project_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?'
+          ).bind(project.id, REVISION_TOTAL_MAX).all();
+          const list = results.map(r => {
+            const pinsRound = r.marks != null;
+            return {
+              id: r.id, kind: pinsRound ? 'pins' : 'text', created_at: r.created_at, open: r.resolved_at == null,
+              photo_count: pinsRound ? Object.keys(parseMarksSnapshot(r.marks) || {}).length : 0,
+              has_note: pinsRound ? r.message_auto !== 1 : true,
+            };
+          });
+          const selection = await loadRound(env, s, project, 'selection');
+          if (selection) {
+            const entry = { id: 'selection', kind: 'selection', created_at: selection.created_at, open: false, photo_count: selection.keys.length, has_note: false };
+            const at = list.findIndex(r => r.created_at < selection.created_at);
+            list.splice(at < 0 ? list.length : at, 0, entry);
+          }
+          return out({ rounds: list });
+        }
+        const found = await loadRound(env, s, project, id);
+        if (!found) return notFound();
+        if (sub !== 'photo') {
+          let photos = found.keys.map((k, i) => ({ i, name: k.split('/').pop(), pins: found.pins[k] || [] }));
+          // the selection: the photos with pins first (each keeps its index)
+          if (found.kind === 'selection') photos = [...photos.filter(x => x.pins.length), ...photos.filter(x => !x.pins.length)];
+          return out({ id: found.id, kind: found.kind, created_at: found.created_at, open: found.open, note: found.note, photos });
+        }
+        // GET /api/pick/rounds/:id/photo?i=<n>&w=<400|1200> — the one guest
+        // read outside pickFinals (docs/revision-pins.md §4.5): the thumbnail
+        // of the key at index i of this project's frozen snapshot. The
+        // request names no key; the key is re-checked against the folders
+        // the round was made on, and only `_thumbs/<w>/<key>.thumb` is read —
+        // a missing one is 404, never the original.
+        const indexes = params.getAll('i');
+        if (indexes.length !== 1 || !/^\d{1,4}$/.test(indexes[0])) return notFound();
+        const index = Number(indexes[0]);
+        if (index >= found.keys.length) return notFound();
+        const key = found.keys[index];
+        if (!pickKeyValid(key) || !pickKeyAllowed({ folders: found.folders }, key)) return notFound();
+        const object = await env.imagepicker.get(`${THUMB_PREFIX}${params.get('w')}/${key}.thumb`);
+        if (!object || !('body' in object)) return out({ error: '縮圖不存在', code: 'no_thumbnail' }, 404);
+        const type = object.httpMetadata?.contentType;
+        return new Response(object.body, {
+          headers: {
+            ...corsHeaders,
+            'Content-Type': typeof type === 'string' && /^image\//.test(type) ? type : 'image/jpeg',
+            'Cache-Control': 'private, no-store',
+            'Vary': 'X-Share-Token, X-Picker-Key',
+            'X-Content-Type-Options': 'nosniff',
+          },
+        });
       }
 
       return jsonErr('Not found', 404);
