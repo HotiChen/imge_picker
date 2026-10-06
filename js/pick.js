@@ -486,11 +486,7 @@
         // modals exist (removed, never hidden). Every string that came from
         // the server (the revision text) goes through textContent.
         _fmtDate(iso) {
-            const d = iso ? new Date(iso) : null;
-            if (!d || isNaN(d.getTime())) return '';
-            return new Intl.DateTimeFormat('zh-TW', {
-                timeZone: 'Asia/Taipei', year: 'numeric', month: 'numeric', day: 'numeric',
-            }).format(d);
+            return Util.fmtDate(iso, 'ymd');
         },
 
         // confirmed_at / revision_open / revision_message from a state read;
@@ -1932,10 +1928,6 @@
             return limit == null ? 0 : Math.max(0, this._selectedCount() - limit);
         },
 
-        _fmtMoney(n) {
-            return Number(n).toLocaleString('en-US');
-        },
-
         // ── claim overlay: the free-seat name prompt ─────────────────────
         _showClaimOverlay() {
             const overlay = document.getElementById('pickClaimOverlay');
@@ -2001,8 +1993,8 @@
             const lines = [`方案 ${limit} 張，目前已選 ${n} 張，超出 ${over} 張`];
             const price = this.extraPrice;
             if (price != null && Number(price) > 0) {
-                const p = this._fmtMoney(price);
-                lines.push(`加挑每張 NT$${p}，加價 NT$${p} × ${over} = NT$${this._fmtMoney(price * over)}`);
+                const p = Util.formatPrice(price);
+                lines.push(`加挑每張 ${p}，加價 ${p} × ${over} = ${Util.formatPrice(price * over)}`);
             }
             body.replaceChildren(...lines.map((t, i) => {
                 const p = document.createElement('p');

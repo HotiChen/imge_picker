@@ -16,6 +16,8 @@ const CONFIG = {
     }
 };
 
+// Kept for the book_editor pages (book_editor.js, viewer.js, layouts.js): they load
+// config.js but NOT js/util.js. The studio pages use window.escHtml (js/util.js) instead.
 // Names on screen come from R2 keys, which are whatever the uploader called the
 // file. Quotes matter as much as angle brackets here: most of these names land
 // in attributes (title=, value=, data-photo-id=), where a bare " ends the

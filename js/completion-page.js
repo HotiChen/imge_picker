@@ -62,7 +62,7 @@
         if (max != null) return `最多 ${max} 跨頁`;
         return null;
     }
-    const formatPrice = n => `NT$ ${n.toLocaleString('en-US')}`;
+    const formatPrice = n => Util.formatPrice(n);   // NT$5,000 (js/util.js, loaded before this file)
     const bound = v => (Number.isSafeInteger(v) && v >= 1 ? v : null);
 
     // The Worker's products, kept only as far as they are well-formed: a print / album with a name and at
