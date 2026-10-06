@@ -1566,17 +1566,29 @@ body {
   color: var(--ink);
 }
 
-/* Loading modal content */
+/* Loading modal: a small centred pill, not the full-size modal box (no dimmed page, no tall column) */
+#loadingModal {
+  inset: auto;
+  top: 50%; left: 50%;
+  width: auto; height: auto;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+#loadingModal .modal-overlay { display: none; }
 .loading-content {
-  max-width: 300px;
-  width: 90%;
-  padding: 32px;
+  width: auto;
+  height: auto;
+  max-width: 220px;
+  padding: 14px 20px;
   background: var(--surface);
   border: 1px solid var(--border);
-  flex-direction: column;
+  border-radius: 12px;
+  flex-direction: row;
   align-items: center;
-  gap: 16px;
+  gap: 12px;
 }
+.loading-content .loading-spinner { width: 20px; height: 20px; flex: none; }
+.loading-content .loading-text { margin: 0; }
 
 .loading-spinner {
   width: 32px;

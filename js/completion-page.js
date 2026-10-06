@@ -27,6 +27,9 @@
     const IMG_PREFIX = '/api/platform/products/';   // the only place a product image may come from
     const PRODUCTS_MAX = 50;                          // the Worker's own cap
     const OPTIONS_MAX = 20;
+    const COVER_MIN_ASPECT = 1.2;                     // landscape enough for the 3:2 hero
+    const COVER_CANDIDATES = 12;
+    const COVER_PROBE_MS = 3000;
 
     const el = (tag, cls, txt, id) => {
         const e = document.createElement(tag);
@@ -218,21 +221,47 @@
             box.hidden = !box.childNodes.length;
         },
 
-        // the first final stays the cover (the same bucket logic as the gallery's own hero)
-        setCover(photo, drive) {
+        // The cover: the first LANDSCAPE final (width/height >= COVER_MIN_ASPECT) among the first COVER_CANDIDATES,
+        // else the first final. Candidates are probed in parallel as 400px thumbnails (the bucket the grid already
+        // uses, so no new size is requested); the choice is made in list order, so it never depends on which
+        // probe answered first. A probe that errors or takes longer than COVER_PROBE_MS is skipped.
+        // The cover is chosen once per mount (coverKey), like before.
+        setCover(photo, drive, candidates) {
             if (!this.root || this.coverKey || !photo || !drive) return;
             this.coverKey = photo.id;
             const frame = this.root.querySelector('.cp-cover-frame');
-            const w = frame.getBoundingClientRect().width || window.innerWidth;
-            const img = el('img', 'cp-cover', null, 'cpCover');
-            img.alt = '';
-            img.decoding = 'async';
-            img.fetchPriority = 'high';
-            img.dataset.photoId = photo.id;
-            img.addEventListener('load', () => img.classList.add('on'));
-            img.addEventListener('error', () => img.remove());
-            img.src = drive.getImageUrl(photo, drive.previewWidth(w, window.devicePixelRatio || 1));
-            frame.replaceChildren(img);
+            const list = (Array.isArray(candidates) && candidates.length ? candidates : [photo])
+                .filter(p => p && p.id).slice(0, COVER_CANDIDATES);
+            const show = chosen => {
+                if (!this.root || !this.root.contains(frame)) return;
+                const w = frame.getBoundingClientRect().width || window.innerWidth;
+                const img = el('img', 'cp-cover', null, 'cpCover');
+                img.alt = '';
+                img.decoding = 'async';
+                img.fetchPriority = 'high';
+                img.dataset.photoId = chosen.id;
+                img.addEventListener('load', () => img.classList.add('on'));
+                img.addEventListener('error', () => img.remove());
+                img.src = drive.getImageUrl(chosen, drive.previewWidth(w, window.devicePixelRatio || 1));
+                frame.replaceChildren(img);
+            };
+            if (list.length < 2) { show(photo); return; }
+            const probes = list.map(p => new Promise(res => {
+                const im = new Image();
+                let done = false;
+                const fin = v => { if (done) return; done = true; clearTimeout(t); im.onload = im.onerror = null; res(v); };
+                const t = setTimeout(() => fin(0), COVER_PROBE_MS);
+                im.onload = () => fin(im.naturalHeight > 0 ? im.naturalWidth / im.naturalHeight : 0);
+                im.onerror = () => fin(0);
+                im.src = drive.getImageUrl(p, 400);
+            }));
+            (async () => {
+                let chosen = photo;
+                for (let i = 0; i < probes.length; i++) {
+                    if ((await probes[i]) >= COVER_MIN_ASPECT) { chosen = list[i]; break; }
+                }
+                show(chosen);
+            })();
         },
 
         setCount(n) {

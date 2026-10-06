@@ -405,7 +405,7 @@
             FinalsGallery.setChips(this._finalsChips());
             FinalsGallery.setPhotos(photos, driveManager.currentFolderId);
             if (window.CompletionPage && CompletionPage.isMounted()) {
-                if (photos.length) CompletionPage.setCover(photos[0], driveManager);
+                if (photos.length) CompletionPage.setCover(photos[0], driveManager, photos);
                 CompletionPage.setCount(photos.length);
             }
             return true;
