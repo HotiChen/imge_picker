@@ -83,6 +83,14 @@
   .badge { display: inline-block; padding: 3px 10px; border-radius: 999px; font-size: 11px; font-family: 'IBM Plex Mono', monospace; }
   .badge-pending { background: var(--peach); color: var(--ink-90); }
   .badge-approved { background: var(--mint); color: var(--success); }
+  /* Status colours (project list + detail header): amber = in progress, coral = needs the
+     photographer, green = done / past, grey = everything else. Own class names, each paired
+     with .badge for the specificity to beat .badge-approved / .badge-pending; text >= 4.5:1
+     on its own background (6:1 and up). */
+  .badge.st-progress { background: #ffe3b0; color: #7a4a00; }
+  .badge.st-action { background: #ffd9d2; color: #9b1c0c; }
+  .badge.st-done { background: #d8f0d2; color: #1f5a1a; }
+  .badge.st-neutral { background: #e8e2d8; color: #4a4338; }
 
   /* Toggle switch */
   .toggle { position: relative; display: inline-block; width: 36px; height: 20px; }
@@ -170,6 +178,18 @@
   .proj-recent-row { display: flex; align-items: center; justify-content: space-between;
     gap: 10px; padding: 10px 14px; background: var(--surface); border: 1px solid var(--rule);
     border-radius: 12px; margin-bottom: 6px; font-size: 13px; }
+  /* the whole row opens the project (js below); 開啟 stays for discoverability */
+  .proj-recent-row[data-project-row] { cursor: pointer; transition: background .12s, border-color .12s; }
+  .proj-recent-row[data-project-row]:hover { background: var(--card); border-color: var(--accent); }
+  .proj-recent-row[data-project-row]:focus-visible { outline: 2px solid var(--accent-ink); outline-offset: 2px; background: var(--card); }
+  /* 交件 notice dialog */
+  .dn-box { padding: 16px 18px; gap: 10px; }
+  .dn-box h4 { margin: 0; font-size: 15px; }
+  .dn-box .dn-note { color: var(--ink-55); font-size: 12px; line-height: 1.6; margin: 0; }
+  .dn-text { width: 100%; min-height: 190px; resize: vertical; font-family: inherit; font-size: 16px; line-height: 1.6;
+    background: var(--bg); color: var(--ink-90); border: 1px solid var(--rule); border-radius: 10px; padding: 10px 12px; }
+  .dn-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .dn-status { color: var(--success); font-size: 13px; font-weight: 600; }
   /* create form: which folder a project will use (js/project-folders.js) and whether it already holds photos */
   .proj-folder-preview { color: var(--ink-70); font-size: 13px; line-height: 1.7; margin: 0 0 6px; overflow-wrap: anywhere; }
   .proj-folder-preview code { font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: var(--ink-90); }
@@ -938,11 +958,18 @@
     if (!p || !p.delivered_at) return '';
     if (p.client_confirmed_at) {
       return p.client_confirmed_by === 'photographer'
-        ? '<span class="badge badge-approved" data-confirm-badge="photographer">已標記完成</span>'
-        : '<span class="badge badge-approved" data-confirm-badge="confirmed">客戶已確認</span>';
+        ? '<span class="badge badge-approved st-done" data-confirm-badge="photographer">已標記完成</span>'
+        : '<span class="badge badge-approved st-done" data-confirm-badge="confirmed">客戶已確認</span>';
     }
     const n = Number(p.open_revision_count) || 0;
-    return n > 0 ? `<span class="badge badge-pending" data-confirm-badge="revising">待修改 ${escHtml(n)}</span>` : '';
+    return n > 0 ? `<span class="badge badge-pending st-action" data-confirm-badge="revising">待修改 ${escHtml(n)}</span>` : '';
+  }
+
+  // The phase badge by colour: 選片中 / 精修中 amber (in progress), 已送出 coral (waiting for
+  // the photographer), anything else grey. Delivered is its own badge beside it.
+  function phaseBadgeHtml(p) {
+    const cls = p.phase === 'submitted' ? 'st-action' : (p.phase === 'picking' || p.phase === 'retouching') ? 'st-progress' : 'st-neutral';
+    return `<span class="badge badge-approved ${cls}" data-phase-badge="${escHtml(p.phase || '')}">${escHtml(PHASE_LABEL[p.phase] || p.phase || '')}</span>`;
   }
 
   function renderProjectList(projects) {
@@ -950,15 +977,15 @@
     if (!box) return;
     if (!projects.length) { box.innerHTML = '<div class="empty">尚未建立過專案</div>'; return; }
     box.innerHTML = projects.map(p => `
-      <div class="proj-recent-row" data-project-row="${escHtml(p.id)}">
+      <div class="proj-recent-row" data-project-row="${escHtml(p.id)}" role="button" tabindex="0">
         <div>
           <span>${escHtml(p.title || '（未命名）')}</span>
-          <span class="badge badge-approved">${escHtml(PHASE_LABEL[p.phase] || p.phase || '')}</span>
-          ${p.delivered_at ? '<span class="badge badge-approved" data-delivered-badge>已交件</span>' : ''}
+          ${phaseBadgeHtml(p)}
+          ${p.delivered_at ? '<span class="badge badge-approved st-done" data-delivered-badge>已交件</span>' : ''}
           ${confirmBadgeHtml(p)}
-          ${p.archived_at ? '<span class="badge badge-pending">已封存</span>' : ''}
-          ${p.modified_after_submit ? '<span class="badge badge-pending">已修改</span>' : ''}
-          ${p.unnotified_submissions ? `<span class="badge badge-pending">${escHtml(p.unnotified_submissions)} 次送出未寄信</span>` : ''}
+          ${p.archived_at ? '<span class="badge badge-pending st-neutral">已封存</span>' : ''}
+          ${p.modified_after_submit ? '<span class="badge badge-pending st-neutral">已修改</span>' : ''}
+          ${p.unnotified_submissions ? `<span class="badge badge-pending st-neutral">${escHtml(p.unnotified_submissions)} 次送出未寄信</span>` : ''}
           <div class="pd-owner" style="margin:2px 0 0;">
             ${p.owner_name ? escHtml(p.owner_name) : '<span class="folder-none">尚無人認領</span>'}
             · 送出 ${escHtml(p.submission_count)} 次
@@ -971,6 +998,21 @@
       </div>`).join('');
     box.querySelectorAll('[data-open-project]').forEach(btn => {
       btn.addEventListener('click', () => openProjectDetail(btn.dataset.openProject));
+    });
+    // The whole row opens the project too. A click that lands on (or inside) a button or link
+    // belongs to that control — 開啟 opens by itself, 複製連結 copies — so the row ignores it
+    // and nothing opens twice. Enter / Space on the focused row itself opens it.
+    box.querySelectorAll('[data-project-row]').forEach(row => {
+      row.addEventListener('click', e => {
+        const inner = e.target.closest('button, a, input, select, textarea, label');
+        if (inner && row.contains(inner)) return;
+        openProjectDetail(row.dataset.projectRow);
+      });
+      row.addEventListener('keydown', e => {
+        if (e.target !== row || (e.key !== 'Enter' && e.key !== ' ')) return;
+        e.preventDefault();
+        openProjectDetail(row.dataset.projectRow);
+      });
     });
     box.querySelectorAll('[data-copy-link]').forEach(btn => {
       btn.addEventListener('click', async () => {
@@ -1274,17 +1316,18 @@
     body.innerHTML = `
       <div class="pd-head">
         <h3>${escHtml(project.title || '（未命名）')}</h3>
-        <span class="badge badge-approved">${escHtml(PHASE_LABEL[project.phase] || project.phase || '')}</span>
-        ${project.delivered_at ? '<span class="badge badge-approved" data-delivered-badge>已交件</span>' : ''}
+        ${phaseBadgeHtml(project)}
+        ${project.delivered_at ? '<span class="badge badge-approved st-done" data-delivered-badge>已交件</span>' : ''}
         <span id="pd-confirm-badge-slot" style="display:contents">${confirmBadgeHtml(project)}</span>
-        ${project.archived_at ? '<span class="badge badge-pending">已封存</span>' : ''}
-        ${project.modified_after_submit ? '<span class="badge badge-pending">已修改，尚未重新送出</span>' : ''}
-        ${data.unnotified_submissions ? `<span class="badge badge-pending">${escHtml(data.unnotified_submissions)} 次送出未寄信</span>` : ''}
+        ${project.archived_at ? '<span class="badge badge-pending st-neutral">已封存</span>' : ''}
+        ${project.modified_after_submit ? '<span class="badge badge-pending st-neutral">已修改，尚未重新送出</span>' : ''}
+        ${data.unnotified_submissions ? `<span class="badge badge-pending st-neutral">${escHtml(data.unnotified_submissions)} 次送出未寄信</span>` : ''}
       </div>
       <div class="pd-owner">目前挑選人：${ownerName ? escHtml(ownerName) : '<span class="folder-none">尚無人認領</span>'}</div>
       ${projectFolderLineHtml(project)}
       <div class="pd-actions">
         ${proofsUploadHtml(project)}
+        ${viewAllHtml(project)}
         <button id="pd-reset-seat-btn" class="btn btn-ghost" type="button">重設主人</button>
         <button id="pd-start-retouch-btn" class="btn btn-accent" type="button">開始精修</button>
         <button id="pd-reopen-btn" class="btn btn-ghost" type="button">開放修改</button>
@@ -1359,6 +1402,7 @@
     document.getElementById('pd-reopen-btn').addEventListener('click', () => projectAction('reopen'));
     // 交件 / 毛片下載 have their own blocks (docs/delivery.md).
     currentProject = project;
+    currentTokens = tokens;
     currentRevisions = Array.isArray(data.revision_requests) ? data.revision_requests : [];
     // Delivery state is delivered_at alone. After 取消交件 or 開放修改 the Worker keeps
     // final_folders, so an undelivered project can still carry them: they
@@ -1452,6 +1496,7 @@
   // finalDraft: the folders chosen in the picker but not delivered yet.
   // finalEditing: a delivered project's 更換精修資料夾 chooser is open.
   let currentProject = null;
+  let currentTokens = [];   // the open project's pick links, newest first (for the 交付通知文案)
   let currentRevisions = [];   // the guest's 要求修改, newest first (detail.revision_requests)
   let finalDraft = [];
   let finalEditing = false;
@@ -1493,6 +1538,14 @@
     const info = PF.rootOfProject(project);
     if (!info || !info.proofShaped) return '';
     return `<a id="pd-upload-proofs-btn" class="btn btn-outline" href="${escHtml(PF.uploadHref(project.id, info.proofFolder, true))}">＋上傳毛片</a>`;
+  }
+
+  // 看全部毛片: the review view (index.html?project=) in its all-proofs mode — every photo in
+  // the project's folders, not just the client's picks. A plain same-tab link, like 看照片.
+  function viewAllHtml(project) {
+    const has = Array.isArray(project.folders) && project.folders.length > 0;
+    if (!has) return '';
+    return `<a id="pd-view-all-btn" class="btn btn-outline" href="index.html?project=${encodeURIComponent(project.id)}&amp;mode=all">看全部毛片</a>`;
   }
 
   // ＋上傳精修: upload.html on the next finals folder, locked there. The next one is
@@ -1675,6 +1728,8 @@
           : '<span class="folder-none">（舊資料：沒有指定精修資料夾，客人仍看到選片畫面）</span>'}</div>
         ${finalEditing ? chooser : `<div class="pd-row">
           <button id="pd-replace-final-btn" class="btn btn-outline" type="button">更換精修資料夾</button>
+          <button id="pd-copy-notice-btn" class="btn btn-outline" type="button">複製交付通知文案</button>
+          <span id="pd-copy-notice-status" class="dn-status" role="status"></span>
           <button id="pd-undeliver-btn" class="btn btn-ghost" type="button">取消交件</button>
         </div>`}
         <div id="pd-deliver-err" class="err"></div>
@@ -1702,6 +1757,14 @@
       renderDeliveryBlock();
     });
     box.querySelector('#pd-mark-done-btn')?.addEventListener('click', markDone);
+    box.querySelector('#pd-copy-notice-btn')?.addEventListener('click', async () => {
+      const st = document.getElementById('pd-copy-notice-status');
+      const ok = await copyText(deliveryNoticeText(currentProject, liveLinkOf(currentTokens)));
+      if (!st) return;
+      st.textContent = ok ? '已複製' : '複製失敗，請手動複製';
+      clearTimeout(st._t);
+      st._t = setTimeout(() => { st.textContent = ''; }, 2500);
+    });
     box.querySelector('#pd-undeliver-btn')?.addEventListener('click', async () => {
       if (!confirm('取消交件後，客人的連結會回到選片畫面（唯讀），精修成品不再顯示。確定要取消交件嗎？')) return;
       await projectAction('undeliver');
@@ -1724,11 +1787,111 @@
           return;
         }
         await Promise.all([openProjectDetail(currentProjectId), loadProjectList()]);
+        showDeliverNotice(currentProject, currentTokens);
       } catch (e) {
         if (errEl) errEl.textContent = '無法連線到 Worker';
         this.disabled = false;
       }
     });
+  }
+
+  // ── 交件後的通知文案 ─────────────────────────────────────────────────────────
+  // A ready-to-paste LINE message: where the finals are, what 確認完成 / 需要修改 do. It says
+  // nothing about pins (the client cannot pin finals yet). The title is the photographer's
+  // free text: it only ever goes through .value / textContent here, never innerHTML.
+  function liveLinkOf(tokens) {
+    const live = (tokens || []).find(t => t.status === 'live');
+    return live ? projectLink(live.token) : '';
+  }
+  function deliveryNoticeText(project, link) {
+    const title = String((project && project.title) || '').replace(/[\u0000-\u001F\u007F-\u009F\u2028\u2029]+/g, ' ').trim() || '您的專案';
+    return [
+      `${title} 的成品已經完成，可以看了！`,
+      link ? `請從這個連結查看與下載：\n${link}` : '請從先前傳給您的選片連結查看與下載。',
+      '',
+      '看完覺得沒問題，請按頁面上的「確認完成」。',
+      '如果有想調整的地方，請按「需要修改」，寫下想修改的內容，我會再幫您處理。',
+    ].join('\n');
+  }
+  // Clipboard API first; where it is missing (an insecure context, an old in-app browser) or
+  // refuses, select the text in a throw-away textarea and execCommand('copy'). 16px so iOS
+  // does not zoom. Resolves true when either path worked.
+  async function copyText(text) {
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(text);
+        return true;
+      }
+    } catch (e) { /* fall through to the selection path */ }
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('aria-hidden', 'true');
+    ta.style.cssText = 'position:fixed;top:0;left:0;width:1px;height:1px;opacity:0;font-size:16px;';
+    document.body.appendChild(ta);
+    let ok = false;
+    try {
+      ta.focus();
+      ta.select();
+      ta.setSelectionRange(0, text.length);
+      ok = !!document.execCommand('copy');
+    } catch (e) { ok = false; }
+    ta.remove();
+    return ok;
+  }
+  function showDeliverNotice(project, tokens) {
+    if (!project || !project.delivered_at) return;
+    document.getElementById('pd-deliver-notice')?.remove();
+    const link = liveLinkOf(tokens);
+    const text = deliveryNoticeText(project, link);
+    const overlay = document.createElement('div');
+    overlay.id = 'pd-deliver-notice';
+    overlay.className = 'picker-overlay';
+    const box = document.createElement('div');
+    box.className = 'picker-box dn-box';
+    box.setAttribute('role', 'dialog');
+    box.setAttribute('aria-modal', 'true');
+    box.setAttribute('aria-labelledby', 'dn-title');
+    const h = document.createElement('h4');
+    h.id = 'dn-title';
+    h.textContent = '已交件，通知客人';
+    const note = document.createElement('p');
+    note.className = 'dn-note';
+    note.textContent = link ? '把下面這段貼到 LINE 傳給客人。' : '目前沒有有效的選片連結（可到「挑選人與連結」產生新連結），文案裡先不放連結。';
+    const ta = document.createElement('textarea');
+    ta.id = 'dn-text';
+    ta.className = 'dn-text';
+    ta.readOnly = true;
+    ta.value = text;
+    const actions = document.createElement('div');
+    actions.className = 'dn-actions';
+    const copy = document.createElement('button');
+    copy.id = 'dn-copy-btn';
+    copy.type = 'button';
+    copy.className = 'btn btn-accent';
+    copy.textContent = '📋 複製交付通知文案';
+    const status = document.createElement('span');
+    status.id = 'dn-status';
+    status.className = 'dn-status';
+    status.setAttribute('role', 'status');
+    const close = document.createElement('button');
+    close.id = 'dn-close-btn';
+    close.type = 'button';
+    close.className = 'btn btn-ghost';
+    close.textContent = '關閉';
+    actions.append(copy, status, close);
+    box.append(h, note, ta, actions);
+    overlay.appendChild(box);
+    document.body.appendChild(overlay);
+    const onKey = e => { if (e.key === 'Escape') done(); };
+    const done = () => { overlay.remove(); document.removeEventListener('keydown', onKey); };
+    document.addEventListener('keydown', onKey);
+    close.addEventListener('click', done);
+    overlay.addEventListener('click', e => { if (e.target === overlay) done(); });
+    copy.addEventListener('click', async () => {
+      const ok = await copyText(text);
+      status.textContent = ok ? '已複製' : '複製失敗，請長按文字手動複製';
+    });
+    copy.focus();
   }
 
   // 允許客人下載毛片原檔 — PATCH allow_proof_download. The checkbox follows
