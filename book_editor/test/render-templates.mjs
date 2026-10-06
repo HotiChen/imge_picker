@@ -146,7 +146,7 @@ const sets = {
 };
 for (const [file, c] of Object.entries(sets)) {
   const items = makePhotos(c.n, { dup: c.dup || [] });
-  const plan = AutoLayout.planSpreads(items, { back: c.n >= 20 });
+  const plan = AutoLayout.planSpreads(items, { back: c.n >= 20, foldSafe: false });
   const dups = plan.dropped.filter(d => d.reason === 'duplicate').map(d => `#${items.findIndex(p => p.id === d.id) + 1}`);
   await shoot(file, PAGE(`planSpreads — ${c.label}`,
     `封面 + ${plan.spreads.length} 個跨頁${dups.length ? `；略過重複：${dups.join(' ')}` : ''}。圖上的數字是檔名順序，白圈是主體焦點（裁切會把它拉向格子中央）。`,

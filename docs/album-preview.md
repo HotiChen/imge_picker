@@ -30,7 +30,8 @@ it as a purchase. Everything is local arithmetic on the `?w=400` thumbnails
   (small, 400 px), `fitCoverImage`. Load order: `config.js`, `layouts.js`,
   `auto_layout.js`. It does **not** need `book_editor.js`, `drive.js` or
   `exporter.js`.
-- Tests (pure, seconds, CI does not run them): `node --test book_editor/test/auto_layout.test.mjs`
+- Tests (pure, seconds, CI does not run them; `node --test book_editor/test/*.test.mjs` runs them all, including
+  `fold_risk.test.mjs` and `plan_spreads_foldsafe.test.mjs` for "Fold safety"): `node --test book_editor/test/auto_layout.test.mjs`
   (analyze / plan / run, with the legacy golden), `book_editor/test/spread_templates.test.mjs`
   (every template through the validator, and the validator against bad data) and
   `book_editor/test/plan_spreads.test.mjs` (the spread planner). Browser: the
@@ -45,7 +46,8 @@ it as a purchase. Everything is local arithmetic on the `?w=400` thumbnails
 AutoLayout.analyze(photoIds, { urlFor(id) -> url, loadImage?(url, {signal, aspectOnly}) -> Promise<ImageLike>,
                                pixelsOf?(image, w, h) -> RGBA bytes, concurrency = 6, signal?, aspectOnly? })
   -> Promise<Array<{ id, ok, aspect, orientation: 'landscape'|'portrait'|'square',
-                     hash /* dHash, 16 hex, '' = unknown */, sharpness, focus: {x, y} /* 0.2..0.8 */ }>>
+                     hash /* dHash, 16 hex, '' = unknown */, sharpness, focus: {x, y} /* 0.2..0.8 */,
+                     foldRisk /* 0..1, or null = unknown: see "Fold safety" */ }>>
 
 AutoLayout.plan(items /* analyze() output */, { style = 'auto', layouts, pages, pageAspect = 1, coverAspect = pageAspect,
                                                  hashThreshold = 6, window = 5, order = 'natural' })
@@ -56,18 +58,22 @@ AutoLayout.plan(items /* analyze() output */, { style = 'auto', layouts, pages, 
 AutoLayout.planSpreads(items, { fit = 'contain', templates, coverAspect = 210/297, spreadAspect = 420/297, hashThreshold = 6, window = 5,
                                 maxPerFace = 4, seed = 0, order = 'natural', back = false,
                                 dedupe = 'separate', similarThreshold = 12, similarWindow = 7,   // near-duplicates, see below
-                                minSpreads, maxSpreads })                                        // spread-count bounds, see below
+                                minSpreads, maxSpreads,                                          // spread-count bounds, see below
+                                foldSafe = true })                                               // no high-risk photo across the fold, see "Fold safety"
   -> { cover: { photoId, crop, fit? } | null,
        spreads: [{ id: 'spread-n', template: <template id>, slots: [{ photoId, fit?, crop: {x, y, scale: 1}, slot: {x, y, w, h, face} }] }],
        back: null | {},                       // {} = a blank closing page (only with back: true and a book to close)
        dropped: [ same as plan ],             // see "A4 album: spreads and the template library"
        similarPairs?, similarSpreads?,        // only when look-alikes exist: see "Near-duplicates"
-       minSpreads?, maxSpreads? }             // only when asked for: see "Spread-count bounds"
+       minSpreads?, maxSpreads?,              // only when asked for: see "Spread-count bounds"
+       foldSpans?, foldAvoided? }             // only when > 0 (and foldSafe): see "Fold safety"
 
 AutoLayout.run(photos, style)   // the editor's five old styles; same output as before
 AutoLayout.DEFAULTS             // the numbers below
 AutoLayout.SPREAD_DEFAULTS      // the planSpreads numbers (price per spread, hero gap, ...)
+AutoLayout.FOLD                 // the fold-risk constants (frozen): W, H, BAND, FLOOR, MIN_MEAN, RATIO_LO, RATIO_HI, OFFSET_MAX, LIMIT
 AutoLayout.util                 // pure helpers (tests): naturalCompare, dHash, hamming, sharpnessOf, focusOf, cropFor, toGray,
+                                // foldStatsOf(gray, w, h) -> {ratio, offset, mean, flat} | null, foldRiskOf(gray, w, h) -> 0..1 (1 = unusable),
                                 // wasteOf(photoAspect, slotAspect), containBox(natW, natH, slotW, slotH, crop) -> {left, top, w, h}
 ```
 
@@ -418,6 +424,130 @@ The viewer's note 「已略過 N 張相近的照片」 reads `dropped`, which is
 `plan_spreads_maxspreads.test.mjs` (`plan_spreads.test.mjs` runs its two duplicate-drop assertions with `dedupe: 'drop'`;
 the 6-book cover golden is unchanged).
 
+## Fold safety: no photo across the fold when its subject is on the fold
+
+**Problem (Tim, an iPhone screenshot).** A through-spread (`hero-bleed`, `hero-frame`, `hero-wide`, `hero-strip`: the only
+templates with a `face: 'span'` slot) draws one photo over both pages. The bride's face sat exactly on the fold, and the
+gutter shadow cut it. The engine does not know where a subject is. **Decision (Tim, option B):** do not span a photo across
+the fold when the content of the photo sits on the fold; span only when the middle of the photo is low-risk. No face
+detection (a later stage): a cheap, deterministic heuristic on pixels the engine already reads.
+
+### The heuristic (`foldRisk`, 0..1)
+
+Computed in `analyze()` from a **third canvas read of the same `?w=400` thumbnail** (a `FOLD.W x FOLD.H` = 64 x 40 grey grid,
+after the 9x8 hash read and the 32x32 sharpness/focus read): no extra network request. The browser (`defaultPixelsOf`, a
+canvas) and the node tests (any `pixelsOf` mock) take the very same path, `o.pixelsOf(img, w, h)`; `js/album-preview.js`
+passes `analyze`'s items straight to `planSpreads`, so nothing changed there. The grid does not keep the photo's aspect: only
+the horizontal fractions matter.
+
+```
+e(x,y)   = max(0, |g(x+1,y) - g(x,y)| + |g(x,y+1) - g(x,y)| - FLOOR)        detail (forward differences, so a 1-pixel pattern shows)
+c[x]     = sum over y of e(x,y)                                              detail per column
+ratio    = (mean of c over the BAND, columns weighted by their overlap with it) / (mean of c over the whole photo)
+offset   = | sum(c[x] * position(x)) / sum(c) - 0.5 |                       detail-weighted centroid's distance from the middle (fractions of the width)
+risk     = clamp((ratio - RATIO_LO) / (RATIO_HI - RATIO_LO)) * clamp(1 - offset / OFFSET_MAX)
+flat     : mean e per pixel < MIN_MEAN  ->  risk 0 (nothing to cut)
+unusable : no pixels / wrong length / NaN / grid under 3x3  ->  risk 1
+high     : risk >= LIMIT
+```
+
+| constant | value | why |
+|---|---|---|
+| `FOLD.W x FOLD.H` | 64 x 40 | 2560 px: cheap, and the band is about 9 columns wide |
+| `BAND` | 0.14 | a photo on a through-spread has the fold at its centre (`contain` centres every slot; the hero slots are symmetric about the fold). 14% of 420 mm = 59 mm = a 10 mm gutter + about 25 mm each side for the binding and the shadow |
+| `FLOOR` | 12 grey levels | `|dx| + |dy|` under this is noise or a smooth ramp (a sky, a studio backdrop, a gradient) and counts as no detail |
+| `MIN_MEAN` | 0.25 | a picture with essentially no detail after the floor has no subject: risk 0 |
+| `RATIO_LO` / `RATIO_HI` | 0.8 / 2.0 | the band as busy as 0.8x the photo's average scores 0, twice as busy scores 1 |
+| `OFFSET_MAX` | 0.3 | the detail's centroid 30% of the width from the middle (or more) scores 0 |
+| `LIMIT` | 0.5 | high risk from 0.5 up; e.g. a band 1.4x as busy as the average **and** a centroid dead centre is exactly 0.5 |
+
+The ratio is the gate (a subject on the fold must make the band busier than the rest); the centroid only lowers a score when
+the detail's mass sits far from the middle. On synthetic 64 x 40 grids (a textured block on flat grey, as in
+`fold_risk.test.mjs`):
+
+| picture | ratio | offset | risk |
+|---|---|---|---|
+| subject 40-60% wide | 5.3 | 0.004 | 0.99 high |
+| subject 30-70% | 2.4 | 0.004 | 0.99 high |
+| small subject 44-50% (touching the fold) | 7.0 | 0.027 | 0.91 high |
+| subject 36-42% (just outside the band) | 0 | 0.105 | 0 |
+| subject 15-35% or 65-85% | 0 | 0.25 | 0 |
+| two subjects at 15-30% and 70-85% (centroid on the middle, nothing on the fold) | 0 | 0.00 | 0 |
+| noise everywhere (+-100 grey levels) | 1.0 | 0.006 | 0.17 low |
+| plain gradient, uniform, faint noise | 0 | 0 | 0 |
+
+**Noise everywhere** (a crowd, foliage): the ratio is about 1 and the centroid on the middle, so the score is about 0.17,
+**low**. Decision: a uniformly busy picture has no particular subject on the fold, and nothing about it says where to avoid;
+the heuristic finds busy *centres*, not busy photos. **No data** (a hash-only item, `aspectOnly`, a tainted canvas, a failed
+read) is **high risk (default deny)**: `analyze` reports `foldRisk: null` and the planner reads any non-number as 1. A number
+below 0 or above 1 is clamped.
+
+Through the real browser canvas (Chromium, 600 x 400 drawn people about 180 px wide on a flat sky): a person at the centre
+0.98, at 42% 0.75, at 33% 0.02, at 25% 0; a couple at 40% + 60% (the gap on the fold) 0.96, a couple at 30% + 70% 0; a 60 px
+subject at the centre 0.99; a flat sky 0. (Checked once by hand, not a committed suite.)
+
+### The planner: `foldSafe` (default **true**)
+
+`planSpreads(items, { foldSafe })`: anything but an explicit `false` is on. With it on, **a template with a `face: 'span'`
+slot takes a photo in that slot only if its `foldRisk < FOLD.LIMIT`**; a high-risk photo (or one with no `foldRisk`) is seated
+on a non-span template (single-face or grid slots) or nowhere. It is a hard rule inside the seating itself (a span seat for a
+high-risk photo costs 1e9, so a group that needs it is never a candidate), so **nothing relaxes it**: not the waste floors,
+the hero-gap, solo and last-spread relaxations, `minSpreads` (the minimum reports `met: false` instead of cutting a face),
+`maxSpreads`, the similar-photo reorders, the variety polish or `fit: 'cover'`. Every photo is still placed (none dropped,
+none cropped; `fit: 'contain'` unchanged: whole photo, `crop {0,0,1}`). For safe photos nothing changes: a book whose photos
+are all low-risk plans byte for byte as with `foldSafe: false` (tested).
+
+Plannable always: the library has a span-free template for every photo count 1 to 8 (`solo-left` / `solo-right` for a lone
+photo, which the "a lone photo only on a hero" rule normally forbids but the relaxation ladder allows once a hero is
+impossible; tested for every n from 1 to 45 with every photo high-risk). **A library passed in with `templates` that can
+seat a photo only on a span** (a hero-only list) cannot take a high-risk photo: it throws `...cannot seat...` like any
+library that cannot seat the photos (`foldSafe: false` plans it as before). `photosNeeded` / `photosAllowed` plan synthetic
+photos that carry the real book's risk mix; a synthetic count the library cannot seat under the rule counts as "does not
+meet" instead of throwing.
+
+`foldSafe: false` is the old planner: any photo may take a span, and **the result has no new key**. The older test files
+(`plan_spreads*.test.mjs`) have no pixels, so they run through a one-line wrapper that adds `foldSafe: false`.
+
+**Result keys** (only with `foldSafe`, only when > 0, so a book with nothing to report is the old object):
+
+| key | meaning |
+|---|---|
+| `foldSpans` | number of spreads that use a span slot (photos across the fold; all of them low-risk) |
+| `foldAvoided` | number of high-risk photos that the plan **without** the rule would have put on a span: the cost of the rule, for tests and a UI note. Needs a second planning when the book has any high-risk photo (about +50 ms for 240 photos; not done for the synthetic plans of `photosNeeded`) |
+
+### Limits (read before trusting it)
+
+- **It cannot find a face.** It finds *busy, sharp centres*: detail in the middle band much denser than the rest of the
+  photo. A centred subject on a plain or blurred background is caught (a person, a couple, a cake). A face with busier detail
+  elsewhere (a lace curtain, foliage, a crowd on both sides) is **not**: the band is not busier than the average. A subject
+  that fills most of the frame is not caught either (the ratio is about 1). A subject with a smooth texture (a bald head,
+  a white dress on white: detail only on the silhouette) can score low if its silhouette lies outside the band.
+- **Only the centre of the photo is considered.** It assumes the fold lands at the photo's centre: true for `fit: 'contain'`
+  (every slot centres the photo) and for the symmetric hero slots. With `fit: 'cover'` a focus crop can move the content
+  off-centre, so the risk is only approximate there.
+- **Tuned on synthetic data only** (drawn blocks, noise, gradients, drawn people through the real canvas). **Tim must look at
+  real photos**: open the preview of a real wedding folder and check (a) no through-spread has a face or a couple's join on
+  the fold, (b) through-spreads still appear for landscapes and wide scenes. `foldAvoided` is the number to watch: a book that
+  loses every hero is too strict.
+- **What to tune.** Too strict (landscapes and wide scenes never span): raise `FOLD.LIMIT` (0.5 to 0.6-0.7), or raise
+  `RATIO_LO` / `RATIO_HI` so a busy centre has to be busier, or narrow `BAND` (0.14 to 0.10). Too lax (a face on the fold
+  still gets through): lower `LIMIT` (0.5 to 0.35), lower `RATIO_LO` (0.8 to 0.6), raise `OFFSET_MAX` (0.3 to 0.4), lower
+  `FLOOR` (12 to 8) if real subjects show little detail at 64 x 40, widen `BAND`. All constants are in `AutoLayout.FOLD`;
+  `fold_risk.test.mjs` pins the numbers above, so change both together.
+- **A good photo is lost for a hero when its middle is busy.** That is the intent (better a quiet page than a cut face); the
+  cost is reported in `foldAvoided`. The editor's `plan()` has no spans and is untouched.
+- **Cost per photo:** three canvas reads instead of two (one `drawImage` + `getImageData` of 2560 pixels, under a
+  millisecond) and about 12 microseconds of arithmetic. The planner needs a second planning when a book has any
+  high-risk photo (for `foldAvoided`): +50 ms at 240 photos.
+
+**Tests.** `book_editor/test/fold_risk.test.mjs` (the helper on synthetic arrays: a centred subject, subjects at 25% / 75%,
+a flat centre, uniform / gradient / faint noise, noise everywhere, missing data, the band edges, mirror symmetry, grid-size
+independence; `analyze` wiring: one load per photo, three reads, `null` without pixels) and
+`book_editor/test/plan_spreads_foldsafe.test.mjs` (default on, no data = no span, the only hero candidate high-risk vs
+`foldSafe: false`, a low-risk landscape still spans, the limit boundary, junk values, 60 random books, cover mode and the
+other options, every n 1..45 all high-risk, `minSpreads` / `maxSpreads`, a span-only library, `hero-strip` seating, result
+keys, determinism, template validity).
+
 ## Whole photos: fit `contain` (the default) and how to switch back to `cover`
 
 **Decision (Tim, checking the A4 preview in the iPhone LINE browser):** do not crop; cropping to fill a slot "cuts off
@@ -493,7 +623,8 @@ at DPR 3 on a 40 px slot); real photographs (the suites use synthetic shapes and
 
 - **Faces.** `FaceDetector` does not exist in Safari, which is most of the
   clients. A subject-aware crop is the gradient centroid for now; a face
-  detector can later feed `focus` without changing the contract.
+  detector can later feed `focus` (and a better `foldRisk`) without changing the
+  contract. Until then the fold is guarded by the detail heuristic in "Fold safety".
 - **EXIF time / burst grouping by time.** The thumbnails have no EXIF and the
   originals must not be fetched for a preview (size, and the original gate).
   File-name order is the proxy. Real grouping (by scene) would need the

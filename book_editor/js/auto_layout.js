@@ -145,6 +145,66 @@ const AutoLayout = (() => {
         return { x: clamp(ex / e / S, FOCUS_MIN, FOCUS_MAX), y: clamp(ey / e / S, FOCUS_MIN, FOCUS_MAX) };
     }
 
+    // ─── fold risk: is the subject on the fold? (docs/album-preview.md, "Fold safety") ──────────
+    // A photo drawn across a spread (a `face: 'span'` slot) has its middle on the fold, where the gutter shadow and the
+    // binding are. The engine cannot find a face, but it can see where the DETAIL of a thumbnail is: a busy, sharp
+    // centre against a plain background is what a subject looks like. foldRisk (0..1) is computed from the grey grid
+    // analyze() reads anyway (FOLD.W x FOLD.H, one more canvas read of the same ?w=400 image, no request).
+    //   detail e(x,y) = max(0, |g(x+1,y) - g(x,y)| + |g(x,y+1) - g(x,y)| - FLOOR)     (forward differences; FLOOR = noise / smooth ramps)
+    //   column energy c[x] = sum over y of e; ratio = mean c in the BAND / mean c overall;
+    //   offset = |detail-weighted horizontal centroid - 0.5|
+    //   risk = clamp((ratio - RATIO_LO) / (RATIO_HI - RATIO_LO)) * clamp(1 - offset / OFFSET_MAX)
+    // No detail at all (mean e < MIN_MEAN: a plain sky, a studio backdrop, a gradient) = no subject = risk 0.
+    // No usable pixels = risk 1 (default deny). high = risk >= LIMIT.
+    const FOLD = Object.freeze({
+        W: 64, H: 40,            // the grey grid (x fractions are what matter, so the aspect is not kept)
+        BAND: 0.14,              // the fold's reach as a share of the photo width, centred: 59 mm of a 420 mm spread = 10 mm gutter + ~25 mm safety each side
+        FLOOR: 12,               // grey levels of |dx| + |dy| that count as no detail (sensor noise, a smooth sky, a gradient)
+        MIN_MEAN: 0.25,          // mean detail per pixel under this = a featureless picture
+        RATIO_LO: 0.8,           // band as busy as 0.8x the photo's average: ratio score 0
+        RATIO_HI: 2.0,           // band twice as busy as the average: ratio score 1
+        OFFSET_MAX: 0.3,         // detail centroid this far (of the width) from the middle or more: centre score 0
+        LIMIT: 0.5,              // risk at or above this = do not span
+    });
+
+    // { ratio, offset, mean, flat } of a grey grid w x h, or null when there is no usable grid (wrong length, too small, NaN)
+    function foldStatsOf(g, w, h) {
+        if (!g || typeof g.length !== 'number' || !Number.isInteger(w) || !Number.isInteger(h) || w < 3 || h < 3 || g.length !== w * h) return null;
+        const col = new Float64Array(w - 1);
+        let total = 0;
+        for (let y = 0; y < h - 1; y++) {
+            for (let x = 0; x < w - 1; x++) {
+                const i = y * w + x;
+                const e = Math.abs(g[i + 1] - g[i]) + Math.abs(g[i + w] - g[i]);
+                if (!Number.isFinite(e)) return null;
+                const d = e > FOLD.FLOOR ? e - FOLD.FLOOR : 0;
+                col[x] += d; total += d;
+            }
+        }
+        const mean = total / ((w - 1) * (h - 1));
+        if (!(mean >= FOLD.MIN_MEAN)) return { ratio: 0, offset: 0, mean, flat: true };
+        // difference column x sits between pixel centres x and x+1: it spans [(x+0.5)/w, (x+1.5)/w]
+        const lo = 0.5 - FOLD.BAND / 2, hi = 0.5 + FOLD.BAND / 2;
+        let bandSum = 0, bandW = 0, moment = 0;
+        for (let x = 0; x < w - 1; x++) {
+            const ov = Math.max(0, Math.min(hi, (x + 1.5) / w) - Math.max(lo, (x + 0.5) / w)) * w;
+            bandSum += ov * col[x]; bandW += ov;
+            moment += col[x] * (x + 1) / w;
+        }
+        const ratio = bandW > 0 ? (bandSum / bandW) / (total / (w - 1)) : 0;
+        return { ratio, offset: Math.abs(moment / total - 0.5), mean, flat: false };
+    }
+
+    // 0..1 from foldStatsOf's answer; 1 for null (not a usable grid: default deny)
+    function foldRiskFromStats(s) {
+        if (!s) return 1;
+        if (s.flat) return 0;
+        const ratioScore = clamp((s.ratio - FOLD.RATIO_LO) / (FOLD.RATIO_HI - FOLD.RATIO_LO), 0, 1);
+        const centreScore = clamp(1 - s.offset / FOLD.OFFSET_MAX, 0, 1);
+        return Math.round(ratioScore * centreScore * 1e4) / 1e4;
+    }
+    const foldRiskOf = (g, w, h) => foldRiskFromStats(foldStatsOf(g, w, h));
+
     const orientationOfAspect = a =>
         Math.abs(a - 1) <= SQUARE_TOLERANCE ? 'square' : (a > 1 ? 'landscape' : 'portrait');
 
@@ -209,7 +269,7 @@ const AutoLayout = (() => {
         return ctx.getImageData(0, 0, w, h).data;
     }
 
-    const failedItem = id => ({ id, ok: false, aspect: 1, orientation: 'square', hash: '', sharpness: 0, focus: { x: 0.5, y: 0.5 } });
+    const failedItem = id => ({ id, ok: false, aspect: 1, orientation: 'square', hash: '', sharpness: 0, focus: { x: 0.5, y: 0.5 }, foldRisk: null });
 
     async function analyzeOne(id, o) {
         let img;
@@ -224,7 +284,7 @@ const AutoLayout = (() => {
         if (!(w > 0 && h > 0)) return failedItem(id);
         const aspect = w / h;
         const out = { id, ok: true, aspect, orientation: orientationOfAspect(aspect),
-            hash: '', sharpness: 0, focus: { x: 0.5, y: 0.5 } };
+            hash: '', sharpness: 0, focus: { x: 0.5, y: 0.5 }, foldRisk: null };   // foldRisk null = unknown (the planner reads it as high)
         if (o.aspectOnly) return out;
         try {
             out.hash = dHash(toGray(await o.pixelsOf(img, 9, 8)));
@@ -233,7 +293,13 @@ const AutoLayout = (() => {
             out.focus = focusOf(g);
         } catch (e) {
             out.hash = ''; out.sharpness = 0; out.focus = { x: 0.5, y: 0.5 };
+            return out;
         }
+        // the third read of the same image (no new request); a failure here costs only the fold risk
+        try {
+            const s = foldStatsOf(toGray(await o.pixelsOf(img, FOLD.W, FOLD.H)), FOLD.W, FOLD.H);
+            out.foldRisk = s ? foldRiskFromStats(s) : null;
+        } catch (e) { out.foldRisk = null; }
         return out;
     }
 
@@ -363,6 +429,8 @@ const AutoLayout = (() => {
             hash: it && typeof it.hash === 'string' ? it.hash.toLowerCase() : '',
             sharp: it && Number.isFinite(Number(it.sharpness)) ? Number(it.sharpness) : 0,
             focus: { x: f && Number.isFinite(f.x) ? f.x : 0.5, y: f && Number.isFinite(f.y) ? f.y : 0.5 },
+            // 0..1; no number (no pixel data, junk) = 1 = high risk
+            fold: it && typeof it.foldRisk === 'number' && Number.isFinite(it.foldRisk) ? clamp(it.foldRisk, 0, 1) : 1,
         };
     }
 
@@ -653,6 +721,7 @@ const AutoLayout = (() => {
     const SP_ORDER = 0.03;            // per seat of distance between shooting order and reading order
     const SP_SAME_FAMILY = 0.1;       // next spread of the same family
     const SP_BIG_SHARP = 0.15;        // sharp photos in the big slots
+    const SP_FOLD_BLOCK = 1e9;        // a high-risk photo in a span slot: far above SP_BIG, so every seating that needs it is skipped (hard rule)
     const SP_BIG = 1e6;               // "impossible" inside the assignment (crushed photo in a no-crush pass)
     const SP_PASSES = 8;              // variety polish: at most this many sweeps over the spreads
     const SP_SIM_PENALTY = 3;         // soft pass only: cost of one look-alike pair sharing a spread (when it cannot be avoided outright)
@@ -768,6 +837,7 @@ const AutoLayout = (() => {
                         const sharp = 1 - ctx.pct.get(r.id);
                         if (lay.span[s]) {
                             c += 1.0 * sharp;
+                            if (ctx.foldSafe && r.fold >= FOLD.LIMIT) c += SP_FOLD_BLOCK;   // never across the fold: the group is skipped below
                             if (r.orientation !== 'square' && r.orientation !== 'landscape') c += ctx.contain ? SP_HERO_WRONG_CONTAIN : SP_HERO_WRONG_COVER;
                             if (r.id === ctx.coverId) c += 10;                  // the cover is already that picture
                         } else {
@@ -780,7 +850,7 @@ const AutoLayout = (() => {
                 const col = k === 1 ? [0] : hungarian(a, k);
                 let c = 0;
                 for (let p = 0; p < k; p++) c += a[p][col[p]];
-                if (c >= SP_BIG / 2) continue;                                   // every seating crushes a photo
+                if (c >= SP_BIG / 2) continue;                                   // every seating crushes a photo (or puts a high-risk photo on the fold)
                 c += lay.hero ? SP_RHYTHM[k] - ctx.cfg.heroBonus * (k === 1 ? 1 : 0.5 * spans) : (k === 1 ? SP_SOLO : SP_RHYTHM[k]);
                 c += ctx.cfg.jitter * jitterOf(lay.id, i, ctx.seed);
                 if (ctx.simCnt) c += SP_SIM_PENALTY * ctx.simCnt[i * (SP_MAX_K + 1) + k];   // look-alikes together (soft pass; the hard pass skips these groups)
@@ -986,16 +1056,17 @@ const AutoLayout = (() => {
     // synthetic photos for photosNeeded: n of them with the aspect (and sharpness) mix of `mix`, evenly strided so a
     // different n samples the same mix; no hash, so nothing is similar
     function syntheticItems(mix, n) {
-        const src = mix.length ? mix : [{ aspect: 1.5, sharp: 50 }, { aspect: 2 / 3, sharp: 50 }];
+        const src = mix.length ? mix : [{ aspect: 1.5, sharp: 50, fold: 1 }, { aspect: 2 / 3, sharp: 50, fold: 1 }];
         return Array.from({ length: n }, (_, i) => {
             const r = src[Math.floor(i * src.length / n)];
             return { id: `syn-${String(i + 1).padStart(5, '0')}`, ok: true, aspect: r.aspect, orientation: orientationOfAspect(r.aspect),
-                hash: '', sharpness: r.sharp, focus: { x: 0.5, y: 0.5 } };
+                hash: '', sharpness: r.sharp, focus: { x: 0.5, y: 0.5 }, foldRisk: r.fold };
         });
     }
 
     // opts: { templates, coverAspect, spreadAspect, hashThreshold, window, maxPerFace, seed, order, back, fit,
-    //         dedupe: 'separate' (default) | 'drop', similarThreshold, similarWindow, minSpreads }
+    //         dedupe: 'separate' (default) | 'drop', similarThreshold, similarWindow, minSpreads, maxSpreads,
+    //         foldSafe: true (default) | false }
     const planSpreads = (items, opts = {}) => planCore(items, opts || {}, false);
 
     function planCore(items, opts, synthetic) {
@@ -1010,6 +1081,7 @@ const AutoLayout = (() => {
         const simThreshold = Number.isFinite(opts.similarThreshold) ? opts.similarThreshold : D.similarThreshold;
         const simWindow = Number.isFinite(opts.similarWindow) ? Math.floor(opts.similarWindow) : D.similarWindow;
         const seed = Number.isFinite(opts.seed) ? Math.trunc(opts.seed) : 0;
+        const foldSafe = opts.foldSafe !== false;    // default on: no high-risk photo across the fold; only an explicit false gives the old behaviour
         const contain = opts.fit !== 'cover';        // 'contain' (whole photo, nothing cropped) unless 'cover' is asked for
         const spreadsOpt = v => (Number.isFinite(v) && v >= 1 ? Math.floor(v) : 0);      // integer >= 1, else "none"
         const askedMin = spreadsOpt(opts.minSpreads), wantMax = spreadsOpt(opts.maxSpreads);
@@ -1028,8 +1100,15 @@ const AutoLayout = (() => {
         // The aspect mix of the usable photos, resampled to n synthetic photos (no hashes: nothing is similar), planned with
         // the same options but one bound. Both searches assume that more photos never help a maximum and never hurt a
         // minimum (a meeting count stays meeting / a fitting count stays fitting): pinned on uniform books in the tests.
-        const synthPlan = (n, extra) => planCore(syntheticItems(kept.map(r => ({ aspect: r.aspect, sharp: r.sharp })), n),
-            { ...opts, order: 'given', dedupe: 'drop', hashThreshold: -1, back: false, minSpreads: undefined, maxSpreads: undefined, ...extra }, true);
+        // A library that cannot seat n synthetic photos (e.g. foldSafe with no span-free template for a lone photo) just does not meet the bound.
+        const synthPlan = (n, extra) => {
+            try {
+                return planCore(syntheticItems(kept.map(r => ({ aspect: r.aspect, sharp: r.sharp, fold: r.fold })), n),
+                    { ...opts, order: 'given', dedupe: 'drop', hashThreshold: -1, back: false, minSpreads: undefined, maxSpreads: undefined, ...extra }, true);
+            } catch (e) {
+                return { minSpreads: { met: false }, maxSpreads: { met: false } };
+            }
+        };
         const templates = opts.templates !== undefined ? opts.templates
             : (typeof SpreadTemplates !== 'undefined' ? SpreadTemplates.TEMPLATES : null);
         const cat = Array.isArray(templates) ? spreadCatalogue(templates, spreadAspect, maxPerFace) : null;
@@ -1109,7 +1188,7 @@ const AutoLayout = (() => {
         const memo = new Map();
         const costsFor = (oi, level) => {
             const key = oi + ':' + level;
-            if (!memo.has(key)) memo.set(key, spreadCosts(orders[oi].P, cat, { pct, coverId: coverRec.id, seed, cfg, contain, simCnt: orders[oi].simCnt }, level));
+            if (!memo.has(key)) memo.set(key, spreadCosts(orders[oi].P, cat, { pct, coverId: coverRec.id, seed, cfg, contain, foldSafe, simCnt: orders[oi].simCnt }, level));
             return memo.get(key);
         };
         // look-alike pairs left sharing a spread under order oi, and the spreads they are on
@@ -1245,6 +1324,18 @@ const AutoLayout = (() => {
             at += lay.k;
         });
         const out = { cover, spreads, back: opts.back === true ? {} : null, dropped };
+        if (foldSafe) {
+            // foldSpans: spreads with a photo across the fold. foldAvoided: high-risk photos the plan without the rule would have put there.
+            // Both only when > 0, so a book with nothing to report is the old object. (The comparison plan costs one more planning; not for synthetic runs.)
+            const spans = spreads.filter(sp => sp.slots.some(x => x.slot.face === 'span')).length;
+            if (spans > 0) out.foldSpans = spans;
+            if (!synthetic && inner.some(r => r.fold >= FOLD.LIMIT)) {
+                const foldOf = new Map(inner.map(r => [r.id, r.fold]));
+                const old = planCore(items, { ...opts, foldSafe: false }, true);
+                const avoided = old.spreads.reduce((n, sp) => n + sp.slots.filter(x => x.slot.face === 'span' && foldOf.get(x.photoId) >= FOLD.LIMIT).length, 0);
+                if (avoided > 0) out.foldAvoided = avoided;
+            }
+        }
         if (sim.edges.length) {
             // reported only when there were look-alikes to separate: how many pairs still share a spread, and which spreads
             const left = pairsOf(sol.groups, sol.oi);
@@ -1258,11 +1349,12 @@ const AutoLayout = (() => {
     return {
         DEFAULTS,
         SPREAD_DEFAULTS,
+        FOLD,
         analyze,
         plan,
         planSpreads,
         // pure helpers, exposed for tests and for callers that want to reuse them
-        util: { naturalCompare, toGray, dHash, hamming, sharpnessOf, focusOf, cropFor, wasteOf, containBox, spreadOutOrder, similarEdges },
+        util: { naturalCompare, toGray, dHash, hamming, sharpnessOf, focusOf, cropFor, wasteOf, containBox, spreadOutOrder, similarEdges, foldStatsOf, foldRiskOf },
 
         // 入口：photos 為照片陣列，style 為排版風格
         async run(photos, style = 'magazine') {
