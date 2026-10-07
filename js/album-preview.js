@@ -261,6 +261,14 @@
         if (variant > 0) o.variant = variant;
         return AutoLayout.planSpreads(items, o);
     }
+    // what the guest sees of a plan: the cover photo, and per spread the template, the mirror state and where each photo sits.
+    // Two plans with the same signature look the same, so 再次編排 never presents one as new.
+    function planSignature(plan) {
+        const r = n => Math.round(n * 1e4);
+        return JSON.stringify([plan.cover.photoId, plan.spreads.map(s => [s.template, !!s.mirrored,
+            s.slots.map(x => [x.photoId, r(x.slot.x), r(x.slot.y), x.slot.face]).sort()])]);
+    }
+    const RELAYOUT_TRIES = 12;      // variants tried for one press before saying there is only one layout
     // the cover title as the page was handed it: a non-empty string once trimmed, else nothing is drawn
     const coverTitleOf = v => (typeof v === 'string' && v.trim() ? v.trim() : '');
     // how much room a title needs: a CJK character is about twice as wide as a latin one
@@ -290,7 +298,7 @@
         zoom: { s: 1, x: 0, y: 0 },           // the current page's zoom: scale and pan (px from centre)
         lastTap: null, touchAt: 0, mouse: null,
         hint: null, hintTimer: null, hintFade: null,
-        items: null, photoCount: 0, variant: 0, basePlan: null,   // re-layout: the analysed photos and the layout number (0 = the first)
+        items: null, photoCount: 0, variant: 0, basePlan: null, sig: '', cueTimer: null,   // re-layout: the analysed photos and the layout number (0 = the first)
 
         isOpen() { return !!this.el; },
 
@@ -344,7 +352,7 @@
             this.el.remove();
             this.el = this.stage = this.foot = null;
             this.pages = []; this.g = null; this.index = 0; this.mouse = null; this.lastTap = null; this.hint = null;
-            this.items = null; this.basePlan = null; this.variant = 0;     // closing forgets the layout number: nothing is stored
+            this.items = null; this.basePlan = null; this.variant = 0; this.sig = ''; clearTimeout(this.cueTimer);     // closing forgets the layout number: nothing is stored
             this.zoom = { s: 1, x: 0, y: 0 };
             document.documentElement.classList.remove('album-open');
             const btn = document.getElementById('albumPreviewBtn');
@@ -442,6 +450,7 @@
             this.setState('ready');
             this.stage.dataset.zoomable = 'true';       // CSS: the stage takes the touches itself (touch-action: none)
             this.pages = pagesOf(plan);
+            this.sig = planSignature(plan);
             const note = text('div', 'album-note', notes.join('・'), 'albumNote');
             note.hidden = notes.length === 0;
             // the bounds could not be met: said plainly, above the page buttons (present only then)
@@ -473,23 +482,61 @@
             const again = button('albumRelayout', 'album-relayout-btn', '再次編排');
             const back = button('albumRelayoutBack', 'album-relayout-btn album-relayout-back', '回到原本');
             back.hidden = true;
+            const chip = text('span', 'album-relayout-chip', '', 'albumRelayoutChip');
+            chip.hidden = true;
+            const status = text('div', 'album-relayout-status', '', 'albumRelayoutStatus');
+            status.setAttribute('role', 'status');
+            status.setAttribute('aria-live', 'polite');
             const cap = text('div', 'album-relayout-cap', '這是系統自動排版的示意，換個排法看看', 'albumRelayoutCap');
             const btns = text('div', 'album-relayout-btns');
-            btns.append(again, back);
-            row.append(btns, cap);
-            again.addEventListener('click', () => this.relayout(this.variant + 1));
-            back.addEventListener('click', () => this.relayout(0));
+            btns.append(again, back, chip);
+            const side = text('div', 'album-relayout-side');
+            side.append(status, cap);
+            row.append(btns, side);
+            again.addEventListener('click', () => this.again());
+            back.addEventListener('click', () => this.relayout(0, '已回到原本排法'));
             return row;
+        },
+
+        say(msg) {
+            const st = document.getElementById('albumRelayoutStatus');
+            if (!st) return;
+            st.textContent = '';                                   // a repeated message is announced again
+            st.textContent = msg;
+        },
+
+        // 再次編排: the next variant whose plan LOOKS different from the one shown (up to RELAYOUT_TRIES tried). When none does
+        // the plan stays and the guest is told so: an unchanged result is never presented as new.
+        again() {
+            if (!this.el || !this.items || !this.pages.length) return;
+            for (let v = this.variant + 1; v <= this.variant + RELAYOUT_TRIES; v++) {
+                let plan;
+                try { plan = planFor(this.items, AlbumPreview, v); } catch (e) { break; }
+                if (!plan || !plan.cover || !plan.spreads.length) break;
+                if (planSignature(plan) !== this.sig) { this.relayout(v, `已換成排法 ${v + 1}`, plan); return; }
+            }
+            this.say('這本相本照片不多，目前只有這個排法');
+        },
+
+        // a short fade of the stage so the guest sees the pages were drawn again (none under prefers-reduced-motion: CSS)
+        cue() {
+            if (!this.stage) return;
+            this.stage.classList.remove('album-redraw');
+            void this.stage.offsetWidth;
+            this.stage.classList.add('album-redraw');
+            clearTimeout(this.cueTimer);
+            this.cueTimer = setTimeout(() => { if (this.stage) this.stage.classList.remove('album-redraw'); }, 300);
         },
 
         // Swap to layout number `variant` (0 = the first one). The page index is kept when it still exists (clamped), the
         // counters and the bounds sentence follow the new plan, the cover title is drawn again with the cover.
-        relayout(variant) {
+        relayout(variant, msg, given) {
             if (!this.el || !this.items || !this.pages.length) return;
             let plan;
-            try { plan = variant === 0 && this.basePlan ? this.basePlan : planFor(this.items, AlbumPreview, variant); } catch (e) { return; }
+            try { plan = given || (variant === 0 && this.basePlan ? this.basePlan : planFor(this.items, AlbumPreview, variant)); } catch (e) { return; }
             if (!plan || !plan.cover || !plan.spreads.length) return;
             this.variant = variant;
+            this.sig = planSignature(plan);
             this.hideHint();
             for (const s of [...this.stage.querySelectorAll('.album-slide')]) this.dropSlide(s);
             this.pages = pagesOf(plan);
@@ -498,12 +545,16 @@
             if (old) old.remove();
             if (hint) this.foot.prepend(this.boundsEl(hint));
             const back = document.getElementById('albumRelayoutBack');
+            const chip = document.getElementById('albumRelayoutChip');
+            if (chip) { chip.hidden = variant === 0; chip.textContent = variant === 0 ? '' : `排法 ${variant + 1}`; }
             if (back) {
                 const hadFocus = document.activeElement === back;
                 back.hidden = variant === 0;
                 if (hadFocus && back.hidden) document.getElementById('albumRelayout')?.focus();
             }
             this.show(Math.min(this.index, this.pages.length - 1));
+            this.cue();
+            if (msg) this.say(msg);
             AlbumPreview.reportHint(hint);
         },
 

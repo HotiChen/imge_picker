@@ -504,6 +504,25 @@ const AutoLayout = (() => {
         return best;
     }
 
+    // Re-layout (variant > 0, 4+ photos): the cover may be another of the top candidates that pass the SAME cover rules as the
+    // normal pick (the waste tier the normal pick would use, or the 60% fit pool): the VARIANT_COVERS sharpest of them, in sharpness
+    // order (earlier on a tie); variant n takes the candidate n mod count (so rank 0, the normal cover, comes back every count variants).
+    function coverCandidates(survivors, coverAspect, contain) {
+        let pool;
+        if (contain) {
+            pool = null;
+            for (const limit of [COVER_WASTE_TARGET, COVER_WASTE_SOFT]) {
+                const p = survivors.filter(r => wasteOf(r.aspect, coverAspect) <= limit);
+                if (p.length) { pool = p; break; }
+            }
+        } else {
+            pool = survivors.filter(r => keptShare(r.aspect, coverAspect) >= COVER_MIN_FIT);
+            if (pool.length === 0) pool = survivors;
+        }
+        if (!pool) return null;
+        return pool.map((r, i) => ({ r, i })).sort((a, b) => b.r.sharp - a.r.sharp || a.i - b.i).slice(0, VARIANT_COVERS).map(x => x.r);
+    }
+
     // ── step 3: pages — dynamic programming over the shooting order ──
     // A page is the next k photos poured into a layout with k slots, so the
     // order is kept. Cost = crop loss of the best seating + a little taste:
@@ -724,6 +743,8 @@ const AutoLayout = (() => {
     const SP_BIG_SHARP = 0.15;        // sharp photos in the big slots
     const SP_FOLD_BLOCK = 1e9;        // a high-risk photo in a span slot: far above SP_BIG, so every seating that needs it is skipped (hard rule)
     const SP_BIG = 1e6;               // "impossible" inside the assignment (crushed photo in a no-crush pass)
+    const VARIANT_COVERS = 3;         // opts.variant > 0 (4+ photos): the cover is one of this many sharpest candidates that pass the cover rules
+    const VARIANT_SWAP_SLACK = 0.3;   // opts.variant > 0: two same-orientation photos in one spread may trade slots if the waste cost grows by at most this
     const VARIANT_JITTER = 8;         // opts.variant > 0: the jitter is this many times bigger (and hashed with the variant)
     const SP_PASSES = 8;              // variety polish: at most this many sweeps over the spreads
     const SP_SIM_PENALTY = 3;         // soft pass only: cost of one look-alike pair sharing a spread (when it cannot be avoided outright)
@@ -1160,6 +1181,46 @@ const AutoLayout = (() => {
     }
     const num0 = (v, d) => (Number(v) > 0 && Number.isFinite(Number(v)) ? Number(v) : d);
 
+    // Re-layout, after the plan is made (variant > 0 only): inside each spread, (a) two photos of the same orientation may trade
+    // slots when that costs little waste, (b) the whole spread may be mirrored left-right (x -> 1 - x - w, left <-> right face,
+    // span stays span, so a photo across the fold is still exactly the one that was; `spread.mirrored = true`). Photos never leave
+    // their spread, so the shooting order grouping, the template, the spread count and the hero spacing are untouched.
+    function variantTouch(spreads, cat, kept, contain, seed) {
+        const byId = new Map(kept.map(r => [r.id, r]));
+        const byTpl = new Map(cat.map(c => [c.id, c]));
+        spreads.forEach((sp, n) => {
+            const lay = byTpl.get(sp.template);
+            if (!lay) return;
+            const k = sp.slots.length;
+            const cost = (r, s) => wasteCost(wasteOf(r.aspect, lay.aspects[s]));
+            const cands = [];
+            for (let a = 0; a < k; a++) for (let b = a + 1; b < k; b++) {
+                if (lay.span[a] || lay.span[b]) continue;
+                const ra = byId.get(sp.slots[a].photoId), rb = byId.get(sp.slots[b].photoId);
+                if (!ra || !rb || ra.orientation !== rb.orientation) continue;
+                const was = cost(ra, a) + cost(rb, b), now = cost(ra, b) + cost(rb, a);
+                const slotWaste = wasteOf(ra.aspect, lay.aspects[b]) <= Math.max(wasteOf(ra.aspect, lay.aspects[a]), wasteOf(rb.aspect, lay.aspects[b]), 0.3)
+                    && wasteOf(rb.aspect, lay.aspects[a]) <= Math.max(wasteOf(ra.aspect, lay.aspects[a]), wasteOf(rb.aspect, lay.aspects[b]), 0.3);
+                if (slotWaste && now - was <= VARIANT_SWAP_SLACK) cands.push([a, b]);
+            }
+            const pick = Math.floor(jitterOf('swap', n, seed) * (cands.length + 1));
+            if (pick < cands.length) {
+                const [a, b] = cands[pick], sa = sp.slots[a], sb = sp.slots[b];
+                const ra = byId.get(sa.photoId), rb = byId.get(sb.photoId);
+                const put = (slot, r, s) => contain
+                    ? { photoId: r.id, fit: 'contain', crop: { x: 0, y: 0, scale: 1 }, slot: slot.slot }
+                    : { photoId: r.id, crop: cropFor(r.aspect, lay.aspects[s], r.focus), slot: slot.slot };
+                sp.slots[a] = put(sa, rb, a);
+                sp.slots[b] = put(sb, ra, b);
+            }
+            if (jitterOf('mirror', n, seed) < 0.5) {
+                sp.slots = sp.slots.map(x => ({ ...x, slot: { x: 1 - x.slot.x - x.slot.w, y: x.slot.y, w: x.slot.w, h: x.slot.h,
+                    face: x.slot.face === 'left' ? 'right' : x.slot.face === 'right' ? 'left' : x.slot.face } }));
+                sp.mirrored = true;
+            }
+        });
+    }
+
     function planOnce(items, opts, synthetic, cap) {
         const D = SPREAD_DEFAULTS;
         const num = (v, d) => (Number(v) > 0 && Number.isFinite(Number(v)) ? Number(v) : d);
@@ -1256,7 +1317,11 @@ const AutoLayout = (() => {
         const pct = new Map(kept.map(r => [r.id, kept.length > 1 ? below(r.sharp) / (kept.length - 1) : 1]));
         const medSharp = sharps[Math.floor(sharps.length / 2)];   // a tie at the median counts as sharp enough (all-equal sharpness must not forbid every hero)
 
-        const coverRec = contain ? pickCoverContain(kept, coverAspect) : pickCover(kept, coverAspect);
+        let coverRec = contain ? pickCoverContain(kept, coverAspect) : pickCover(kept, coverAspect);
+        if (variant > 0 && kept.length >= 4) {
+            const cands = coverCandidates(kept, coverAspect, contain);
+            if (cands && cands.length > 1 && cands.includes(coverRec)) coverRec = cands[(cands.indexOf(coverRec) + variant) % cands.length];
+        }
         const cover = contain
             ? { photoId: coverRec.id, fit: 'contain', crop: { x: 0, y: 0, scale: 1 } }
             : { photoId: coverRec.id, crop: cropFor(coverRec.aspect, coverAspect, coverRec.focus) };
@@ -1473,6 +1538,7 @@ const AutoLayout = (() => {
             spreads.push({ id: `spread-${n + 1}`, template: lay.id, slots });
             at += lay.k;
         });
+        if (variant > 0) variantTouch(spreads, cat, kept, contain, seed);
         const out = { cover, spreads, back: opts.back === true ? {} : null, dropped };
         if (variant) out.variant = variant;     // absent for variant 0: that plan is the old object
         if (foldSafe) {

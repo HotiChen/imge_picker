@@ -113,7 +113,8 @@ test('hard rules hold for every variant: photos, cover, bounds, fold, hero gap, 
     for (let v = 1; v <= 5; v++) {
       const p = plan(it, { ...o, variant: v }), l = `${label} variant ${v}`;
       assert.deepEqual(ids(p), ids(base), `${l}: same photos`);
-      assert.equal(p.cover.photoId, base.cover.photoId, `${l}: same cover`);
+      // the cover may be another top candidate for 4+ photos (plan_variant_small.test.mjs pins the cover rules)
+      if (it.length < 4) assert.equal(p.cover.photoId, base.cover.photoId, `${l}: same cover`);
       assert.deepEqual(p.dropped, base.dropped, l);
       if (o.maxSpreads) assert.ok(p.spreads.length <= o.maxSpreads || base.spreads.length > o.maxSpreads, `${l}: maxSpreads`);
       if (o.minSpreads) assert.ok(p.spreads.length >= o.minSpreads || base.spreads.length < o.minSpreads, `${l}: minSpreads`);
