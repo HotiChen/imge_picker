@@ -1124,3 +1124,17 @@ Tim 要手動做的：合併前跑 migration（逐句）；決定運費預設與
 8. `readGuestShop` 用 `project.photographer_id`，`orderLines` 與所有 admin 訂單查詢用 `DEFAULT_PHOTOGRAPHER_ID`——今天相同，多攝影師時會分岔。
 9. `privacy.html` 在舊稿多處被引用，**不存在**。
 10. 本檔「Album page range」寫「`albumExtraPagesCost` 回 null 時 S3 決定」；本稿把這個決定提前到 S2（`extra_pages_unpriced`，Q10）。
+
+## S2 — Tim 的決定（2026-10-08，這一節蓋過 §11 的建議與上面的衝突處）
+
+Tim 的角色是**平台方**（photographers 是平台的客戶；試營運只用 Tim 自己的案子）。回覆：「先把功能做出來，金流再想」。
+
+- §11 的 17 題：**全照建議**，下面三處除外／補充。
+- **Q2、Q3：S2 只做面交，沒有運費、沒有宅配、不加運費那一行。**宅配與運費整包留到之後（§3.5 與相關欄位／測試先不做；
+  `delivery_method` 只存 `pickup`，不要為宅配預留未用的欄位）。
+- **Q12：錢怎麼流先不決定。**S2 只負責「客人看到轉帳資訊」，資訊文字沿用現有 `studio_settings` 裡的付款說明；
+  把「讀轉帳資訊」收成**單一函式**，之後要改成平台帳戶、或每位攝影師各自的帳戶，只改這一處。
+  平台撥款、15% 平台費、發票、退款一律不在 S2；等 Tim 找會計師確認後另開（`docs/products-orders.md` Phase C）。
+- **Q11：S2 不自動檢查無框畫解析度**（建議 A）。上傳時存照片寬高（建議 C）是上傳路徑的改動，**另開一個小任務，不放進 S2**。
+- **Q7：個資告知與開關。**S2 做好後 `GUEST_ORDERS` 預設 `off`；審閱前客人只看得到「我有興趣」。誰來審：Tim 之後決定，不擋程式。
+- 工作切分照 §9（WP1 Worker → WP2 對抗式審查 → WP3 客人端 ‖ WP4 攝影師端 → 合併）。
