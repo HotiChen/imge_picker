@@ -178,6 +178,20 @@ for (const [label, co, phone] of [['390px', MOBILE, true], ['1500px', { viewport
     { before: w.before, initScript: SPIES, contextOptions: MOBILE });
 }
 
+{
+  const w = world({ title: '這是一個非常非常長的專案名稱用來測試封面標題在有出血的時候是否仍然留在裁切線之內而不會跑進被裁掉的那一圈' });
+  await suite('album cover title 390px — a long title with a bleed stays inside the trim line on both sides', `${base}/index.html?t=TOK`,
+    async page => {
+      const out = [], ok = line(out);
+      await open(page, () => { AlbumPreview.bleedMm = 10; }, true);
+      const c = await titleGeo(page);
+      ok('control: two full lines (the text reaches across the page)', c.lines === 2 && c.ink.r - c.ink.l > c.page.w * 0.6, JSON.stringify([c.lines, c.ink, c.page.w]));
+      ok('left and right ink edges are inside the trim guide, and the top too', c.guide && c.ink.l >= c.guide.l && c.ink.r <= c.guide.r && c.ink.t >= c.guide.t, JSON.stringify([c.ink, c.guide]));
+      return out;
+    },
+    { before: w.before, initScript: SPIES, contextOptions: MOBILE });
+}
+
 // ── 5. 再次編排: the button, the variants, the bounds, the clamp, 回到原本, nothing stored
 {
   const w = world({ n: 30 });
@@ -288,6 +302,23 @@ for (const [label, co, phone] of [['390px', MOBILE, true], ['1500px', { viewport
       ok('control: the first book is longer than 2 spreads, we were on its last page', n0 > 2 && new RegExp(`^${n0} / ${n0}$`).test(before), before);
       ok('after the press the counter is 2 / 2 and next is disabled (clamped to the shorter book)', after.label === '2 / 2' && after.next, JSON.stringify(after));
       ok('only slides of the new book exist (indexes 1, 2)', after.slides.every(i => +i <= 2) && after.slides.length >= 2, JSON.stringify(after.slides));
+      return out;
+    },
+    { before: w.before, initScript: SPIES, contextOptions: MOBILE });
+}
+{
+  const w = world({ n: 30 });
+  await suite('album re-layout 390px — an unmet maximum: the kind sentence is in the footer before and after a press (re-planned with the same bounds)', `${base}/index.html?t=TOK`,
+    async page => {
+      const out = [], ok = line(out);
+      await open(page, () => { AlbumPreview.PLAN_OPTS = { fit: 'contain', maxSpreads: 2 }; }, true);
+      const read = () => page.evaluate(() => ({ n: document.querySelectorAll('#albumBounds').length, t: document.getElementById('albumBounds')?.textContent ?? null,
+        total: document.getElementById('albumLabel').textContent, behind: document.querySelector('#completionPage .cp-hint')?.textContent ?? null }));
+      const a = await read();
+      ok('control: with 30 photos and a maximum of 2 spreads the sentence is there', a.n === 1 && /超過/.test(a.t || ''), JSON.stringify(a));
+      await page.click('#albumRelayout'); await page.waitForTimeout(300);
+      const b = await read();
+      ok('after a press: still exactly one sentence (not duplicated, not lost) and it is reported to the page behind', b.n === 1 && /超過/.test(b.t || '') && /超過/.test(b.behind || ''), JSON.stringify(b));
       return out;
     },
     { before: w.before, initScript: SPIES, contextOptions: MOBILE });

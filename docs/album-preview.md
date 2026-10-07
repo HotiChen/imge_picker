@@ -892,3 +892,39 @@ normalised: a finite number above 0, capped at 10; null, 0, junk and negatives a
 album product's number before the viewer opens, e.g. `AlbumPreview.bleedMm = Number(albumProduct.bleed_mm) || 0;` or pass
 `bleedMm` in the `syncEntry({ show, after, folders, bleedMm })` call that pick.js / the completion page already makes.
 To open the editor with the same number: `book_editor/index.html?bleed=<bleed_mm>`.
+
+## Cover title and 再次編排 (re-layout) — 2026-10-07
+
+Both are only in the guest's preview viewer (the 完成頁 「相本預覽」). Nothing is stored, ordered or written; the book editor is
+unchanged.
+
+### Cover title
+- `AlbumPreview.coverTitle` (a string; `js/completion-page.js` sets it from the same `ctx.title` as the page hero, in `_fillHero`,
+  and clears it on unmount). Empty, blank, missing or not a string: **nothing is added** and the cover markup is byte-identical to
+  before (tested). The hero's own fallback 「精修成品」 is *not* passed on: no title, no text on the cover.
+- Drawn by `renderPage` on the **cover page only** (not the back, not any spread). `textContent`, `dir="auto"`, never `innerHTML`.
+- Top of the cover, white on a soft dark top gradient (`.album-cover-title`, `css/completion-page.css`), centred, `pointer-events: none`
+  (the viewer's swipe / pinch / double tap never see it). Inside the trim: with `bleedMm` > 0 the block is padded in by the bleed
+  (`bleed / 210` of the page width, which is what `%` padding means), so the text is never in the dimmed strip.
+- Sized in container units (`container-type: inline-size` on the titled cover, `cqw`), so it scales from a 390px phone to 1500px.
+  Four tiers by weighted length (a CJK character counts 2): 7 / 5.6 / 4.6 / 3.8 cqw. At most two lines, then an ellipsis
+  (`-webkit-line-clamp: 2`). Serif stack of the completion page (`--cp-serif`, repeated because the viewer is outside `.cp`).
+
+### 再次編排 / 回到原本
+- Planner option **`variant`** (`AutoLayout.planSpreads`): a non-negative integer. **0, absent or junk = exactly the plan as before**
+  (byte for byte; `plan_variant.test.mjs` pins it with digests made on the commit before it existed; `result.variant` is absent then).
+  `n > 0` multiplies the soft jitter on the spread cost by `VARIANT_JITTER` (8) and hashes it with the variant, so only choices that were
+  near-ties change. Everything hard is untouched: all photos kept, same cover, min / maxSpreads, preferredPerSpread, foldSafe, hero
+  gap, fit. Deterministic for (photos, options, variant). `result.variant = n` when n > 0. (Why 8: 4 left small books with only 2
+  distinct plans; 12 added waste.) The synthetic min/max searches always run with variant 0.
+- Measured on 11 books x 5 seeds (12..60 photos, with and without bounds): variants 1..5 give at least 3 distinct plans on every
+  free book; mean slot waste +0.005 (worst single book about +0.065). Test bounds: mean +0.02, any one book +0.08 (waste is 0..1 of
+  one frame, so 0.08 is 8 percentage points). A book forced by a tight bound (20 photos in 4 spreads) has nothing to vary: counted,
+  not demanded.
+- Viewer: `再次編排` (44px, under the page controls) calls `planSpreads` again on the **already analysed photos** (no network) with
+  `variant + 1`; `回到原本` (hidden until a variant is active) shows the first plan again. The page index is kept, clamped to the new
+  page count; `n / total`, the bounds sentence (`boundsHint`, also reported through `AlbumPreview.onResult`) and the cover title follow
+  the new plan; `minSpreads` / `maxSpreads` from the shop product stay in `PLAN_OPTS`. The variant lives in the open viewer only
+  and is forgotten on close. Caption under the buttons: 「這是系統自動排版的示意，換個排法看看」.
+- Tests: `book_editor/test/plan_variant.test.mjs`, `test/suites/53-album-cover-title-relayout.mjs`. Synthetic photos, Chromium only:
+  how it looks on a real album and on an iPhone / LINE browser needs Tim.
