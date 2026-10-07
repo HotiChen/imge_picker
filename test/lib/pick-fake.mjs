@@ -212,6 +212,9 @@ export function pickFakeWorker(opts = {}) {
     state.pickers.set(id, { id, name: opts.ownerName, key: opts.ownerKey || 'OWNER-KEY' });
     state.project.owner_picker_id = id;
   }
+  // product_interests rows (docs/guest-shop.md, product interest): {product_id, product_name, product_kind,
+  // first_at, last_at, tap_count}; opts.interests seeds them
+  state.interests = (opts.interests || []).map(x => ({ ...x }));
   const requests = [];
 
   function findByKey(key) {
@@ -611,6 +614,7 @@ export function pickFakeWorker(opts = {}) {
           pickers, selections, tokens, submissions,
           unnotified_submissions: unnotifiedCountFake(state.submissions),
           revision_requests,
+          interests: state.interests.slice().sort((a, b) => (a.last_at < b.last_at ? 1 : a.last_at > b.last_at ? -1 : 0)),   // newest tap first, [] when none
         });
       }
       if (/^\/api\/admin\/projects\/[^/]+$/.test(u.pathname) && method === 'DELETE') {
@@ -812,6 +816,37 @@ export function pickFakeWorker(opts = {}) {
       }
       if (opts.image) return route.fulfill({ status: 200, contentType: 'image/png', body: opts.image,
         headers: { 'Access-Control-Allow-Origin': '*' } });
+      // POST /api/pick/interest (worker.js, docs/guest-shop.md "Product interest"): the Worker's order of checks —
+      // link (401) -> method (405, Allow: POST) -> seat (403 not_owner) -> delivered AND confirmed now (409
+      // not_confirmed, before the body) -> body (413 too_large / 400 invalid_body) -> product offered now (404
+      // not_found) -> tables (500 shop_unavailable / interest_unavailable) -> cap of 20 distinct products
+      // (409 interest_cap) -> 200 {ok, already}. Every answer carries Cache-Control: private, no-store.
+      // opts.interestFail = 'net' drops the connection; opts.interestUnavailable = the migration has not run;
+      // opts.interestDelay holds the answer back that many ms. The query token only: a key in the URL is a bug
+      // the suite checks for.
+      if (u.pathname === '/api/pick/interest') {
+        if (opts.interestDelay) await new Promise(r => setTimeout(r, opts.interestDelay));
+        if (opts.interestFail === 'net') return route.abort('failed');
+        if (!shareTok || state.project.archived_at) return json({ error: 'Unauthorized' }, 401);
+        const send = (data, status, extra) => route.fulfill({ status, contentType: 'application/json', headers: { 'Cache-Control': 'private, no-store', ...(extra || {}) }, body: JSON.stringify(data) });
+        if (method !== 'POST') return send({ error: 'Method not allowed' }, 405, { Allow: 'POST' });
+        const picker = findByKey(pickerKey);
+        if (!picker || state.project.owner_picker_id !== picker.id) return send({ error: '只有挑選人可以通知攝影師', code: 'not_owner' }, 403);
+        if (pickScopeFake(state.project).mode !== 'delivered' || !state.project.client_confirmed_at) return send({ error: '尚未確認完成', code: 'not_confirmed' }, 409);
+        if ((req.postData() || '').length > 1024) return send({ error: 'too large', code: 'too_large' }, 413);
+        if (!body || typeof body !== 'object' || typeof body.product_id !== 'string' || body.product_id.length < 1 || body.product_id.length > 200) return send({ error: 'invalid body', code: 'invalid_body' }, 400);
+        const product = (opts.shopProducts || []).find(x => x.id === body.product_id);
+        if (!product) return send({ error: '這個商品目前不提供', code: 'not_found' }, 404);
+        if (opts.shopUnavailable) return send({ error: '商品資訊暫時無法顯示', code: 'shop_unavailable' }, 500);
+        if (opts.interestUnavailable) return send({ error: '暫時無法記錄', code: 'interest_unavailable' }, 500);
+        const at = new Date().toISOString();
+        const row = state.interests.find(x => x.product_id === product.id);
+        if (!row && state.interests.length >= 20) return send({ error: '已達上限', code: 'interest_cap', max: 20 }, 409);
+        if (row) { row.tap_count += 1; row.last_at = at; row.product_name = product.name; row.product_kind = product.kind; }
+        else state.interests.push({ product_id: product.id, product_name: product.name, product_kind: product.kind, first_at: at, last_at: at, tap_count: 1 });
+        return send({ ok: true, already: !!row }, 200);
+      }
+
       route.fulfill({ status: 200, contentType: 'image/png', body: PIXEL });
     });
   };

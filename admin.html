@@ -270,6 +270,13 @@
   .pd-confirm { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--rule); }
   .pd-confirm-status { font-size: 13px; color: var(--ink-90); font-weight: 600; }
   .pd-confirm-status.done { color: var(--success); }
+  /* 客人興趣 (docs/guest-shop.md, product interest): what the guest tapped 「我有興趣」 on */
+  #pd-interests { margin-top: 12px; }
+  #pd-interests h4 { margin: 0 0 6px; font-size: 14px; }
+  #pd-interests ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+  #pd-interests li { background: var(--card); border: 1px solid var(--rule); border-radius: 10px; padding: 8px 12px; font-size: 13px; overflow-wrap: anywhere; }
+  #pd-interests .pd-int-kind { color: var(--ink-70); margin-left: 6px; }
+  #pd-interests .pd-int-meta { color: var(--ink-70); font-size: 12px; display: block; margin-top: 2px; }
   #pd-revisions { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
   .pd-rev { background: var(--card); border: 1px solid var(--rule); border-radius: 10px; padding: 8px 12px; font-size: 13px; }
   /* a handled request is quieter (white, dashed, softer text), not translucent: it must stay AA-legible */
@@ -1615,6 +1622,7 @@
     const tokens = data.tokens || [];
     const selected = (data.selections || []).filter(s => s.rating > 0);
     const ownerName = data.owner ? data.owner.name : null;
+    const interests = Array.isArray(data.interests) ? data.interests : [];
 
     secProject = project;
     body.innerHTML = `
@@ -1670,6 +1678,7 @@
         ${!submissions.length ? '<button id="pd-delete-btn" class="btn btn-danger" type="button">刪除</button>' : ''}
       </div>
       <div id="pd-action-err" class="err"></div>
+      ${interests.length ? '<div id="pd-interests" class="pd-block"></div>' : ''}
 
       ${secHtml('delivery', '<div id="pd-delivery" class="pd-block"></div>')}
       ${secHtml('settings', '<div id="pd-proofdl" class="pd-block"></div><div id="pd-plan" class="pd-block"></div>')}
@@ -1747,6 +1756,7 @@
     finalDraft = lastFinalFolders(project);
     finalEditing = false;
     startFinalsTarget(project);
+    fillInterests(interests);
     renderDeliveryBlock();
     renderProofDownloadBlock();
     renderPlanBlock();
@@ -2896,6 +2906,30 @@
   // D1 timestamps come back as raw UTC ISO strings; Tim reads them in Taipei.
   // "9/27 22:52" rather than "2026-09-27T14:52:00.000Z" — no year (every one
   // of these is recent) and no seconds (nobody needs them here).
+  // 客人興趣: product names come from our catalogue but go in with textContent anyway
+  const INTEREST_KIND = { album: '相本', print: '無框畫' };
+  function fillInterests(list) {
+    const box = document.getElementById('pd-interests');
+    if (!box) return;
+    const h = document.createElement('h4');
+    h.textContent = '客人興趣';
+    const ul = document.createElement('ul');
+    for (const it of list) {
+      const li = document.createElement('li');
+      const name = document.createElement('strong');
+      name.textContent = String(it.product_name == null ? '' : it.product_name);
+      const kind = document.createElement('span');
+      kind.className = 'pd-int-kind';
+      kind.textContent = INTEREST_KIND[it.product_kind] || '其他';
+      const meta = document.createElement('span');
+      meta.className = 'pd-int-meta';
+      meta.textContent = `最近 ${fmtTime(it.last_at)}・點 ${Number(it.tap_count) || 1} 次`;
+      li.append(name, kind, meta);
+      ul.append(li);
+    }
+    box.replaceChildren(h, ul);
+  }
+
   function fmtTime(iso) {
     if (!iso) return '';
     return Util.fmtDate(iso, 'mdhm') || String(iso);

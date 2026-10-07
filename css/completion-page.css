@@ -108,7 +108,12 @@ html.cp-on footer.app-footer { display: none !important; }
 .fg-lightbox--light .fg-lb-nav { background: rgba(255, 255, 255, .85); color: #231b12; box-shadow: 0 1px 6px rgba(35, 27, 18, .18); }
 .fg-lightbox--light .fg-lb-nav:hover:not(:disabled) { background: #fff; }
 
-/* 4. 商品／加購 */
+/* 4. 把照片留下來 (product cards + 「我有興趣」) */
+.cp-interest { margin-top: 12px; }
+.cp-interest-btn { width: 100%; }
+.cp-interest-btn:disabled { cursor: default; }
+.cp-interest-msg { margin: 8px 0 0; font-size: 14px; color: var(--cp-ink-70); }
+.cp-interest-msg:empty { display: none; }
 .cp-products { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr)); gap: 18px; align-items: start; }
 .cp-product { display: flex; flex-direction: column; min-width: 0; overflow: hidden; background: var(--cp-surface); border: 1px solid var(--cp-rule); border-radius: 14px; }
 .cp-product-img { aspect-ratio: 4 / 3; background: var(--cp-rule); }
