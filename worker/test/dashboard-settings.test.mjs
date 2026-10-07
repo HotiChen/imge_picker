@@ -148,6 +148,7 @@ test('settings start empty and never return the blob', async () => {
   assert.deepEqual(await res.json(), {
     studio_name: null, booking_url: null, default_pick_limit: null, default_extra_price: null,
     default_extra_max: null, effective_default_extra_max: 10, // docs/project-plan.md
+    transfer_info: null, // docs/guest-shop.md S2
     has_logo: false, logo_type: null, logo_updated_at: null, updated_at: null,
   });
   await putLogo(env, PNG);
@@ -434,7 +435,7 @@ test('stats: an empty studio', async () => {
   assert.deepEqual(json.by_phase, { picking: 0, submitted: 0, retouching: 0 });
   assert.equal(json.delivered, 0);
   assert.equal(json.archived, 0);
-  assert.deepEqual(json.todo, { submitted_not_retouching: 0, unnotified_submissions: 0, modified_after_submit: 0, unpaid_orders: 0 });
+  assert.deepEqual(json.todo, { submitted_not_retouching: 0, unnotified_submissions: 0, modified_after_submit: 0, unpaid_orders: 0, requested_orders: 0 });
   assert.equal(json.per_month.length, 12);
   assert.equal(json.per_month[11].month, monthKey(Date.now()));
   assert.equal(json.per_month[0].month, monthKey(taipeiMonthStart(11)));
@@ -465,7 +466,7 @@ test('stats: counts by phase, delivered, archived and to-do, this photographer o
   assert.deepEqual(json.by_phase, { picking: 2, submitted: 2, retouching: 1 });
   assert.equal(json.delivered, 3);
   assert.equal(json.archived, 3);
-  assert.deepEqual(json.todo, { submitted_not_retouching: 2, unnotified_submissions: 1, modified_after_submit: 2, unpaid_orders: 0 });
+  assert.deepEqual(json.todo, { submitted_not_retouching: 2, unnotified_submissions: 1, modified_after_submit: 2, unpaid_orders: 0, requested_orders: 0 });
 });
 
 test('stats per_month: Asia/Taipei boundaries, last 12 months, created and delivered', async () => {
@@ -563,7 +564,9 @@ test('the dashboard migration: fresh == archive-era database + it', () => {
     '\n' + readFileSync(new URL('../migrations/2026-09-30-extra-max.sql', import.meta.url), 'utf8') +
     '\n' + readFileSync(new URL('../migrations/2026-10-04-client-confirm.sql', import.meta.url), 'utf8') +
     '\n' + readFileSync(new URL('../migrations/2026-10-07-project-shoot-date.sql', import.meta.url), 'utf8') +
-    '\n' + readFileSync(new URL('../migrations/2026-10-07-project-type.sql', import.meta.url), 'utf8');
+    '\n' + readFileSync(new URL('../migrations/2026-10-07-project-type.sql', import.meta.url), 'utf8') +
+    // (studio_settings.transfer_info, S2 guest ordering: the one statement of that file on this table)
+    '\n' + readFileSync(new URL('../migrations/2026-10-09-guest-orders.sql', import.meta.url), 'utf8').match(/ALTER TABLE studio_settings[^;]*;/)[0];
   const shape = db => ['projects', 'studio_settings'].map(t => db._db.prepare(`PRAGMA table_info(${t})`).all());
   assert.deepEqual(shape(fakeDB({ schema: deployed + '\n' + migration + '\n' + later })), shape(fakeDB({ schema: fresh })));
   assert.match(fresh, /ALTER TABLE projects ADD COLUMN delivered_at TEXT;/, 'schema.sql names the hand-run ALTER');

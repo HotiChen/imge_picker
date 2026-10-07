@@ -77,6 +77,16 @@ export function fakeBucket(initial = {}, { pageSize = 1000 } = {}) {
       return withBody(rec.body);
     },
 
+    // real R2: the object's metadata without a body, or null
+    async head(key) {
+      const rec = store.get(key);
+      if (!rec) return null;
+      return {
+        key, size: rec.body.length, uploaded: rec.uploaded, httpEtag: `"${encodeURIComponent(key)}-v1"`,
+        writeHttpMetadata(headers) { headers.set('Content-Type', rec.contentType); },
+      };
+    },
+
     async put(key, value, opts = {}) {
       putLog.push(key);
       // the upload route hands us request.body (a stream), the book routes a string

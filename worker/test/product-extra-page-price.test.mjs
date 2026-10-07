@@ -341,7 +341,9 @@ test('albumExtraPagesCost: null when not priced, not an album, spreads not a pos
   assert.equal(albumExtraPagesCost(huge, edge + 1), null);
 });
 
-test('albumExtraPagesCost is not wired to any route yet (no guest album order path)', () => {
+test('albumExtraPagesCost is wired into the guest order path only (S2: POST /api/pick/orders, guestOrderLines)', () => {
   const calls = SRC.match(/albumExtraPagesCost\(/g) || [];
-  assert.equal(calls.length, 1, 'only its definition names it');
+  assert.equal(calls.length, 2, 'its definition and one call');
+  const guest = /^async function guestOrderLines\([\s\S]*?\n}\n/m.exec(SRC);
+  assert.ok(guest && guest[0].includes('albumExtraPagesCost('), 'the one call is in guestOrderLines');
 });

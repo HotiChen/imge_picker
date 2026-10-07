@@ -1104,7 +1104,7 @@ test('stats: revenue by paid_at in Taipei months, cost and margin; outstanding a
   assert.equal(body.outstanding, 5000 + 2500 + 3000);
   assert.equal(body.todo.unpaid_orders, 3);
   // the existing fields are still there
-  assert.deepEqual(Object.keys(body.todo).sort(), ['modified_after_submit', 'submitted_not_retouching', 'unnotified_submissions', 'unpaid_orders']);
+  assert.deepEqual(Object.keys(body.todo).sort(), ['modified_after_submit', 'requested_orders', 'submitted_not_retouching', 'unnotified_submissions', 'unpaid_orders']);
   assert.ok(body.by_phase && body.per_month.length === 12);
 });
 
@@ -1214,7 +1214,10 @@ test('the products/orders migration: re-runnable, and schema.sql == dashboard-er
     db._db.prepare(`PRAGMA table_info(${t})`).all(),
     db._db.prepare(`PRAGMA index_list(${t})`).all().map(i => i.name).sort(),
   ]);
-  const migrated = fakeDB({ schema: deployed + '\n' + migration });
+  // the S2 guest-ordering columns and index come from their own migration on top
+  // (its studio_settings column is already in `deployed`)
+  const guestOrders = readFileSync(new URL('../migrations/2026-10-09-guest-orders.sql', import.meta.url), 'utf8').replace(/ALTER TABLE studio_settings[^;]*;/, '');
+  const migrated = fakeDB({ schema: deployed + '\n' + migration + '\n' + guestOrders });
   assert.deepEqual(shape(migrated), shape(fakeDB({ schema: fresh })));
   assert.ok(shape(migrated).every(([cols]) => cols.length > 0));
   migrated._db.exec(migration); // safe to paste twice

@@ -713,11 +713,13 @@ function cleanBookingUrl(raw) {
 // Everything the photographer set, minus the logo bytes. An absent row reads
 // as all-null.
 async function readStudioSettings(env, photographerId) {
-  // default_extra_max arrives in a hand-run migration; until then it reads unset
+  // default_extra_max and transfer_info arrive in hand-run migrations (in
+  // that order); until then each reads unset
   const read = cols => env.DB.prepare(
     `SELECT studio_name, booking_url, default_pick_limit, default_extra_price${cols}, logo IS NOT NULL AS has_logo, logo_type, logo_updated_at, updated_at FROM studio_settings WHERE photographer_id = ?`
   ).bind(photographerId).first();
-  const row = await withoutMissingColumn(() => read(', default_extra_max'), () => read(''));
+  const row = await withoutMissingColumn(() => read(', default_extra_max, transfer_info'),
+    () => withoutMissingColumn(() => read(', default_extra_max'), () => read('')));
   const hasLogo = !!row?.has_logo;
   const extraMax = row?.default_extra_max ?? null;
   return {
@@ -726,6 +728,8 @@ async function readStudioSettings(env, photographerId) {
     default_pick_limit: row?.default_pick_limit ?? null,
     default_extra_price: row?.default_extra_price ?? null,
     default_extra_max: extraMax,
+    // shown to a guest on a confirmed order (S2); null = not set
+    transfer_info: row?.transfer_info ?? null,
     // what a new project gets when the create body leaves extra_max out
     effective_default_extra_max: isExtraMax(extraMax) ? extraMax : EXTRA_MAX_DEFAULT,
     has_logo: hasLogo,
@@ -1275,26 +1279,53 @@ async function readGuestShop(env, photographerId) {
 }
 
 // Orders matching `where` (on `o`, after ORDER_SCOPE_SQL), newest first, with
-// their lines and computed money.
+// their lines and computed money. Named columns, never o.* (docs/guest-shop.md
+// S2): request_id stays in the database, and a column a later migration adds
+// cannot reach a response unannounced. The guest-order columns (contact,
+// delivery, consent) come back as `contact` {name, phone, line, erased_at}
+// (null on an order without one), `delivery_method` and `consent_version`;
+// before the S2 migration they read null. `project_delivered`: the project
+// is delivered right now (an order is never touched by undeliver / reopen,
+// docs/guest-shop.md §3.4, so the photographer is shown it instead).
+const ORDER_BASE_COLUMNS = ['id', 'photographer_id', 'project_id', 'source', 'status', 'picker_id', 'discount', 'paid_amount', 'paid_at',
+  'paid_method', 'note', 'guest_note', 'created_at', 'updated_at', 'confirmed_at', 'fulfilled_at', 'cancelled_at'];
+const ORDER_GUEST_COLUMNS = ['contact_name', 'contact_phone', 'contact_line', 'delivery_method', 'consent_version', 'contact_erased_at'];
+const ORDER_ITEM_LATE_COLUMNS = ['list_price', 'layout'];
+const lateColumns = (alias, cols, late) => cols.map(c => (late ? `${alias}.${c}` : `NULL AS ${c}`)).join(', ');
 async function readOrders(env, where, binds, limit = 500) {
-  const { results: orders } = await env.DB.prepare(
-    `SELECT o.*, p.title AS project_title, ${ORDER_SUBTOTAL_SQL} AS subtotal, ${ORDER_TOTAL_SQL} AS total,
+  const { results: orders } = await withoutMissingColumn(...[true, false].map(late => () => env.DB.prepare(
+    `SELECT ${ORDER_BASE_COLUMNS.map(c => `o.${c}`).join(', ')}, ${lateColumns('o', ORDER_GUEST_COLUMNS, late)},
+            p.title AS project_title, (p.delivered_at IS NOT NULL AND p.final_folders IS NOT NULL) AS project_delivered,
+            ${ORDER_SUBTOTAL_SQL} AS subtotal, ${ORDER_TOTAL_SQL} AS total,
             ${ORDER_COST_SQL} AS cost, ${ORDER_OUTSTANDING_SQL} AS outstanding
        ${ORDER_SCOPE_SQL} AND ${where} ORDER BY o.created_at DESC, o.rowid DESC LIMIT ${limit}`
-  ).bind(DEFAULT_PHOTOGRAPHER_ID, ...binds).all();
+  ).bind(DEFAULT_PHOTOGRAPHER_ID, ...binds).all()));
   if (!orders.length) return [];
-  const { results: items } = await env.DB.prepare(
+  const { results: items } = await withoutMissingColumn(...[true, false].map(late => () => env.DB.prepare(
     // named columns, never i.*: vendor_cost is the operator's and must not
     // reach an admin response
     `SELECT i.id, i.order_id, i.kind, i.product_id, i.option_id, i.name, i.option_label, i.unit_price, i.unit_cost,
-            i.qty, i.photo_keys, i.platform_option_id
+            i.qty, i.photo_keys, i.platform_option_id, ${lateColumns('i', ORDER_ITEM_LATE_COLUMNS, late)}
        FROM order_items i WHERE i.order_id IN (SELECT o.id ${ORDER_SCOPE_SQL} AND ${where}
        ORDER BY o.created_at DESC, o.rowid DESC LIMIT ${limit}) ORDER BY i.rowid`
-  ).bind(DEFAULT_PHOTOGRAPHER_ID, ...binds).all();
-  return orders.map(o => ({
+  ).bind(DEFAULT_PHOTOGRAPHER_ID, ...binds).all()));
+  return orders.map(({ contact_name, contact_phone, contact_line, contact_erased_at, project_delivered, ...o }) => ({
     ...o,
-    items: items.filter(i => i.order_id === o.id).map(i => ({ ...i, photo_keys: parsePhotoKeys(i.photo_keys) })),
+    contact: contact_name != null || contact_erased_at != null
+      ? { name: contact_name, phone: contact_phone, line: contact_line, erased_at: contact_erased_at } : null,
+    project_delivered: project_delivered === 1,
+    items: items.filter(i => i.order_id === o.id).map(i => ({ ...i, photo_keys: parsePhotoKeys(i.photo_keys), layout: parseLayout(i.layout) })),
   }));
+}
+
+// An order_items.layout back as an object; null when there is none or it
+// will not parse as one.
+function parseLayout(json) {
+  if (typeof json !== 'string') return null;
+  try {
+    const v = JSON.parse(json);
+    return isPlainObject(v) ? v : null;
+  } catch { return null; }
 }
 
 async function readOrder(env, id) {
@@ -1302,19 +1333,35 @@ async function readOrder(env, id) {
   return order || null;
 }
 
+// The folders an order line's photo may be in. The photographer's (admin):
+// the project's proofs and its last chosen finals (final_folders, kept after
+// undeliver and reopen — docs/guest-shop.md §11 Q17: a print is nearly always
+// of a final). A guest's: the finals of the delivery up now, through
+// pickFinals and nothing else (never a proof, even with the proof originals
+// switch on).
+function orderPhotoFolders(project, guest) {
+  if (guest) return pickFinals(project) || [];
+  const parsed = v => { try { const x = JSON.parse(v); return Array.isArray(x) ? x : null; } catch { return null; } };
+  const proofs = parsed(project.folders) || [];
+  const finals = typeof project.final_folders === 'string' ? finalFolders(parsed(project.final_folders)) : null;
+  return [...proofs, ...(finals || [])];
+}
+
 // An order's lines, validated, as the order_items rows they become.
-// `project` gives the folders every photo key must be inside; `existing` is
-// the order's current items by id, photo_keys parsed (PUT), or null (create). A line with an id
-// keeps its snapshot and may change only qty, photo_keys and unit_price; a
-// line without one names an active option of an active product of this
-// photographer, and everything else is read from there. Returns {lines} or
-// {bad: code}.
-async function orderLines(env, project, input, existing) {
+// `project` (the projects row) gives the folders every photo key must be
+// inside (orderPhotoFolders); `existing` is the order's current items by id,
+// photo_keys parsed (PUT), or null (create). A line with an id keeps its
+// snapshot and may change only qty, photo_keys and unit_price (a photo it
+// already carries is not re-checked: a later delivery may have moved the
+// finals); a line without one names an active option of an active product of
+// `photographerId`, and everything else is read from there, list_price (the
+// catalogue price) included. `guest`: the guest order path — finals only, and
+// unit_price is never read from the input. Returns {lines} or {bad: code}.
+async function orderLines(env, project, input, existing, { guest = false, photographerId = DEFAULT_PHOTOGRAPHER_ID } = {}) {
   if (!Array.isArray(input) || !input.length) return { bad: 'invalid_lines' };
   if (input.length > ORDER_LINES_MAX) return { bad: 'too_many_lines' };
-  let folders = [];
-  try { folders = JSON.parse(project.folders); } catch {}
-  const scope = { folders: Array.isArray(folders) ? folders : [] };
+  if (guest && existing) return { bad: 'invalid_lines' };
+  const scope = { folders: orderPhotoFolders(project, guest) };
   const seen = new Set();
   const lines = [];
   let photos = 0;
@@ -1329,11 +1376,12 @@ async function orderLines(env, project, input, existing) {
     }
     const qty = l.qty === undefined && old ? old.qty : l.qty;
     if (!(Number.isSafeInteger(qty) && qty >= 1 && qty <= ORDER_QTY_MAX)) return { bad: 'invalid_qty' };
-    if (l.unit_price !== undefined && l.unit_price !== null && !isMoney(l.unit_price)) return { bad: 'invalid_unit_price' };
+    if (!guest && l.unit_price !== undefined && l.unit_price !== null && !isMoney(l.unit_price)) return { bad: 'invalid_unit_price' };
     const keys = old && l.photo_keys === undefined ? old.photo_keys : (l.photo_keys ?? []);
     if (!Array.isArray(keys) || keys.length > ORDER_LINE_PHOTOS_MAX) return { bad: 'invalid_photo_keys' };
     if (!keys.every(pickKeyValid) || new Set(keys).size !== keys.length) return { bad: 'invalid_photo_keys' };
-    if (!keys.every(k => pickKeyAllowed(scope, k))) return { bad: 'photo_not_in_project' };
+    const carried = new Set(old && Array.isArray(old.photo_keys) ? old.photo_keys : []);
+    if (!keys.every(k => carried.has(k) || pickKeyAllowed(scope, k))) return { bad: 'photo_not_in_project' };
     photos += keys.length;
     if (photos > ORDER_PHOTOS_MAX) return { bad: 'invalid_photo_keys' };
     lines.push({ l, old, qty, keys });
@@ -1353,7 +1401,7 @@ async function orderLines(env, project, input, existing) {
          LEFT JOIN platform_product_options po ON po.id = o.platform_option_id
          LEFT JOIN platform_products pp ON pp.id = p.platform_product_id AND pp.id = po.platform_product_id
         WHERE p.photographer_id = ? AND o.id IN (${wanted.map(() => '?').join(', ')})`
-    ).bind(DEFAULT_PHOTOGRAPHER_ID, ...wanted).all();
+    ).bind(photographerId, ...wanted).all();
     for (const r of results) catalogue.set(r.id, r);
   }
   // A kept platform line's snapshot covers the units already sold, not new
@@ -1391,7 +1439,11 @@ async function orderLines(env, project, input, existing) {
       if (platform && !c.platform_active) return { bad: 'retired_option' };
       row = {
         id: crypto.randomUUID(), kind: c.kind, product_id: c.product_id, option_id: c.id,
-        name: c.name, option_label: c.label, unit_price: l.unit_price ?? c.price, qty,
+        name: c.name, option_label: c.label, qty,
+        // a guest's line is always the catalogue's price; only the
+        // photographer may name another
+        unit_price: guest ? c.price : (l.unit_price ?? c.price),
+        list_price: c.price,
         // an adopted option costs the platform price of today, and snapshots
         // the vendor's cost and which platform option it was
         unit_cost: platform ? c.platform_price : c.cost,
@@ -1904,6 +1956,325 @@ async function sendRevisionRoundNotification(env, project, pickerName, note, pin
     `<ul>${lines.map(l => `<li>${escapeHtml(l)}</li>`).join('')}</ul>` +
     (moreText ? `<p>${escapeHtml(moreText)}</p>` : '') +
     `<p><a href="${escapeHtml(link)}">打開專案</a></p>`;
+  await env.NOTIFY_EMAIL.send({
+    to: env.PHOTOGRAPHER_EMAIL,
+    from: env.NOTIFY_FROM || env.PHOTOGRAPHER_EMAIL,
+    subject, html, text,
+  });
+  return true;
+}
+
+// ─── Guest ordering (docs/guest-shop.md, S2) ────────────────────────────────
+// On the completion page (delivered AND confirmed by the client) the seat
+// holder orders from the guest shop: the order lands as source 'guest',
+// status 'requested', and the photographer confirms it with one tap (the
+// existing admin status route). Pickup only, no shipping (Tim, 2026-10-08).
+// Every price is the catalogue's, recomputed here; the body names options,
+// quantities, a final photo (prints) or a spread count (albums). Dark-launched:
+// GUEST_ORDERS (wrangler.toml) is "off" until the privacy notice is reviewed.
+// Change the limits here only.
+const GUEST_ORDER_LINES_MAX = 20;
+const GUEST_PRINT_QTY_MAX = 10;
+const GUEST_ALBUM_QTY_MAX = 3;
+// requested at once, and guest orders in all (cancelled included), per project
+const GUEST_OPEN_ORDERS_MAX = 3;
+const GUEST_ORDERS_MAX = 20;
+const GUEST_ORDER_BODY_MAX = 32 * 1024;
+const GUEST_OPTION_ID_MAX = 200;
+// the privacy notice the order form shows; a new text bumps it, and a page
+// still showing the old one is refused (consent_required)
+const ORDER_CONSENT_VERSION = 'v1';
+const GUEST_DELIVERY_METHODS = ['pickup'];
+const CONTACT_NAME_MAX = 50;
+const CONTACT_LINE_MAX = 50;
+// a phone: CONTACT_PHONE_MIN–CONTACT_PHONE_MAX characters of digits, + - ( ) and spaces
+const CONTACT_PHONE_MIN = 6;
+const CONTACT_PHONE_MAX = 20;
+const CONTACT_PHONE = new RegExp(`^[0-9+\\-() ]{${CONTACT_PHONE_MIN},${CONTACT_PHONE_MAX}}$`);
+const TRANSFER_INFO_MAX = 500;
+// a paragraph a guest or the photographer types: line feeds stay, every other
+// control, line-separator, bidi, BOM or lone-surrogate character is refused
+const PARAGRAPH_UNSAFE = /[\x00-\x09\x0b-\x1f\x7f-\x9f\u{61c}\u{200e}\u{200f}\u{2028}\u{2029}\u{202a}-\u{202e}\u{2066}-\u{2069}\u{feff}\u{d800}-\u{dfff}]/u;
+const ORDER_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const REQUEST_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const ORDERS_UNAVAILABLE = { error: '線上訂購功能尚未啟用', code: 'orders_unavailable' };
+const ORDERS_REQUESTED_URL = 'https://imhoti.tw/studio/orders.html?status=requested';
+const GUEST_ORDER_EMAIL_LINES_MAX = 20;
+// what /api/pick/shop tells the page when ordering is open
+const GUEST_ORDERING_INFO = {
+  consent_version: ORDER_CONSENT_VERSION, delivery_methods: GUEST_DELIVERY_METHODS,
+  max_lines: GUEST_ORDER_LINES_MAX, print_qty_max: GUEST_PRINT_QTY_MAX, album_qty_max: GUEST_ALBUM_QTY_MAX,
+};
+const GUEST_ORDER_ERRORS = {
+  invalid_body: '訂單資料不正確', invalid_request_id: '訂單資料不正確，請重新整理', invalid_lines: '訂單品項不正確',
+  too_many_lines: `一張訂單最多 ${GUEST_ORDER_LINES_MAX} 項`, invalid_qty: '數量不正確', invalid_photo_key: '照片名稱不正確',
+  duplicate_line: '同一張照片同一規格只能一項，請改數量', invalid_spreads: '相本頁數不正確', invalid_contact: '請填姓名，以及電話或 LINE ID',
+  invalid_delivery: '目前只提供面交取件', consent_required: '請先閱讀並勾選個資告知', invalid_note: `備註最多 ${ORDER_NOTE_MAX} 字`,
+  product_not_offered: '這個商品目前無法訂購', not_in_finals: '只能訂購這次交件的精修照片', photo_not_found: '找不到這張照片',
+  album_not_orderable: '這本相本請直接聯絡攝影師訂購', pages_below_min: '相本頁數少於最少頁數', pages_above_max: '相本頁數超過最多頁數',
+  invalid_layout: '相本頁數不正確', extra_pages_unpriced: '這本相本無法加頁，請選最少頁數或聯絡攝影師',
+};
+
+// Whether guest ordering is open for this project: GUEST_ORDERS exactly "on",
+// or exactly "pilot" with the project listed in GUEST_ORDERS_PILOT (comma
+// separated ids). Unset or anything else is off, so a typo fails closed. The
+// one place either variable is read.
+function guestOrdersEnabled(env, projectId) {
+  const mode = env.GUEST_ORDERS;
+  if (mode === 'on') return true;
+  if (mode !== 'pilot') return false;
+  const listed = String(env.GUEST_ORDERS_PILOT ?? '').split(',').map(v => v.trim()).filter(Boolean);
+  return typeof projectId === 'string' && listed.includes(projectId);
+}
+
+// Whether the S2 migration has fully run (every column; the unique index is a
+// backstop the routes do not rely on). The guest routes and erase ask before
+// they read or write, so a half-run paste answers 500 orders_unavailable.
+async function guestOrdersReady(env) {
+  try {
+    await env.DB.prepare(
+      `SELECT (SELECT ${ORDER_GUEST_COLUMNS.concat('request_id').map(c => `COUNT(${c})`).join(' + ')} FROM orders WHERE 0) AS o, ` +
+      `(SELECT ${ORDER_ITEM_LATE_COLUMNS.map(c => `COUNT(${c})`).join(' + ')} FROM order_items WHERE 0) AS i, ` +
+      '(SELECT COUNT(transfer_info) FROM studio_settings WHERE 0) AS s'
+    ).first();
+    return true;
+  } catch (e) {
+    if (!isMissingSchema(e)) throw e;
+    return false;
+  }
+}
+
+// The transfer details a guest sees on a confirmed order. The one place they
+// are read for a guest (docs/guest-shop.md, 「S2 — Tim 的決定」 Q12: who
+// receives the money is undecided — the photographer's own account today, the
+// platform's or a per-photographer account later: change it here only).
+// Today: the project photographer's studio_settings.transfer_info; null when
+// unset, or before the migration.
+async function readTransferInfo(env, project) {
+  const owner = project?.photographer_id;
+  if (typeof owner !== 'string' || !owner) return null;
+  try {
+    const row = await env.DB.prepare('SELECT transfer_info FROM studio_settings WHERE photographer_id = ?').bind(owner).first();
+    return typeof row?.transfer_info === 'string' && row.transfer_info ? row.transfer_info : null;
+  } catch (e) {
+    if (isMissingSchema(e)) return null;
+    throw e;
+  }
+}
+
+// A paragraph as stored: CRLF / CR become LF, a tab a space, trimmed; null
+// (absent) or '' reads as ''. undefined when it is not a string, is over
+// `max` characters or holds a character PARAGRAPH_UNSAFE refuses.
+function paragraphText(value, max) {
+  if (value === undefined || value === null) return '';
+  if (typeof value !== 'string') return undefined;
+  const t = value.replace(/\r\n?/g, '\n').replace(/\t/g, ' ').trim();
+  if (overChars(t, max) || PARAGRAPH_UNSAFE.test(t)) return undefined;
+  return t;
+}
+// studio_settings.transfer_info from a settings PUT: the stored value (null
+// clears) or undefined when refused
+function transferInfoValue(value) {
+  const t = paragraphText(value, TRANSFER_INFO_MAX);
+  return t === undefined ? undefined : t || null;
+}
+
+// The guest's contact (docs/guest-shop.md §4.3, Q6-A): a name (1–50
+// characters) and a phone (CONTACT_PHONE) and/or a LINE ID (1–50), each
+// trimmed, none with a character PROJECT_TYPE_UNSAFE refuses. An empty or
+// missing phone / LINE ID is none (stored NULL). {name, phone, line} or null.
+function guestContact(v) {
+  if (!isPlainObject(v)) return null;
+  const field = (x, max, required) => {
+    if (x === undefined || x === null) return required ? undefined : null;
+    if (typeof x !== 'string') return undefined;
+    const t = x.trim();
+    if (!t) return required ? undefined : null;
+    return overChars(t, max) || PROJECT_TYPE_UNSAFE.test(t) ? undefined : t;
+  };
+  const name = field(v.name, CONTACT_NAME_MAX, true);
+  const phone = field(v.phone, CONTACT_PHONE_MAX, false);
+  const line = field(v.line, CONTACT_LINE_MAX, false);
+  if (name === undefined || phone === undefined || line === undefined) return null;
+  if (phone !== null && !CONTACT_PHONE.test(phone)) return null;
+  if (phone === null && line === null) return null;
+  return { name, phone, line };
+}
+
+// A POST /api/pick/orders body, checked without the database, in the order the
+// codes are documented: {order: {requestId, lines: [{option_id, qty,
+// photo_key?, spreads?}], contact, note, expected}} or {bad: code, max?}.
+// Nothing money-related is read: the lines keep only these four fields.
+function guestOrderBody(body) {
+  if (!isPlainObject(body)) return { bad: 'invalid_body' };
+  if (typeof body.request_id !== 'string' || !REQUEST_ID.test(body.request_id)) return { bad: 'invalid_request_id' };
+  if (!Array.isArray(body.lines) || !body.lines.length) return { bad: 'invalid_lines' };
+  if (body.lines.length > GUEST_ORDER_LINES_MAX) return { bad: 'too_many_lines', max: GUEST_ORDER_LINES_MAX };
+  const seen = new Set();
+  const lines = [];
+  for (const l of body.lines) {
+    if (!isPlainObject(l) || typeof l.option_id !== 'string' || !l.option_id || l.option_id.length > GUEST_OPTION_ID_MAX) return { bad: 'invalid_lines' };
+    if (!(Number.isSafeInteger(l.qty) && l.qty >= 1 && l.qty <= GUEST_PRINT_QTY_MAX)) return { bad: 'invalid_qty' };
+    if (l.photo_key !== undefined && (typeof l.photo_key !== 'string' || !l.photo_key || !pickKeyValid(l.photo_key))) return { bad: 'invalid_photo_key' };
+    const same = `${l.option_id}\n${l.photo_key ?? ''}`;
+    if (seen.has(same)) return { bad: 'duplicate_line' };
+    seen.add(same);
+    if (l.spreads !== undefined && !(Number.isSafeInteger(l.spreads) && l.spreads >= 1 && l.spreads <= PAGE_BOUND_MAX)) return { bad: 'invalid_spreads' };
+    lines.push({ option_id: l.option_id, qty: l.qty, photo_key: l.photo_key, spreads: l.spreads });
+  }
+  const contact = guestContact(body.contact);
+  if (!contact) return { bad: 'invalid_contact' };
+  const delivery = body.delivery;
+  if (delivery !== undefined && !(isPlainObject(delivery) && GUEST_DELIVERY_METHODS.includes(delivery.method))) return { bad: 'invalid_delivery' };
+  if (body.consent !== ORDER_CONSENT_VERSION) return { bad: 'consent_required' };
+  const note = paragraphText(body.note, ORDER_NOTE_MAX);
+  if (note === undefined) return { bad: 'invalid_note' };
+  if (!(Number.isSafeInteger(body.expected_total) && body.expected_total >= 0)) return { bad: 'invalid_body' };
+  return { order: { requestId: body.request_id.toLowerCase(), lines, contact, note, expected: body.expected_total } };
+}
+
+// A guest order's lines against the shop and the finals, priced by the
+// Worker: {lines} (order_items rows, list_price and layout included) or
+// {fail: [status, code]}. In order: the option is in this project's
+// photographer's guest shop right now (readGuestShop: visible, active, its
+// platform product and option active, at or above the platform price) — 404
+// product_not_offered; the line fits its kind (a print names one final, an
+// album a spread count and 1–3 copies); a print's photo is in the finals of the
+// delivery up now — 403 not_in_finals — and in R2 — 404 photo_not_found; an
+// album's spreads fit its platform product (an album with no min_pages is not
+// orderable; extra spreads cost extra_page_price each, and above min_pages
+// with no such price it is refused). The snapshot (name, label, price, cost,
+// platform option) is orderLines', in its guest scope.
+async function guestOrderLines(env, project, finals, wanted) {
+  const owner = project.photographer_id;
+  const shop = typeof owner === 'string' && owner ? await readGuestShop(env, owner) : [];
+  if (!shop) return { fail: [500, 'shop_unavailable'] };
+  const offered = new Map();
+  for (const p of shop) for (const o of p.options) offered.set(o.id, p);
+  if (wanted.some(l => !offered.has(l.option_id))) return { fail: [404, 'product_not_offered'] };
+  for (const l of wanted) {
+    const p = offered.get(l.option_id);
+    if (p.kind === 'print') {
+      if (l.spreads !== undefined) return { fail: [400, 'invalid_lines'] };
+      if (l.photo_key === undefined) return { fail: [400, 'invalid_photo_key'] };
+    } else {
+      if (l.photo_key !== undefined) return { fail: [400, 'invalid_lines'] };
+      if (l.spreads === undefined) return { fail: [400, 'invalid_spreads'] };
+      if (l.qty > GUEST_ALBUM_QTY_MAX) return { fail: [400, 'invalid_qty'] };
+    }
+  }
+  const prints = wanted.filter(l => l.photo_key !== undefined);
+  if (prints.some(l => !pickKeyAllowed({ folders: finals }, l.photo_key))) return { fail: [403, 'not_in_finals'] };
+  const found = await Promise.all(prints.map(l => env.imagepicker.head(l.photo_key)));
+  if (found.some(o => !o)) return { fail: [404, 'photo_not_found'] };
+  const extras = [];
+  for (const l of wanted) {
+    const p = offered.get(l.option_id);
+    if (p.kind !== 'album') { extras.push(0); continue; }
+    if (p.min_pages == null) return { fail: [400, 'album_not_orderable'] };
+    const problem = albumPagesProblem(l.spreads, p);
+    if (problem) return { fail: [400, problem] };
+    const extra = albumExtraPagesCost(p, l.spreads);
+    if (!extra && l.spreads > p.min_pages) return { fail: [400, 'extra_pages_unpriced'] };
+    extras.push(extra ? extra.cost : 0);
+  }
+  const checked = await orderLines(env, project,
+    wanted.map(l => ({ option_id: l.option_id, qty: l.qty, photo_keys: l.photo_key === undefined ? [] : [l.photo_key] })),
+    null, { guest: true, photographerId: owner });
+  // the shop said yes a moment ago: a refusal now is the catalogue changing
+  // under the request (or a finals key orderLines would not take)
+  if (checked.bad) return { fail: checked.bad === 'photo_not_in_project' ? [403, 'not_in_finals'] : [404, 'product_not_offered'] };
+  const lines = checked.lines.map((row, i) => {
+    const l = wanted[i];
+    if (row.kind !== 'album') return { ...row, layout: null };
+    return {
+      ...row, unit_price: row.unit_price + extras[i],
+      layout: JSON.stringify({ v: 1, mode: 'photographer', source: 'all_finals', spreads: l.spreads }),
+    };
+  });
+  if (lines.some(l => !isMoney(l.unit_price))) return { fail: [400, 'extra_pages_unpriced'] };
+  return { lines };
+}
+
+// An order line as an INSERT that only lands while `gate` (SQL, with its
+// binds) holds. `late`: with list_price and layout (the S2 migration); the
+// admin routes retry without them on a database that has not had it.
+function orderItemInsert(env, orderId, l, gate, gateBinds, late = true) {
+  const cols = ['id', 'order_id', 'kind', 'product_id', 'option_id', 'name', 'option_label', 'unit_price', 'unit_cost', 'qty', 'photo_keys',
+    'platform_option_id', 'vendor_cost', ...(late ? ORDER_ITEM_LATE_COLUMNS : [])];
+  const values = [l.id, orderId, l.kind, l.product_id, l.option_id, l.name, l.option_label, l.unit_price, l.unit_cost, l.qty, l.photo_keys,
+    l.platform_option_id, l.vendor_cost, ...(late ? [l.list_price ?? null, l.layout ?? null] : [])];
+  return env.DB.prepare(`INSERT INTO order_items (${cols.join(', ')}) SELECT ${values.map(() => '?').join(', ')} WHERE ${gate}`)
+    .bind(...values, ...gateBinds);
+}
+
+// The seat holder's guest orders in a project, newest first (at most
+// GUEST_ORDERS_MAX, the per-project cap), or the one with `orderId`, in the
+// guest view — the only shape a guest route returns, built from named
+// columns: never the photographer's note, a cost, the platform option, the
+// list price, the request id, the picker, the consent version or the layout
+// as stored; a print's photo by its file name only (never its folder: a guest
+// route never returns final_folders). The transfer details only on a
+// confirmed or fulfilled order (Tim, answer 1).
+async function guestOrdersFor(env, project, pickerId, orderId = null) {
+  const { results: orders } = await env.DB.prepare(
+    `SELECT o.id, o.status, o.created_at, o.confirmed_at, o.cancelled_at, o.discount, o.paid_amount, o.guest_note, o.delivery_method,
+            o.contact_name, o.contact_phone, o.contact_line, ${ORDER_SUBTOTAL_SQL} AS subtotal, ${ORDER_TOTAL_SQL} AS total
+       FROM orders o WHERE o.project_id = ?1 AND o.picker_id = ?2 AND o.source = 'guest'${orderId === null ? '' : ' AND o.id = ?4'}
+      ORDER BY o.created_at DESC, o.rowid DESC LIMIT ?3`
+  ).bind(project.id, pickerId, GUEST_ORDERS_MAX, ...(orderId === null ? [] : [orderId])).all();
+  if (!orders.length) return [];
+  const { results: items } = await env.DB.prepare(
+    'SELECT i.order_id, i.kind, i.name, i.option_label, i.qty, i.unit_price, i.photo_keys, i.layout FROM order_items i ' +
+    'WHERE i.order_id IN (SELECT value FROM json_each(?)) ORDER BY i.rowid'
+  ).bind(JSON.stringify(orders.map(o => o.id))).all();
+  const payable = o => o.status === 'confirmed' || o.status === 'fulfilled';
+  const transfer = orders.some(payable) ? await readTransferInfo(env, project) : null;
+  return orders.map(o => ({
+    id: o.id, status: o.status, created_at: o.created_at, confirmed_at: o.confirmed_at, cancelled_at: o.cancelled_at,
+    items: items.filter(i => i.order_id === o.id).map(i => {
+      const key = parsePhotoKeys(i.photo_keys)[0];
+      const spreads = parseLayout(i.layout)?.spreads;
+      return {
+        kind: i.kind, name: i.name, option_label: i.option_label, qty: i.qty, unit_price: i.unit_price,
+        photo_name: i.kind === 'print' && typeof key === 'string' ? key.split('/').pop() : null,
+        spreads: i.kind === 'album' && Number.isSafeInteger(spreads) ? spreads : null,
+      };
+    }),
+    subtotal: o.subtotal, discount: o.discount, total: o.total, paid: o.paid_amount >= o.total,
+    delivery_method: o.delivery_method, guest_note: o.guest_note,
+    contact: o.contact_name == null ? null : { name: o.contact_name, phone: o.contact_phone, line: o.contact_line },
+    transfer_info: payable(o) ? transfer : null,
+  }));
+}
+
+// Tells the photographer about a guest order (`cancelled`: the guest cancelled
+// it). Same transport and rules as the other notifications: skipped when
+// mail is not set up, the subject on one line, every guest string through
+// oneLine in it, everything escaped in the HTML part, the guest's note in the
+// body only. `order` is the guest view: never the phone or the LINE ID (no
+// personal contact data in the inbox, docs/guest-shop.md §5.6).
+async function sendOrderNotification(env, project, order, cancelled = false) {
+  if (!env.NOTIFY_EMAIL || !env.PHOTOGRAPHER_EMAIL) {
+    console.warn('order notification skipped: NOTIFY_EMAIL or PHOTOGRAPHER_EMAIL is not configured');
+    return false;
+  }
+  const title = oneLine(project.title || '未命名專案');
+  const name = oneLine(order.contact?.name || '客人');
+  const subject = oneLine(`[${cancelled ? '客人取消訂單' : '新訂單'}] ${title} — ${name}：NT$${order.total}`);
+  const lead = cancelled ? '客人取消了一筆待確認的訂單：' : '客人在完成頁下了一筆訂單，請到訂單頁確認：';
+  const lines = order.items.slice(0, GUEST_ORDER_EMAIL_LINES_MAX).map(i =>
+    `${oneLine(i.name)}${i.option_label ? `（${oneLine(i.option_label)}）` : ''} × ${i.qty}　NT$${i.unit_price}` +
+    (i.spreads != null ? `　${i.spreads} 跨頁` : '') + (i.photo_name ? `　${oneLine(i.photo_name)}` : ''));
+  const fields = [['專案', title], ['客人', name], ['取貨', '面交'], ['總額', `NT$${order.total}`]];
+  const note = order.guest_note ? String(order.guest_note).replace(BIDI_ALL, ' ') : '';
+  const text = fields.map(([k, v]) => `${k}：${v}`).join('\n') + `\n\n${lead}\n${lines.join('\n')}` +
+    (note ? `\n\n客人備註：\n${note}` : '') + `\n\n打開訂單：${ORDERS_REQUESTED_URL}`;
+  const html = '<table>' +
+    fields.map(([k, v]) => `<tr><th align="left">${escapeHtml(k)}</th><td>${escapeHtml(v)}</td></tr>`).join('') +
+    `</table><p>${escapeHtml(lead)}</p><ul>${lines.map(l => `<li>${escapeHtml(l)}</li>`).join('')}</ul>` +
+    (note ? `<p>客人備註：</p><p style="white-space:pre-wrap">${escapeHtml(note)}</p>` : '') +
+    `<p><a href="${escapeHtml(ORDERS_REQUESTED_URL)}">打開訂單</a></p>`;
   await env.NOTIFY_EMAIL.send({
     to: env.PHOTOGRAPHER_EMAIL,
     from: env.NOTIFY_FROM || env.PHOTOGRAPHER_EMAIL,
@@ -3344,30 +3715,28 @@ export default {
           : ['retire', 'restore'].includes(action) ? 'product-active' : null;
       } else if (area === 'platform-products') route = !id ? 'platform-products' : null;
       else if (area === 'projects') route = 'project-orders';
-      else route = !id ? 'orders' : !action ? 'order' : ['payment', 'status'].includes(action) ? `order-${action}` : null;
+      else route = !id ? 'orders' : !action ? 'order' : ['payment', 'status', 'erase-contact'].includes(action) ? `order-${action}` : null;
       const methods = {
         products: ['GET', 'POST'], product: ['PUT'], 'product-active': ['POST'], 'project-orders': ['GET', 'POST'],
         adopt: ['POST'], 'platform-products': ['GET'],
-        orders: ['GET'], order: ['PUT'], 'order-payment': ['POST'], 'order-status': ['POST'],
+        orders: ['GET'], order: ['PUT'], 'order-payment': ['POST'], 'order-status': ['POST'], 'order-erase-contact': ['POST'],
       }[route];
       if (!methods) return jsonErr('Not found', 404);
       if (!methods.includes(request.method)) return jsonErr('Method not allowed', 405);
       if (!env.DB) return jsonErr('DB not configured', 500);
       const now = new Date().toISOString();
       let body = null;
-      // retire and restore take no body
-      if (request.method !== 'GET' && route !== 'product-active') {
+      // retire, restore and erase-contact take no body
+      if (request.method !== 'GET' && route !== 'product-active' && route !== 'order-erase-contact') {
         try { body = await request.json(); } catch { body = null; }
         if (!isPlainObject(body)) return jsonErr('Invalid body');
       }
       const done = (data, status = 200) => jsonOk(data, status, ADMIN_ONLY_HEADERS);
-      // An order line as an INSERT that only lands while `gate` (SQL, with
-      // its binds) holds.
-      const insertItem = (orderId, l, gate, gateBinds) => env.DB.prepare(
-        'INSERT INTO order_items (id, order_id, kind, product_id, option_id, name, option_label, unit_price, unit_cost, qty, photo_keys, platform_option_id, vendor_cost) ' +
-        `SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE ${gate}`
-      ).bind(l.id, orderId, l.kind, l.product_id, l.option_id, l.name, l.option_label, l.unit_price, l.unit_cost, l.qty, l.photo_keys,
-        l.platform_option_id, l.vendor_cost, ...gateBinds);
+      // A batch that inserts order lines: built with list_price / layout
+      // (`build(true)`), and once more without them on a database the S2
+      // migration has not reached (a batch is one transaction: the failed
+      // one wrote nothing).
+      const batchWithItems = build => withoutMissingColumn(() => env.DB.batch(build(true)), () => env.DB.batch(build(false)));
       // an admin edit takes a system order over; a guest's stays the guest's
       const takeOver = "source = CASE WHEN source = 'system' THEN 'admin' ELSE source END";
 
@@ -3553,7 +3922,9 @@ export default {
       }
 
       if (route === 'project-orders') {
-        const project = await env.DB.prepare('SELECT id, folders FROM projects WHERE id = ? AND photographer_id = ?')
+        // SELECT *: the finals snapshot (final_folders) is one of the folders
+        // a line's photo may be in (orderPhotoFolders)
+        const project = await env.DB.prepare('SELECT * FROM projects WHERE id = ? AND photographer_id = ?')
           .bind(id, DEFAULT_PHOTOGRAPHER_ID).first();
         if (!project) return jsonErr('Not found', 404);
 
@@ -3589,12 +3960,12 @@ export default {
         const note = hasField(body, 'note') ? orderNote(body.note) : '';
         if (note === null) return orderBad('invalid_note');
         const orderId = crypto.randomUUID();
-        await env.DB.batch([
+        await batchWithItems(late => [
           env.DB.prepare(
             "INSERT INTO orders (id, photographer_id, project_id, source, status, discount, note, created_at, updated_at, confirmed_at) " +
             "SELECT ?, ?, ?, 'admin', 'confirmed', ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM projects WHERE id = ? AND photographer_id = ?)"
           ).bind(orderId, DEFAULT_PHOTOGRAPHER_ID, id, discount, note, now, now, now, id, DEFAULT_PHOTOGRAPHER_ID),
-          ...checked.lines.map(l => insertItem(orderId, l, 'EXISTS (SELECT 1 FROM orders WHERE id = ?)', [orderId])),
+          ...checked.lines.map(l => orderItemInsert(env, orderId, l, 'EXISTS (SELECT 1 FROM orders WHERE id = ?)', [orderId], late)),
         ]);
         const order = await readOrder(env, orderId);
         if (!order) return jsonErr('Not found', 404);
@@ -3620,7 +3991,7 @@ export default {
         if (order.status === 'cancelled' && money) return cancelled();
         let lines = null;
         if (hasField(body, 'lines')) {
-          const project = await env.DB.prepare('SELECT folders FROM projects WHERE id = ? AND photographer_id = ?')
+          const project = await env.DB.prepare('SELECT * FROM projects WHERE id = ? AND photographer_id = ?')
             .bind(order.project_id, DEFAULT_PHOTOGRAPHER_ID).first();
           const checked = await orderLines(env, project, body.lines, new Map(order.items.map(i => [i.id, i])));
           if (checked.bad) return orderBad(checked.bad, checked.error);
@@ -3635,26 +4006,47 @@ export default {
         if (subtotal - discount < order.paid_amount) return orderBad('below_paid');
         const same = 'EXISTS (SELECT 1 FROM orders WHERE id = ? AND updated_at = ?)';
         const sameBinds = [id, order.updated_at];
-        const statements = [];
-        if (lines) {
-          const kept = lines.filter(l => !l.isNew).map(l => l.id);
-          statements.push(env.DB.prepare(
-            `DELETE FROM order_items WHERE order_id = ? AND id NOT IN (SELECT value FROM json_each(?)) AND ${same}`
-          ).bind(id, JSON.stringify(kept), ...sameBinds));
-          for (const l of lines) {
-            statements.push(l.isNew
-              ? insertItem(id, l, same, sameBinds)
-              : env.DB.prepare(`UPDATE order_items SET qty = ?, unit_price = ?, photo_keys = ? WHERE id = ? AND order_id = ? AND ${same}`)
-                .bind(l.qty, l.unit_price, l.photo_keys, l.id, id, ...sameBinds));
+        // the statements, with or without the S2 line columns (batchWithItems)
+        const build = late => {
+          const statements = [];
+          if (lines) {
+            const kept = lines.filter(l => !l.isNew).map(l => l.id);
+            statements.push(env.DB.prepare(
+              `DELETE FROM order_items WHERE order_id = ? AND id NOT IN (SELECT value FROM json_each(?)) AND ${same}`
+            ).bind(id, JSON.stringify(kept), ...sameBinds));
+            for (const l of lines) {
+              statements.push(l.isNew
+                ? orderItemInsert(env, id, l, same, sameBinds, late)
+                : env.DB.prepare(`UPDATE order_items SET qty = ?, unit_price = ?, photo_keys = ? WHERE id = ? AND order_id = ? AND ${same}`)
+                  .bind(l.qty, l.unit_price, l.photo_keys, l.id, id, ...sameBinds));
+            }
           }
-        }
-        // last, because every statement above is gated on the updated_at it
-        // moves
-        statements.push(env.DB.prepare(
-          `UPDATE orders SET discount = ?, note = ?, ${takeOver}, updated_at = ? WHERE id = ? AND photographer_id = ? AND updated_at = ?`
-        ).bind(discount, note, now, id, DEFAULT_PHOTOGRAPHER_ID, order.updated_at));
-        const results = await env.DB.batch(statements);
+          // last, because every statement above is gated on the updated_at it
+          // moves
+          statements.push(env.DB.prepare(
+            `UPDATE orders SET discount = ?, note = ?, ${takeOver}, updated_at = ? WHERE id = ? AND photographer_id = ? AND updated_at = ?`
+          ).bind(discount, note, now, id, DEFAULT_PHOTOGRAPHER_ID, order.updated_at));
+          return statements;
+        };
+        const results = await batchWithItems(build);
         if (!results[results.length - 1].meta?.changes) return conflict();
+        return done({ order: await readOrder(env, id) });
+      }
+
+      // POST /api/admin/orders/:id/erase-contact (no body) — 清除聯絡資料
+      // (docs/guest-shop.md §5.4, Q15-A: by hand only): the guest's phone and
+      // LINE ID become NULL and contact_erased_at is stamped; the name stays
+      // (the books). Already erased: 200, nothing written. An admin or system
+      // order has no contact (409 no_contact). Before the S2 migration: 500.
+      if (route === 'order-erase-contact') {
+        if (!await guestOrdersReady(env)) return done(ORDERS_UNAVAILABLE, 500);
+        if (order.source !== 'guest') return done({ error: '這筆訂單沒有客人聯絡資料', code: 'no_contact' }, 409);
+        if (!order.contact?.erased_at) {
+          await env.DB.prepare(
+            'UPDATE orders SET contact_phone = NULL, contact_line = NULL, contact_erased_at = ?1, updated_at = ?1 ' +
+            'WHERE id = ?2 AND photographer_id = ?3 AND contact_erased_at IS NULL'
+          ).bind(now, id, DEFAULT_PHOTOGRAPHER_ID).run();
+        }
         return done({ order: await readOrder(env, id) });
       }
 
@@ -3752,8 +4144,11 @@ export default {
           GROUP BY month`
       ).bind(DEFAULT_PHOTOGRAPHER_ID, since).all();
       const paidByMonth = new Map(paidMonthly.map(r => [r.month, r]));
+      // requested: guest orders waiting for the photographer's confirmation
+      // (archived projects included: the order still waits)
       const owed = await env.DB.prepare(
-        `SELECT COALESCE(SUM(${ORDER_OUTSTANDING_SQL}), 0) AS outstanding, COALESCE(SUM(${ORDER_OUTSTANDING_SQL} > 0), 0) AS unpaid
+        `SELECT COALESCE(SUM(${ORDER_OUTSTANDING_SQL}), 0) AS outstanding, COALESCE(SUM(${ORDER_OUTSTANDING_SQL} > 0), 0) AS unpaid,
+                COALESCE(SUM(o.source = 'guest' AND o.status = 'requested'), 0) AS requested
            ${ORDER_SCOPE_SQL}`
       ).bind(DEFAULT_PHOTOGRAPHER_ID).first();
       return jsonOk({
@@ -3776,6 +4171,7 @@ export default {
           unnotified_submissions: c.unnotified,
           modified_after_submit: c.modified,
           unpaid_orders: owed.unpaid,
+          requested_orders: owed.requested,
         },
       }, 200, ADMIN_ONLY_HEADERS);
     }
@@ -3825,6 +4221,12 @@ export default {
           if (v !== null && !isExtraMax(v)) return bad('default_extra_max');
           set.default_extra_max = v;
         }
+        // the transfer details a guest sees on a confirmed order (S2)
+        if (has('transfer_info')) {
+          const v = transferInfoValue(body.transfer_info);
+          if (v === undefined) return bad('transfer_info');
+          set.transfer_info = v;
+        }
         // column names come from the fixed list above, never from the body
         const cols = [...Object.keys(set), 'updated_at'];
         const all = ['photographer_id', ...cols];
@@ -3834,7 +4236,11 @@ export default {
             `ON CONFLICT(photographer_id) DO UPDATE SET ${cols.map(k => `${k} = excluded.${k}`).join(', ')}`
           ).bind(DEFAULT_PHOTOGRAPHER_ID, ...Object.values(set), new Date().toISOString()).run();
         } catch (e) {
-          // default_extra_max before its migration: one statement, so nothing landed
+          // default_extra_max / transfer_info before its migration: one
+          // statement, so nothing landed; the error names the column
+          if (isMissingColumn(e) && 'transfer_info' in set && /transfer_info/.test(String(e?.message || ''))) {
+            return jsonOk(ORDERS_UNAVAILABLE, 500, ADMIN_ONLY_HEADERS);
+          }
           if (isMissingColumn(e) && 'default_extra_max' in set) return jsonOk(EXTRA_MAX_UNAVAILABLE, 500, ADMIN_ONLY_HEADERS);
           throw e;
         }
@@ -3948,7 +4354,12 @@ export default {
         const owner = project.photographer_id;
         const products = typeof owner === 'string' && owner ? await readGuestShop(env, owner) : [];
         if (!products) return jsonOk(SHOP_UNAVAILABLE, 500, SHARED_LINK_HEADERS);
-        return jsonOk({ products }, 200, SHARED_LINK_HEADERS);
+        // S2: whether this project takes guest orders (the switch, and the
+        // migration). Not a secret, the same for owner and viewers, and not a
+        // promise that this caller may order (a viewer never may; the page
+        // also needs is_owner and confirmed_at from /state).
+        const ordering = guestOrdersEnabled(env, project.id) && await guestOrdersReady(env) ? GUEST_ORDERING_INFO : null;
+        return jsonOk({ products, ordering }, 200, SHARED_LINK_HEADERS);
       }
 
       // POST /api/pick/interest {product_id} — 「我有興趣」 on the completion
@@ -4028,6 +4439,160 @@ export default {
           if (ctx?.waitUntil) ctx.waitUntil(notify); else await notify;
         }
         return out({ ok: true, already: row.tap_count > 1 });
+      }
+
+      // ─── Guest orders (docs/guest-shop.md, S2) ─────────────────────────
+      // POST /api/pick/orders — order from the shop; GET /api/pick/orders —
+      // the seat holder's own orders here; POST /api/pick/orders/:id/cancel —
+      // cancel one's own requested order. Every answer is no-store. Checks,
+      // in order: the link (401, above), the path (404), the method (405),
+      // the seat (403 not_owner: the receipt is the seat, Q8-A; a viewer
+      // never orders, Q16-A). POST then: the switch (403 ordering_disabled),
+      // delivered AND confirmed now (409 not_confirmed, before the body), the
+      // body (413 / 400), the migration (500 orders_unavailable), a replay of
+      // the same request (200), the shop and the finals (404 / 403 / 400),
+      // the guest's total (409 price_changed), then one gated batch holding
+      // the caps. GET and cancel look at neither the switch nor the delivery:
+      // a guest always sees and can cancel their own requested order.
+      if (pathParts[2] === 'orders') {
+        const out = (data, status = 200) => jsonOk(data, status, SHARED_LINK_HEADERS);
+        const sub = pathParts.slice(3);
+        const cancelling = sub.length === 2 && sub[1] === 'cancel';
+        if (sub.length && !cancelling) return out({ error: 'Not found', code: 'not_found' }, 404);
+        const allow = cancelling ? ['POST'] : ['GET', 'POST'];
+        if (!allow.includes(request.method)) return jsonOk({ error: 'Method not allowed' }, 405, { ...SHARED_LINK_HEADERS, Allow: allow.join(', ') });
+        const notOwner = () => out({ error: '只有挑選人可以訂購', code: 'not_owner' }, 403);
+        if (!isOwner) return notOwner();
+        const refuse = (status, code, extra = {}) => out({ error: GUEST_ORDER_ERRORS[code] || code.replace(/_/g, ' '), code, ...extra }, status);
+        const unavailable = () => out(ORDERS_UNAVAILABLE, 500);
+        const background = work => {
+          const p = Promise.resolve().then(work).catch(e => console.error('order notification failed:', e?.message || e));
+          return ctx?.waitUntil ? ctx.waitUntil(p) : p;
+        };
+
+        if (cancelling) {
+          const orderId = sub[0];
+          const notFound = () => out({ error: 'Not found', code: 'not_found' }, 404);
+          if (!ORDER_ID.test(orderId)) return notFound();
+          if (!await guestOrdersReady(env)) return unavailable();
+          const view = async () => (await guestOrdersFor(env, project, picker.id, orderId))[0] || null;
+          const badTransition = from => out({ error: `無法從 ${from} 取消`, code: 'bad_transition', from, to: 'cancelled' }, 409);
+          const before = await view();
+          if (!before) return notFound();
+          if (before.status === 'cancelled') return out({ order: before });
+          if (before.status !== 'requested') return badTransition(before.status);
+          // conditional on requested: an admin confirm landing first wins
+          const at = new Date().toISOString();
+          const result = await env.DB.prepare(
+            "UPDATE orders SET status = 'cancelled', cancelled_at = ?1, updated_at = ?1 " +
+            "WHERE id = ?2 AND project_id = ?3 AND picker_id = ?4 AND source = 'guest' AND status = 'requested'"
+          ).bind(at, orderId, project.id, picker.id).run();
+          const after = await view();
+          if (!after) return notFound();
+          if (!result.meta?.changes) return after.status === 'cancelled' ? out({ order: after }) : badTransition(after.status);
+          await background(() => sendOrderNotification(env, project, after, true));
+          return out({ order: after });
+        }
+
+        if (request.method === 'GET') {
+          if (!await guestOrdersReady(env)) return unavailable();
+          return out({ orders: await guestOrdersFor(env, project, picker.id) });
+        }
+
+        // POST /api/pick/orders
+        if (!guestOrdersEnabled(env, project.id)) return out({ error: '目前尚未開放線上訂購', code: 'ordering_disabled' }, 403);
+        const scope = pickReadScope(s);
+        const notConfirmed = () => out({ error: '確認完成後才能訂購', code: 'not_confirmed' }, 409);
+        if (scope.mode !== 'delivered' || !project.client_confirmed_at) return notConfirmed();
+        const read = await readJsonCapped(request, GUEST_ORDER_BODY_MAX);
+        if (read.refused) return read.refused;
+        const parsed = guestOrderBody(read.body);
+        if (parsed.bad) return refuse(400, parsed.bad, parsed.max ? { max: parsed.max } : {});
+        const want = parsed.order;
+        if (!await guestOrdersReady(env)) return unavailable();
+        // the same submit again (a double tap, a retry after a lost answer):
+        // the order that landed, whatever the body says now
+        const replayed = async () => {
+          const row = await env.DB.prepare(
+            "SELECT id FROM orders WHERE project_id = ? AND picker_id = ? AND source = 'guest' AND request_id = ?"
+          ).bind(project.id, picker.id, want.requestId).first();
+          const [order] = row ? await guestOrdersFor(env, project, picker.id, row.id) : [];
+          return order ? out({ order, replay: true }) : null;
+        };
+        const early = await replayed();
+        if (early) return early;
+        const priced = await guestOrderLines(env, project, scope.finals, want.lines);
+        if (priced.fail) {
+          const [status, code] = priced.fail;
+          return code === 'shop_unavailable' ? out(SHOP_UNAVAILABLE, 500) : refuse(status, code);
+        }
+        const { lines } = priced;
+        const total = linesSubtotal(lines);
+        if (total !== want.expected) {
+          return refuse(409, 'price_changed', {
+            error: '價格已更新，請確認新的總額',
+            quote: { lines: lines.map(l => ({ option_id: l.option_id, qty: l.qty, unit_price: l.unit_price })), subtotal: total, total },
+          });
+        }
+        // One batch (a transaction). The order row lands only while every
+        // rule still holds against the rows as they are inside the write:
+        // the link not revoked, the seat, not archived, the delivery this
+        // request checked the photos against (delivered_at and final_folders
+        // as read: a 更換精修 / undeliver / reopen in between makes it a
+        // no-op), confirmed, this request not already there, under both
+        // caps. The lines land only with it.
+        const orderId = crypto.randomUUID();
+        const at = new Date().toISOString();
+        let landed = false;
+        try {
+          const results = await env.DB.batch([
+            env.DB.prepare(
+              'INSERT INTO orders (id, photographer_id, project_id, source, status, picker_id, guest_note, request_id, ' +
+              'contact_name, contact_phone, contact_line, delivery_method, consent_version, created_at, updated_at) ' +
+              "SELECT ?1, p.photographer_id, p.id, 'guest', 'requested', ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10 FROM projects p " +
+              "WHERE p.id = ?11 AND p.owner_picker_id = ?2 AND p.archived_at IS NULL AND p.phase = 'retouching' " +
+              'AND p.delivered_at = ?12 AND p.final_folders = ?13 AND p.client_confirmed_at IS NOT NULL ' +
+              "AND EXISTS (SELECT 1 FROM share_tokens t WHERE t.token = ?14 AND t.kind = 'pick' AND t.project_id = p.id AND t.revoked_at IS NULL) " +
+              'AND NOT EXISTS (SELECT 1 FROM orders x WHERE x.project_id = p.id AND x.request_id = ?4) ' +
+              `AND (SELECT COUNT(*) FROM orders x WHERE x.project_id = p.id AND x.source = 'guest' AND x.status = 'requested') < ${GUEST_OPEN_ORDERS_MAX} ` +
+              `AND (SELECT COUNT(*) FROM orders x WHERE x.project_id = p.id AND x.source = 'guest') < ${GUEST_ORDERS_MAX}`
+            ).bind(orderId, picker.id, want.note, want.requestId, want.contact.name, want.contact.phone, want.contact.line,
+              GUEST_DELIVERY_METHODS[0], ORDER_CONSENT_VERSION, at, project.id, project.delivered_at, project.final_folders, s.token),
+            ...lines.map(l => orderItemInsert(env, orderId, l, 'EXISTS (SELECT 1 FROM orders WHERE id = ?)', [orderId])),
+          ]);
+          landed = !!results[0].meta?.changes;
+        } catch (e) {
+          if (isMissingSchema(e)) return unavailable();
+          // the unique index caught a racing twin of this request
+          if (!/UNIQUE constraint failed/i.test(String(e?.message || ''))) throw e;
+        }
+        if (!landed) {
+          const replay = await replayed();
+          if (replay) return replay;
+          // re-read to say why, in the order the checks above run
+          const now = await env.DB.prepare('SELECT * FROM projects WHERE id = ?').bind(project.id).first();
+          const link = await env.DB.prepare('SELECT revoked_at FROM share_tokens WHERE token = ?').bind(s.token).first();
+          if (!now || now.archived_at || !link || link.revoked_at) return jsonOk({ error: 'Unauthorized' }, 401, SHARED_LINK_HEADERS);
+          if (now.owner_picker_id !== picker.id) return notOwner();
+          if (now.phase !== 'retouching' || !pickFinals(now) || !now.client_confirmed_at) return notConfirmed();
+          if (now.delivered_at !== project.delivered_at || now.final_folders !== project.final_folders) {
+            return out({ error: '交件內容剛更新，請重新整理', code: 'delivery_changed' }, 409);
+          }
+          const counts = await env.DB.prepare(
+            "SELECT COALESCE(SUM(status = 'requested'), 0) AS open, COUNT(*) AS total FROM orders WHERE project_id = ? AND source = 'guest'"
+          ).bind(project.id).first();
+          if ((counts?.open ?? 0) >= GUEST_OPEN_ORDERS_MAX) {
+            return out({ error: `待確認的訂單已有 ${GUEST_OPEN_ORDERS_MAX} 筆，請等攝影師確認`, code: 'too_many_open_orders', max: GUEST_OPEN_ORDERS_MAX }, 409);
+          }
+          if ((counts?.total ?? 0) >= GUEST_ORDERS_MAX) {
+            return out({ error: `線上訂單已達上限（${GUEST_ORDERS_MAX} 筆），請直接聯絡攝影師`, code: 'order_cap', max: GUEST_ORDERS_MAX }, 409);
+          }
+          // the request id is taken in this project by another seat holder
+          return out({ error: '訂單資料不正確，請重新整理', code: 'duplicate_request' }, 409);
+        }
+        const [order] = await guestOrdersFor(env, project, picker.id, orderId);
+        await background(() => sendOrderNotification(env, project, order));
+        return out({ order }, 201);
       }
 
       // GET /api/pick/state — what anyone holding the link may see

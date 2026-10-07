@@ -401,12 +401,14 @@ test('albumPagesProblem: a count that is not a whole number from 0 is invalid_la
   assert.equal(albumPagesProblem(1, { kind: 'album', min_pages: '10', max_pages: 'x' }), null);
 });
 
-test('albumPagesProblem is not wired to any route yet: no order path carries a layout', () => {
-  // documents the state Tim was told about: S3 is where it gets called
-  // albumExtraPagesCost (itself not wired, product-extra-page-price.test.mjs)
-  // calls it to refuse spreads above max_pages; that call is not a route
+test('albumPagesProblem is wired into the guest order path only (S2: the guest\'s spreads on POST /api/pick/orders)', () => {
+  // S2 wires it with the spread count the guest picks (docs/guest-shop.md
+  // §3.3); S3 will call it with layout.pages.length. albumExtraPagesCost
+  // calls it too, to refuse spreads above max_pages; that call is not a route
   const helper = /^function albumExtraPagesCost\([\s\S]*?\n}\n/m.exec(SRC);
   assert.ok(helper && helper[0].includes('albumPagesProblem('), 'the helper is there and calls it');
-  const calls = SRC.replace(helper[0], '').split('albumPagesProblem(').length - 1;
-  assert.equal(calls, 1, 'only the definition — wire it in S3 and update this test');
+  const guest = /^async function guestOrderLines\([\s\S]*?\n}\n/m.exec(SRC);
+  assert.ok(guest && guest[0].includes('albumPagesProblem('), 'guestOrderLines calls it');
+  const calls = SRC.replace(helper[0], '').replace(guest[0], '').split('albumPagesProblem(').length - 1;
+  assert.equal(calls, 1, 'nowhere else but the definition (no admin order route judges pages)');
 });

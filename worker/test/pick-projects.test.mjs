@@ -205,7 +205,9 @@ test('the migration file turns a deployed database into exactly what schema.sql 
     '\n' + readFileSync(new URL('../migrations/2026-10-04-client-confirm.sql', import.meta.url), 'utf8') +
     '\n' + readFileSync(new URL('../migrations/2026-10-07-revision-pins.sql', import.meta.url), 'utf8') +
     '\n' + readFileSync(new URL('../migrations/2026-10-07-project-shoot-date.sql', import.meta.url), 'utf8') +
-    '\n' + readFileSync(new URL('../migrations/2026-10-07-project-type.sql', import.meta.url), 'utf8');
+    '\n' + readFileSync(new URL('../migrations/2026-10-07-project-type.sql', import.meta.url), 'utf8') +
+    // (S2 guest ordering: only its studio_settings column — orders are not in this chain)
+    '\n' + readFileSync(new URL('../migrations/2026-10-09-guest-orders.sql', import.meta.url), 'utf8').match(/ALTER TABLE studio_settings[^;]*;/)[0];
   // the live database: share_tokens without project_id, none of the new tables
   const deployed = fresh
     .replace(/,\n(?:\s*--[^\n]*\n)*\s*project_id\s+TEXT\n\);/, '\n);')

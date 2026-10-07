@@ -284,7 +284,14 @@ CREATE TABLE IF NOT EXISTS studio_settings (
   -- Appended, from a hand-run
   --   ALTER TABLE studio_settings ADD COLUMN default_extra_max INTEGER;
   -- (worker/migrations/2026-09-30-extra-max.sql).
-  default_extra_max   INTEGER
+  default_extra_max   INTEGER,
+  -- the transfer details (bank, account) a guest sees on a confirmed guest
+  -- order (docs/guest-shop.md, S2): at most 500 characters, line breaks kept, no
+  -- other control or bidi character; NULL = not set. The guest side reads it
+  -- through readTransferInfo only. Appended, from a hand-run
+  --   ALTER TABLE studio_settings ADD COLUMN transfer_info TEXT;
+  -- (worker/migrations/2026-10-09-guest-orders.sql).
+  transfer_info       TEXT
 );
 
 -- ─── Products and orders (docs/products-orders.md) ─────────────────────────
@@ -351,9 +358,33 @@ CREATE TABLE IF NOT EXISTS orders (
   updated_at      TEXT NOT NULL,
   confirmed_at    TEXT,
   fulfilled_at    TEXT,
-  cancelled_at    TEXT
+  cancelled_at    TEXT,
+  -- Guest ordering (docs/guest-shop.md, S2: pickup only). Guest orders only;
+  -- admin and system orders keep NULL in all of them. request_id: the UUID the
+  -- guest page sends with each submit (a retry returns the order that landed,
+  -- unique per project); contact_name 1–50, contact_phone 6–20 and/or
+  -- contact_line 1–50 (at least one); delivery_method 'pickup';
+  -- consent_version the privacy notice ticked ('v1'); contact_erased_at when
+  -- the photographer cleared phone and LINE ID (the name stays). Appended,
+  -- from a hand-run (worker/migrations/2026-10-09-guest-orders.sql):
+  --   ALTER TABLE orders ADD COLUMN request_id TEXT;
+  --   ALTER TABLE orders ADD COLUMN contact_name TEXT;
+  --   ALTER TABLE orders ADD COLUMN contact_phone TEXT;
+  --   ALTER TABLE orders ADD COLUMN contact_line TEXT;
+  --   ALTER TABLE orders ADD COLUMN delivery_method TEXT;
+  --   ALTER TABLE orders ADD COLUMN consent_version TEXT;
+  --   ALTER TABLE orders ADD COLUMN contact_erased_at TEXT;
+  --   CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_request ON orders(project_id, request_id);
+  request_id      TEXT,
+  contact_name    TEXT,
+  contact_phone   TEXT,
+  contact_line    TEXT,
+  delivery_method TEXT,
+  consent_version TEXT,
+  contact_erased_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_orders_project ON orders(project_id, created_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_request ON orders(project_id, request_id);
 CREATE INDEX IF NOT EXISTS idx_orders_owner_paid ON orders(photographer_id, paid_at);
 
 -- Every line snapshots name, option, price and cost when it is added, so a
@@ -371,7 +402,16 @@ CREATE TABLE IF NOT EXISTS order_items (
   qty           INTEGER NOT NULL CHECK (qty BETWEEN 1 AND 999),
   photo_keys    TEXT NOT NULL DEFAULT '[]',  -- JSON; print: ≤ 1 per unit, album: the set
   platform_option_id TEXT,                -- snapshot: the platform option sold (NULL = not the platform's)
-  vendor_cost   INTEGER NOT NULL DEFAULT 0 CHECK (vendor_cost >= 0)  -- snapshot, operator only: never in an /api/admin response
+  vendor_cost   INTEGER NOT NULL DEFAULT 0 CHECK (vendor_cost >= 0),  -- snapshot, operator only: never in an /api/admin response
+  -- list_price: the catalogue price when the line was made (admin and guest
+  -- lines; NULL on older lines and on the extra-pick line), what the future
+  -- platform fee is computed from. layout: album lines of a guest order,
+  -- {"v":1,"mode":"photographer","source":"all_finals","spreads":N}; NULL
+  -- otherwise. Appended, from the same hand-run file as the orders columns:
+  --   ALTER TABLE order_items ADD COLUMN list_price INTEGER;
+  --   ALTER TABLE order_items ADD COLUMN layout TEXT;
+  list_price    INTEGER,
+  layout        TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_items_order ON order_items(order_id);
 

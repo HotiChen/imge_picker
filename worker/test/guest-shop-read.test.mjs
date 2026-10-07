@@ -133,6 +133,8 @@ test('delivered: the shop lists the guest-visible products, sorted, in the exact
         ],
       },
     ],
+    // S2 guest ordering: null while GUEST_ORDERS is off (here: unset)
+    ordering: null,
   });
   // the image_url really serves the image, without any token
   const img = await call(env, json.products[1].image_url);
@@ -159,7 +161,7 @@ test('no cost leaks: no cost, platform_price, vendor_cost or platform option id 
   const p = await delivered(env);
   const json = await okShop(env, p.token);
   const { keys, values } = walk(json);
-  assert.deepEqual([...keys].sort(), ['bleed_mm', 'description', 'extra_page_price', 'id', 'image_url', 'kind', 'label', 'max_pages', 'min_pages', 'name', 'options', 'photo_count', 'price', 'products'].sort());
+  assert.deepEqual([...keys].sort(), ['bleed_mm', 'description', 'extra_page_price', 'id', 'image_url', 'kind', 'label', 'max_pages', 'min_pages', 'name', 'options', 'ordering', 'photo_count', 'price', 'products'].sort());
   for (const forbidden of [VENDOR, VENDOR + 1, PLATFORM, PLATFORM + 1]) assert.ok(!values.includes(forbidden), `value ${forbidden}`);
   const text = JSON.stringify(json);
   assert.doesNotMatch(text, /987651|987652|2987|2988|cost|platform_price|vendor|guest_visible|photographer/);
@@ -293,7 +295,7 @@ test("another photographer's products never show; the project decides the photog
   assert.deepEqual(theirs.products.map(x => [x.id, x.options.map(o => [o.id, o.price])]), [['theirs', [['theirs-o', 99999]]]]);
   // and a project with no photographer sees nothing
   env.DB._db.prepare("UPDATE projects SET photographer_id = '' WHERE id = ?").run(p.project.id);
-  assert.deepEqual(await okShop(env, p.token), { products: [] });
+  assert.deepEqual(await okShop(env, p.token), { products: [], ordering: null });
 });
 
 // ─── when it answers ────────────────────────────────────────────────────────
@@ -436,7 +438,7 @@ test('caps: at most 50 products and 20 options each', async () => {
 test('an empty catalogue is {products: []}', async () => {
   const env = envOp();
   const p = await delivered(env);
-  assert.deepEqual(await okShop(env, p.token), { products: [] });
+  assert.deepEqual(await okShop(env, p.token), { products: [], ordering: null });
 });
 
 test('min_pages / max_pages: the album carries them, the print null; photo_count is album-only too', async () => {
