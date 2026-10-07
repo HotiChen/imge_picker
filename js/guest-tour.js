@@ -45,12 +45,19 @@
         for (const el of document.querySelectorAll(sel)) if (visible(el)) return el;
         return null;
     }
+    // TEST PHASE SWITCH: while FORCE_DEFAULT is true the tour shows on every visit (the stored "seen" is ignored and
+    // never written, so nobody is marked as having seen it). To go live as first-visit-only, set it to false
+    // (a page may also set window.GUEST_TOUR_FORCE = true / false before this file loads; the test harness does).
+    const FORCE_DEFAULT = true;
+    function forced() { return typeof window.GUEST_TOUR_FORCE === 'boolean' ? window.GUEST_TOUR_FORCE : FORCE_DEFAULT; }
     function seen(phase) {
-        if (mem[phase]) return true;
+        if (mem[phase]) return true;   // finished or skipped on this page load: do not restart it until a reload
+        if (forced()) return false;
         try { return localStorage.getItem(KEYS[phase]) === '1'; } catch (e) { return false; }
     }
     function markSeen(phase) {
         mem[phase] = true;
+        if (forced()) return;
         try { localStorage.setItem(KEYS[phase], '1'); } catch (e) { /* private mode: once per page load */ }
     }
     // a dialog the guest is in: nothing to start under it, and a running tour steps aside

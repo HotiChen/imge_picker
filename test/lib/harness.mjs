@@ -57,6 +57,9 @@ export async function suite(name, url, run, { initScript, before, contextOptions
   const context = await browser.newContext({ viewport: { width: 1500, height: 950 }, ...contextOptions });
   // the first-visit guest tour (js/guest-tour.js) is marked seen in every suite, or its card would sit over the
   // page the suite drives; a suite that tests the tour passes `tour: true` and seeds the keys itself
+  // the tour's test-phase switch (js/guest-tour.js: force it on every visit) is off in every suite; a suite that tests
+  // the switch sets window.GUEST_TOUR_FORCE = true in its own initScript (runs after this one)
+  await context.addInitScript(() => { window.GUEST_TOUR_FORCE = false; });
   if (!tour) await context.addInitScript(() => { try { localStorage.setItem('guestTourPickingV1', '1'); localStorage.setItem('guestTourDeliveredV1', '1'); } catch (e) { /* ignore */ } });
   if (initScript) await context.addInitScript(initScript);
   const page = await context.newPage();

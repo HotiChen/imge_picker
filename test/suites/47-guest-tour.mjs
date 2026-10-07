@@ -405,4 +405,41 @@ for (const reduce of [true, false]) {
     }, { before: w.before, initScript: seed(false, true), contextOptions: MOBILE });
 }
 
+
+// ═══ test-phase switch: GUEST_TOUR_FORCE shows the tour on every visit and never records "seen" ═══
+{
+  const m = pickWorld();
+  await sx('guest tour (390px) — FORCE on: the tour shows even when both seen keys are set, and finishing does not write them',
+    URL_, async (page, ok) => {
+      ok('the tour card appears although the seen keys are set', await waitCard(page));
+      await page.click('.gt-skip');
+      ok('略過 closes it', await until(async () => !(await page.$('.gt-card'))));
+      const keys = await page.evaluate(([a, b]) => [localStorage.getItem(a), localStorage.getItem(b)], [KA, KB]);
+      ok('forced mode does not write the seen keys (they stay as the test seeded them: "1")', keys[0] === '1' && keys[1] === '1', JSON.stringify(keys));
+      await page.reload();
+      ok('a reload shows the tour again', await waitCard(page));
+    }, { before: m.attach, initScript: `${seed(true, true)}window.GUEST_TOUR_FORCE = true;`, contextOptions: MOBILE });
+}
+{
+  const m = pickWorld();
+  await sx('guest tour (390px) — FORCE on: finishing never writes the seen key (nothing seeded)',
+    URL_, async (page, ok) => {
+      ok('the tour card appears', await waitCard(page));
+      await page.click('.gt-skip');
+      ok('closed', await until(async () => !(await page.$('.gt-card'))));
+      const keys = await page.evaluate(([a, b]) => [localStorage.getItem(a), localStorage.getItem(b)], [KA, KB]);
+      ok('no seen key was written', keys[0] === null && keys[1] === null, JSON.stringify(keys));
+    }, { before: m.attach, initScript: `${OWNER}window.GUEST_TOUR_FORCE = true;`, contextOptions: MOBILE });
+}
+{
+  const m = pickWorld();
+  await sx('guest tour (390px) — FORCE off (explicit): seen keys set → no tour (positive control for the switch)',
+    URL_, async (page, ok) => {
+      await page.waitForSelector('.pick-card, .photo-card, [data-key]', { timeout: 8000 }).catch(() => {});
+      await sleep(1200);
+      ok('no tour card when forced off and seen', !(await hasCard(page)));
+      ok('the ？ button is still there (the page itself works)', !!(await page.$('.gt-help')));
+    }, { before: m.attach, initScript: `${seed(true, true)}window.GUEST_TOUR_FORCE = false;`, contextOptions: MOBILE });
+}
+
 }
