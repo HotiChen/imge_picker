@@ -88,7 +88,7 @@
             const options = [];
             for (const o of (Array.isArray(p.options) ? p.options.slice(0, OPTIONS_MAX) : [])) {
                 if (!o || typeof o !== 'object' || !Number.isSafeInteger(o.price) || o.price < 0) continue;
-                options.push({ label: typeof o.label === 'string' ? o.label : '', price: o.price });
+                options.push({ id: typeof o.id === 'string' && o.id.length >= 1 && o.id.length <= 200 ? o.id : null, label: typeof o.label === 'string' ? o.label : '', price: o.price });
             }
             if (!options.length) continue;
             const album = p.kind === 'album';
@@ -125,6 +125,7 @@
 
         root: null, ctx: null, albumSec: null, coverKey: null,
         _interested: new Set(),   // product ids the owner has told the photographer about, kept until unmount
+        _products: null, _ordering: null, _orderOff: false,
         _shopTok: 0, _shopDone: false, _planBase: null, _hadPlanBase: false,
 
         isMounted() { return !!this.root && this.root.isConnected; },
@@ -200,6 +201,8 @@
             this._shopTok++;
             this._shopDone = false;
             this._interested = new Set();
+            this._products = null; this._ordering = null; this._orderOff = false;
+            if (window.GuestOrder) GuestOrder.reset();
             if (this.root) this.root.remove();
             if (this._hadPlanBase && window.AlbumPreview) {
                 AlbumPreview.PLAN_OPTS = this._planBase || {};
@@ -322,6 +325,8 @@
                 const workerUrl = cfg.workerUrl;
                 const products = r && r.ok && r.data ? cleanProducts(r.data.products, workerUrl) : [];
                 if (products.length) {
+                    this._products = products;
+                    this._ordering = r.data.ordering;
                     this._applyBounds(products.find(p => p.kind === 'album') || null);
                     this.albumSec.before(this._buildShop(products));
                 }
@@ -347,6 +352,9 @@
             sec.append(el('h2', 'cp-h2', '把這段回憶留下來'), el('p', 'cp-sub', '有些照片，值得變成真正的作品。'));
             const list = el('ul', 'cp-products');
             const owner = !!(this.ctx && this.ctx.isOwner && this.ctx.onInterest);
+            // 訂購 (js/guest-order.js) replaces 「我有興趣」 only when the Worker offers ordering AND this is the seat owner of a
+            // confirmed project; otherwise (ordering null, a viewer, ordering switched off meanwhile) the page is what it always was
+            const ordering = this._orderingOn();
             for (const p of products) {
                 const li = el('li', `cp-product cp-product--${p.kind}`);
                 if (p.image) {
@@ -379,11 +387,20 @@
                 }
                 body.append(opts);
                 // 「我有興趣」: the seat owner only (a viewer has no key and the Worker would answer 403)
-                if (owner && p.id) body.append(this._buildInterest(p));
+                const op = ordering ? { ...p, options: p.options.filter(o => o.id) } : null;
+                if (ordering && op.options.length && GuestOrder.orderable(op)) {
+                    const wrap = el('div', 'cp-interest');
+                    wrap.append(GuestOrder.orderButton(op));
+                    body.append(wrap);
+                } else if (owner && p.id) {
+                    if (ordering && p.kind === 'album') body.append(el('p', 'go-unorderable', '這本相本目前不開放線上訂購，歡迎按「我有興趣」通知攝影師。'));
+                    body.append(this._buildInterest(p));
+                }
                 li.append(body);
                 list.append(li);
             }
             sec.append(list);
+            if (ordering) sec.append(GuestOrder.buildBar());
             // one call to action, information only: a link to the studio, or a plain line
             const cta = el('div', 'cp-cta', null, 'cpShopCta');
             const href = bookingLink(this.ctx && this.ctx.studio && this.ctx.studio.bookingUrl);
@@ -396,6 +413,23 @@
             }
             sec.append(cta);
             return sec;
+        },
+
+        // true when the 訂購 flow is on for this mount (see _buildShop). Starting it resets the cart, so it is called once per build.
+        _orderingOn() {
+            const c = this.ctx || {};
+            if (this._orderOff || !window.GuestOrder || !this._ordering || !c.isOwner || !c.confirmed || !c.orderApi) return false;
+            return GuestOrder.start({
+                ordering: this._ordering, api: c.orderApi, listFinals: c.listFinals, thumbUrl: c.thumbUrl, root: this.root,
+                onOrderingDisabled: () => this._orderingOff_(),
+            });
+        },
+        // the Worker said ordering_disabled: the shop goes back to 「我有興趣」
+        _orderingOff_() {
+            this._orderOff = true;
+            if (window.GuestOrder) GuestOrder.close();
+            const old = this.root && this.root.querySelector('#cpShop');
+            if (old && this._products) { const fresh = this._buildShop(this._products); old.replaceWith(fresh); }
         },
 
         // 「我有興趣」: one call to cfg.onInterest(product_id) -> {ok, status, data}. Disabled while in flight;
