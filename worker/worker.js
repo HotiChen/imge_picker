@@ -772,15 +772,33 @@ const CUSTOM_PRODUCTS_DISABLED = { error: '目前只能從平台加入商品', c
 // before anything is written.
 const PAGE_BOUNDS = ['min_pages', 'max_pages'];
 const PAGE_BOUND_MAX = 200;
+// platform_products.bleed_mm: millimetres of bleed the lab wants on each side
+// of a page or print, 0–BLEED_MM_MAX inclusive, decimals allowed; NULL = 0 mm.
+// Operator only, albums and prints alike (a kind change keeps it). Its own
+// hand-run migration (2026-10-07-product-bleed.sql), degrading exactly like
+// the page bounds: it rides along in pageColumns / pageSelect / pageBoundsFit.
+const BLEED_MM_MAX = 10;
+// every optional platform_products column a hand-run migration adds, in the
+// order a write judges them (min first, then max, then bleed)
+const PRODUCT_LATE_COLUMNS = [...PAGE_BOUNDS, 'bleed_mm'];
 const PAGES_UNAVAILABLE = {
   min_pages: { error: '最少頁數功能尚未啟用', code: 'min_pages_unavailable' },
   max_pages: { error: '最多頁數功能尚未啟用', code: 'max_pages_unavailable' },
+  bleed_mm: { error: '出血設定功能尚未啟用', code: 'bleed_mm_unavailable' },
 };
+// The bleed an operator write names: {set: {bleed_mm}} (empty when the body
+// leaves it out: the stored value stays) or {bad: 'invalid_bleed_mm'}.
+function bleedWrite(body) {
+  if (!hasField(body, 'bleed_mm')) return { set: {} };
+  const v = body.bleed_mm;
+  if (v !== null && !(typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= BLEED_MM_MAX)) return { bad: 'invalid_bleed_mm' };
+  return { set: { bleed_mm: v } };
+}
 // a platform product's page bound as every response shows it: albums only
 const albumOnly = (kind, v) => (kind === 'album' && v != null ? v : null);
 
-// Which page-bound columns this database has: {min_pages, max_pages}, each a
-// boolean, by a query that names the column and reads no row.
+// Which late columns this database has: {min_pages, max_pages, bleed_mm},
+// each a boolean, by a query that names the column and reads no row.
 async function pageColumns(env) {
   const has = async col => {
     try {
@@ -791,13 +809,13 @@ async function pageColumns(env) {
       throw e;
     }
   };
-  const [min, max] = await Promise.all(PAGE_BOUNDS.map(has));
-  return { min_pages: min, max_pages: max };
+  const found = await Promise.all(PRODUCT_LATE_COLUMNS.map(has));
+  return Object.fromEntries(PRODUCT_LATE_COLUMNS.map((c, i) => [c, found[i]]));
 }
-// the two columns for a SELECT on platform products aliased `alias`, NULL
+// the late columns for a SELECT on platform products aliased `alias`, NULL
 // for one this database does not have
-const pageSelect = (cols, alias = 'pp') => PAGE_BOUNDS.map(c => `${cols[c] ? `${alias}.${c}` : 'NULL'} AS ${c}`).join(', ');
-const ALL_PAGE_COLUMNS = { min_pages: true, max_pages: true };
+const pageSelect = (cols, alias = 'pp') => PRODUCT_LATE_COLUMNS.map(c => `${cols[c] ? `${alias}.${c}` : 'NULL'} AS ${c}`).join(', ');
+const ALL_PAGE_COLUMNS = { min_pages: true, max_pages: true, bleed_mm: true };
 // `query(cols)` as if both columns are there (one round trip on a migrated
 // database); only when that fails on a missing column, probe which are and
 // run it again. Another missing column fails the retry too: never a looser
@@ -844,7 +862,7 @@ function pageBoundsWrite(body, kind, current) {
 // is {unavailable: the 500 body}. Returns {set} or {unavailable}.
 function pageBoundsFit(set, cols) {
   const out = {};
-  for (const col of PAGE_BOUNDS) {
+  for (const col of PRODUCT_LATE_COLUMNS) {
     if (!hasField(set, col)) continue;
     if (cols[col]) out[col] = set[col];
     else if (set[col] !== null) return { unavailable: PAGES_UNAVAILABLE[col] };
@@ -1124,6 +1142,8 @@ async function readGuestShop(env, photographerId) {
       photo_count: albumOnly(p.kind, p.photo_count),
       min_pages: albumOnly(p.kind, p.min_pages),
       max_pages: albumOnly(p.kind, p.max_pages),
+      // mm on each side, prints and albums; null = 0 mm
+      bleed_mm: p.bleed_mm ?? null,
       // the public image route (relative to the Worker), versioned by when
       // the operator last changed it
       image_url: p.has_image
@@ -2976,18 +2996,21 @@ export default {
         if (fields.bad) return orderBad(fields.bad);
         const bounds = pageBoundsWrite(body, fields.set.kind, null);
         if (bounds.bad) return orderBad(bounds.bad);
+        const bleed = bleedWrite(body);
+        if (bleed.bad) return orderBad(bleed.bad);
         const opts = productOptions(body.options, new Set(), PLATFORM_MONEY);
         if (opts.bad) return orderBad(opts.bad);
         // a NULL bound for a column the database does not have is dropped,
         // so a product without one is made before its migration too; the
-        // columns are probed only when the body names a bound
-        const fit = Object.keys(bounds.set).length ? pageBoundsFit(bounds.set, await pageColumns(env)) : { set: {} };
+        // columns are probed only when the body names a bound or the bleed
+        const late = { ...bounds.set, ...bleed.set };
+        const fit = Object.keys(late).length ? pageBoundsFit(late, await pageColumns(env)) : { set: {} };
         if (fit.unavailable) return done(fit.unavailable, 500);
         const pageCols = Object.keys(fit.set);
         const p = { description: '', photo_count: null, sort: 0, ...fields.set };
         if (p.kind !== 'album') p.photo_count = null;
         const productId = crypto.randomUUID();
-        // column names: PAGE_BOUNDS' fixed strings only
+        // column names: PRODUCT_LATE_COLUMNS' fixed strings only
         await env.DB.batch([
           env.DB.prepare(
             `INSERT INTO platform_products (id, kind, name, description, photo_count, sort, created_at, updated_at${pageCols.map(c => `, ${c}`).join('')}) ` +
@@ -3019,6 +3042,8 @@ export default {
       const kind = fields.set.kind ?? current.kind;
       const bounds = pageBoundsWrite(body, kind, current);
       if (bounds.bad) return orderBad(bounds.bad);
+      const bleed = bleedWrite(body);
+      if (bleed.bad) return orderBad(bleed.bad);
       let opts = null;
       if (hasField(body, 'options')) {
         const { results } = await env.DB.prepare('SELECT id FROM platform_product_options WHERE platform_product_id = ?').bind(id).all();
@@ -3028,7 +3053,7 @@ export default {
       }
       // a number for a column this database does not have yet: 500, before
       // anything is written; a NULL for one is dropped (nothing to clear)
-      const fit = pageBoundsFit(bounds.set, cols);
+      const fit = pageBoundsFit({ ...bounds.set, ...bleed.set }, cols);
       if (fit.unavailable) return done(fit.unavailable, 500);
       if (kind !== 'album') fields.set.photo_count = null;
       await env.DB.batch(catalogueWrites(env, PLATFORM_TABLES, id, { ...fields.set, ...fit.set }, opts, now));
@@ -3215,7 +3240,7 @@ export default {
         if (!current) return jsonErr('Not found', 404);
         let statements;
         if (current.platform_product_id) {
-          if (['kind', 'name', 'description', 'photo_count', 'min_pages', 'max_pages'].some(k => hasField(body, k))) return orderBad('platform_managed');
+          if (['kind', 'name', 'description', 'photo_count', 'min_pages', 'max_pages', 'bleed_mm'].some(k => hasField(body, k))) return orderBad('platform_managed');
           const fields = productFields(body, true);
           if (fields.bad) return orderBad(fields.bad);
           let opts = null;

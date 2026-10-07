@@ -11,7 +11,7 @@ import assert from 'node:assert/strict';
 import { readFileSync, existsSync } from 'node:fs';
 import { fakeDB } from './fakes.mjs';
 import { SECRET, MINE, THEIRS, setup, call, pick, save, claimed, rows, one, collectingCtx } from './pick-helpers.mjs';
-import { FRESH, NO_PAGES, NO_MAX, NO_MIN, MIN_SQL, MAX_SQL } from './page-schemas.mjs';
+import { FRESH, NO_PAGES, NO_MAX, NO_MIN, MIN_SQL, MAX_SQL, BLEED_SQL } from './page-schemas.mjs';
 
 const OP = 'operator-secret';
 const envFor = (schema, extra = {}) => setup({ OPERATOR_TOKEN: OP, ...(schema ? { DB: fakeDB({ schema }) } : {}), ...extra });
@@ -72,8 +72,8 @@ test('migration: a second file with one ALTER for max_pages; the min_pages file 
   assert.ok(cols(NO_MAX).includes('min_pages') && !cols(NO_MAX).includes('max_pages'));
   assert.ok(!cols(NO_MIN).includes('min_pages') && cols(NO_MIN).includes('max_pages'));
   // both, in order, on a database with neither = schema.sql; max alone on top of min = schema.sql
-  assert.deepEqual(shape(fakeDB({ schema: NO_PAGES + '\n' + MIN_SQL + '\n' + MAX_SQL })), shape(fakeDB()));
-  assert.deepEqual(shape(fakeDB({ schema: NO_MAX + '\n' + MAX_SQL })), shape(fakeDB()));
+  assert.deepEqual(shape(fakeDB({ schema: NO_PAGES + '\n' + MIN_SQL + '\n' + MAX_SQL + '\n' + BLEED_SQL })), shape(fakeDB()));
+  assert.deepEqual(shape(fakeDB({ schema: NO_MAX + '\n' + MAX_SQL + '\n' + BLEED_SQL })), shape(fakeDB()));
   const twice = fakeDB({ schema: NO_MAX + '\n' + MAX_SQL });
   assert.throws(() => twice._db.exec(MAX_SQL), /duplicate column/);
 });

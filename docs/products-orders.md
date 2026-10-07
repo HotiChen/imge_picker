@@ -537,3 +537,29 @@ both a **minimum and a maximum** per album product.
   the operator writes these; such an album fits no count, so
   `albumPagesProblem` refuses every order on it rather than letting one
   through, and the operator sees both values in the list.
+
+## bleed_mm — print / album bleed (2026-10-07)
+
+- `platform_products.bleed_mm REAL`, nullable: millimetres of bleed the lab
+  wants **on each side** of a page (album) or a print. NULL = 0 mm. Albums
+  **and** prints (unlike the page bounds): a kind change keeps it.
+- **Operator only.** `POST /api/operator/products` and
+  `PUT /api/operator/products/:id` take `bleed_mm`: a JSON number 0–10
+  inclusive (decimals allowed, e.g. 2.5) or `null`, else 400
+  `invalid_bleed_mm` (strings, booleans, arrays refused). A PUT without the
+  field keeps it (and does not write it back). Nothing is written on any 400.
+  On an adopted product the photographer's PUT naming it is 400
+  `platform_managed`; a custom product (service) reads `null`.
+- **Reads:** wherever `min_pages` is (operator list/responses,
+  `GET /api/admin/products`, adopt / PUT responses,
+  `GET /api/admin/platform-products`) and the guest shop
+  (`GET /api/pick/shop`, `docs/guest-shop.md`). Raw value or `null`; a UI
+  treats `null` as 0 mm. It is not a cost.
+- **Migration** `worker/migrations/2026-10-07-product-bleed.sql`
+  (`ALTER TABLE platform_products ADD COLUMN bleed_mm REAL`), hand-run before
+  the merge, after the two page-bound files. It rides on the page-bound
+  machinery (`PRODUCT_LATE_COLUMNS` in `pageColumns` / `pageSelect` /
+  `pageBoundsFit`): one query on a migrated database, a probe only after a
+  missing-column failure, `null` everywhere before it, and an operator write
+  of a number answers 500 `bleed_mm_unavailable` (after min / max) with
+  nothing written; `null` or no field still works.

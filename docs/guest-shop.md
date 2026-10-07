@@ -439,6 +439,7 @@ last-seen stamp).
     "photo_count": 20 | null,         // album only, advisory
     "min_pages": 10 | null,           // album only: fewest inside spreads (1 spread = 1 P, cover/back not counted)
     "max_pages": 30 | null,           // album only: most inside spreads, same unit, >= min_pages
+    "bleed_mm": 3 | 2.5 | null,       // prints and albums: mm of bleed on each side, 0–10; null = 0 mm
     "image_url": "/api/platform/products/<id>/image?v=<stamp>" | null,  // relative to the Worker origin, public
     "options": [ { "id": "<product_options.id>", "label": "20×20", "price": 5000 } ]  // label '' when single
 } ] }
@@ -459,8 +460,8 @@ last-seen stamp).
   product id appears only inside `image_url`.
 - **Sorted** by the photographer's `sort` (then created), options in their
   set order. **Capped** at 50 products (sellable ones, by sort) × 20 options.
-- Before the `min_pages` / `max_pages` migrations everything works with that
-  field `null` (each column on its own).
+- Before the `min_pages` / `max_pages` / `bleed_mm` migrations everything
+  works with that field `null` (each column on its own).
 
 ## Album page range — where the refusal lives (S3, not built yet)
 

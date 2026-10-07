@@ -385,7 +385,15 @@ CREATE TABLE IF NOT EXISTS platform_products (
   -- to a deployed database by
   --   ALTER TABLE platform_products ADD COLUMN max_pages INTEGER;
   -- (worker/migrations/2026-10-06-product-max-pages.sql, after the one above).
-  max_pages        INTEGER
+  max_pages        INTEGER,
+  -- millimetres of bleed the lab wants on each side of a page (album) or a
+  -- print, 0–10, decimals allowed; NULL = 0 mm. Albums and prints alike (not
+  -- cleared by a kind change). Operator only; shown to photographers and
+  -- guests (the album editor draws the cut line from it). Added to a deployed
+  -- database by
+  --   ALTER TABLE platform_products ADD COLUMN bleed_mm REAL;
+  -- (worker/migrations/2026-10-07-product-bleed.sql, after the two above).
+  bleed_mm         REAL
 );
 CREATE INDEX IF NOT EXISTS idx_platform_products_sort ON platform_products(active, sort);
 
