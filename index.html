@@ -59,6 +59,10 @@
     <!-- Header — Studio Dark -->
     <header class="header">
         <div class="header-left">
+            <!-- Phone + photographer only (css/styles.css "Photographer's picker on a phone"): the way back to
+                 the admin. Shown only when 登出 exists, i.e. a studio token (never for a client session or a
+                 guest). Hidden on a review page (?project=), whose #pvBackLink is the back control. -->
+            <a id="backToAdminLink" class="back-btn back-to-admin" href="dashboard.html">← 返回後台</a>
             <button id="sidebarToggle" class="sidebar-toggle-btn" title="切換選單">
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <path d="M3 12h18M3 6h18M3 18h18" stroke-linecap="round" stroke-linejoin="round"/>
@@ -163,6 +167,16 @@
                     <div class="folder-tree-title">資料夾</div>
                     <div id="folderTree" class="folder-tree"></div>
                 </div>
+            </div>
+
+            <!-- Phone menu: 上傳 / 相本書 / 登出 leave the header on a phone and live here (css/styles.css
+                 "Photographer's picker on a phone"). Not the first section, so the review view and the guest
+                 page, which drop every section after the first, never carry it. -->
+            <div class="sidebar-section phone-menu" id="phoneMenu">
+                <div class="side-title">選單</div>
+                <a id="phoneUploadBtn" class="btn btn-outline btn-block" href="upload.html">⬆ 上傳</a>
+                <button id="phoneBookBtn" type="button" class="btn btn-outline btn-block">📖 相本書</button>
+                <button id="phoneLogoutBtn" type="button" class="btn btn-outline btn-block">登出</button>
             </div>
 
             <!-- 02 / RATING -->
@@ -316,7 +330,7 @@
                     </defs>
                 </svg>
                 <h2>開始使用</h2>
-                <p class="empty-state-text">請在左側輸入資料夾路徑（例如：20260122/）來載入照片</p>
+                <p class="empty-state-text"><span class="es-desktop">請在左側輸入資料夾路徑（例如：20260122/）來載入照片</span><span class="es-phone">點左上角 ☰ 輸入資料夾路徑</span></p>
             </div>
 
             <div id="loadingState" class="loading-state" style="display: none;">

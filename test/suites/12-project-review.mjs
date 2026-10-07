@@ -521,7 +521,7 @@ async function rvInteract(page, ok, errs) {
       await page.waitForSelector('#studio-logout', { timeout: 5000 });
       const r = await page.evaluate(RV_CHROME, rvArgs);
       ok('positive: this is not review mode', r.pv === false);
-      ok('every sidebar title is there (SOURCE, RATING, FLAGS, ANNOTATION, 排序, DATA)', JSON.stringify(r.titles) === JSON.stringify(['01 / SOURCE', '02 / RATING', '03 / FLAGS', '04 / ANNOTATION', '排序', '05 / DATA']), JSON.stringify(r.titles));
+      ok('every sidebar title is there (SOURCE, 選單 = the phone menu, RATING, FLAGS, ANNOTATION, 排序, DATA)', JSON.stringify(r.titles) === JSON.stringify(['01 / SOURCE', '選單', '02 / RATING', '03 / FLAGS', '04 / ANNOTATION', '排序', '05 / DATA']), JSON.stringify(r.titles));
       // every id review mode removes is still in the DOM, except #pickFilterBar (guest-only: pick.js fills it)
       const missing = await page.evaluate(ids => ids.filter(id => !document.getElementById(id)), RV_GONE_IDS);
       ok('every removed control is still in the DOM in the ordinary mode', missing.length === 0, missing.join());

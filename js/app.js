@@ -63,6 +63,34 @@ class App {
 
         // 5. 啟動 5 分鐘自動存檔計時器
         this.startAutoSaveTimer();
+
+        // 6. 手機上沒載入資料夾：把藏著資料夾輸入框的側邊欄打開一次
+        this.autoOpenSidebarOnPhone();
+    }
+
+    // The folder input lives in the sidebar, which is a closed drawer at <= 1024px. A photographer on a
+    // phone with nothing loaded would see an empty page and no hint, so open it ONCE per page load. Not for
+    // a guest link or the review view (they own the page), not when a folder is already loaded, and never
+    // again after the user closed it (this runs once, at the end of init).
+    autoOpenSidebarOnPhone() {
+        if (this._sidebarAutoOpened) return;
+        this._sidebarAutoOpened = true;
+        if (document.documentElement.classList.contains('guest-mode')) return;
+        if (window.PickController && PickController.active) return;
+        if (window.ProjectViewController && ProjectViewController.active) return;
+        if (!window.matchMedia || !window.matchMedia('(max-width: 1024px)').matches) return;
+        if (driveManager.currentFolderId) return;
+        const sidebar = document.querySelector('.sidebar');
+        const backdrop = document.getElementById('sidebarBackdrop');
+        if (!sidebar || !backdrop) return;
+        sidebar.classList.add('active');
+        backdrop.classList.add('active');
+    }
+
+    openUploadPage() {
+        const folder = driveManager.currentFolderId || '';
+        const url = 'upload.html' + (folder ? `?folder=${encodeURIComponent(folder)}` : '');
+        window.open(url, '_blank');
     }
 
     async checkUrlParams() {
@@ -248,9 +276,18 @@ class App {
         // 上傳頁
         this.addListener('uploadPageBtn', 'click', e => {
             e.preventDefault();
-            const folder = driveManager.currentFolderId || '';
-            const url = 'upload.html' + (folder ? `?folder=${encodeURIComponent(folder)}` : '');
-            window.open(url, '_blank');
+            this.openUploadPage();
+        });
+
+        // 手機：上傳 / 相本書 / 登出 在側邊欄的選單裡（標頭放不下）
+        this.addListener('phoneUploadBtn', 'click', e => {
+            e.preventDefault();
+            this.openUploadPage();
+        });
+        this.addListener('phoneBookBtn', 'click', () => this.openBookEditor());
+        this.addListener('phoneLogoutBtn', 'click', () => {
+            const out = document.getElementById('studio-logout');
+            if (out) out.click();
         });
 
         // 載入按鈕
