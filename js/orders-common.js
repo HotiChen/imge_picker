@@ -66,6 +66,8 @@
     min_pages_unavailable: '最少頁數還不能存：D1 migration（2026-10-06-product-min-pages.sql）尚未執行',
     invalid_bleed_mm: '出血需為 0–10 mm 的數字（或留空）',
     bleed_mm_unavailable: '出血尚未啟用，請先執行 migration（2026-10-07-product-bleed.sql）',
+    invalid_extra_page_price: '加頁價格需為 0–1,000,000 的整數（或留空）',
+    extra_page_price_unavailable: '加頁價格尚未啟用，請先執行 migration（2026-10-07-product-extra-page-price.sql）',
     max_pages_unavailable: '最多頁數還不能存：D1 migration（2026-10-06-product-max-pages.sql）尚未執行',
   };
 
@@ -116,6 +118,18 @@
     return '';
   }
 
+  // An album's minimum and extra-page price as one short label: '最少 10 頁 · 加頁 NT$200／頁' (either part
+  // alone when only that is set). Pages are spreads. '' for a non-album, or when neither is usable.
+  function pagePriceText(p) {
+    if (!p || p.kind !== 'album') return '';
+    const min = Number.isSafeInteger(p.min_pages) && p.min_pages >= 1 ? p.min_pages : null;
+    const extra = Number.isSafeInteger(p.extra_page_price) && p.extra_page_price >= 0 ? p.extra_page_price : null;
+    const parts = [];
+    if (min !== null) parts.push(`最少 ${min} 頁`);
+    if (extra !== null) parts.push(`加頁 ${money(extra)}／頁`);
+    return parts.join(' · ');
+  }
+
   // A product's bleed as a short label: '出血 3 mm' / '出血 2.5 mm'. '' for null or 0 (null = 0 mm = no
   // bleed asked) and for anything that is not a finite number in 0–10. Albums and prints alike.
   function bleedText(p) {
@@ -150,6 +164,6 @@
 
   window.Orders = {
     KIND_LABEL, STATUS_LABEL, METHOD_LABEL, SOURCE_LABEL, STATUS_MOVES, PAYMENT_LABEL,
-    esc, money, errorText, paymentState, lineName, platformImageUrl, pageRangeText, bleedText, client,
+    esc, money, errorText, paymentState, lineName, platformImageUrl, pageRangeText, pagePriceText, bleedText, client,
   };
 })();

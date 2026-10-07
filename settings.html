@@ -492,6 +492,7 @@
           ${gone ? '<span class="pill pill-off">平台已下架</span>' : ''}
           ${p.kind === 'album' && p.photo_count ? `<span class="hint">指定 ${O.esc(p.photo_count)} 張</span>` : ''}
           ${adopted && O.pageRangeText(p) ? `<span class="hint" data-page-range>${O.esc(O.pageRangeText(p))}</span>` : ''}
+          ${adopted && O.pagePriceText(p) ? `<span class="hint" data-page-price>${O.esc(O.pagePriceText(p))}</span>` : ''}
           ${adopted && O.bleedText(p) ? `<span class="hint" data-bleed>${O.esc(O.bleedText(p))}</span>` : ''}
           ${p.description ? `<div class="hint">${O.esc(p.description)}</div>` : ''}
           <ul class="prod-opts">${opts}</ul>

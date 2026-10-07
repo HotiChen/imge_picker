@@ -218,6 +218,7 @@
         ${retired ? '<span class="pill pill-off">已下架</span>' : ''}
         ${p.kind === 'album' && p.photo_count ? `<span class="hint">指定 ${O.esc(p.photo_count)} 張</span>` : ''}
         ${O.pageRangeText(p) ? `<span class="hint" data-page-range>${O.esc(O.pageRangeText(p))}</span>` : ''}
+        ${O.pagePriceText(p) ? `<span class="hint" data-page-price>${O.esc(O.pagePriceText(p))}</span>` : ''}
         ${O.bleedText(p) ? `<span class="hint" data-bleed>${O.esc(O.bleedText(p))}</span>` : ''}
         ${p.description ? `<div class="hint">${O.esc(p.description)}</div>` : ''}
         <ul class="prod-opts">${opts}</ul>
@@ -279,7 +280,8 @@
 
   function openForm(product, note) {
     const editing = !!product;
-    const p = product || { kind: 'album', name: '', description: '', photo_count: null, min_pages: null, max_pages: null, bleed_mm: null, options: [] };
+    // a NEW album starts at 10 spreads minimum (editable, clearable); an existing product shows what is stored
+    const p = product || { kind: 'album', name: '', description: '', photo_count: null, min_pages: DEFAULT_MIN_PAGES, max_pages: null, extra_page_price: null, bleed_mm: null, options: [] };
     const opts = editing ? (p.options || []).filter(o => o.active) : [];
     addBtn.hidden = true;
     formBox.innerHTML = `<div class="prod-form" id="op-form" data-mode="${editing ? 'edit' : 'new'}">
@@ -315,6 +317,12 @@
           <label for="opf-max-pages">最多頁數（跨頁）</label>
           <input id="opf-max-pages" class="field" type="text" inputmode="numeric" autocomplete="off" value="${p.max_pages != null ? O.esc(p.max_pages) : ''}">
           <div id="opf-max-pages-err" class="err" data-field-err></div>
+        </div>
+        <div class="field-group">
+          <label for="opf-extra-page-price">加頁價格（NT$／頁，選填）</label>
+          <input id="opf-extra-page-price" class="field" type="text" inputmode="numeric" autocomplete="off" value="${p.extra_page_price != null ? O.esc(p.extra_page_price) : ''}">
+          <div id="opf-extra-page-price-err" class="err" data-field-err></div>
+          <div class="hint">超過最少頁數的每一頁加價（1 頁 = 1 個跨頁）；留空 = 不提供加頁。</div>
         </div>
         <div class="hint" style="flex-basis:100%;margin-top:-6px;margin-bottom:12px;">內頁的跨頁數，1 跨頁 = 1 P，封面與封底不算；1–200 的整數，選填，留空 = 不限。</div>
       </div>
@@ -373,6 +381,16 @@
   // album page bounds (1 spread = 1 P): blank = none, else a whole number 1–200
   // — what the Worker accepts; the Worker's answer is still the one that counts
   const PAGE_BOUND_MAX = 200;
+  const DEFAULT_MIN_PAGES = 10;     // Tim: an album defaults to a minimum of 10 spreads (create form only)
+  const EXTRA_PAGE_PRICE_MAX = 1000000;
+  // extra page price: blank = null, else a whole number 0–1,000,000 (what the Worker accepts)
+  const readExtraPrice = raw => {
+    const v = raw.trim();
+    if (v === '') return { value: null };
+    if (!isInt(v)) return { bad: true };
+    const n = Number(v);
+    return Number.isSafeInteger(n) && n <= EXTRA_PAGE_PRICE_MAX ? { value: n } : { bad: true };
+  };
   const readPageBound = raw => {
     const v = raw.trim();
     if (v === '') return { value: null };
@@ -381,7 +399,7 @@
     return Number.isSafeInteger(n) && n >= 1 && n <= PAGE_BOUND_MAX ? { value: n } : { bad: true };
   };
   function clearPageErrors() {
-    for (const id of ['opf-min-pages', 'opf-max-pages']) {
+    for (const id of ['opf-min-pages', 'opf-max-pages', 'opf-extra-page-price']) {
       const input = $(id), msg = $(id + '-err');
       if (input) input.removeAttribute('aria-invalid');
       if (msg) msg.textContent = '';
@@ -423,14 +441,16 @@
       formErr.textContent = O.errorText({ code: 'invalid_photo_count' }); return;
     }
     // the page bounds belong to albums: judged and sent only for one
-    let minPages = null, maxPages = null;
+    let minPages = null, maxPages = null, extraPrice = null;
     clearPageErrors();
     if (kind === 'album') {
       const lo = readPageBound($('opf-min-pages').value), hi = readPageBound($('opf-max-pages').value);
       if (lo.bad) { pageError('opf-min-pages', 'invalid_min_pages'); return; }
       if (hi.bad) { pageError('opf-max-pages', 'invalid_max_pages'); return; }
       if (lo.value !== null && hi.value !== null && hi.value < lo.value) { pageError('opf-max-pages', 'invalid_page_range'); return; }
-      minPages = lo.value; maxPages = hi.value;
+      const ex = readExtraPrice($('opf-extra-page-price').value);
+      if (ex.bad) { pageError('opf-extra-page-price', 'invalid_extra_page_price'); return; }
+      minPages = lo.value; maxPages = hi.value; extraPrice = ex.value;
     }
     // the bleed belongs to albums and prints alike: always judged, always sent (null clears)
     clearBleedError();
@@ -452,7 +472,7 @@
       photo_count: kind === 'album' && countRaw !== '' ? Number(countRaw) : null,
       // a print does not send the page bounds at all (the Worker clears both
       // when a product leaves album); an album sends null to clear one
-      ...(kind === 'album' ? { min_pages: minPages, max_pages: maxPages } : {}),
+      ...(kind === 'album' ? { min_pages: minPages, max_pages: maxPages, extra_page_price: extraPrice } : {}),
       bleed_mm: bleed.value,
       options,
     };

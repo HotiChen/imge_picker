@@ -73,6 +73,8 @@
     }
     const formatPrice = n => Util.formatPrice(n);   // NT$5,000 (js/util.js, loaded before this file)
     const bound = v => (Number.isSafeInteger(v) && v >= 1 ? v : null);
+    // extra_page_price: NT$ per spread above min_pages, a whole number >= 0, albums only
+    const extraPrice = v => (Number.isSafeInteger(v) && v >= 0 ? v : null);
 
     // The Worker's products, kept only as far as they are well-formed: a print / album with a name and at
     // least one option whose price is a whole number >= 0. Nothing else from the row is used.
@@ -93,6 +95,7 @@
             out.push({
                 kind: p.kind, name: p.name, description: typeof p.description === 'string' ? p.description : '',
                 min: album ? bound(p.min_pages) : null, max: album ? bound(p.max_pages) : null,
+                extraPagePrice: album ? extraPrice(p.extra_page_price) : null,
                 image: productImageUrl(workerUrl, p.image_url), options,
             });
         }
@@ -345,6 +348,12 @@
                 body.append(el('h3', 'cp-product-name', p.name));
                 const range = rangeText(p.min, p.max);
                 if (range) body.append(el('p', 'cp-product-range', range));
+                if (p.extraPagePrice !== null) {
+                    // the option price covers the book up to `min` spreads; each spread above costs this
+                    const parts = [`加頁 ${formatPrice(p.extraPagePrice)}／頁`];
+                    if (p.min !== null) parts.push(`含 ${p.min} 頁`);
+                    body.append(el('p', 'cp-product-extra', parts.join(' · ')));
+                }
                 if (p.description) body.append(el('p', 'cp-product-desc', p.description));
                 const opts = el('ul', 'cp-options');
                 for (const o of p.options) {
