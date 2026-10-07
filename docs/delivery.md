@@ -372,6 +372,40 @@ the 下載毛片原檔 list keep the card grid and the sidebar. Files:
 - Not done: download all, duplicate-photo hiding (a copy file in the folder
   shows like any other), a cover chosen by the photographer (needs a column).
 
+## Shoot date for the completion page (Worker, 2026-10-07)
+
+`projects.shoot_date TEXT`, nullable: the day of the shoot, for the 完成頁.
+Not `users.shoot_date` (the client account's own registration answer, which
+may be 未定 and belongs to an account, not a project); no column existed on
+projects before.
+
+- **Format:** strictly `'YYYY-MM-DD'`, a real calendar day (leap years
+  checked), years 1900–2100. No spaces, no time, no other separator.
+- **Set by the photographer:** `POST /api/admin/projects` takes optional
+  `shoot_date` (`''` / `null` / absent = not set; bad → 400
+  `{error, code: 'invalid_shoot_date'}`, nothing written, no link minted);
+  `PATCH /api/admin/projects/:id` takes `shoot_date` alongside the other keys
+  (`''` or `null` clears; bad → the route's 400 `invalid_body` for the whole
+  body). The PATCH answer echoes the stored value (`''` comes back `null`).
+  It is not a plan field: an archived project still takes it (a plan key in
+  the same body still 409s).
+- **Admin reads:** the create answer, `GET /api/admin/projects` (each row)
+  and `GET /api/admin/projects/:id` (`project.shoot_date`), always the key,
+  `null` when unset.
+- **Guest read:** only `GET /api/pick/state` → `shoot_date`, and only while
+  delivered (`mode === 'delivered'`) **and** confirmed (`confirmed_at` set,
+  by the guest or the photographer); `null` in every other state (picking,
+  retouching, delivered-unconfirmed, after undeliver / reopen / a repeat
+  deliver). Owner and viewers alike, like `confirmed_at`. No other guest
+  route carries it.
+- **Migration** `worker/migrations/2026-10-07-project-shoot-date.sql`
+  (`ALTER TABLE projects ADD COLUMN shoot_date TEXT`), hand-run before the
+  merge. Before it: list, detail and state answer with `shoot_date: null`
+  (the list keeps every other column: the shoot_date-less retry runs the
+  whole existing fallback chain), a create without a date works, and a
+  create or PATCH that names a date (PATCH: even `null`) is 500
+  `shoot_date_unavailable` with nothing written.
+
 ## Out of scope for this step
 
 Zip download of everything; watermarks; a second link just for delivery;

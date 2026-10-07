@@ -89,6 +89,7 @@ test('each project shows phase, flag, seat holder, submits and its live link', a
     client_confirmed_at: null, // not confirmed (docs/delivery.md, client confirmation)
     client_confirmed_by: null,
     open_revision_count: 0, // no open 要求修改
+    shoot_date: null, // not set (docs/delivery.md, shoot date)
     submission_count: 2,
     last_submitted_at: latest,
     unnotified_submissions: 2, // no mail binding here, so neither was emailed

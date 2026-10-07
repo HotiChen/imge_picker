@@ -27,7 +27,7 @@ const OBJECTS = {
 const FRESH = readFileSync(new URL('../schema.sql', import.meta.url), 'utf8');
 // a database before this migration: neither column, no table
 const strippedColumns = FRESH.replace(
-  /(extra_max\s+INTEGER),\n(?:\s*--[^\n]*\n)*\s*client_confirmed_at\s+TEXT,\n(?:\s*--[^\n]*\n)*\s*client_confirmed_by\s+TEXT\n\);/, '$1\n);');
+  /(extra_max\s+INTEGER),\n(?:\s*--[^\n]*\n)*\s*client_confirmed_at\s+TEXT,\n(?:\s*--[^\n]*\n)*\s*client_confirmed_by\s+TEXT,\n(?:\s*--[^\n]*\n)*\s*shoot_date\s+TEXT\n\);/, '$1\n);');
 const strippedTable = s => s.replace(/\n-- ─── Client confirmation[\s\S]*$/, '\n');
 const BEFORE = strippedTable(strippedColumns);
 // the two ALTERs run but not the CREATE TABLE (the D1 console runs one
@@ -138,7 +138,8 @@ test('migration: two ALTERs, one CREATE TABLE IF NOT EXISTS and its index, one s
   const cols = t => db._db.prepare(`PRAGMA table_info(${t})`).all().map(c => c.name);
   const fresh = fakeDB();
   const freshCols = t => fresh._db.prepare(`PRAGMA table_info(${t})`).all().map(c => c.name);
-  assert.deepEqual(cols('projects'), freshCols('projects'));
+  // (shoot_date comes later, from 2026-10-07-project-shoot-date.sql)
+  assert.deepEqual(cols('projects'), freshCols('projects').filter(c => c !== 'shoot_date'));
   // (the three revision-pins columns come later, from 2026-10-07-revision-pins.sql)
   assert.deepEqual(cols('revision_requests'), freshCols('revision_requests').filter(c => !['marks', 'finals', 'message_auto'].includes(c)));
   assert.deepEqual(cols('revision_requests'), ['id', 'project_id', 'picker_id', 'message', 'created_at', 'resolved_at']);

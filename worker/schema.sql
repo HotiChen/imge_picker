@@ -166,7 +166,16 @@ CREATE TABLE IF NOT EXISTS projects (
   client_confirmed_at TEXT,
   -- who confirmed: 'guest' (the seat holder) or 'photographer' (by hand,
   -- when the guest never answers); NULL with client_confirmed_at
-  client_confirmed_by TEXT
+  client_confirmed_by TEXT,
+  -- the day of the shoot, 'YYYY-MM-DD' (a real day, 1900–2100); NULL = not
+  -- set. Set by the photographer (POST /api/admin/projects, PATCH
+  -- /api/admin/projects/:id; '' or null clears). A guest sees it only in
+  -- /api/pick/state while delivered AND confirmed (the completion page).
+  -- Not users.shoot_date, the client account's own registration answer.
+  -- Appended, from a hand-run
+  --   ALTER TABLE projects ADD COLUMN shoot_date TEXT;
+  -- (worker/migrations/2026-10-07-project-shoot-date.sql).
+  shoot_date      TEXT
 );
 
 -- Everyone who ever held the seat. key_hash is the SHA-256 of the bearer key

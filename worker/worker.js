@@ -539,11 +539,36 @@ const isExtraMax = v => Number.isSafeInteger(v) && v >= 0 && v <= EXTRA_MAX_MAX;
 // plan fields; the proof switch is a plain boolean)
 const PROJECT_PATCH_FIELDS = {
   allow_proof_download: v => typeof v === 'boolean',
+  shoot_date: v => isShootDateInput(v),
   pick_limit: v => v === null || (Number.isSafeInteger(v) && v >= 0),
   extra_price: v => v === null || isMoney(v),
   extra_max: v => v === null || isExtraMax(v),
 };
 const EXTRA_MAX_UNAVAILABLE = { error: '加選上限功能尚未啟用', code: 'extra_max_unavailable' };
+// PATCH keys that are not the plan: they still apply to an archived project
+const PROJECT_NON_PLAN_FIELDS = ['allow_proof_download', 'shoot_date'];
+
+// projects.shoot_date (docs/delivery.md, "Shoot date"): the day of the shoot,
+// for the completion page. Strictly 'YYYY-MM-DD', a real calendar day from
+// SHOOT_YEAR_MIN to SHOOT_YEAR_MAX; '' or null on a write clears it (NULL).
+// Its own hand-run migration (2026-10-07-project-shoot-date.sql): before it,
+// reads say null and a write naming it answers 500 shoot_date_unavailable.
+// A guest reads it only in /api/pick/state while delivered and confirmed.
+const SHOOT_YEAR_MIN = 1900;
+const SHOOT_YEAR_MAX = 2100;
+const SHOOT_DATE_UNAVAILABLE = { error: '拍攝日期功能尚未啟用', code: 'shoot_date_unavailable' };
+function isShootDate(v) {
+  if (typeof v !== 'string') return false;
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(v);
+  if (!m) return false;
+  const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  if (y < SHOOT_YEAR_MIN || y > SHOOT_YEAR_MAX) return false;
+  const t = new Date(Date.UTC(y, mo - 1, d));
+  return t.getUTCFullYear() === y && t.getUTCMonth() === mo - 1 && t.getUTCDate() === d;
+}
+const isShootDateInput = v => v === null || v === '' || isShootDate(v);
+// what a valid input stores: '' clears like null
+const shootDateValue = v => (v === '' ? null : v);
 
 // The only image types a logo may be, decided by the bytes themselves. The
 // client's Content-Type is never consulted: an SVG (script) or HTML file
@@ -2377,6 +2402,12 @@ export default {
       } else {
         extra_max = await studioDefaultExtraMax(env, DEFAULT_PHOTOGRAPHER_ID);
       }
+      // shoot_date: optional, 'YYYY-MM-DD'; '' or null = not set
+      let shoot_date = null;
+      if (body && hasField(body, 'shoot_date')) {
+        if (!isShootDateInput(body.shoot_date)) return jsonOk({ error: 'shoot_date must be YYYY-MM-DD', code: 'invalid_shoot_date' }, 400);
+        shoot_date = shootDateValue(body.shoot_date);
+      }
       const id = crypto.randomUUID();
       const token = newShareToken();
       const now = Date.now();
@@ -2385,22 +2416,32 @@ export default {
       const foldersJson = JSON.stringify(snapshot);
       const cleanTitle = title.trim().slice(0, 200);
       // a database without the column yet (hand-run migration) still gets
-      // the project, uncapped like every project before the feature
-      const inserted = await withoutMissingColumn(
-        () => env.DB.prepare(
-          'INSERT INTO projects (id, title, folders, pick_limit, extra_price, created_at, photographer_id, extra_max) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
-        ).bind(id, cleanTitle, foldersJson, pick_limit, extra_price, createdAt, DEFAULT_PHOTOGRAPHER_ID, extra_max).run().then(() => extra_max),
-        () => env.DB.prepare(
-          'INSERT INTO projects (id, title, folders, pick_limit, extra_price, created_at, photographer_id) VALUES (?, ?, ?, ?, ?, ?, ?)'
-        ).bind(id, cleanTitle, foldersJson, pick_limit, extra_price, createdAt, DEFAULT_PHOTOGRAPHER_ID).run().then(() => null),
-      );
+      // the project, uncapped like every project before the feature. A
+      // shoot date is named only when set; set on a database without its
+      // column, both tries fail and nothing is written (500, below).
+      const shootCol = shoot_date === null ? '' : ', shoot_date';
+      const shootVal = shoot_date === null ? [] : [shoot_date];
+      let inserted;
+      try {
+        inserted = await withoutMissingColumn(
+          () => env.DB.prepare(
+            `INSERT INTO projects (id, title, folders, pick_limit, extra_price, created_at, photographer_id, extra_max${shootCol}) VALUES (?, ?, ?, ?, ?, ?, ?, ?${shootVal.map(() => ', ?').join('')})`
+          ).bind(id, cleanTitle, foldersJson, pick_limit, extra_price, createdAt, DEFAULT_PHOTOGRAPHER_ID, extra_max, ...shootVal).run().then(() => extra_max),
+          () => env.DB.prepare(
+            `INSERT INTO projects (id, title, folders, pick_limit, extra_price, created_at, photographer_id${shootCol}) VALUES (?, ?, ?, ?, ?, ?, ?${shootVal.map(() => ', ?').join('')})`
+          ).bind(id, cleanTitle, foldersJson, pick_limit, extra_price, createdAt, DEFAULT_PHOTOGRAPHER_ID, ...shootVal).run().then(() => null),
+        );
+      } catch (e) {
+        if (isMissingColumn(e) && shoot_date !== null) return jsonOk(SHOOT_DATE_UNAVAILABLE, 500);
+        throw e;
+      }
       // book_id '' keeps it off every book route and out of the per-album
       // list; the kind keeps it off everything else that is not a pick route
       await env.DB.prepare(
         "INSERT INTO share_tokens (token, book_id, label, kind, project_id, folders, created_at, expires_at) VALUES (?, '', ?, 'pick', ?, ?, ?, ?)"
       ).bind(token, cleanTitle, id, foldersJson, createdAt, expiresAt).run();
       return jsonOk({
-        project: { id, title: cleanTitle, folders: snapshot, pick_limit, extra_price, extra_max: inserted, photographer_id: DEFAULT_PHOTOGRAPHER_ID },
+        project: { id, title: cleanTitle, folders: snapshot, pick_limit, extra_price, extra_max: inserted, shoot_date, photographer_id: DEFAULT_PHOTOGRAPHER_ID },
         token, expires_at: expiresAt,
       }, 201);
     }
@@ -2421,9 +2462,9 @@ export default {
       const archivedFilter = params.get('archived') === '1' ? 'p.archived_at IS NOT NULL' : 'p.archived_at IS NULL';
       // the delivery columns come from a hand-run migration: until it runs the
       // list still loads, with every project undelivered and the switch off
-      const listed = delivery => env.DB.prepare(
+      const listed = (delivery, shoot) => env.DB.prepare(
         `SELECT p.id, p.title, p.phase, p.modified_after_submit, p.pick_limit, p.extra_price,
-                o.name AS owner_name, p.created_at, p.archived_at, p.delivered_at,${delivery}
+                o.name AS owner_name, p.created_at, p.archived_at, p.delivered_at,${shoot}${delivery}
                 (SELECT COUNT(*) FROM submissions s WHERE s.project_id = p.id) AS submission_count,
                 (SELECT MAX(s.created_at) FROM submissions s WHERE s.project_id = p.id) AS last_submitted_at,
                 ${PICK_UNNOTIFIED_SQL} AS unnotified_submissions,
@@ -2447,19 +2488,22 @@ export default {
       // later one: without them nothing is confirmed and nothing is open
       const confirmCols = ' p.client_confirmed_at, p.client_confirmed_by,' +
         ' (SELECT COUNT(*) FROM revision_requests r WHERE r.project_id = p.id AND r.resolved_at IS NULL) AS open_revision_count,';
-      const { results } = await withoutMissingSchema(
-        () => listed(' p.final_folders, p.allow_proof_download, p.extra_max,' + confirmCols),
+      // and shoot_date from a later one still: the whole chain runs with it
+      // first, so a database without it loses only it, never the rest
+      const chain = shoot => withoutMissingSchema(
+        () => listed(' p.final_folders, p.allow_proof_download, p.extra_max,' + confirmCols, shoot),
         () => withoutMissingColumn(
-          () => listed(' p.final_folders, p.allow_proof_download, p.extra_max,'),
+          () => listed(' p.final_folders, p.allow_proof_download, p.extra_max,', shoot),
           () => withoutMissingColumn(
-            () => listed(' p.final_folders, p.allow_proof_download,'),
-            () => listed(''),
+            () => listed(' p.final_folders, p.allow_proof_download,', shoot),
+            () => listed('', shoot),
           ),
         ),
       );
+      const { results } = await withoutMissingColumn(() => chain(' p.shoot_date,'), () => chain(''));
       return jsonOk({
         projects: results.map(r => ({
-          ...r, extra_max: r.extra_max ?? null, ...deliveryFields(r),
+          ...r, extra_max: r.extra_max ?? null, shoot_date: r.shoot_date ?? null, ...deliveryFields(r),
           client_confirmed_at: r.client_confirmed_at ?? null,
           client_confirmed_by: r.client_confirmed_by ?? null,
           open_revision_count: r.open_revision_count ?? 0,
@@ -2513,7 +2557,7 @@ export default {
       const revisions = await revisionRequestsFor(env, project.id);
       return jsonOk({
         project: {
-          ...project, folders, extra_max: project.extra_max ?? null, ...deliveryFields(project),
+          ...project, folders, extra_max: project.extra_max ?? null, shoot_date: project.shoot_date ?? null, ...deliveryFields(project),
           client_confirmed_at: project.client_confirmed_at ?? null,
           client_confirmed_by: project.client_confirmed_by ?? null,
           open_revision_count: revisions.open,
@@ -2847,12 +2891,12 @@ export default {
       const keys = isPlainObject(body) ? Object.keys(body) : [];
       if (!keys.length || !keys.every(k => hasField(PROJECT_PATCH_FIELDS, k) && PROJECT_PATCH_FIELDS[k](body[k]))) {
         return jsonOk({
-          error: 'Send any of {allow_proof_download: true|false, pick_limit, extra_price, extra_max: a whole number from 0, or null}',
+          error: "Send any of {allow_proof_download: true|false, pick_limit, extra_price, extra_max: a whole number from 0, or null, shoot_date: 'YYYY-MM-DD', '' or null}",
           code: 'invalid_body',
         }, 400, ADMIN_ONLY_HEADERS);
       }
-      const planEdit = keys.some(k => k !== 'allow_proof_download');
-      const value = k => k === 'allow_proof_download' ? (body[k] ? 1 : 0) : body[k];
+      const planEdit = keys.some(k => !PROJECT_NON_PLAN_FIELDS.includes(k));
+      const value = k => k === 'allow_proof_download' ? (body[k] ? 1 : 0) : k === 'shoot_date' ? shootDateValue(body[k]) : body[k];
       // column names are the allow-listed keys above, never free text
       let result;
       try {
@@ -2861,7 +2905,11 @@ export default {
           (planEdit ? ' AND archived_at IS NULL' : '')
         ).bind(...keys.map(value), pathParts[3], DEFAULT_PHOTOGRAPHER_ID).run();
       } catch (e) {
-        // extra_max before its hand-run migration: nothing was written
+        // extra_max or shoot_date before its hand-run migration: one
+        // statement, so nothing was written; the error names the column
+        if (isMissingColumn(e) && keys.includes('shoot_date') && /shoot_date/.test(String(e?.message || ''))) {
+          return jsonOk(SHOOT_DATE_UNAVAILABLE, 500, ADMIN_ONLY_HEADERS);
+        }
         if (isMissingColumn(e) && keys.includes('extra_max')) return jsonOk(EXTRA_MAX_UNAVAILABLE, 500, ADMIN_ONLY_HEADERS);
         throw e;
       }
@@ -2873,7 +2921,7 @@ export default {
         }
         return jsonErr('Not found', 404);
       }
-      return jsonOk({ ok: true, ...Object.fromEntries(keys.map(k => [k, body[k]])) }, 200, ADMIN_ONLY_HEADERS);
+      return jsonOk({ ok: true, ...Object.fromEntries(keys.map(k => [k, k === 'shoot_date' ? shootDateValue(body[k]) : body[k]])) }, 200, ADMIN_ONLY_HEADERS);
     }
     // any other write to /api/admin/projects/:id is not a route (without this
     // a PUT would fall through to the upload route and store it as a key)
@@ -3775,6 +3823,10 @@ export default {
           allow_proof_download: scope.proofOriginals,
           delivered_at: scope.mode === 'delivered' ? project.delivered_at : null,
           confirmed_at: delivered ? project.client_confirmed_at ?? null : null,
+          // the shoot day, for the completion page only: delivered and
+          // confirmed, owner and viewers alike; null before (and before the
+          // shoot-date migration)
+          shoot_date: delivered && project.client_confirmed_at ? project.shoot_date ?? null : null,
           revision_open: !!revision,
           // the fixed text of a round sent without a note is not the guest's
           revision_message: revision && isOwner && revision.message_auto !== 1 ? revision.message : null,

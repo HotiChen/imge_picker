@@ -84,7 +84,7 @@ function landOnce(env, re, fn) {
 // schema.sql as a database that has not had the extra-max migration
 const FRESH = readFileSync(new URL('../schema.sql', import.meta.url), 'utf8');
 const PRE_MIGRATION = FRESH
-  .replace(/(allow_proof_download INTEGER NOT NULL DEFAULT 0),\n(?:\s*--[^\n]*\n)*\s*extra_max\s+INTEGER,\n(?:\s*--[^\n]*\n)*\s*client_confirmed_at\s+TEXT,\n(?:\s*--[^\n]*\n)*\s*client_confirmed_by\s+TEXT\n\);/, '$1\n);')
+  .replace(/(allow_proof_download INTEGER NOT NULL DEFAULT 0),\n(?:\s*--[^\n]*\n)*\s*extra_max\s+INTEGER,\n(?:\s*--[^\n]*\n)*\s*client_confirmed_at\s+TEXT,\n(?:\s*--[^\n]*\n)*\s*client_confirmed_by\s+TEXT,\n(?:\s*--[^\n]*\n)*\s*shoot_date\s+TEXT\n\);/, '$1\n);')
   .replace(/(updated_at\s+TEXT),\n(?:\s*--[^\n]*\n)*\s*default_extra_max\s+INTEGER\n\);/, '$1\n);');
 const preMigrationEnv = () => setup({ DB: fakeDB({ schema: PRE_MIGRATION }) });
 
@@ -110,7 +110,8 @@ test('migration: two append-only ALTERs, noted in schema.sql; the fixture really
   // (the client-confirm columns appended after extra_max come back from
   // their own migration on top, so the column order is pinned)
   const confirmSql = readFileSync(new URL('../migrations/2026-10-04-client-confirm.sql', import.meta.url), 'utf8');
-  assert.deepEqual(shape(fakeDB({ schema: PRE_MIGRATION + '\n' + sql + '\n' + confirmSql })), shape(fakeDB()));
+  const shootSql = readFileSync(new URL('../migrations/2026-10-07-project-shoot-date.sql', import.meta.url), 'utf8');
+  assert.deepEqual(shape(fakeDB({ schema: PRE_MIGRATION + '\n' + sql + '\n' + confirmSql + '\n' + shootSql })), shape(fakeDB()));
   // and a second paste fails loudly rather than doing anything
   const twice = fakeDB({ schema: PRE_MIGRATION + '\n' + sql });
   assert.throws(() => twice._db.exec(sql), /duplicate column/);
