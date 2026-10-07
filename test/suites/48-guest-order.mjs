@@ -343,7 +343,11 @@ const layout = (page, label, ok) => page.evaluate(() => {
     ok('a plain-Chinese network message, and the button is usable again', (await $(page, '#goSubmitError')).includes('無法連線') && await page.evaluate(() => !document.getElementById('goSubmit').disabled), await $(page, '#goSubmitError'));
     w.ctl.dropAfterWrite = true;
     await click(page, '#goSubmit');
-    await page.waitForFunction(() => /無法連線/.test(document.getElementById('goSubmitError')?.textContent || ''), null, { timeout: 4000 });
+    // the error text from the first failure is still on screen, so wait for the SECOND request to arrive, then for the button to be free again:
+    // submitOrder() disables #goSubmit synchronously on the click and only the re-render after the answer re-enables it, so the button
+    // check cannot pass on the stale text. 8 s (the other waits here are 4 s) because this one spans a whole request round trip under load.
+    await waitPosts(w, 2);
+    await page.waitForFunction(() => { const b = document.getElementById('goSubmit'); return b && !b.disabled && /無法連線/.test(document.getElementById('goSubmitError')?.textContent || ''); }, null, { timeout: 8000 });
     ok('the Worker wrote the order but the answer was lost: 1 stored order, the page still on review', w.orders.length === 1 && await page.evaluate(() => document.getElementById('goSheet').dataset.step) === 'review');
     await click(page, '#goSubmit');
     await step(page, 'receipt');
