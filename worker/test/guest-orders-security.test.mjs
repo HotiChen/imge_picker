@@ -175,9 +175,32 @@ test('#8 the same request twice (double tap, retry): 200 replay, one order, one 
   assert.deepEqual([a.status, b.status].sort(), [200, 201]);
   assert.equal(orderRows(env).length, 1);
   assert.equal(mail(env).length, 1);
+  // the twin lands between this request's replay check and its write: the
+  // INSERT itself refuses a second order for the request, and the answer is
+  // the twin's order (the unique index is only the backstop)
+  const twin = orderBody(c);
+  landOnce(env, /INSERT INTO orders/, `INSERT INTO orders (id, photographer_id, project_id, source, status, picker_id, request_id, contact_name, created_at, updated_at)
+    VALUES ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'default', ?, 'guest', 'requested', ?, ?, '王小明', 'x', 'x')`, p.id, p.pickerId, twin.request_id);
+  const raced = await placeOrder(env, p, twin);
+  assert.equal(raced.status, 200, await raced.clone().text());
+  const rj = await raced.json();
+  assert.equal(rj.replay, true);
+  assert.equal(rj.order.id, 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
+  assert.equal(orderRows(env).filter(o => o.request_id === twin.request_id).length, 1);
   const bad = await placeOrder(env, p, orderBody(c, { request_id: 'not-a-uuid' }));
   assert.equal(bad.status, 400);
   assert.equal(await code(bad), 'invalid_request_id');
+  // a request id already on another seat holder's order here (a seat reset,
+  // and the id reused): never that order, never a second one — 409
+  const firstId = (await (a.status === 201 ? a : b).clone().json()).order.id;
+  assert.equal((await call(env, `/api/admin/projects/${p.id}/reset-seat`, { method: 'POST', token: SECRET })).status, 200);
+  const next = await claim(env, p.token, '新的人');
+  const dup = await placeOrder(env, p, { ...body }, next.key);
+  assert.equal(dup.status, 409, await dup.clone().text());
+  const dj = await dup.json();
+  assert.equal(dj.code, 'duplicate_request');
+  assert.ok(!JSON.stringify(dj).includes(firstId));
+  assert.equal(orderRows(env).filter(o => o.request_id === body.request_id).length, 1);
   // the replay is the seat holder's own: another project's order with the
   // same request id is not handed out (a new order lands here)
   const q = await confirmed(env);

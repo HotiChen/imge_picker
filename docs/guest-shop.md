@@ -1138,3 +1138,169 @@ Tim 的角色是**平台方**（photographers 是平台的客戶；試營運只�
 - **Q11：S2 不自動檢查無框畫解析度**（建議 A）。上傳時存照片寬高（建議 C）是上傳路徑的改動，**另開一個小任務，不放進 S2**。
 - **Q7：個資告知與開關。**S2 做好後 `GUEST_ORDERS` 預設 `off`；審閱前客人只看得到「我有興趣」。誰來審：Tim 之後決定，不擋程式。
 - 工作切分照 §9（WP1 Worker → WP2 對抗式審查 → WP3 客人端 ‖ WP4 攝影師端 → 合併）。
+
+## S2 — built (Worker, WP1, 2026-10-09)
+
+What the Worker serves, per the 2026-10-08 design as overridden by 「S2 — Tim 的決定」: **pickup only** (no
+shipping fee, no shipping line, no address column, `delivery_method` is always `'pickup'`), the transfer text
+read through one function, no resolution check, switch shipped `off`. Tests: `worker/test/guest-orders.test.mjs`
+(contract, money, state matrix, admin side, before the migration) and `worker/test/guest-orders-security.test.mjs`
+(§7, one test per case; #23 is now "pickup only").
+
+There was no payment text in `studio_settings` to reuse (the decision assumed one): the migration adds
+`studio_settings.transfer_info`, and the guest side reads it only through `readTransferInfo(env, project)`.
+
+### Migration (Tim, D1 Console, one statement at a time, before the merge)
+
+`worker/migrations/2026-10-09-guest-orders.sql`, 11 statements:
+
+```sql
+ALTER TABLE orders ADD COLUMN request_id TEXT;
+ALTER TABLE orders ADD COLUMN contact_name TEXT;
+ALTER TABLE orders ADD COLUMN contact_phone TEXT;
+ALTER TABLE orders ADD COLUMN contact_line TEXT;
+ALTER TABLE orders ADD COLUMN delivery_method TEXT;
+ALTER TABLE orders ADD COLUMN consent_version TEXT;
+ALTER TABLE orders ADD COLUMN contact_erased_at TEXT;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_request ON orders(project_id, request_id);
+ALTER TABLE order_items ADD COLUMN list_price INTEGER;
+ALTER TABLE order_items ADD COLUMN layout TEXT;
+ALTER TABLE studio_settings ADD COLUMN transfer_info TEXT;
+```
+
+Until **all** columns are there (a half-run paste counts as not run): the three guest routes answer 500
+`orders_unavailable` and write nothing; `/api/pick/shop` says `ordering: null`; a settings PUT naming
+`transfer_info` and `erase-contact` answer 500 `orders_unavailable`. Everything else works as before (admin order
+reads / create / PUT / payment / status, stats, settings without the field), the new fields reading `null`. The
+unique index is a backstop only: idempotency is the INSERT's own `NOT EXISTS`.
+
+### The switch
+
+`GUEST_ORDERS` in `worker/wrangler.toml` `[vars]` (shipped `"off"`): exactly `"on"` = open; exactly `"pilot"` =
+open only for the project ids in `GUEST_ORDERS_PILOT` (comma separated, spaces trimmed); anything else, unset or a
+typo = off. Read in one function (`guestOrdersEnabled`). Off: `POST /api/pick/orders` → 403 `ordering_disabled`,
+`/shop` → `ordering: null`. GET and cancel never look at the switch (a guest always sees / cancels their own
+requested order).
+
+### `GET /api/pick/shop` (changed)
+
+Gains one key, the same for owner and viewers: `ordering: null` (switch off for this project, or migration not
+run), else `{consent_version: "v1", delivery_methods: ["pickup"], max_lines: 20, print_qty_max: 10,
+album_qty_max: 3}`. Non-null does **not** mean this caller may order: the page also needs `is_owner` and
+`confirmed_at` from `/api/pick/state`. An album whose `min_pages` is `null` cannot be ordered
+(`album_not_orderable`): show it as information / 「我有興趣」 only.
+
+### `POST /api/pick/orders`
+
+Pick link (`?t=` / `X-Share-Token`) + `X-Picker-Key`. Body (≤ 32 KB):
+
+```
+{ request_id: "<uuid v4>",                       // a new one per submit; resend the same one on retry
+  lines: [ {option_id, qty, photo_key}           // print: one final per line, qty 1–10 copies of it
+         | {option_id, qty, spreads} ],          // album: 1–3 copies, spreads = inside spreads (min_pages … max_pages)
+  contact: { name, phone?, line? },              // name 1–50; phone 6–20 of [0-9 + - ( ) space] and/or LINE ID 1–50
+  delivery: { method: "pickup" },                // optional; anything but pickup is refused
+  note?: string,                                 // ≤ 500, line breaks kept
+  expected_total: integer,                       // the total the page showed
+  consent: "v1" }                                // = ordering.consent_version
+```
+
+Unknown keys are ignored; nothing money-related is read (`unit_price`, `price`, `total`, `kind`, `name`,
+`photo_keys`, … have no effect). Checks, in this order:
+
+| Status | code | when |
+|---|---|---|
+| 401 | — | dead link (unknown, expired, revoked, archived project), any non-pick token |
+| 404 | `not_found` | a path under `orders/` other than `orders/:id/cancel` |
+| 405 | — | not GET/POST (`Allow: GET, POST`) |
+| 403 | `not_owner` | viewer, no / wrong key, another project's key, key from before a seat reset |
+| 403 | `ordering_disabled` | switch off for this project |
+| 409 | `not_confirmed` | not delivered now, or delivered but not confirmed by the client (before the body is read) |
+| 413 | `too_large` (`max`) | body over 32 KB |
+| 400 | `Invalid JSON` (error only) / `invalid_body` | not JSON / not an object |
+| 400 | `invalid_request_id` | not a UUID v4 |
+| 400 | `invalid_lines` / `too_many_lines` (`max: 20`) | not a 1–20 array of objects with a 1–200 char `option_id` |
+| 400 | `invalid_qty` | qty not a whole number 1–10 (album: 1–3, judged after the catalogue) |
+| 400 | `invalid_photo_key` | not a string / empty / control characters / a folder / > 256 chars; a print line without one |
+| 400 | `duplicate_line` | the same option and photo (or the same album option) twice |
+| 400 | `invalid_spreads` | not a whole number 1–200; an album line without one |
+| 400 | `invalid_contact` | see contact above (control / bidi characters refused) |
+| 400 | `invalid_delivery` | delivery present and not `{method: "pickup"}` |
+| 400 | `consent_required` | consent ≠ `"v1"` |
+| 400 | `invalid_note` | not a string, > 500, control (but line feed) / bidi characters |
+| 400 | `invalid_body` | `expected_total` not a whole number ≥ 0 |
+| 500 | `orders_unavailable` | migration not (fully) run |
+| 200 | — | `{order, replay: true}`: this seat holder already placed this `request_id` here (whatever the body says now) |
+| 500 | `shop_unavailable` | catalogue tables missing |
+| 404 | `product_not_offered` | option not in `readGuestShop` for the project's photographer now (hidden, retired, platform-retired, under the platform price, a service, another photographer's, unknown) |
+| 400 | `invalid_lines` | a print line with `spreads`, an album line with `photo_key` |
+| 403 | `not_in_finals` | a print photo outside the finals of the delivery up now (proofs never, even with proof download on) |
+| 404 | `photo_not_found` | in the finals folder but not in R2 |
+| 400 | `album_not_orderable` | the album's platform product has no `min_pages` |
+| 400 | `pages_below_min` / `pages_above_max` | spreads outside the range |
+| 400 | `extra_pages_unpriced` | spreads above `min_pages` and no `extra_page_price` |
+| 409 | `price_changed` | server total ≠ `expected_total`; `quote: {lines: [{option_id, qty, unit_price}], subtotal, total}`; nothing written |
+| 401 / 403 / 409 | — / `not_owner` / `not_confirmed`, `delivery_changed` | the write did not land because the link, seat or delivery changed during the request (re-read) |
+| 409 | `too_many_open_orders` (`max: 3`) / `order_cap` (`max: 20`) | 3 requested at once / 20 guest orders in this project, cancelled included |
+| 409 | `duplicate_request` | this `request_id` is already on another seat holder's order in this project (only after a seat reset with a reused id: make a new one) |
+| 201 | — | `{order}` |
+
+Money: print `unit_price` = the option price; album `unit_price` = option price + (spreads − min_pages) ×
+`extra_page_price` (each copy). `list_price` = option price, `unit_cost` = platform price, as for admin lines.
+Album lines store `photo_keys: []` (= all finals, 請攝影師排版) and `layout
+{"v":1,"mode":"photographer","source":"all_finals","spreads":N}`. The write is one gated batch (seat, not archived,
+link not revoked, `delivered_at` and `final_folders` as read, confirmed, request not there, both caps). After a
+201 the photographer gets one email (`[新訂單] <title> — <contact name>：NT$<total>`; lines, 面交, note; never the
+phone or LINE ID; link `https://imhoti.tw/studio/orders.html?status=requested`). The guest gets no email (Q14).
+
+### `GET /api/pick/orders` and `POST /api/pick/orders/:id/cancel`
+
+GET: 401 → 405 → 403 `not_owner` → 500 `orders_unavailable` → 200 `{orders: [guest view]}` (this seat holder's
+guest orders in this project, newest first, ≤ 20).
+
+Cancel (no body): 401 → 404 (bad path) → 405 (`Allow: POST`) → 403 `not_owner` → 404 `not_found` (not a UUID) →
+500 `orders_unavailable` → 404 `not_found` (not this project / this seat holder / a guest order) → 200 `{order}` when
+already cancelled (nothing written) → 409 `bad_transition` (`from`, `to: "cancelled"`) unless requested → one
+`UPDATE … WHERE status = 'requested'` (an admin confirm landing first → 409 `bad_transition`, `from: "confirmed"`)
+→ 200 `{order}` + an email `[客人取消訂單] …`.
+
+**Guest view** (the only order shape a guest route returns):
+
+```
+{ id, status: "requested"|"confirmed"|"fulfilled"|"cancelled", created_at, confirmed_at, cancelled_at,
+  items: [{ kind: "print"|"album", name, option_label, qty, unit_price, photo_name: "f1.jpg"|null, spreads: 12|null }],
+  subtotal, discount, total, paid: boolean,          // paid_amount >= total
+  delivery_method: "pickup", guest_note,
+  contact: { name, phone|null, line|null },          // after 清除聯絡資料: only the name
+  transfer_info: string|null }                       // only when confirmed / fulfilled, and set in settings
+```
+
+Never `note`, costs, platform ids, `list_price`, `request_id`, `picker_id`, `consent_version`, the stored layout, a
+folder or a full key.
+
+### Photographer side
+
+- `GET /api/admin/orders`, `GET /api/admin/projects/:id/orders`, every single-order answer: named columns (no
+  `o.*`, never `request_id` or `vendor_cost`). Each order gains `contact: {name, phone, line, erased_at} | null`
+  (null on admin / system orders), `delivery_method` (`'pickup'` | null), `consent_version` (`'v1'` | null),
+  `project_delivered` (boolean: the project is delivered right now — show 「專案目前未交件」 on a guest order when
+  false; orders are never changed by undeliver / reopen / 更換精修, Q13-A). Items gain `list_price` (null on old
+  lines and the extra-pick line) and `layout` (parsed object or null).
+- `POST /api/admin/orders/:id/erase-contact` (no body): 200 `{order}` (phone and LINE ID null, `erased_at` set, name
+  kept); already erased → 200, nothing written; 404 unknown / another photographer's; 409 `no_contact` on an admin /
+  system order; 500 `orders_unavailable` before the migration.
+- Confirm / cancel / payment / discount: the existing routes, unchanged (`requested → confirmed` is one tap).
+- `GET /api/admin/stats`: `todo.requested_orders` (guest orders still `requested`, archived projects included).
+- `GET/PUT /api/admin/settings`: `transfer_info` (string ≤ 500, line breaks kept, trimmed, `''`/null clears,
+  control / bidi characters → 400 `invalid_transfer_info`).
+- `POST /api/admin/projects/:id/orders` and `PUT /api/admin/orders/:id`: lines may now carry a final photo (the
+  project's last chosen finals, even after undeliver) as well as proofs (Q17-A, the old bug); a photo a kept line
+  already carries is not re-checked (a later delivery may have moved the finals). New lines record `list_price`.
+- `PATCH /api/admin/projects/:id`: unchanged (its only S2 addition was the shipping fee).
+
+### Not done / not verified
+
+- No per-IP rate limit (caps only: 3 open, 20 per project, 20 lines, 32 KB). No honeypot (not in the 10-08 design).
+- Not verified outside node:sqlite: D1's handling of the gated `INSERT … SELECT` with the unique index (several
+  NULLs), D1's error wording for a missing column inside a batch, `R2.head` on real keys, real email delivery and
+  how the Chinese subject shows in Gmail.

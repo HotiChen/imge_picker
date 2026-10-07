@@ -11,7 +11,7 @@ import {
   WORKER, MIGRATION, MIGRATION_FILE, statementsOf, s2Schema, envOf, catalogue, confirmed, ready, printLine, albumLine,
   orderBody, placeOrder, myOrders, cancelOrder, placed, orderRows, itemRows, dbSnapshot, adminOrders, code,
   F1, F2, F3, PA, FINAL, FINAL2, FRESH, fakeMailer, admin, deliver, confirm, retouching, delivered, SECRET, call, pick,
-  rows, one, S2_ORDER_COLUMNS, S2_ITEM_COLUMNS, S2_SETTINGS_COLUMNS,
+  rows, one, landOnce, S2_ORDER_COLUMNS, S2_ITEM_COLUMNS, S2_SETTINGS_COLUMNS,
 } from './guest-order-helpers.mjs';
 
 const mail = env => env.NOTIFY_EMAIL.sent;
@@ -317,6 +317,13 @@ test('the same request_id again: 200 {order, replay:true}, one order, one email 
   const other = await placeOrder(env, p, { ...body, lines: [printLine(c, { qty: 3 })], expected_total: 9000 });
   assert.equal(other.status, 200);
   assert.equal((await other.json()).order.id, a.id);
+  // the photographer repriced since: a retry is still the order that landed,
+  // never a price_changed (the guest would submit again with a new id)
+  env.DB._db.prepare('UPDATE product_options SET price = 3500 WHERE id = ?').run(c.print.options[0].id);
+  const late = await placeOrder(env, p, body);
+  assert.equal(late.status, 200);
+  assert.equal((await late.json()).order.total, 3000);
+  env.DB._db.prepare('UPDATE product_options SET price = 3000 WHERE id = ?').run(c.print.options[0].id);
   assert.equal(orderRows(env).length, 1);
   assert.equal(itemRows(env).length, 1);
   assert.equal(mail(env).length, 1);
@@ -591,6 +598,14 @@ test('a half-run migration (one statement at a time) is still unavailable: never
   assert.equal((await placeOrder(env, p, body)).status, 201);
   assert.equal((await placeOrder(env, p, body)).status, 200);
   assert.equal(orderRows(env).length, 1);
+  // a twin landing between the replay check and the write: the INSERT's own
+  // NOT EXISTS keeps it to one order, with no index to fall back on
+  const twin = orderBody(c);
+  landOnce(env, /INSERT INTO orders/, `INSERT INTO orders (id, photographer_id, project_id, source, status, picker_id, request_id, contact_name, created_at, updated_at)
+    VALUES ('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', 'default', ?, 'guest', 'requested', ?, ?, '王小明', 'x', 'x')`, p.id, p.pickerId, twin.request_id);
+  const raced = await placeOrder(env, p, twin);
+  assert.equal(raced.status, 200);
+  assert.equal(orderRows(env).filter(o => o.request_id === twin.request_id).length, 1);
 });
 
 test('before the migration the photographer\'s order routes and stats work as before (new fields read null)', async () => {
@@ -743,6 +758,8 @@ test('stats: todo.requested_orders counts the guest orders waiting for confirmat
   assert.equal(await get(), 0);
   const a = await placed(env, p, c);
   await placed(env, p, c);
+  // a requested order that is not a guest's never counts (none should exist)
+  env.DB._db.prepare("INSERT INTO orders (id, photographer_id, project_id, source, status, created_at, updated_at) VALUES ('adm', 'default', ?, 'admin', 'requested', 'x', 'x')").run(p.id);
   assert.equal(await get(), 2);
   await orderStatus(env, a.id, 'confirmed');
   assert.equal(await get(), 1);
