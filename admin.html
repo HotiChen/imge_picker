@@ -9,6 +9,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@600;900&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="css/revision-rounds-view.css?v=20261007h">
 <link rel="stylesheet" href="css/side-nav.css?v=20261007h">
+<link rel="stylesheet" href="css/guest-order-card.css?v=20261007h">
 <style>
   /* Bright theme, shared with home.html / dashboard.html / settings.html — cream
      ground, white cards, dark ink, warm accent, soft pastel pills. The photographer's
@@ -2438,7 +2439,6 @@
 
   function orderCardHtml(o) {
     const pay = O.paymentState(o);
-    const moves = O.STATUS_MOVES[o.status] || [];
     const items = o.items || [];
     const lines = items.map(i => `<tr data-item-id="${escHtml(i.id)}">
         <td>${escHtml(O.lineName(i))} <span class="badge badge-pending">${escHtml(O.KIND_LABEL[i.kind] || i.kind)}</span>
@@ -2457,11 +2457,12 @@
       </div>` : '';
     return `<div class="ord-card ${escHtml(o.status)}" data-order-id="${escHtml(o.id)}" data-status="${escHtml(o.status)}" data-source="${escHtml(o.source)}">
       <div class="ord-head">
-        <span class="badge ${o.status === 'confirmed' || o.status === 'fulfilled' ? 'badge-approved' : 'badge-pending'} ord-status">${escHtml(O.STATUS_LABEL[o.status] || o.status)}</span>
+        <span class="badge ${o.status === 'confirmed' || o.status === 'fulfilled' ? 'badge-approved' : 'badge-pending'} ord-status">${escHtml(O.statusLabel(o))}</span>
         ${o.status === 'cancelled' && !o.paid_amount ? '' : `<span class="badge ${pay === 'paid' || pay === 'free' ? 'badge-approved' : 'badge-pending'} ord-pay" data-pay="${pay}">${escHtml(O.PAYMENT_LABEL[pay])}</span>`}
         <span class="folder-none">${escHtml(O.SOURCE_LABEL[o.source] || o.source)}</span>
         <span class="ord-time">${escHtml(fmtTime(o.created_at))}</span>
       </div>
+      <div data-guest-slot></div>
       <table class="ord-table"><thead><tr><th>品項</th><th class="num">單價</th><th class="num">數量</th><th class="num">小計</th></tr></thead><tbody>${lines}</tbody></table>
       <div class="ord-totals">
         <div>小計 ${O.money(o.subtotal)}${o.discount ? ` · 折扣 −${O.money(o.discount)}` : ''}</div>
@@ -2471,10 +2472,10 @@
         <div class="muted">成本 ${O.money(o.cost)} · 毛利 ${O.money(o.total - o.cost)}</div>
       </div>
       ${o.note ? `<div class="ord-note">備註：${escHtml(o.note)}</div>` : ''}
-      ${o.guest_note ? `<div class="ord-note">客人留言：${escHtml(o.guest_note)}</div>` : ''}
+      ${o.guest_note && o.source !== 'guest' ? `<div class="ord-note">客人留言：${escHtml(o.guest_note)}</div>` : ''}
       ${payForm}
       <div class="ord-actions">
-        ${moves.map(([to, label]) => `<button type="button" class="btn ${to === 'cancelled' ? 'btn-danger' : 'btn-accent'}" data-status-to="${to}">${escHtml(label)}</button>`).join('')}
+        ${O.movesFor(o).map(([to, label]) => `<button type="button" class="btn ${to === 'cancelled' ? 'btn-danger' : 'btn-accent'}" data-status-to="${to}">${escHtml(label)}</button>`).join('')}
         ${canEdit ? '<button type="button" class="btn btn-ghost" data-order-edit>編輯</button>' : ''}
         ${canPay && oc.paying !== o.id ? '<button type="button" class="btn btn-ghost" data-pay-open>記錄收款</button>' : ''}
         ${o.paid_amount > 0 ? '<button type="button" class="btn btn-ghost" data-pay-clear>清除收款</button>' : ''}
@@ -2496,6 +2497,12 @@
       ${editingNew ? editorHtml(null) : ''}
       ${oc.editing ? '' : '<button type="button" id="pd-order-add-btn" class="btn btn-outline" style="margin-top:6px;">＋ 新增訂單</button>'}
       <div class="ord-err" id="pd-order-err">${escHtml(oc.msg._ || '')}</div>`;
+    // a guest order's contact card is built with textContent (js/orders-common.js), not into the string above
+    for (const o of oc.orders) {
+      const card = O.guestCard(o);
+      const slot = card && box.querySelector(`.ord-card[data-order-id="${CSS.escape(o.id)}"] [data-guest-slot]`);
+      if (slot) slot.replaceWith(card);
+    }
     refreshSecSummaries();
   }
 
@@ -2702,6 +2709,11 @@
     if (t.closest('[data-pay-clear]')) {
       if (!confirm('確定清除這筆訂單的收款紀錄？')) return;
       await orderCall(id, `/api/admin/orders/${encodeURIComponent(id)}/payment`, 'POST', { paid_amount: 0 });
+      return;
+    }
+    if (t.closest('[data-erase-contact]')) {
+      if (!confirm(O.ERASE_CONFIRM)) return;
+      await orderCall(id, `/api/admin/orders/${encodeURIComponent(id)}/erase-contact`, 'POST');
       return;
     }
     const mv = t.closest('[data-status-to]');

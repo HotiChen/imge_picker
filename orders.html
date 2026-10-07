@@ -8,6 +8,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@600;900&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="css/side-nav.css?v=20261007h">
+<link rel="stylesheet" href="css/guest-order-card.css?v=20261007h">
 <style>
   /* Bright design, approved by Tim (design-canvas spec: /tmp/claude-0/light-design.html) —
      cream ground, white cards, dark ink text, warm accent, soft pastel pills. */
@@ -50,7 +51,7 @@
   .chip.active { background: var(--accent-dim); border-color: var(--accent-dim); color: var(--ink-90); font-weight: 600; }
 
   .summary { font-size: 12px; color: var(--ink-55); margin-bottom: 10px; }
-  .ord-row { display: flex; justify-content: space-between; align-items: flex-start; gap: 14px; padding: 14px 0; border-top: 1px solid var(--rule); }
+  .ord-row { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-start; gap: 14px; padding: 14px 0; border-top: 1px solid var(--rule); }
   .ord-row:first-child { border-top: none; }
   .ord-row.cancelled { opacity: .55; }
   .ord-main { min-width: 0; }
@@ -141,7 +142,7 @@
     return `<div class="ord-row ${O.esc(o.status)}" data-order-id="${O.esc(o.id)}" data-status="${O.esc(o.status)}">
       <div class="ord-main">
         <a class="ord-proj" href="${href}">${O.esc(o.project_title || '（未命名）')}</a>
-        <span class="badge badge-status ${O.esc(o.status)}">${O.esc(O.STATUS_LABEL[o.status] || o.status)}</span>
+        <span class="badge badge-status ${O.esc(o.status)}${O.isGuest(o) && o.status === 'requested' ? ' guest-req' : ''}">${O.esc(O.statusLabel(o))}</span>
         ${o.status === 'cancelled' && !o.paid_amount ? '' : `<span class="badge badge-pay-${pay}">${O.esc(O.PAYMENT_LABEL[pay])}</span>`}
         <div class="ord-lines">${lines || '（沒有品項）'}</div>
       </div>
@@ -168,9 +169,52 @@
     }
     const orders = r.data.orders || [];
     listEl.innerHTML = orders.length ? orders.map(rowHtml).join('') : '<div class="empty">沒有符合的訂單</div>';
+    // the guest's card is built with textContent (js/orders-common.js), never into the HTML string above
+    for (const o of orders) {
+      const card = O.guestCard(o);
+      if (!card) continue;
+      const rowEl = listEl.querySelector(`[data-order-id="${CSS.escape(o.id)}"]`);
+      if (!rowEl) continue;
+      rowEl.appendChild(card);
+      const moves = O.movesFor(o);
+      if (moves.length) {
+        const bar = document.createElement('div');
+        bar.className = 'guest-actions';
+        for (const [to, label] of moves) {
+          const b = document.createElement('button');
+          b.type = 'button';
+          b.className = 'gbtn ' + (to === 'cancelled' ? 'gbtn-danger' : 'gbtn-go');
+          b.setAttribute('data-status-to', to);
+          b.textContent = label;
+          bar.appendChild(b);
+        }
+        rowEl.appendChild(bar);
+      }
+    }
     const owed = orders.reduce((n, o) => n + (Number(o.outstanding) || 0), 0);
     summaryEl.textContent = orders.length ? `${orders.length} 筆 · 未收合計 ${O.money(owed)}` : '';
   }
+
+  // 確認訂單 / 取消 / 清除客人個資: the existing status route and erase-contact, then re-read the list
+  listEl.addEventListener('click', async e => {
+    const rowEl = e.target.closest('.ord-row');
+    const mv = e.target.closest('[data-status-to]');
+    const er = e.target.closest('[data-erase-contact]');
+    if (!rowEl || (!mv && !er)) return;
+    const id = rowEl.dataset.orderId;
+    errEl.textContent = '';
+    let r;
+    if (mv) {
+      const to = mv.dataset.statusTo;
+      if (to === 'cancelled' && !confirm('確定取消這筆訂單？取消後就不能再修改金額或收款。')) return;
+      r = await api(`/api/admin/orders/${encodeURIComponent(id)}/status`, 'POST', { status: to });
+    } else {
+      if (!confirm(O.ERASE_CONFIRM)) return;
+      r = await api(`/api/admin/orders/${encodeURIComponent(id)}/erase-contact`, 'POST');
+    }
+    if (!r.ok) { errEl.textContent = O.errorText(r.data, r.status); if (r.data && r.data.code === 'bad_transition') load(); return; }
+    await load();
+  });
 
   filtersEl.addEventListener('click', e => {
     const b = e.target.closest('[data-filter]');
@@ -181,8 +225,11 @@
   });
 
   // dashboard's 未付款訂單 links here with ?filter=unpaid
-  const wanted = new URLSearchParams(location.search).get('filter');
+  // and the new-order email links here with ?status=requested
+  const qs = new URLSearchParams(location.search);
+  const wanted = qs.get('filter');
   if (FILTERS.some(f => f[0] === wanted)) current = wanted;
+  else if (['requested', 'confirmed', 'fulfilled', 'cancelled'].includes(qs.get('status'))) current = qs.get('status');
   renderFilters();
   load();
 })();

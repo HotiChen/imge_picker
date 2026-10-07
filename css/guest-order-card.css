@@ -1,0 +1,22 @@
+/* Guest order card (js/orders-common.js guestCard): orders.html and the admin project detail.
+   Photographer pages: cream theme tokens (--rule, --card, --peach, --ink-*, --danger) come from the page. */
+.gc { flex: 1 0 100%; min-width: 0; margin-top: 10px; padding: 10px 12px; border: 1px solid var(--rule); border-radius: 12px; background: var(--card); font-size: 13px; line-height: 1.7; overflow-wrap: anywhere; }
+.ord-card .gc { margin: 0 0 8px; }
+.gc-warn { margin-bottom: 8px; padding: 8px 10px; border: 2px solid var(--danger); border-radius: 10px; background: var(--peach); color: var(--ink-90); font-weight: 600; }
+.gc-row { display: flex; gap: 8px; align-items: baseline; min-width: 0; }
+.gc-label { flex: none; color: var(--ink-55); font-size: 12px; min-width: 4.5em; }
+.gc-name, .gc-phone, .gc-line, .gc-note, .gc-photo, .gc-item-name { unicode-bidi: isolate; min-width: 0; overflow-wrap: anywhere; }
+.gc-name { font-weight: 600; }
+.gc-note { white-space: pre-wrap; }
+.gc-erased { color: var(--ink-55); font-style: italic; }
+.gc-items { margin-top: 6px; border-top: 1px dashed var(--rule); }
+.gc-item { display: flex; flex-wrap: wrap; gap: 2px 10px; padding: 4px 0; border-top: 1px solid var(--rule); font-size: 12px; color: var(--ink-70); }
+.gc-item:first-child { border-top: 0; }
+.gc-photo { font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: var(--ink-55); }
+.gc-erase { margin-top: 8px; min-height: 36px; border: 1px solid var(--danger); color: var(--danger); background: var(--surface, #fff); border-radius: 999px; padding: 5px 12px; cursor: pointer; font-size: 12px; font-family: inherit; }
+.guest-actions { flex: 1 0 100%; display: flex; flex-wrap: wrap; gap: 8px; }
+.guest-actions button { min-height: 36px; }
+.badge-status.guest-req { background: var(--peach); color: var(--ink-90); font-weight: 600; }
+.gbtn { padding: 5px 14px; border-radius: 999px; border: 1px solid var(--accent-dim, #ffd9a8); background: var(--surface, #fff); color: var(--ink-90); cursor: pointer; font-size: 13px; font-weight: 600; font-family: inherit; }
+.gbtn-go { background: var(--accent, #f5a13b); border-color: var(--accent, #f5a13b); }
+.gbtn-danger { color: var(--danger); border-color: var(--danger); }

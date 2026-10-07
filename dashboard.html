@@ -244,11 +244,12 @@
         { n: todo.submitted_not_retouching || 0, label: '個專案已送出但尚未開始精修' },
         { n: todo.unnotified_submissions || 0, label: '次送出尚未寄信通知' },
         { n: todo.modified_after_submit || 0, label: '個專案送出後又被修改' },
-        { n: todo.unpaid_orders || 0, label: '', href: 'orders.html?filter=unpaid', prefix: '未付款訂單' },
+        { n: todo.requested_orders || 0, label: '', href: 'orders.html?status=requested', prefix: '待確認訂單', key: 'requested-orders' },
+        { n: todo.unpaid_orders || 0, label: '', href: 'orders.html?filter=unpaid', prefix: '未付款訂單', key: 'unpaid-orders' },
       ].filter(i => i.n > 0);
       const list = document.getElementById('todo-list');
       list.innerHTML = items.length
-        ? items.map(i => `<li${i.href ? ' data-todo="unpaid-orders"' : ''}><span>${i.prefix ? `${escHtml(i.prefix)} ${escHtml(i.n)}` : `${escHtml(i.n)} ${escHtml(i.label)}`}</span><a href="${i.href || 'admin.html#projects'}">查看 →</a></li>`).join('')
+        ? items.map(i => `<li${i.key ? ` data-todo="${i.key}"` : ''}><span>${i.prefix ? `${escHtml(i.prefix)} ${escHtml(i.n)}` : `${escHtml(i.n)} ${escHtml(i.label)}`}</span><a href="${i.href || 'admin.html#projects'}">查看 →</a></li>`).join('')
         : '<li class="todo-empty">目前沒有待處理事項</li>';
     }
 

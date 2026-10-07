@@ -39,6 +39,10 @@
     invalid_paid_at: '收款日期不正確',
     invalid_status: '訂單狀態不正確',
     busy: '系統忙碌中，請稍後再試',
+    // guest orders (S2)
+    no_contact: '這筆訂單沒有客人聯絡資料可清除',
+    orders_unavailable: '客人訂購功能尚未啟用，請先執行 migration',
+    invalid_transfer_info: '匯款資訊格式不正確（500 字以內，不可含特殊控制字元）',
     // products
     invalid_kind: '請選擇商品類型',
     invalid_name: '商品名稱必填（60 字以內）',
@@ -162,7 +166,112 @@
     };
   }
 
+  // ── guest orders (S2, docs/guest-shop.md) ──────────────────────────────────
+  // Every guest-controlled string (contact name / phone / LINE id, note, photo names) goes in with
+  // textContent, never innerHTML. Shared by orders.html and the admin project detail.
+  const isGuest = o => !!o && o.source === 'guest';
+
+  // The status badge text: a guest order still waiting reads 「客人下單 · 待確認」, everything else the plain label.
+  function statusLabel(o) {
+    if (isGuest(o) && o.status === 'requested') return '客人下單 · 待確認';
+    return STATUS_LABEL[o.status] || o.status;
+  }
+
+  // [target, label] buttons for an order; the guest's first tap is 「確認訂單」.
+  function movesFor(o) {
+    return (STATUS_MOVES[o.status] || []).map(([to, label]) =>
+      [to, isGuest(o) && o.status === 'requested' && to === 'confirmed' ? '確認訂單' : label]);
+  }
+
+  const TEL_OK = /^[0-9+\-]+$/;   // a tel: link only for digits, + and -
+
+  function el(tag, cls, text) {
+    const e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text !== undefined) e.textContent = text;
+    return e;
+  }
+  function row(cls, label, valueNode) {
+    const r = el('div', 'gc-row ' + cls);
+    r.appendChild(el('span', 'gc-label', label));
+    r.appendChild(valueNode);
+    return r;
+  }
+  const baseName = k => String(k).split('/').pop();
+
+  // The card of a guest order (null for any other order): warning when the project is not delivered, the contact, the
+  // guest's note, the lines, and 清除客人個資 when there is something to clear.
+  function guestCard(o) {
+    if (!isGuest(o)) return null;
+    const card = el('div', 'gc');
+    card.setAttribute('data-guest-card', '');
+    if (o.project_delivered === false && o.status !== 'cancelled') {
+      card.appendChild(el('div', 'gc-warn', '專案目前未交件：這筆訂單仍然保留，請先確認交件狀態再處理。'));
+    }
+    const c = o.contact;
+    if (c) {
+      const name = el('span', 'gc-name', c.name == null ? '' : String(c.name));
+      name.setAttribute('dir', 'auto');
+      card.appendChild(row('gc-name-row', '客人', name));
+      if (c.erased_at) {
+        card.appendChild(el('div', 'gc-erased', `個資已清除（${window.Util.fmtDate(c.erased_at, 'iso')}）`));
+      } else {
+        if (c.phone) {
+          const v = el('span', 'gc-phone');
+          const phone = String(c.phone);
+          if (TEL_OK.test(phone)) {
+            const a = el('a', '', phone);
+            a.setAttribute('href', 'tel:' + phone);
+            v.appendChild(a);
+          } else v.textContent = phone;
+          v.setAttribute('dir', 'auto');
+          card.appendChild(row('gc-phone-row', '電話', v));
+        }
+        if (c.line) {
+          const v = el('span', 'gc-line', String(c.line));
+          v.setAttribute('dir', 'auto');
+          card.appendChild(row('gc-line-row', 'LINE', v));
+        }
+      }
+    }
+    if (o.delivery_method === 'pickup') card.appendChild(row('gc-method-row', '取貨', el('span', 'gc-method', '面交')));
+    if (o.consent_version) card.appendChild(row('gc-consent-row', '個資聲明', el('span', 'gc-consent', String(o.consent_version))));
+    if (o.guest_note) {
+      const n = el('div', 'gc-note', String(o.guest_note));
+      n.setAttribute('dir', 'auto');
+      card.appendChild(row('gc-note-row', '客人留言', n));
+    }
+    const items = el('div', 'gc-items');
+    for (const i of (o.items || [])) {
+      const it = el('div', 'gc-item');
+      const nm = el('span', 'gc-item-name', `${lineName(i)} × ${i.qty}`);
+      nm.setAttribute('dir', 'auto');
+      it.appendChild(nm);
+      const keys = (i.photo_keys || []).filter(k => typeof k === 'string' && k);
+      if (keys.length) {
+        const ph = el('span', 'gc-photo', keys.map(baseName).join('、'));
+        ph.setAttribute('dir', 'auto');
+        it.appendChild(ph);
+      }
+      const sp = i.layout && Number.isInteger(i.layout.spreads) ? i.layout : null;
+      if (sp) it.appendChild(el('span', 'gc-spreads', `${sp.spreads} 跨頁${sp.mode === 'photographer' ? ' · 請攝影師排版' : ''}`));
+      const differs = i.list_price != null && Number(i.list_price) !== Number(i.unit_price);
+      it.appendChild(el('span', 'gc-price', differs ? `定價 ${money(i.list_price)} → 單價 ${money(i.unit_price)}` : `單價 ${money(i.unit_price)}`));
+      items.appendChild(it);
+    }
+    card.appendChild(items);
+    if (c && !c.erased_at) {
+      const b = el('button', 'btn btn-ghost gc-erase', '清除客人個資');
+      b.type = 'button';
+      b.setAttribute('data-erase-contact', '');
+      card.appendChild(b);
+    }
+    return card;
+  }
+  const ERASE_CONFIRM = '確定清除這位客人的個資？\n電話與 LINE ID 會被永久刪除（姓名與訂單內容保留），無法復原。';
+
   window.Orders = {
+    isGuest, statusLabel, movesFor, guestCard, ERASE_CONFIRM,
     KIND_LABEL, STATUS_LABEL, METHOD_LABEL, SOURCE_LABEL, STATUS_MOVES, PAYMENT_LABEL,
     esc, money, errorText, paymentState, lineName, platformImageUrl, pageRangeText, pagePriceText, bleedText, client,
   };
