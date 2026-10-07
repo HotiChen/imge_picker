@@ -77,7 +77,10 @@ const eachBook = (list, fn) => { for (const [n, o] of list) for (const seed of S
 test('result.variety reports the measures, recomputed from the spreads', () => {
   eachBook(BOOKS, (p, label) => {
     const m = measure(p);
-    assert.deepEqual(p.variety, { distinctCounts: m.distinct, maxSameRun: m.maxRun, repeatedTemplates: m.rep, distinctTemplates: m.tpl, heroSpreads: m.heroes }, label);
+    // heroWanted (plan_hero.test.mjs) is a number next to the measures, not one of them
+    assert.equal(typeof p.variety.heroWanted, 'number', label);
+    const { heroWanted, ...measures } = p.variety;
+    assert.deepEqual(measures, { distinctCounts: m.distinct, maxSameRun: m.maxRun, repeatedTemplates: m.rep, distinctTemplates: m.tpl, heroSpreads: m.heroes }, label);
   });
 });
 
@@ -176,7 +179,8 @@ test('foldSafe stays: no high-risk photo on a through-spread, whatever the varie
     assert.ok(bad.size > 0);
     const p = plan(it);
     assert.ok(p.spreads.some(spans), `seed ${seed} n ${n}: control: there is a through-spread`);
-    for (const s of p.spreads) if (spans(s)) for (const x of s.slots) assert.ok(!bad.has(x.photoId), `${x.photoId} across the fold`);
+    // only the span slot is on the fold: a hero-strip's small slots may hold a risky photo (plan_spreads_foldsafe.test.mjs)
+    for (const s of p.spreads) for (const x of s.slots) if (x.slot.face === 'span') assert.ok(!bad.has(x.photoId), `${x.photoId} across the fold`);
   }
 });
 
@@ -242,6 +246,9 @@ test('positive controls: the previous behaviour fails the new assertions', () =>
 test('the new plans do not cost much: the spread count stays within 30% (or 3) of the previous plan when unbounded', () => {
   for (const seed of SEEDS) for (const n of SIZES) {
     const a = plan(items(seed, n)).spreads.length, b = old(items(seed, n)).spreads.length;
-    assert.ok(Math.abs(a - b) <= Math.max(3, Math.round(b * 0.3)), `seed ${seed} n ${n}: ${a} vs ${b}`);
+    // heroRate (default 0.2, plan_hero.test.mjs) adds lone-photo spreads: 40% here (was 30%); heroRate 0 keeps the 30%
+    assert.ok(Math.abs(a - b) <= Math.max(3, Math.round(b * 0.4)), `seed ${seed} n ${n}: ${a} vs ${b}`);
+    const z = plan(items(seed, n), { heroRate: 0 }).spreads.length;
+    assert.ok(Math.abs(z - b) <= Math.max(3, Math.round(b * 0.3)), `heroRate 0, seed ${seed} n ${n}: ${z} vs ${b}`);
   }
 });
