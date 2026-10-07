@@ -278,6 +278,24 @@
             this._renderAlbumEntry();
             const noteGroup = document.getElementById('noteInputGroup');
             if (noteGroup) noteGroup.hidden = gallery;
+            this._syncTour();
+        },
+
+        // First-visit tour (js/guest-tour.js): the seat owner only, picking or delivered-not-confirmed, never on
+        // the 完成頁. Idempotent; the module itself waits for the grid and for any open dialog.
+        _syncTour() {
+            if (!window.GuestTour) return;
+            let phase = null;
+            if (this.active && this.mode === 'picking') phase = 'picking';
+            else if (this.active && this.mode === 'delivered' && this.view === 'finals') phase = 'delivered';
+            GuestTour.maybeStart({
+                phase,
+                isOwner: this.isOwner,
+                isEligible: () => phase === 'picking'
+                    ? this.canEdit()
+                    : (this.mode === 'delivered' && this.view === 'finals' && !this.confirmedAt && !this._completionWanted() &&
+                       !this.revisionOpen && Array.isArray(this.revisionDrafts)),
+            });
         },
 
         _renderDeliveryBar() {
@@ -997,6 +1015,7 @@
                 if (emptyP) emptyP.textContent = '';
             }
             this.renderCounter();
+            this._syncTour();
         },
 
         // Every server-known rating/note wins over whatever localStorage
@@ -1871,6 +1890,7 @@
                 this.closeSubmitModal();
                 this.renderBanner();
                 this.renderCounter();
+                this._syncTour();
                 if (typeof toast !== 'undefined') {
                     let msg = `已送出，共 ${data.count ?? 0} 張`;
                     if (data.over) msg += `，超出方案 ${data.over} 張`;
@@ -1891,6 +1911,7 @@
                 this.closeSubmitModal();
                 this.renderBanner();
                 this.rerenderGrid();
+                this._syncTour();
             } else if (errEl) {
                 // a real, server-authored message (e.g. 請選擇與新人的關係,
                 // Email 格式不正確) rather than a made-up one

@@ -1,0 +1,46 @@
+/* First-visit tour on the client pick page (js/guest-tour.js). Dark client theme: tokens from
+   css/styles.css only. Everything is position:fixed, so it never moves the page (no layout shift). */
+.gt-dim { position: fixed; inset: 0; z-index: 3400; background: rgba(8, 6, 4, .45); pointer-events: none; display: none; }
+.gt-ring {
+  position: fixed; z-index: 3400; display: none; pointer-events: none; box-sizing: border-box;
+  border: 2px solid var(--accent); border-radius: 10px;
+  box-shadow: 0 0 0 9999px rgba(8, 6, 4, .45);
+}
+.gt-card {
+  position: fixed; z-index: 3500; box-sizing: border-box; padding: 12px 14px 12px;
+  background: var(--surface); color: var(--ink);
+  border: 1px solid var(--accent); border-radius: 12px; box-shadow: 0 8px 28px rgba(0, 0, 0, .6);
+  font: 400 14px/1.55 var(--font-sans);
+}
+.gt-card:focus { outline: none; }
+.gt-head { display: flex; align-items: center; justify-content: space-between; min-height: 44px; margin: -6px -8px 0 0; }
+.gt-count { font: 600 12px/1 var(--font-sans); color: var(--accent); font-variant-numeric: tabular-nums; }
+.gt-x { min-width: 44px; min-height: 44px; padding: 0; background: none; border: 0; color: var(--ink-70); font-size: 16px; cursor: pointer; }
+.gt-text { margin: 0 0 8px; overflow-wrap: anywhere; }
+.gt-actions { display: flex; align-items: center; gap: 8px; }
+.gt-btn {
+  min-height: 44px; min-width: 44px; padding: 0 14px; border-radius: 8px; cursor: pointer;
+  font: 500 14px/1 var(--font-sans); border: 1px solid var(--border); background: transparent; color: var(--ink);
+}
+.gt-btn[hidden] { display: none; }
+.gt-skip { margin-right: auto; border-color: transparent; color: var(--ink-70); }
+.gt-next { background: var(--accent); border-color: var(--accent); color: #1a1408; font-weight: 600; }
+.gt-btn:focus-visible, .gt-x:focus-visible, .gt-help:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+
+/* the ？ replay button: left, above the phone's bottom bar (the ♥ sits bottom-right of a card, the submit
+   button bottom-right of the bar); no bar in the delivered gallery */
+.gt-help {
+  position: fixed; z-index: 900; left: 12px; bottom: calc(76px + env(safe-area-inset-bottom));
+  width: 44px; height: 44px; padding: 0; border-radius: 50%; cursor: pointer;
+  background: rgba(14, 12, 8, .72); color: var(--ink-70); border: 1px solid var(--border);
+  font: 600 16px/1 var(--font-sans); opacity: .8;
+}
+body:not(.pick-active) .gt-help { bottom: calc(16px + env(safe-area-inset-bottom)); }
+@media (min-width: 1025px) {
+  .gt-help { left: auto; right: 16px; bottom: 16px; }
+  body:not(.pick-active) .gt-help { bottom: 16px; }
+}
+html.cp-on .gt-help { display: none; }
+@media (prefers-reduced-motion: no-preference) {
+  .gt-ring { transition: left .18s ease, top .18s ease, width .18s ease, height .18s ease; }
+}

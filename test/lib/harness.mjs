@@ -51,10 +51,13 @@ export const stats = { failed: 0, ran: 0 };
 // iterations while developing; run everything before a commit or merge.
 export const ONLY = process.env.ONLY || '';
 
-export async function suite(name, url, run, { initScript, before, contextOptions } = {}) {
+export async function suite(name, url, run, { initScript, before, contextOptions, tour } = {}) {
   if (ONLY && !ONLY.split('|').some(t => t && name.includes(t))) return;
   stats.ran++;
   const context = await browser.newContext({ viewport: { width: 1500, height: 950 }, ...contextOptions });
+  // the first-visit guest tour (js/guest-tour.js) is marked seen in every suite, or its card would sit over the
+  // page the suite drives; a suite that tests the tour passes `tour: true` and seeds the keys itself
+  if (!tour) await context.addInitScript(() => { try { localStorage.setItem('guestTourPickingV1', '1'); localStorage.setItem('guestTourDeliveredV1', '1'); } catch (e) { /* ignore */ } });
   if (initScript) await context.addInitScript(initScript);
   const page = await context.newPage();
   const pageErrors = [];
