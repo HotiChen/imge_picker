@@ -249,6 +249,9 @@ const lines = () => {
       await waitList(page);
       const overflowList = await page.evaluate(() => document.documentElement.scrollWidth);
       await page.evaluate(() => { document.getElementById('proj-recent-list').style.marginBottom = '2500px'; scrollTo(0, 300); });
+      // the 開啟 button must already be on screen at 300, or tap() scrolls it into view first and the position to come back to is not 300 (the create form is taller since 攝影類別)
+      await page.evaluate(() => { const b = document.querySelector('[data-open-project]'); const r = b.getBoundingClientRect(); if (r.top < 0 || r.bottom > innerHeight - 150) scrollTo(0, scrollY + r.top - 400); });
+      const y0 = await page.evaluate(() => scrollY);
       await page.locator('[data-open-project]').tap();
       await waitDetail(page);
       ok('detail shown, list/create form hidden', await isShown(page, '#project-detail-panel') && await listAllHidden(page), JSON.stringify(await listState(page)));
@@ -261,7 +264,7 @@ const lines = () => {
       await waitList(page);
       ok('返回 shows the list again, detail hidden', await listAllShown(page) && await isHidden(page, '#project-detail-panel'));
       await page.waitForFunction(() => scrollY > 250, null, { timeout: 3000 }).catch(() => {});
-      ok('and the scroll position is back near where the list was (300)', Math.abs((await page.evaluate(() => scrollY)) - 300) <= 2, String(await page.evaluate(() => scrollY)));
+      ok(`and the scroll position is back near where the list was (${y0})`, y0 > 250 && Math.abs((await page.evaluate(() => scrollY)) - y0) <= 2, `${y0} → ${await page.evaluate(() => scrollY)}`);
       return out;
     },
     { before: m.attach, initScript: ADMIN_PLAIN, contextOptions: MOBILE });
