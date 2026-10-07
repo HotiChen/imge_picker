@@ -1,5 +1,5 @@
 // Browser suites: the first-visit guided tour for the client on the pick page (js/guest-tour.js, css/guest-tour.css).
-// Tour A = picking (4 steps), tour B = delivered and not yet confirmed (3 steps), seat owner only. Every suite here
+// Tour A = picking (7 steps; the lightbox part is in suite 52), tour B = delivered and not yet confirmed (3 steps), seat owner only. Every suite here
 // passes `tour: true` (test/lib/harness.mjs seeds the "seen" keys everywhere else). Chromium only.
 // Registered by test/run.mjs in file-name order; see test/README.md.
 import { base, suite } from '../lib/harness.mjs';
@@ -51,23 +51,23 @@ const nextBtn = page => page.click('.gt-next');
 // ═════ A1. tour A, the whole walk at phone width
 {
   const m = pickWorld();
-  await sx('guest tour (390px) — picking owner: 4 steps, each popover inside the viewport and off its target; finishing marks it seen; nothing is picked by the tour',
+  await sx('guest tour (390px) — picking owner: 7 steps, each popover inside the viewport and off its target; finishing marks it seen; nothing is picked by the tour',
     URL_, async (page, ok) => {
       await gridReady(page);
       ok('positive: the tour appears once the grid has cards', await waitCard(page));
       ok('key not set before it ends', (await storeVal(page, KA)) === null);
       const shiftBefore = await page.evaluate(() => ({ sh: document.documentElement.scrollHeight, c: JSON.stringify(document.querySelector('.photo-card').getBoundingClientRect()) }));
       const texts = [], seenCounts = [];
-      for (let step = 1; step <= 4; step++) {
+      for (let step = 1; step <= 7; step++) {
         const i = await info(page);
         if (!i) { ok(`step ${step} has a card`, false); break; }
         texts.push(i.text); seenCounts.push(i.count);
-        ok(`step ${step}: counter ${step}/4, popover inside the 390x844 viewport`, i.count === `${step}/4` && inside(i), JSON.stringify(i));
+        ok(`step ${step}: counter ${step}/7, popover inside the 390x844 viewport`, i.count === `${step}/7` && inside(i), JSON.stringify(i));
         ok(`step ${step}: focus is inside the card`, i.inCard);
-        if (step === 3) ok('step 3 is text only: no ring; says: ♥ first, 標示修改, tap the position, 完成', !i.ring && i.text.includes('愛心') && i.text.includes('標示修改') && i.text.includes('位置') && i.text.includes('完成'), JSON.stringify(i));
+        if (step === 5 || step === 6) ok(`step ${step} is text only here (photo not ♥, not in pin mode): no ring`, !i.ring && i.text.includes(step === 5 ? '標示修改' : '完成') && i.text.includes('位置'), JSON.stringify(i));
         else {
           ok(`step ${step}: a ring is on the target and the popover does not cover it`, !!i.ring && !overlap(i.card, i.ring), JSON.stringify(i));
-          const sel = ['.photo-card .pick-heart-btn', '.photo-card', null, '#pickSubmitBtn'][step - 1];
+          const sel = ['.photo-card .pick-heart-btn', '.photo-card', '#prevPhotoBtn, #nextPhotoBtn, .modal-nav-overlay', '#photoModal #modalPhotoRating .pick-heart-btn', null, null, '#pickSubmitBtn'][step - 1];
           await sleep(300);
           const hit = await page.evaluate(({ sel }) => { const rg = document.querySelector('.gt-ring').getBoundingClientRect(); const el = [...document.querySelectorAll(sel)].find(e => { const b = e.getBoundingClientRect(); return b.left >= rg.left - 1 && b.right <= rg.right + 1 && b.top >= rg.top - 1 && b.bottom <= rg.bottom + 1; }); return !!el; }, { sel });
           ok(`step ${step}: the ring encloses a real ${sel}`, hit);
@@ -79,19 +79,19 @@ const nextBtn = page => page.click('.gt-next');
           ok('role=dialog, aria-live=polite', aria[0] === 'dialog' && aria[1] === 'polite', String(aria));
           ok('first step has no 上一步', i.backHidden);
         }
-        if (step === 4) ok('last step\'s button reads 完成', i.next === '完成', i.next);
-        if (step < 4) await nextBtn(page);
+        if (step === 7) ok('last step\'s button reads 完成', i.next === '完成', i.next);
+        if (step < 7) await nextBtn(page);
       }
-      ok('the four texts are the specified ones', texts[0].includes('點愛心選這張') && texts[1].includes('點照片可以放大') && texts[2].includes('修圖') && texts[2].includes('愛心') && texts[2].includes('標示修改') && texts[2].includes('點照片上要修的位置') && texts[2].includes('完成') && !texts[2].includes('備註・標示') && texts[3].includes('選好了，按這裡送出'), JSON.stringify(texts));
+      ok('the seven texts are the specified ones', texts[0].includes('點愛心選這張') && texts[1].includes('放大') && texts[2].includes('左右') && texts[2].includes('滑') && texts[3].includes('愛心') && texts[4].includes('標示修改') && texts[5].includes('點照片上要修的位置') && texts[5].includes('完成') && !texts.join('').includes('備註・標示') && texts[6].includes('選好了，按這裡送出'), JSON.stringify(texts));
       const after = await page.evaluate(() => ({ sh: document.documentElement.scrollHeight, c: JSON.stringify(document.querySelector('.photo-card').getBoundingClientRect()) }));
       ok('no layout shift: scrollHeight and the first card rect are unchanged while the tour ran', after.sh === shiftBefore.sh && after.c === shiftBefore.c, JSON.stringify([shiftBefore, after]));
       await page.click('.gt-back');
-      ok('上一步 goes back (3/4)', (await info(page)).count === '3/4');
-      await nextBtn(page); await nextBtn(page);
+      ok('上一步 from 送出 skips the lightbox steps (it is closed) and lands on 2/7', (await info(page)).count === '2/7');
+      for (let k = 0; k < 6; k++) await nextBtn(page);
       ok('完成 closes the card', await until(async () => !(await page.$('.gt-card'))));
       ok('and marks picking seen', (await storeVal(page, KA)) === '1');
       ok('the delivered key is untouched', (await storeVal(page, KB)) === null);
-      ok('the tour picked nothing: no selection write, counter at 0', m.requests.filter(r => r.method === 'PUT').length === 0 && (await page.textContent('#pickCounter')).includes('0'));
+      ok('the tour picked nothing: no write with a rating or a pin (the page\'s own empty note save on closing the lightbox is rating 0), counter at 0', m.requests.filter(r => r.method === 'PUT' && (r.body?.upsert || []).some(u => u.rating > 0 || (u.marks && u.marks.length))).length === 0 && (await page.textContent('#pickCounter')).includes('0'));
     }, { before: m.attach, initScript: OWNER, contextOptions: MOBILE });
 }
 
@@ -119,12 +119,12 @@ const nextBtn = page => page.click('.gt-next');
       await sleep(250);
       const modalOpen = await page.evaluate(() => document.getElementById('photoModal').classList.contains('active'));
       const sel = await page.evaluate(() => app.photos.filter(p => p.rating > 0).length);
-      ok('an outside tap neither opens the lightbox nor ♥s, and the step stays 1/4', !modalOpen && sel === 0 && (await info(page)).count === '1/4', JSON.stringify([modalOpen, sel]));
+      ok('an outside tap neither opens the lightbox nor ♥s, and the step stays 1/7', !modalOpen && sel === 0 && (await info(page)).count === '1/7', JSON.stringify([modalOpen, sel]));
       const heart = await page.evaluate(() => { const r = document.querySelector('.gt-ring').getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; });
       await page.touchscreen.tap(heart.x, heart.y);
       await sleep(250);
       const sel2 = await page.evaluate(() => app.photos.filter(p => p.rating > 0).length);
-      ok('a tap on the highlighted ♥ advances to 2/4 and does not pick it', (await info(page)).count === '2/4' && sel2 === 0, String(sel2));
+      ok('a tap on the highlighted ♥ advances to 2/7 and does not pick it', (await info(page)).count === '2/7' && sel2 === 0, String(sel2));
       await page.click('.gt-skip');
       await page.evaluate(() => { window.scrollTo(0, 0); });
       const h = await page.$eval('.photo-card .pick-heart-btn', e => { const r = e.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; });
@@ -143,7 +143,7 @@ const nextBtn = page => page.click('.gt-next');
       ok('seen key present: no tour', await noCardFor(page));
       ok('positive: the ？ help button is there (owner, picking)', !!(await page.$('.gt-help')));
       await page.click('.gt-help');
-      ok('？ replays the tour at step 1/4', await waitCard(page) && (await info(page)).count === '1/4');
+      ok('？ replays the tour at step 1/7', await waitCard(page) && (await info(page)).count === '1/7');
       await page.keyboard.press('Escape');
       ok('Esc closes it', await until(async () => !(await page.$('.gt-card'))));
       ok('focus returned to the ？ button', await page.evaluate(() => document.activeElement && document.activeElement.classList.contains('gt-help')));
@@ -225,7 +225,7 @@ for (const [how, act] of [['略過', p => p.click('.gt-skip')], ['✕', p => p.c
 // ═════ A6. dialogs
 {
   const m = pickWorld();
-  await sx('guest tour (390px) — nothing starts under an open lightbox; it starts when that closes; a lightbox opening mid-tour steps the tour aside without marking it seen',
+  await sx('guest tour (390px) — nothing starts under an open lightbox; it starts when that closes; a lightbox the guest opens mid-tour keeps the tour up, another blocker (the loading pill) steps it aside without marking it seen',
     URL_, async (page, ok) => {
       await gridReady(page);
       await page.evaluate(() => { app.openModal(0); });
@@ -235,7 +235,10 @@ for (const [how, act] of [['略過', p => p.click('.gt-skip')], ['✕', p => p.c
       await page.evaluate(() => app.closeModal());
       ok('positive: after closing it the tour starts', await waitCard(page));
       await page.evaluate(() => { app.openModal(1); });
-      ok('a lightbox opening mid-tour removes the card', await until(async () => !(await page.$('.gt-card'))));
+      await sleep(700);
+      ok('a lightbox opening mid-tour (the guest\'s) keeps the card', await hasCard(page));
+      await page.evaluate(() => { document.getElementById('loadingState').style.display = 'block'; });
+      ok('another blocker (the loading pill) removes the card', await until(async () => !(await page.$('.gt-card'))));
       ok('and did not mark it seen', (await storeVal(page, KA)) === null);
     }, { before: m.attach, initScript: seed(true, true), contextOptions: MOBILE });
 }
@@ -266,10 +269,10 @@ for (const [how, act] of [['略過', p => p.click('.gt-skip')], ['✕', p => p.c
       await gridReady(page);
       ok('positive: tour up', await waitCard(page));
       await nextBtn(page); await nextBtn(page);
-      ok('at step 3/4', (await info(page)).count === '3/4');
+      ok('at step 3/7 (the photo is open)', (await info(page)).count === '3/7');
       await page.evaluate(() => document.getElementById('pickSubmitBtn').remove());
-      await nextBtn(page);
-      ok('the submit button is gone: step 4 is skipped and the tour ends', await until(async () => !(await page.$('.gt-card'))));
+      await nextBtn(page); await nextBtn(page); await nextBtn(page); await nextBtn(page);
+      ok('the submit button is gone: step 7 is skipped and the tour ends', await until(async () => !(await page.$('.gt-card'))));
       ok('ending that way is finishing: seen', (await storeVal(page, KA)) === '1');
       // zero targets
       await page.evaluate(() => { localStorage.removeItem('guestTourPickingV1'); document.querySelectorAll('.photo-card').forEach(e => e.remove()); });
@@ -279,14 +282,14 @@ for (const [how, act] of [['略過', p => p.click('.gt-skip')], ['✕', p => p.c
 }
 {
   const m = pickWorld();
-  await sx('guest tour (390px) — a missing first target is left out of the count (3 steps, not 4)',
+  await sx('guest tour (390px) — a missing last target is left out of the count (6 steps, not 7)',
     URL_, async (page, ok) => {
       await gridReady(page);
       await page.click('.gt-help').catch(() => {});
       await page.evaluate(() => { GuestTour.close(false); document.getElementById('pickSubmitBtn').remove(); });
       await page.evaluate(() => GuestTour.start('picking'));
       ok('positive: tour starts with the remaining targets', await waitCard(page));
-      ok('counter says 1/3', (await info(page)).count === '1/3');
+      ok('counter says 1/6', (await info(page)).count === '1/6');
     }, { before: m.attach, initScript: seed(true, false), contextOptions: MOBILE });
 }
 
@@ -297,10 +300,10 @@ for (const [how, act] of [['略過', p => p.click('.gt-skip')], ['✕', p => p.c
     URL_, async (page, ok) => {
       await gridReady(page);
       ok('positive: tour shows', await waitCard(page));
-      for (let s = 1; s <= 4; s++) {
+      for (let s = 1; s <= 7; s++) {
         const i = await info(page);
         ok(`step ${s}: inside the viewport and off its ring`, inside(i) && (!i.ring || !overlap(i.card, i.ring)), JSON.stringify(i));
-        if (s < 4) await nextBtn(page);
+        if (s < 7) await nextBtn(page);
       }
       await page.click('.gt-skip');
       const h = await page.$eval('.gt-help', e => { const r = e.getBoundingClientRect(); return { r: r.right, b: r.bottom, vw: document.documentElement.clientWidth, vh: innerHeight }; });

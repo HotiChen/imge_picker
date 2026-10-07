@@ -1,8 +1,11 @@
 // First-visit guided tour for the CLIENT on the pick page (index.html?t=…). Phase-aware, seat owner only:
-//   picking   — ♥ on a photo, tap to enlarge, pins/notes (text only: that tool lives inside the lightbox),
-//               the submit button
+//   picking   — ♥ on a photo, then the tour REALLY opens that photo (the card's own click, no fake modal) and
+//               walks the enlarged view: left/right/swipe, its ♥, 標示修改, 完成; then closes what it opened and
+//               points at the submit button. The tour never taps, swipes, hearts or pins for the guest.
 //   delivered — the finals, how to mark a change, 確認完成 (delivered and not yet confirmed)
-// No tour for viewers, on the 完成頁 (html.cp-on), or while a dialog / the lightbox / the claim overlay is open.
+// No tour for viewers, on the 完成頁 (html.cp-on), and none STARTS while a dialog / the lightbox / the claim
+// overlay is open. A running picking tour allows the pick page's own lightbox (#photoModal): the one it opened and
+// one the guest opens; only the first is closed when the tour ends.
 // Pure overlay: everything is position:fixed, nothing changes the page layout; scrolling stays free (no shield).
 // Taps outside the card are swallowed (a capture-phase click guard) so a stray tap cannot ♥ or open a photo
 // under the dim; a tap on the highlighted target advances (the action itself is not performed).
@@ -14,12 +17,27 @@
     const MARGIN = 12;                    // gap between card and target / viewport edge
     const PAD = 6;                        // ring padding around a target
 
+    const MODAL = '#photoModal';
+    const modalActive = () => { const m = document.getElementById('photoModal'); return !!m && m.classList.contains('active'); };
+    const lbHeart = () => first(MODAL + ' #modalPhotoRating .pick-heart-btn');
+    const lbHearted = () => { const h = lbHeart(); return !!h && h.classList.contains('on'); };
+    const pinMode = () => !!(window.PickController && PickController.pinMode);
+    // the lightbox's own prev/next circles (ring both through their overlay strip); none visible: swipe only
+    const navTarget = () => (first(MODAL + ' #prevPhotoBtn') || first(MODAL + ' #nextPhotoBtn')) ? first(MODAL + ' .modal-nav-overlay') : null;
+
+    // modal: the step lives inside the enlarged view (skipped when it is not open); soft: no target is fine
+    // (text only, altText when the target is absent); skipIf: nothing to teach now; onNext: runs when 下一步 /
+    // a tap on the ring leaves the step; auto: advance by itself after the guest's own real tap.
     const FLOWS = {
         picking: [
-            { text: '點愛心選這張。選好的照片會留給攝影師修圖。', target: () => first('.photo-card .pick-heart-btn') },
-            { text: '點照片可以放大，看得更清楚。', target: () => first('.photo-card') },
-            { text: '想請攝影師修圖？\n① 先點愛心，選這張\n② 點照片放大，按「標示修改」\n③ 點照片上要修的位置，寫下怎麼修\n④ 想標幾個位置都可以，標完按「完成」' },
-            { text: '選好了，按這裡送出。', target: () => first('#mobileActionBar:not(.pick-bar-off) #pickSubmitBtn') },
+            { id: 'heart', text: '點愛心選這張。選好的照片會留給攝影師修圖。', target: () => first('.photo-card .pick-heart-btn') },
+            { id: 'open', text: '點照片可以放大，看得更清楚。按「下一步」，幫你打開這張。', target: () => first('.photo-card'), onNext: 'open' },
+            { id: 'nav', modal: true, soft: true, text: '點左右兩邊的箭頭，或用手指左右滑，看上一張／下一張。', altText: '用手指左右滑，看上一張／下一張。', target: navTarget },
+            { id: 'lbheart', modal: true, text: '想選這張就點愛心。選了，才能標示修改。', target: lbHeart, skipIf: lbHearted, auto: () => lbHearted() },
+            { id: 'pin', modal: true, soft: true, text: '按這裡，再點照片上要修的位置。', altText: '選了愛心之後，這裡會出現「標示修改」：按它，再點照片上要修的位置。',
+              target: () => first('#pickPinBtn'), skipIf: pinMode, auto: () => pinMode() },
+            { id: 'done', modal: true, soft: true, text: '點照片上要修的位置，寫下怎麼修；想標幾個位置都可以，標完按「完成」。', target: () => first('#pickPinDoneBtn') },
+            { id: 'submit', text: '選好了，按這裡送出。', target: () => first('#mobileActionBar:not(.pick-bar-off) #pickSubmitBtn') },
         ],
         delivered: [
             { text: '這是攝影師交付的精修成品。', target: () => first('#fgRows .fg-tile') },
@@ -61,11 +79,12 @@
         try { localStorage.setItem(KEYS[phase], '1'); } catch (e) { /* private mode: once per page load */ }
     }
     // a dialog the guest is in: nothing to start under it, and a running tour steps aside
-    function blocked() {
+    // `running`: a picking tour is up, so the pick page's own lightbox (#photoModal) is no blocker any more
+    function blocked(running) {
         const root = document.documentElement;
         if (root.classList.contains('cp-on')) return true;
         if (document.getElementById('fgLightbox')) return true;
-        if (document.querySelector('.modal.active')) return true;
+        for (const m of document.querySelectorAll('.modal.active')) if (!(running && m.id === 'photoModal')) return true;
         if (visible(document.getElementById('pickClaimOverlay'))) return true;
         if (visible(document.getElementById('loadingState'))) return true;     // the loading pill
         return false;
@@ -125,8 +144,10 @@
 
         // the flow's steps whose target exists now (text-only steps always stay)
         resolve(ph) {
-            return FLOWS[ph].map(s => ({ text: s.text, target: s.target, hasTarget: !!s.target, el: s.target ? s.target() : null }))
-                .filter(s => !s.hasTarget || s.el);
+            const all = FLOWS[ph].map(s => ({ ...s, hasTarget: !!s.target, el: s.target && !s.modal ? s.target() : null }))
+                .filter(s => s.modal || !s.hasTarget || s.el);
+            // the enlarged-view steps need the step that opens a photo
+            return all.some(s => s.id === 'open') || !all.some(s => s.modal) ? all : all.filter(s => !s.modal);
         },
 
         start(ph) {
@@ -136,7 +157,7 @@
             this.tour = { phase: ph, steps, i: 0, opener: document.activeElement };
             this.build();
             this.show(0);
-            this._onKey = e => { if (e.key === 'Escape') { e.preventDefault(); this.finish(); } };
+            this._onKey = e => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); this.finish(); } };
             this._onClick = e => this.guard(e);
             this._onMove = () => this.schedule();
             document.addEventListener('keydown', this._onKey, true);
@@ -145,7 +166,9 @@
             window.addEventListener('scroll', this._onMove, true);
             this._watch = setInterval(() => {
                 if (!this.tour) return;
-                if (blocked() || this.phaseNow() !== this.tour.phase) { this.close(false); return; }
+                if (blocked(this.tour.phase === 'picking') || this.phaseNow() !== this.tour.phase) { this.close(false); return; }
+                this.sync();
+                if (!this.tour) return;
                 this.place();
             }, 300);
         },
@@ -194,6 +217,9 @@
             if (!t) return;
             const n = e.target;
             if (n && n.closest && (n.closest('.gt-card') || n.closest('.gt-help'))) return;
+            if (this._own) return;                               // the tour's own click on the card
+            // the enlarged view is the guest's: arrows, ♥, 標示修改, pins, ✕ all work as usual
+            if (n && n.closest && n.closest('#photoModal') && modalActive()) { setTimeout(() => this.sync(), 80); return; }
             const el = t.steps[t.i] && t.steps[t.i].el;
             e.preventDefault();
             e.stopPropagation();
@@ -204,6 +230,7 @@
             const t = this.tour;
             if (!t) return;
             const j = t.i + d;
+            if (d > 0 && t.steps[t.i].onNext === 'open') this.openPhoto();
             if (j >= t.steps.length) { this.finish(); return; }
             if (j < 0) return;
             this.show(j);
@@ -215,20 +242,23 @@
             // a target that vanished since the start: skip the step (never point at nothing)
             while (i >= 0 && i < t.steps.length) {
                 const s = t.steps[i];
+                if (s.modal && !modalActive()) { i += d; continue; }       // nothing enlarged to point into
+                if (s.skipIf && s.skipIf()) { i += d; continue; }
                 if (!s.target) break;
                 s.el = s.target();
-                if (s.el) break;
+                if (s.el || s.soft) break;
                 i += d;
             }
             if (i < 0 || i >= t.steps.length) { if (d > 0) this.finish(); return; }
             t.i = i;
             const s = t.steps[i];
+            if (!s.modal) this.closeOwnedModal();                    // back on the grid: put away what the tour opened
             t.count.textContent = `${i + 1}/${t.steps.length}`;
             t.text.textContent = s.text;
             t.back.hidden = i === 0;
             const last = i === t.steps.length - 1;
             t.next.textContent = last ? '完成' : '下一步';
-            if (s.el) {
+            if (s.el && !s.modal) {
                 const r = s.el.getBoundingClientRect();
                 if (r.top < 0 || r.bottom > innerHeight) s.el.scrollIntoView({ block: 'center', behavior: 'auto' });
             }
@@ -247,7 +277,11 @@
             if (!t) return;
             const s = t.steps[t.i];
             const vw = document.documentElement.clientWidth, vh = innerHeight;
-            const el = s.el && visible(s.el) ? s.el : null;
+            if (s.modal && s.target) s.el = s.target();                // the guest may have swiped to another photo
+            let el = s.el && visible(s.el) ? s.el : null;
+            if (!s.modal && el && modalActive()) el = null;            // a grid target under the lightbox: no ring
+            const txt = el || !s.altText ? s.text : s.altText;
+            if (t.text.textContent !== txt) t.text.textContent = txt;
             const card = t.card;
             card.style.width = `${Math.min(340, vw - 2 * MARGIN)}px`;
             const w = card.offsetWidth, h = card.offsetHeight;
@@ -279,11 +313,42 @@
             card.style.left = `${left}px`;
         },
 
+        // the tour's only "action": open the highlighted card's photo through the card's own click handler
+        // (the same path as a guest's tap). If a lightbox is already open (the guest's), leave it alone.
+        openPhoto() {
+            const t = this.tour;
+            if (!t || modalActive()) return;
+            const card = first('.photo-card');
+            if (!card) return;
+            this._own = true;
+            try { card.click(); } finally { this._own = false; }
+            if (modalActive()) t.openedModal = true;
+        },
+
+        closeOwnedModal() {
+            const t = this.tour;
+            if (!t || !t.openedModal) return;
+            t.openedModal = false;
+            if (modalActive() && window.app && typeof app.closeModal === 'function') app.closeModal();
+        },
+
+        // per tick / after the guest's own tap: a lightbox the guest closed, a ♥ or 標示修改 tap that finished a step
+        sync() {
+            const t = this.tour;
+            if (!t) return;
+            const s = t.steps[t.i];
+            if (!modalActive()) t.openedModal = false;               // closed by the guest: no longer ours to close
+            if (!s || !s.modal) return;
+            if (!modalActive()) { this.go(1); return; }
+            if (s.auto && s.auto()) this.go(1);
+        },
+
         // finishing, skipping, ✕ and Esc all mean "seen"
         finish() {
             const t = this.tour;
             if (!t) return;
             markSeen(t.phase);
+            this.closeOwnedModal();
             this.close(true);
         },
 
