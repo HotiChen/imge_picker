@@ -724,6 +724,7 @@ const AutoLayout = (() => {
     const SP_BIG_SHARP = 0.15;        // sharp photos in the big slots
     const SP_FOLD_BLOCK = 1e9;        // a high-risk photo in a span slot: far above SP_BIG, so every seating that needs it is skipped (hard rule)
     const SP_BIG = 1e6;               // "impossible" inside the assignment (crushed photo in a no-crush pass)
+    const VARIANT_JITTER = 8;         // opts.variant > 0: the jitter is this many times bigger (and hashed with the variant)
     const SP_PASSES = 8;              // variety polish: at most this many sweeps over the spreads
     const SP_SIM_PENALTY = 3;         // soft pass only: cost of one look-alike pair sharing a spread (when it cannot be avoided outright)
     // variety (opts.variety, default on): soft preferences on top of the cheapest book, see docs/album-preview.md
@@ -1110,6 +1111,7 @@ const AutoLayout = (() => {
     // opts: { templates, coverAspect, spreadAspect, hashThreshold, window, maxPerFace, seed, order, back, fit,
     //         dedupe: 'separate' (default) | 'drop', similarThreshold, similarWindow, minSpreads, maxSpreads,
     //         foldSafe: true (default) | false, preferredPerSpread: 5 (default) | n | 0 / null (no cap),
+    //         variant: 0 (default, the plan as always) | n > 0 (another layout of the same photos: near-ties re-rolled; result.variant),
     //         variety: on (default) | 0 / false / null (the cheapest book as before, no `variety` in the result) }
     const planSpreads = (items, opts = {}) => planCore(items, opts || {}, false);
 
@@ -1169,7 +1171,10 @@ const AutoLayout = (() => {
         const windowSize = Number.isFinite(opts.window) ? opts.window : DEFAULTS.window;
         const simThreshold = Number.isFinite(opts.similarThreshold) ? opts.similarThreshold : D.similarThreshold;
         const simWindow = Number.isFinite(opts.similarWindow) ? Math.floor(opts.similarWindow) : D.similarWindow;
-        const seed = Number.isFinite(opts.seed) ? Math.trunc(opts.seed) : 0;
+        // variant (re-layout): 0 / absent = exactly the plan without it; n > 0 only re-rolls the near-ties (a bigger, differently
+        // hashed jitter on the spread cost), every hard rule unchanged
+        const variant = Number.isInteger(opts.variant) && opts.variant > 0 ? opts.variant : 0;
+        const seed = (Number.isFinite(opts.seed) ? Math.trunc(opts.seed) : 0) ^ (variant ? Math.imul(variant, 0x9E3779B1) : 0);
         const varOn = !varietyOff(opts.variety);       // variety: default on
         const heroRate = opts.heroRate === undefined ? SP_HERO_RATE : (Number.isFinite(opts.heroRate) && opts.heroRate > 0 ? Math.min(opts.heroRate, 1) : 0);
         const foldSafe = opts.foldSafe !== false;    // default on: no high-risk photo across the fold; only an explicit false gives the old behaviour
@@ -1195,7 +1200,7 @@ const AutoLayout = (() => {
         const synthPlan = (n, extra) => {
             try {
                 return planCore(syntheticItems(kept.map(r => ({ aspect: r.aspect, sharp: r.sharp, fold: r.fold })), n),
-                    { ...opts, order: 'given', dedupe: 'drop', hashThreshold: -1, back: false, minSpreads: undefined, maxSpreads: undefined, variety: false, ...extra }, true);
+                    { ...opts, order: 'given', dedupe: 'drop', hashThreshold: -1, back: false, minSpreads: undefined, maxSpreads: undefined, variety: false, variant: 0, ...extra }, true);
             } catch (e) {
                 return { minSpreads: { met: false }, maxSpreads: { met: false } };
             }
@@ -1262,7 +1267,7 @@ const AutoLayout = (() => {
 
         if (!cat) throw new Error('AutoLayout.planSpreads: load spread_templates.js first, or pass { templates }');
 
-        const cfg = { spreadPrice: D.spreadPrice, heroBonus: D.heroBonus, jitter: D.jitter, heroGap: D.heroGap, maxFamilyRun: D.maxFamilyRun, kRun: varOn, nearMul: varOn ? SP_VAR_NEAR : 1 };
+        const cfg = { spreadPrice: D.spreadPrice, heroBonus: D.heroBonus, jitter: D.jitter * (variant ? VARIANT_JITTER : 1), heroGap: D.heroGap, maxFamilyRun: D.maxFamilyRun, kRun: varOn, nearMul: varOn ? SP_VAR_NEAR : 1 };
 
         // The orders the photos may be poured in: the shooting order, and, when look-alikes sit close together, a few
         // mild reorders that space them out (each photo within `shift` places of home). Only 'separate' mode.
@@ -1469,6 +1474,7 @@ const AutoLayout = (() => {
             at += lay.k;
         });
         const out = { cover, spreads, back: opts.back === true ? {} : null, dropped };
+        if (variant) out.variant = variant;     // absent for variant 0: that plan is the old object
         if (foldSafe) {
             // foldSpans: spreads with a photo across the fold. foldAvoided: high-risk photos the plan without the rule would have put there.
             // Both only when > 0, so a book with nothing to report is the old object. (The comparison plan costs one more planning; not for synthetic runs.)

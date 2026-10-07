@@ -244,14 +244,42 @@
         const failed = items.length - ok;
         if (ok === 0 || (ok < 2 && failed > 0)) { const e = new Error('photos failed'); e.kind = 'photos'; throw e; }
 
-        const plan = AutoLayout.planSpreads(items, { ...cfg.PLAN_OPTS, coverAspect: cfg.COVER_ASPECT, spreadAspect: cfg.SPREAD_ASPECT });
+        const plan = planFor(items, cfg, 0);
         const dup = plan.dropped.filter(d => d.reason === 'duplicate').length;
         if (ok - dup < 2 || !plan.cover || plan.spreads.length === 0) return { kind: 'few' };
         const notes = [];
         if (dup > 0) notes.push(`已略過 ${dup} 張相近的照片`);
         if (capped) notes.push(`已先用前 ${cfg.MAX_PHOTOS} 張排版`);
         if (failed > 0) notes.push(`${failed} 張照片讀取失敗，未放入相本`);
-        return { kind: 'ready', plan, notes, hint: boundsHint(plan, ok - dup) };
+        return { kind: 'ready', plan, notes, hint: boundsHint(plan, ok - dup), items, photoCount: ok - dup };
+    }
+
+    // The plan for `variant` (0 = the first layout; n > 0 = the same photos laid out another way, AutoLayout's `variant`).
+    // Pure and local: the analysed items are kept, so 再次編排 never touches the network again.
+    function planFor(items, cfg, variant) {
+        const o = { ...cfg.PLAN_OPTS, coverAspect: cfg.COVER_ASPECT, spreadAspect: cfg.SPREAD_ASPECT };
+        if (variant > 0) o.variant = variant;
+        return AutoLayout.planSpreads(items, o);
+    }
+    // the cover title as the page was handed it: a non-empty string once trimmed, else nothing is drawn
+    const coverTitleOf = v => (typeof v === 'string' && v.trim() ? v.trim() : '');
+    // how much room a title needs: a CJK character is about twice as wide as a latin one
+    const titleUnits = t => [...t].reduce((n, ch) => n + (/[\u2e80-\u9fff\uf900-\ufaff\uff00-\uffef]/.test(ch) ? 2 : 1), 0);
+    const titleTier = t => { const u = titleUnits(t); return u <= 24 ? 1 : u <= 44 ? 2 : u <= 72 ? 3 : 4; };
+
+    // the pages the viewer shows, from a plan: the cover, the spreads, then the back if the plan has one
+    function pagesOf(plan) {
+        const pages = [
+            { kind: 'cover', aspect: COVER_ASPECT, layout: 'cover',
+              slots: [{ photoId: plan.cover.photoId, crop: plan.cover.crop, fit: plan.cover.fit, slot: { x: 0, y: 0, w: 1, h: 1 } }] },
+            ...plan.spreads.map(sp => ({ kind: 'spread', aspect: SPREAD_ASPECT, layout: sp.template, slots: sp.slots })),
+        ];
+        if (plan.back) {
+            const b = plan.back;
+            pages.push({ kind: 'back', aspect: COVER_ASPECT, layout: 'back',
+                slots: b.photoId ? [{ photoId: b.photoId, crop: b.crop || { x: 0, y: 0, scale: 1 }, fit: b.fit, slot: { x: 0, y: 0, w: 1, h: 1 } }] : [] });
+        }
+        return pages;
     }
 
     // ── the viewer ────────────────────────────────────────────────────────
@@ -262,6 +290,7 @@
         zoom: { s: 1, x: 0, y: 0 },           // the current page's zoom: scale and pan (px from centre)
         lastTap: null, touchAt: 0, mouse: null,
         hint: null, hintTimer: null, hintFade: null,
+        items: null, photoCount: 0, variant: 0, basePlan: null,   // re-layout: the analysed photos and the layout number (0 = the first)
 
         isOpen() { return !!this.el; },
 
@@ -315,6 +344,7 @@
             this.el.remove();
             this.el = this.stage = this.foot = null;
             this.pages = []; this.g = null; this.index = 0; this.mouse = null; this.lastTap = null; this.hint = null;
+            this.items = null; this.basePlan = null; this.variant = 0;     // closing forgets the layout number: nothing is stored
             this.zoom = { s: 1, x: 0, y: 0 };
             document.documentElement.classList.remove('album-open');
             const btn = document.getElementById('albumPreviewBtn');
@@ -337,7 +367,7 @@
             build(this.folders, ctl.signal, onProgress, AlbumPreview).then(res => {
                 if (id !== this.runId) return;
                 if (res.kind === 'few') this.showFew();
-                else this.showAlbum(res.plan, res.notes, res.hint);
+                else { this.items = res.items; this.photoCount = res.photoCount; this.variant = 0; this.basePlan = res.plan; this.showAlbum(res.plan, res.notes, res.hint); }
                 AlbumPreview.reportHint(res.kind === 'few' ? null : res.hint);
             }, err => {
                 if (id !== this.runId || isAbort(err) || ctl.signal.aborted) return;
@@ -411,34 +441,70 @@
         showAlbum(plan, notes, hint) {
             this.setState('ready');
             this.stage.dataset.zoomable = 'true';       // CSS: the stage takes the touches itself (touch-action: none)
-            this.pages = [
-                { kind: 'cover', aspect: COVER_ASPECT, layout: 'cover',
-                  slots: [{ photoId: plan.cover.photoId, crop: plan.cover.crop, fit: plan.cover.fit, slot: { x: 0, y: 0, w: 1, h: 1 } }] },
-                ...plan.spreads.map(sp => ({ kind: 'spread', aspect: SPREAD_ASPECT, layout: sp.template, slots: sp.slots })),
-            ];
-            if (plan.back) {
-                const b = plan.back;
-                this.pages.push({ kind: 'back', aspect: COVER_ASPECT, layout: 'back',
-                    slots: b.photoId ? [{ photoId: b.photoId, crop: b.crop || { x: 0, y: 0, scale: 1 }, fit: b.fit, slot: { x: 0, y: 0, w: 1, h: 1 } }] : [] });
-            }
+            this.pages = pagesOf(plan);
             const note = text('div', 'album-note', notes.join('・'), 'albumNote');
             note.hidden = notes.length === 0;
             // the bounds could not be met: said plainly, above the page buttons (present only then)
-            const bounds = hint ? text('div', 'album-bounds', hint, 'albumBounds') : null;
-            if (bounds) bounds.setAttribute('role', 'status');
+            const bounds = hint ? this.boundsEl(hint) : null;
             const prev = button('albumPrev', 'album-nav-btn', '‹', '上一頁');
             const next = button('albumNext', 'album-nav-btn', '›', '下一頁');
             const label = text('div', 'album-label', '', 'albumLabel');
             label.setAttribute('aria-live', 'polite');
             const row = text('div', 'album-nav'); row.append(prev, label, next);
             if (bounds) this.foot.append(bounds);
-            this.foot.append(note, row);
+            this.foot.append(note, row, this.relayoutRow());
             prev.addEventListener('click', () => this.go(-1));
             next.addEventListener('click', () => this.go(1));
             this.index = 0;
             this.show(0);
             next.focus();
             this.showHint();
+        },
+
+        boundsEl(hint) {
+            const b = text('div', 'album-bounds', hint, 'albumBounds');
+            b.setAttribute('role', 'status');
+            return b;
+        },
+
+        // 再次編排 / 回到原本: the same photos, another layout. Local only (the analysed items are kept), nothing stored.
+        relayoutRow() {
+            const row = text('div', 'album-relayout');
+            const again = button('albumRelayout', 'album-relayout-btn', '再次編排');
+            const back = button('albumRelayoutBack', 'album-relayout-btn album-relayout-back', '回到原本');
+            back.hidden = true;
+            const cap = text('div', 'album-relayout-cap', '這是系統自動排版的示意，換個排法看看', 'albumRelayoutCap');
+            const btns = text('div', 'album-relayout-btns');
+            btns.append(again, back);
+            row.append(btns, cap);
+            again.addEventListener('click', () => this.relayout(this.variant + 1));
+            back.addEventListener('click', () => this.relayout(0));
+            return row;
+        },
+
+        // Swap to layout number `variant` (0 = the first one). The page index is kept when it still exists (clamped), the
+        // counters and the bounds sentence follow the new plan, the cover title is drawn again with the cover.
+        relayout(variant) {
+            if (!this.el || !this.items || !this.pages.length) return;
+            let plan;
+            try { plan = variant === 0 && this.basePlan ? this.basePlan : planFor(this.items, AlbumPreview, variant); } catch (e) { return; }
+            if (!plan || !plan.cover || !plan.spreads.length) return;
+            this.variant = variant;
+            this.hideHint();
+            for (const s of [...this.stage.querySelectorAll('.album-slide')]) this.dropSlide(s);
+            this.pages = pagesOf(plan);
+            const hint = boundsHint(plan, this.photoCount);
+            const old = this.foot.querySelector('#albumBounds');
+            if (old) old.remove();
+            if (hint) this.foot.prepend(this.boundsEl(hint));
+            const back = document.getElementById('albumRelayoutBack');
+            if (back) {
+                const hadFocus = document.activeElement === back;
+                back.hidden = variant === 0;
+                if (hadFocus && back.hidden) document.getElementById('albumRelayout')?.focus();
+            }
+            this.show(Math.min(this.index, this.pages.length - 1));
+            AlbumPreview.reportHint(hint);
         },
 
         // ── pages ──
@@ -559,6 +625,21 @@
                 box.appendChild(wrap);
                 page.appendChild(box);
             });
+            const title = pageData.kind === 'cover' ? coverTitleOf(AlbumPreview.coverTitle) : '';
+            if (title) {
+                // The project title, at the top of the cover only: inside the trim (the bleed strip is the printer's, not
+                // ours), white on a soft dark fade, sized in the page's own container units (css/completion-page.css).
+                // textContent, never innerHTML; it takes no tap or drag (pointer-events: none, so the viewer's gestures
+                // see the page, not the title).
+                page.dataset.titled = 'true';          // CSS: the cover becomes the container its title is sized in
+                const box = text('div', 'album-cover-title');
+                box.dataset.tier = String(titleTier(title));
+                box.setAttribute('dir', 'auto');
+                box.style.paddingTop = `calc(${pct(bx)} + 6cqw)`;
+                box.style.paddingLeft = box.style.paddingRight = `calc(${pct(bx)} + 7cqw)`;
+                box.appendChild(text('div', 'album-cover-title-text', title));
+                page.appendChild(box);
+            }
             if (bleed) {
                 // the trim line: dashed, with everything outside it dimmed (the part the printer cuts off)
                 const guide = text('div', 'album-bleed-guide');
@@ -821,6 +902,8 @@
         // mm of bleed the printer trims off each outer edge (the product's bleed_mm; null / 0 = none = the page is
         // drawn exactly as before). Read when a page is drawn, so set it before the viewer opens.
         bleedMm: 0,
+        // the project title drawn at the top of the cover (js/completion-page.js sets it with the page; '' = nothing drawn)
+        coverTitle: '',
         onResult: null,           // optional (hint: string | null) => void, called after every run (the page behind the viewer shows the hint)
         boundsHint,
 

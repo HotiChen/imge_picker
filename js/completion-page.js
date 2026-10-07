@@ -208,6 +208,7 @@
                 AlbumPreview.PLAN_OPTS = this._planBase || {};
                 AlbumPreview.onResult = null;
             }
+            if (window.AlbumPreview) AlbumPreview.coverTitle = '';
             this._hadPlanBase = false; this._planBase = null;
             this.root = this.albumSec = null; this.coverKey = null;
             document.documentElement.classList.remove('cp-on');
@@ -218,6 +219,7 @@
         _fillHero() {
             const c = this.ctx || {}, r = this.root;
             r.querySelector('#cpTitle').textContent = c.title || '精修成品';
+            if (window.AlbumPreview) AlbumPreview.coverTitle = typeof c.title === 'string' ? c.title : '';   // the same title, at the top of the preview's cover
             r.querySelector('#cpConfirmed').textContent = c.confirmedText || '';
             const shoot = shootDateText(c.shootDate);
             const sd = r.querySelector('#cpShootDate');

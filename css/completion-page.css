@@ -142,6 +142,33 @@ html.cp-on footer.app-footer { display: none !important; }
 /* the same sentence inside the dark viewer's footer (the viewer is outside .cp, so the dark tokens apply) */
 .album-bounds { margin: 0 0 8px; padding: 8px 10px; background: var(--accent-dim); border-left: 3px solid var(--accent); font-size: 14px; line-height: 1.5; text-align: left; color: var(--ink); }
 
+/* the dark viewer's cover title and 再次編排 (js/album-preview.js; the viewer is outside .cp, so these are plain classes).
+   The title is white on a soft dark fade at the TOP of the cover only, centred, inside the trim (the script pads it in by the
+   bleed), sized in the cover's own container units so it scales from a 390px phone to a desktop; long titles use a smaller
+   tier and stop at two lines with an ellipsis. It takes no taps: the viewer's swipe / pinch / double tap see the page. */
+.album-page[data-titled] { container-type: inline-size; }
+.album-cover-title {
+  position: absolute; z-index: 2; top: 0; left: 0; right: 0; box-sizing: border-box; padding-bottom: 12cqw;
+  background: linear-gradient(to bottom, rgba(0,0,0,.62) 0%, rgba(0,0,0,.36) 55%, rgba(0,0,0,0) 100%);
+  text-align: center; color: #fff; pointer-events: none; user-select: none; -webkit-user-select: none;
+}
+.album-cover-title-text {
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden;
+  font-family: 'Noto Serif TC', 'Songti TC', 'Source Han Serif TC', 'PMingLiU', serif; font-weight: 600;
+  font-size: 7cqw; line-height: 1.3; letter-spacing: .02em; overflow-wrap: anywhere; text-shadow: 0 1px 3px rgba(0,0,0,.55);
+}
+.album-cover-title[data-tier="2"] .album-cover-title-text { font-size: 5.6cqw; }
+.album-cover-title[data-tier="3"] .album-cover-title-text { font-size: 4.6cqw; }
+.album-cover-title[data-tier="4"] .album-cover-title-text { font-size: 3.8cqw; }
+.album-relayout { margin-top: 6px; display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.album-relayout-btns { display: flex; justify-content: center; gap: 10px; }
+.album-relayout-btn { min-height: 44px; min-width: 44px; padding: 0 18px; background: transparent; border: 1px solid var(--border); color: var(--ink); font-size: 14px; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.album-relayout-btn:hover { border-color: var(--ink-55); }
+.album-relayout-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.album-relayout-btn[hidden] { display: none; }
+.album-relayout-cap { text-align: center; font-size: 12px; line-height: 1.4; color: var(--ink-55); }
+@media (max-height: 500px) { .album-relayout { margin: 0; flex: 0 0 auto; } .album-relayout-cap { display: none; } }
+
 /* 6. footer */
 .cp-foot { display: flex; flex-direction: column; align-items: center; gap: 14px; margin-top: 56px; padding: 28px 0 calc(40px + env(safe-area-inset-bottom, 0px)); border-top: 1px solid var(--cp-rule); text-align: center; }
 .cp-foot-studio { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 4px 16px; font-size: 14px; color: var(--cp-ink-55); }
