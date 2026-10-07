@@ -30,6 +30,21 @@
       </nav>`;
     const logoutBtn = container.querySelector('.side-nav-logout');
     if (logoutBtn) logoutBtn.addEventListener('click', () => { if (typeof onLogout === 'function') onLogout(); });
+    // Phone: the menu is a horizontally scrolling pill row (css/side-nav.css); bring the current
+    // page's pill into view. Scrolls only the row itself, never the page. Deferred to a frame and
+    // phone-only: reading layout synchronously here, in the middle of admin.html switching between
+    // its list and detail, disturbs the list's restored scroll position.
+    try {
+      if (!window.matchMedia || !window.matchMedia('(max-width: 768px)').matches) return;
+      requestAnimationFrame(() => {
+        const list = container.querySelector('.side-nav-list');
+        const cur = container.querySelector('.side-nav-item.active');
+        if (list && cur && list.scrollWidth > list.clientWidth) {
+          const off = cur.getBoundingClientRect().left - list.getBoundingClientRect().left + list.scrollLeft;
+          list.scrollLeft = Math.max(0, off - (list.clientWidth - cur.offsetWidth) / 2);
+        }
+      });
+    } catch (e) { /* cosmetic only */ }
   }
 
   // The plain-page logout dashboard.html/settings.html share: no login-view

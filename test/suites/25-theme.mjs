@@ -257,7 +257,7 @@ for (const [tag, ctx] of [['1280', DESKTOP], ['390', PHONE]]) {
       await tokenChecks(page, ok, 'admin 列表');
       await brightChecks(page, ok, 'admin 列表', { minItems: 25,
         named: ['#proj-title', '#proj-create-btn', '#proj-create-err', '.pick-admin-field label', '#proj-link-output', '[data-project-row] .badge-approved',
-          '[data-project-row] .badge-pending', '[data-project-row] .pd-owner', '[data-project-row] [data-open-project]', '.side-nav-logout', '.btn-logout'] });
+          '[data-project-row] .badge-pending', '[data-project-row] .pd-owner', '[data-project-row] [data-open-project]', ...(tag === '1280' ? ['.side-nav-logout'] : []) /* on a phone the menu's 登出 is hidden, the header one stays */, '.btn-logout'] });
       const row = await page.$eval('[data-project-row]', e => { const c = getComputedStyle(e); return { bg: c.backgroundColor }; });
       ok('a project row is a white card on the cream page', row.bg === WHITE, JSON.stringify(row));
       await shot(page, `admin-projects-${tag}`);

@@ -1,0 +1,40 @@
+/* Shared studio side menu + phone layout for the photographer's pages
+   (admin.html, dashboard.html, orders.html, settings.html; operator.html uses the header/main
+   phone rules only, it has no side menu). Markup comes from js/side-nav.js.
+   One source of truth: the pages used to carry four inline copies of the menu rules.
+   Needs the page's own tokens (--surface, --rule, --card, --accent-dim, --ink-*, --danger).
+
+   Desktop (> 768px): a 190px column beside <main>.
+   Phone (<= 768px): the column becomes a one-line, horizontally scrollable pill row ABOVE the
+   content (all pills 44px tall), <main> takes the full width with 16px padding, the header stays
+   one bar (version stamp hidden, 登出 stays in the header, so the menu has no second one).
+   Why a pill row and not a hamburger: every destination stays one tap away, no JS state to get
+   wrong, and the active page is visible at a glance. */
+
+.app-shell { display: flex; align-items: stretch; min-height: calc(100vh - 52px); }
+.side-nav { width: 190px; flex-shrink: 0; background: var(--surface); border-right: 1px solid var(--rule); padding: 20px 14px; }
+.side-nav-brand { color: var(--ink-55); font-size: 10px; letter-spacing: 0.2em; padding: 0 10px 12px; border-bottom: 1px solid var(--rule); margin-bottom: 10px; }
+.side-nav-list { display: flex; flex-direction: column; gap: 2px; }
+.side-nav-item { display: block; text-align: left; background: none; border: none; color: var(--ink-70); text-decoration: none; padding: 9px 10px; border-radius: 999px; font-size: 13px; font-family: inherit; cursor: pointer; }
+.side-nav-item:hover { background: var(--card); color: var(--ink-90); }
+.side-nav-item.active { background: var(--accent-dim); color: var(--ink-90); font-weight: 600; }
+.side-nav-logout { margin-top: 14px; border-top: 1px solid var(--rule); border-radius: 0; padding-top: 14px; color: var(--ink-55); }
+.side-nav-logout:hover { color: var(--danger); background: none; }
+
+@media (max-width: 768px) {
+  body header { padding: 0 16px; gap: 10px; }
+  header .brand { white-space: nowrap; flex: none; }
+  header .subtitle { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  header .spacer { flex: 1 0 0; min-width: 0; }
+  header #buildVersion, header .refresh-info { display: none; }
+  header .btn-logout { white-space: nowrap; flex: none; min-height: 44px; padding: 0 16px; }
+
+  .app-shell { flex-direction: column; min-height: 0; }
+  .side-nav { width: auto; min-width: 0; border-right: 0; border-bottom: 1px solid var(--rule); padding: 0; }
+  .side-nav-brand { display: none; }
+  .side-nav-list { flex-direction: row; gap: 6px; padding: 8px 16px; overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
+  .side-nav-list::-webkit-scrollbar { display: none; }
+  .side-nav-item { flex: none; display: inline-flex; align-items: center; min-height: 44px; padding: 0 16px; white-space: nowrap; }
+  .side-nav-logout { display: none; }
+  body main { padding: 16px; max-width: none; }
+}
