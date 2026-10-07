@@ -406,6 +406,42 @@ projects before.
   create or PATCH that names a date (PATCH: even `null`) is 500
   `shoot_date_unavailable` with nothing written.
 
+## Project type (Worker, 2026-10-07)
+
+`projects.project_type TEXT`, nullable: the photography category of the
+PROJECT (婚紗 / 婚禮 / 親子 …), for the photographer's own sorting. Not
+`users.shoot_type` (the client account's registration answer).
+
+- **Values:** the categories in `js/shoot-types.js` (`SHOOT_TYPES`, the list
+  admin.html already draws), or text typed under 其他. Because 其他 is free
+  text, the Worker keeps no copy of the list (same reasoning as
+  `users.shoot_type`: a server list could only refuse what the UI allows); a
+  worker test reads `js/shoot-types.js` and pins that every entry is accepted.
+  What it refuses: a non-string (other than `null`), more than 20 characters
+  (code points) after the trim, and any C0/DEL/C1 control, U+2028/2029, bidi
+  mark/override/isolate (U+061C, 200E/200F, 202A–202E, 2066–2069), BOM or lone
+  surrogate. Stored trimmed; `''`, blank or `null` = not set (NULL). The UI
+  should send the bare category, or the typed text for 其他 (never the literal
+  `其他` with an empty box; the Worker would accept `其他` as a value).
+- **Set by the photographer:** `POST /api/admin/projects` takes optional
+  `project_type` (bad → 400 `{error, code: 'invalid_project_type'}`, nothing
+  written, no link minted); `PATCH /api/admin/projects/:id` takes it alongside
+  the other keys (`''` / blank / `null` clears; bad → 400 `invalid_body` for
+  the whole body). The PATCH answer echoes the stored value (trimmed; a clear
+  comes back `null`). Not a plan field: an archived project still takes it.
+- **Admin reads:** the create answer, every `GET /api/admin/projects` row and
+  `GET /api/admin/projects/:id` → `project.project_type`, always the key,
+  `null` when unset.
+- **Guest reads:** none. No guest route (`/api/pick/state`, shop, rounds,
+  `?list=`, objects) carries it; a test checks the value never appears.
+- **Migration** `worker/migrations/2026-10-07-project-type.sql`
+  (`ALTER TABLE projects ADD COLUMN project_type TEXT`), hand-run before the
+  merge; independent of the shoot-date one (either order). Before it: list and
+  detail answer `project_type: null` (the list tries both new columns, then
+  each alone, then neither, so nothing else is lost), a create without a type
+  works, and a create or PATCH that names it (PATCH: even `null` / `''`) is 500
+  `project_type_unavailable` with nothing written.
+
 ## Out of scope for this step
 
 Zip download of everything; watermarks; a second link just for delivery;
