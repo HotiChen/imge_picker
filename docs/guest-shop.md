@@ -1198,7 +1198,7 @@ Pick link (`?t=` / `X-Share-Token`) + `X-Picker-Key`. Body (≤ 32 KB):
 { request_id: "<uuid v4>",                       // a new one per submit; resend the same one on retry
   lines: [ {option_id, qty, photo_key}           // print: one final per line, qty 1–10 copies of it
          | {option_id, qty, spreads} ],          // album: 1–3 copies, spreads = inside spreads (min_pages … max_pages)
-  contact: { name, phone?, line? },              // name 1–50; phone 6–20 of [0-9 + - ( ) space] and/or LINE ID 1–50
+  contact: { name, phone?, line? },              // name 1–50; phone 6–20 of [0-9 + - ( ) space], ≥ 6 digits, and/or LINE ID 1–50
   delivery: { method: "pickup" },                // optional; anything but pickup is refused
   note?: string,                                 // ≤ 500, line breaks kept
   expected_total: integer,                       // the total the page showed
@@ -1297,6 +1297,14 @@ folder or a full key.
   project's last chosen finals, even after undeliver) as well as proofs (Q17-A, the old bug); a photo a kept line
   already carries is not re-checked (a later delivery may have moved the finals). New lines record `list_price`.
 - `PATCH /api/admin/projects/:id`: unchanged (its only S2 addition was the shipping fee).
+
+### Adversarial review (WP2, 2026-10-09)
+
+`worker/test/guest-orders-adversarial.test.mjs`. Two fixes: the 413 / `Invalid JSON` answers of `POST /api/pick/orders`
+now carry `Cache-Control: private, no-store` and `Vary` like every other answer there; a phone needs at least 6
+digits (`------` was a phone). Not changed, on purpose: a settings PUT of `transfer_info` checks only its own
+column (saving it before the orders columns exist is harmless); the open-order cap is per project, so after a seat
+reset the previous holder's 3 `requested` orders block the new holder until the photographer confirms or cancels them.
 
 ### Not done / not verified
 

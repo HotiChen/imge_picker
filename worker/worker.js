@@ -1987,10 +1987,12 @@ const ORDER_CONSENT_VERSION = 'v1';
 const GUEST_DELIVERY_METHODS = ['pickup'];
 const CONTACT_NAME_MAX = 50;
 const CONTACT_LINE_MAX = 50;
-// a phone: CONTACT_PHONE_MIN–CONTACT_PHONE_MAX characters of digits, + - ( ) and spaces
+// a phone: CONTACT_PHONE_MIN–CONTACT_PHONE_MAX characters of digits, + - ( ) and spaces,
+// at least CONTACT_PHONE_MIN of them digits (`------` reaches nobody)
 const CONTACT_PHONE_MIN = 6;
 const CONTACT_PHONE_MAX = 20;
 const CONTACT_PHONE = new RegExp(`^[0-9+\\-() ]{${CONTACT_PHONE_MIN},${CONTACT_PHONE_MAX}}$`);
+const CONTACT_PHONE_DIGITS = new RegExp(`^(?:[^0-9]*[0-9]){${CONTACT_PHONE_MIN}}`);
 const TRANSFER_INFO_MAX = 500;
 // a paragraph a guest or the photographer types: line feeds stay, every other
 // control, line-separator, bidi, BOM or lone-surrogate character is refused
@@ -2096,7 +2098,7 @@ function guestContact(v) {
   const phone = field(v.phone, CONTACT_PHONE_MAX, false);
   const line = field(v.line, CONTACT_LINE_MAX, false);
   if (name === undefined || phone === undefined || line === undefined) return null;
-  if (phone !== null && !CONTACT_PHONE.test(phone)) return null;
+  if (phone !== null && !(CONTACT_PHONE.test(phone) && CONTACT_PHONE_DIGITS.test(phone))) return null;
   if (phone === null && line === null) return null;
   return { name, phone, line };
 }
@@ -4505,7 +4507,11 @@ export default {
         const notConfirmed = () => out({ error: '確認完成後才能訂購', code: 'not_confirmed' }, 409);
         if (scope.mode !== 'delivered' || !project.client_confirmed_at) return notConfirmed();
         const read = await readJsonCapped(request, GUEST_ORDER_BODY_MAX);
-        if (read.refused) return read.refused;
+        if (read.refused) {
+          // the 413 / Invalid JSON answer, no-store like every other here
+          for (const [k, v] of Object.entries(SHARED_LINK_HEADERS)) read.refused.headers.set(k, v);
+          return read.refused;
+        }
         const parsed = guestOrderBody(read.body);
         if (parsed.bad) return refuse(400, parsed.bad, parsed.max ? { max: parsed.max } : {});
         const want = parsed.order;
