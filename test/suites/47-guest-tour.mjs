@@ -64,7 +64,7 @@ const nextBtn = page => page.click('.gt-next');
         texts.push(i.text); seenCounts.push(i.count);
         ok(`step ${step}: counter ${step}/4, popover inside the 390x844 viewport`, i.count === `${step}/4` && inside(i), JSON.stringify(i));
         ok(`step ${step}: focus is inside the card`, i.inCard);
-        if (step === 3) ok('step 3 is text only: no ring, mentions 備註 and 加註記', !i.ring && i.text.includes('備註') && i.text.includes('註記'), JSON.stringify(i));
+        if (step === 3) ok('step 3 is text only: no ring; says: ♥ first, 標示修改, tap the position, 完成', !i.ring && i.text.includes('愛心') && i.text.includes('標示修改') && i.text.includes('位置') && i.text.includes('完成'), JSON.stringify(i));
         else {
           ok(`step ${step}: a ring is on the target and the popover does not cover it`, !!i.ring && !overlap(i.card, i.ring), JSON.stringify(i));
           const sel = ['.photo-card .pick-heart-btn', '.photo-card', null, '#pickSubmitBtn'][step - 1];
@@ -82,7 +82,7 @@ const nextBtn = page => page.click('.gt-next');
         if (step === 4) ok('last step\'s button reads 完成', i.next === '完成', i.next);
         if (step < 4) await nextBtn(page);
       }
-      ok('the four texts are the specified ones', texts[0].includes('點愛心選這張') && texts[1].includes('點照片可以放大') && texts[2].includes('修圖') && texts[3].includes('選好了，按這裡送出'), JSON.stringify(texts));
+      ok('the four texts are the specified ones', texts[0].includes('點愛心選這張') && texts[1].includes('點照片可以放大') && texts[2].includes('修圖') && texts[2].includes('愛心') && texts[2].includes('標示修改') && texts[2].includes('點照片上要修的位置') && texts[2].includes('完成') && !texts[2].includes('備註・標示') && texts[3].includes('選好了，按這裡送出'), JSON.stringify(texts));
       const after = await page.evaluate(() => ({ sh: document.documentElement.scrollHeight, c: JSON.stringify(document.querySelector('.photo-card').getBoundingClientRect()) }));
       ok('no layout shift: scrollHeight and the first card rect are unchanged while the tour ran', after.sh === shiftBefore.sh && after.c === shiftBefore.c, JSON.stringify([shiftBefore, after]));
       await page.click('.gt-back');
@@ -360,7 +360,7 @@ for (const reduce of [true, false]) {
         ok(`step ${s}: the ring sits on ${s < 3 ? 'a finals tile' : '確認完成'}`, what === (s < 3 ? 'tile' : 'confirm'), String(what));
         if (s < 3) await nextBtn(page);
       }
-      ok('texts: 精修成品 / 標示修改 / 確認完成', seen[0].includes('精修') && seen[1].includes('標示修改') && seen[1].includes('註記') && seen[2].includes('確認完成'), JSON.stringify(seen));
+      ok('texts: 精修成品 / 標示修改 / 確認完成', seen[0].includes('精修') && seen[1].includes('標示修改') && seen[1].includes('位置') && seen[1].includes('送出修改') && seen[2].includes('確認完成'), JSON.stringify(seen));
       await nextBtn(page);
       ok('完成 closes', await until(async () => !(await page.$('.gt-card'))));
       ok('delivered key set, picking key untouched', (await storeVal(page, KB)) === '1' && (await storeVal(page, KA)) === null);

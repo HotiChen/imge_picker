@@ -16,7 +16,7 @@
 .gt-head { display: flex; align-items: center; justify-content: space-between; min-height: 44px; margin: -6px -8px 0 0; }
 .gt-count { font: 600 12px/1 var(--font-sans); color: var(--accent); font-variant-numeric: tabular-nums; }
 .gt-x { min-width: 44px; min-height: 44px; padding: 0; background: none; border: 0; color: var(--ink-70); font-size: 16px; cursor: pointer; }
-.gt-text { margin: 0 0 8px; overflow-wrap: anywhere; }
+.gt-text { margin: 0 0 8px; overflow-wrap: anywhere; white-space: pre-line; }
 .gt-actions { display: flex; align-items: center; gap: 8px; }
 .gt-btn {
   min-height: 44px; min-width: 44px; padding: 0 14px; border-radius: 8px; cursor: pointer;

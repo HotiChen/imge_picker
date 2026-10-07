@@ -18,12 +18,12 @@
         picking: [
             { text: '點愛心選這張。選好的照片會留給攝影師修圖。', target: () => first('.photo-card .pick-heart-btn') },
             { text: '點照片可以放大，看得更清楚。', target: () => first('.photo-card') },
-            { text: '想請攝影師修圖？放大照片後，按「備註・標示」，再在照片上點一下加註記。' },
+            { text: '想請攝影師修圖？\n① 先點愛心，選這張\n② 點照片放大，按「標示修改」\n③ 點照片上要修的位置，寫下怎麼修\n④ 想標幾個位置都可以，標完按「完成」' },
             { text: '選好了，按這裡送出。', target: () => first('#mobileActionBar:not(.pick-bar-off) #pickSubmitBtn') },
         ],
         delivered: [
             { text: '這是攝影師交付的精修成品。', target: () => first('#fgRows .fg-tile') },
-            { text: '有要修改的地方：點照片放大，按「標示修改」，再在照片上點一下加註記。', target: () => first('#fgRows .fg-tile') },
+            { text: '有要修改的地方？\n① 點照片放大，按「標示修改」\n② 點照片上要修的位置，寫下怎麼修\n③ 標完按「完成」，全部標好再按「送出修改」', target: () => first('#fgRows .fg-tile') },
             { text: '都滿意就按「確認完成」。', target: () => first('#doneConfirmBtn') },
         ],
     };
