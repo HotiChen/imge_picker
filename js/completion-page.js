@@ -93,6 +93,7 @@
             if (!options.length) continue;
             const album = p.kind === 'album';
             out.push({
+                id: typeof p.id === 'string' && p.id.length >= 1 && p.id.length <= 200 ? p.id : null,
                 kind: p.kind, name: p.name, description: typeof p.description === 'string' ? p.description : '',
                 min: album ? bound(p.min_pages) : null, max: album ? bound(p.max_pages) : null,
                 extraPagePrice: album ? extraPrice(p.extra_page_price) : null,
@@ -108,10 +109,22 @@
         try { const u = new URL(url); return u.protocol === 'https:' ? u.href : null; } catch (e) { return null; }
     }
 
+    // plain Chinese for what POST /api/pick/interest can answer (docs/guest-shop.md)
+    function interestError(r) {
+        const st = r && r.status, code = r && r.data && r.data.code;
+        if (st === 401) return '連結已失效';
+        if (st === 404 && code === 'not_found') return '這個商品目前不提供';
+        if (st === 403 && code === 'not_owner') return '只有挑選人可以通知攝影師';
+        if (st === 409 && code === 'not_confirmed') return '請先確認完成後再試';
+        if (st === 409 && code === 'interest_cap') return '已通知多項商品，請直接聯絡攝影師';
+        return '暫時無法通知，請稍後再試';
+    }
+
     const CompletionPage = {
         cleanProducts, productImageUrl, rangeText, shootDateText, formatPrice, bookingLink,
 
         root: null, ctx: null, albumSec: null, coverKey: null,
+        _interested: new Set(),   // product ids the owner has told the photographer about, kept until unmount
         _shopTok: 0, _shopDone: false, _planBase: null, _hadPlanBase: false,
 
         isMounted() { return !!this.root && this.root.isConnected; },
@@ -186,6 +199,7 @@
         unmount() {
             this._shopTok++;
             this._shopDone = false;
+            this._interested = new Set();
             if (this.root) this.root.remove();
             if (this._hadPlanBase && window.AlbumPreview) {
                 AlbumPreview.PLAN_OPTS = this._planBase || {};
@@ -330,8 +344,9 @@
 
         _buildShop(products) {
             const sec = el('section', 'cp-sec cp-shop', null, 'cpShop');
-            sec.append(el('h2', 'cp-h2', '商品與加購'), el('p', 'cp-sub', '喜歡這些照片？也可以做成實體作品留下來。'));
+            sec.append(el('h2', 'cp-h2', '把照片留下來'), el('p', 'cp-sub', '有些照片，值得變成真正的作品。'));
             const list = el('ul', 'cp-products');
+            const owner = !!(this.ctx && this.ctx.isOwner && this.ctx.onInterest);
             for (const p of products) {
                 const li = el('li', `cp-product cp-product--${p.kind}`);
                 if (p.image) {
@@ -363,6 +378,8 @@
                     opts.append(row);
                 }
                 body.append(opts);
+                // 「我有興趣」: the seat owner only (a viewer has no key and the Worker would answer 403)
+                if (owner && p.id) body.append(this._buildInterest(p));
                 li.append(body);
                 list.append(li);
             }
@@ -379,6 +396,33 @@
             }
             sec.append(cta);
             return sec;
+        },
+
+        // 「我有興趣」: one call to cfg.onInterest(product_id) -> {ok, status, data}. Disabled while in flight;
+        // 200 (already or not) -> a disabled 「已通知攝影師」 for the rest of the mount; any error leaves it usable.
+        _buildInterest(p) {
+            const wrap = el('div', 'cp-interest');
+            const btn = el('button', 'cp-btn cp-btn--line cp-interest-btn', '我有興趣');
+            btn.type = 'button';
+            btn.dataset.productId = p.id;
+            const msg = el('p', 'cp-interest-msg');
+            msg.setAttribute('role', 'status');
+            const done = () => { btn.textContent = '已通知攝影師'; btn.disabled = true; btn.removeAttribute('aria-busy'); msg.textContent = ''; };
+            if (this._interested.has(p.id)) done();
+            btn.addEventListener('click', async () => {
+                if (btn.disabled) return;
+                btn.disabled = true;
+                btn.setAttribute('aria-busy', 'true');
+                msg.textContent = '';
+                let r = null;
+                try { r = await this.ctx.onInterest(p.id); } catch (e) { r = null; }
+                if (r && r.ok) { this._interested.add(p.id); done(); return; }
+                btn.disabled = false;
+                btn.removeAttribute('aria-busy');
+                msg.textContent = interestError(r);
+            });
+            wrap.append(btn, msg);
+            return wrap;
         },
 
         // ── the album hint, under the entry ────────────────────────────

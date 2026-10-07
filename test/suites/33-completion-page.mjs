@@ -309,7 +309,7 @@ for (const [label, co] of [['390px', MOBILE], ['1280px', ALB_DESK]]) {
       await page.waitForTimeout(300);
       ok('and no request was ever made to a foreign host or to /api/other', !requested.some(u => /evil\.example|\/api\/other|\/admin\//.test(u)), JSON.stringify(requested.filter(u => /evil|other|admin/.test(u))));
       ok('control: the allowed product image WAS requested (the request log works)', requested.some(u => u.startsWith(`${WORKER}/api/platform/products/pp-album/image`)), JSON.stringify(requested.slice(-5)));
-      ok('information only: no order UI in the shop (no input, no select, no textarea, no cart / add button)', await page.evaluate(() => !document.querySelector('#cpShop input, #cpShop select, #cpShop textarea, #cpShop button')));
+      ok('information only: no order UI in the shop (no input, no select, no textarea, no cart / add button; the owner\'s only buttons are 我有興趣, suite 45)', await page.evaluate(() => !document.querySelector('#cpShop input, #cpShop select, #cpShop textarea') && [...document.querySelectorAll('#cpShop button')].every(b => b.classList.contains('cp-interest-btn') && b.textContent === '我有興趣')));
       return out;
     },
     { before: async page => { page.on('request', r => requested.push(r.url())); await w.before(page); }, initScript: OWNER, contextOptions: ALB_DESK });

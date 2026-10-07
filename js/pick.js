@@ -135,6 +135,15 @@
             return this._json('/api/pick/shop', { headers: this.headers(), signal: ctl ? ctl.signal : undefined })
                 .finally(() => clearTimeout(timer));
         },
+        // POST /api/pick/interest (docs/guest-shop.md): the 完成頁 「我有興趣」. Token in the query, key only in
+        // the X-Picker-Key header (this.headers()), never in a URL.
+        postInterest(productId) {
+            return this._json(`/api/pick/interest?t=${encodeURIComponent(this.token)}`, {
+                method: 'POST',
+                headers: this.headers({ 'Content-Type': 'application/json' }),
+                body: JSON.stringify({ product_id: productId }),
+            });
+        },
         claim(name) {
             return this._json('/api/pick/claim', {
                 method: 'POST',
@@ -362,6 +371,8 @@
                 onShare: () => this.shareLink(),
                 onDownloadAll: () => this.downloadAllFinals(),
                 fetchShop: () => this.fetchShop(),
+                isOwner: this.isOwner,
+                onInterest: id => this.postInterest(id),
                 onShopSettled: () => this._renderAlbumEntry(),
             };
             const fresh = !CompletionPage.isMounted();
