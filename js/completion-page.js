@@ -344,7 +344,7 @@
 
         _buildShop(products) {
             const sec = el('section', 'cp-sec cp-shop', null, 'cpShop');
-            sec.append(el('h2', 'cp-h2', '把照片留下來'), el('p', 'cp-sub', '有些照片，值得變成真正的作品。'));
+            sec.append(el('h2', 'cp-h2', '把這段回憶留下來'), el('p', 'cp-sub', '有些照片，值得變成真正的作品。'));
             const list = el('ul', 'cp-products');
             const owner = !!(this.ctx && this.ctx.isOwner && this.ctx.onInterest);
             for (const p of products) {

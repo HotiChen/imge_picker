@@ -108,7 +108,7 @@ html.cp-on footer.app-footer { display: none !important; }
 .fg-lightbox--light .fg-lb-nav { background: rgba(255, 255, 255, .85); color: #231b12; box-shadow: 0 1px 6px rgba(35, 27, 18, .18); }
 .fg-lightbox--light .fg-lb-nav:hover:not(:disabled) { background: #fff; }
 
-/* 4. 把照片留下來 (product cards + 「我有興趣」) */
+/* 4. 把這段回憶留下來 (product cards + 「我有興趣」) */
 .cp-interest { margin-top: 12px; }
 .cp-interest-btn { width: 100%; }
 .cp-interest-btn:disabled { cursor: default; }

@@ -37,11 +37,11 @@ const click = (page, id) => page.evaluate(i => document.querySelector(`#cpShop .
 // ── 1. owner: heading, a button on every card, one POST, the right shape, key only in the header
 {
   const w = world();
-  await sx('product interest — owner 390px: heading 把照片留下來, a 我有興趣 button on each card, one tap = one POST with the id, key in the header only; the tapped card turns into a disabled 已通知攝影師',
+  await sx('product interest — owner 390px: heading 把這段回憶留下來, a 我有興趣 button on each card, one tap = one POST with the id, key in the header only; the tapped card turns into a disabled 已通知攝影師',
     `${base}/index.html?t=TOK`, async (page, ok) => {
       await ready(page);
       const h = await page.evaluate(() => ({ h: document.querySelector('#cpShop .cp-h2').textContent, sub: document.querySelector('#cpShop .cp-sub').textContent, cards: document.querySelectorAll('#cpShop .cp-product').length, btns: document.querySelectorAll('#cpShop .cp-interest-btn').length, all: document.getElementById('completionPage').textContent }));
-      ok('heading is 把照片留下來 and the sub line is 有些照片，值得變成真正的作品。', h.h === '把照片留下來' && h.sub === '有些照片，值得變成真正的作品。', JSON.stringify(h));
+      ok('heading is 把這段回憶留下來 and the sub line is 有些照片，值得變成真正的作品。', h.h === '把這段回憶留下來' && h.sub === '有些照片，值得變成真正的作品。', JSON.stringify(h));
       ok('the old heading 商品與加購 is gone', !h.all.includes('商品與加購'));
       ok('positive: 2 cards, 2 buttons (print and album), both labelled 我有興趣 and displayed',
         h.cards === 2 && h.btns === 2 && (await card(page, 'prod-print')).text === '我有興趣' && (await card(page, 'prod-album')).display !== 'none', JSON.stringify(h));
