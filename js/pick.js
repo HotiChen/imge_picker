@@ -58,6 +58,7 @@
         // Client confirmation (docs/delivery.md), from GET /api/pick/state:
         // null / false / null outside the delivered mode.
         confirmedAt: null,
+        shootDate: null,        // projects.shoot_date, only sent for a confirmed delivery (docs/delivery.md)
         revisionOpen: false,
         revisionMessage: null,
         // pins on the finals (docs/revision-pins.md): the seat holder's drafts [{photo_key, marks}] — null unless the
@@ -356,6 +357,7 @@
                 title: this.projectTitle,
                 studio: { name: studio.name || '', hasLogo: !!studio.has_logo, logoUrl: `${CONFIG.WORKER_URL}/api/studio/logo`, bookingUrl: studio.booking_url || null },
                 confirmedText: `已確認完成${when ? `（${when}）` : ''}`,
+                shootDate: this.shootDate,
                 workerUrl: CONFIG.WORKER_URL,
                 onShare: () => this.shareLink(),
                 onDownloadAll: () => this.downloadAllFinals(),
@@ -509,6 +511,7 @@
         _applyConfirmFields(data) {
             const delivered = this.mode === 'delivered';
             this.confirmedAt = delivered && typeof data.confirmed_at === 'string' ? data.confirmed_at : null;
+            this.shootDate = delivered && this.confirmedAt && typeof data.shoot_date === 'string' ? data.shoot_date : null;
             this.revisionOpen = delivered && !this.confirmedAt && data.revision_open === true;
             // only the seat holder is sent the text (a viewer: null, always)
             this.revisionMessage = this.isOwner && this.revisionOpen && typeof data.revision_message === 'string' ? data.revision_message : null;

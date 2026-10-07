@@ -232,6 +232,9 @@
   .proj-notice { margin: 0 0 14px; padding: 10px 14px; border-radius: 10px; background: var(--accent-dim); color: var(--ink-90); font-size: 13px; line-height: 1.6; }
   .pd-head { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
   .pd-owner { color: var(--ink-55); font-size: 13px; margin-bottom: 14px; }
+  .pd-shoot-text { color: var(--ink-55); font-size: 13px; }
+  .pd-shoot-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; font-size: 13px; color: var(--ink-55); }
+  .pd-shoot-row .field { width: auto; }
   .pd-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; }
   .pd-submission { padding: 10px 0; border-top: 1px solid var(--rule); font-size: 12px; }
   .pd-submission:first-child { border-top: none; }
@@ -1056,7 +1059,8 @@
     if (extraMaxNum !== undefined && (!Number.isInteger(extraMaxNum) || extraMaxNum < 0 || extraMaxNum > 500)) {
       errEl.textContent = '最多可加選需為 0–500 的整數'; return;
     }
-    const createBody = { title: folderPlan.title, folders: [folderPlan.proofFolder], pick_limit, extra_price };
+    // the date field is the shoot date (it also names the folder): the project keeps it for the 完成頁
+    const createBody = { title: folderPlan.title, folders: [folderPlan.proofFolder], pick_limit, extra_price, shoot_date: document.getElementById('proj-date').value };
     if (extraMaxNum !== undefined) createBody.extra_max = extraMaxNum;
     this.disabled = true;
     try {
@@ -1066,7 +1070,7 @@
         body: JSON.stringify(createBody),
       });
       const data = await r.json().catch(() => ({}));
-      if (!r.ok) { errEl.textContent = data.error || `建立失敗（${r.status}）`; return; }
+      if (!r.ok) { errEl.textContent = data.code && SHOOT_DATE_ERRORS[data.code] && data.code !== 'invalid_body' ? SHOOT_DATE_ERRORS[data.code] : data.error || `建立失敗（${r.status}）`; return; }
       const link = projectLink(data.token);
       const linkOut = document.getElementById('proj-link-output');
       linkOut.value = link;
@@ -1306,6 +1310,51 @@
     }
   }
 
+  // projects.shoot_date (docs/delivery.md, "Shoot date"): 'YYYY-MM-DD' or null. Util.fmtDate reads it as
+  // a Taipei day, so a value that is no date at all comes back '' and shows nothing.
+  function shootDateOf(project) {
+    const v = project && typeof project.shoot_date === 'string' ? project.shoot_date : '';
+    return /^\d{4}-\d{2}-\d{2}$/.test(v) ? Util.fmtDate(`${v}T00:00:00+08:00`, 'iso') : '';
+  }
+  const SHOOT_DATE_ERRORS = {
+    invalid_shoot_date: '拍攝日期格式不正確',
+    invalid_body: '拍攝日期格式不正確',
+    shoot_date_unavailable: '拍攝日期尚未啟用，請先執行 migration（2026-10-07-project-shoot-date.sql）',
+  };
+  const shootDateError = (data, status) => SHOOT_DATE_ERRORS[data && data.code] || (data && data.error) || `儲存失敗（${status}）`;
+  function renderShootDateHeader(project) {
+    const el = document.getElementById('pd-shoot-text');
+    if (!el) return;
+    const d = shootDateOf(project);
+    el.textContent = d ? `拍攝日期 ${d}` : '';
+    el.hidden = !d;
+  }
+  function wireShootDate(project) {
+    const input = document.getElementById('pd-shoot-input');
+    const save = document.getElementById('pd-shoot-save');
+    const err = document.getElementById('pd-shoot-err');
+    save.addEventListener('click', async () => {
+      err.textContent = '';
+      save.disabled = true;
+      try {
+        const r = await fetch(`${WORKER_URL}/api/admin/projects/${encodeURIComponent(currentProjectId)}`, {
+          method: 'PATCH',
+          headers: { 'Authorization': `Bearer ${getToken()}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ shoot_date: input.value || null }),   // an emptied field clears it
+        });
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok) { err.textContent = shootDateError(data, r.status); return; }
+        project.shoot_date = data.shoot_date ?? null;
+        input.value = shootDateOf(project);
+        renderShootDateHeader(project);
+      } catch (e) {
+        err.textContent = '無法連線到 Worker';
+      } finally {
+        save.disabled = false;
+      }
+    });
+  }
+
   function renderProjectDetail(data) {
     const body = document.getElementById('project-detail-body');
     const project = data.project || {};
@@ -1319,6 +1368,7 @@
     body.innerHTML = `
       <div class="pd-head">
         <h3>${escHtml(project.title || '（未命名）')}</h3>
+        <span class="pd-shoot-text" id="pd-shoot-text" data-shoot-date></span>
         ${phaseBadgeHtml(project)}
         ${project.delivered_at ? '<span class="badge badge-approved st-done" data-delivered-badge>已交件</span>' : ''}
         <span id="pd-confirm-badge-slot" style="display:contents">${confirmBadgeHtml(project)}</span>
@@ -1327,6 +1377,12 @@
         ${data.unnotified_submissions ? `<span class="badge badge-pending st-neutral">${escHtml(data.unnotified_submissions)} 次送出未寄信</span>` : ''}
       </div>
       <div class="pd-owner">目前挑選人：${ownerName ? escHtml(ownerName) : '<span class="folder-none">尚無人認領</span>'}</div>
+      <div class="pd-shoot-row" id="pd-shoot-row">
+        <label for="pd-shoot-input">拍攝日期</label>
+        <input id="pd-shoot-input" class="field" type="date" value="${escHtml(shootDateOf(project))}">
+        <button id="pd-shoot-save" class="btn btn-outline" type="button">儲存</button>
+        <span id="pd-shoot-err" class="err" role="alert"></span>
+      </div>
       ${projectFolderLineHtml(project)}
       <div class="pd-actions">
         ${proofsUploadHtml(project)}
@@ -1396,6 +1452,9 @@
       <div id="pd-link-err" class="err"></div>`)}
     `;
     secData = { selectedCount: selected.length, submissions, pickers, tokens, ownerName };
+
+    renderShootDateHeader(project);
+    wireShootDate(project);
 
     document.getElementById('pd-reset-seat-btn').addEventListener('click', async () => {
       if (!confirm('確定要重設選片人嗎？選取結果與送出紀錄都會保留。\n新的主人會接手目前所有選片，並可修改或刪除')) return;

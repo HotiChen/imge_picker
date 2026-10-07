@@ -64,6 +64,8 @@
     invalid_max_pages: '最多頁數需為 1–200 的整數（或留空）',
     invalid_page_range: '最多頁數不能小於最少頁數',
     min_pages_unavailable: '最少頁數還不能存：D1 migration（2026-10-06-product-min-pages.sql）尚未執行',
+    invalid_bleed_mm: '出血需為 0–10 mm 的數字（或留空）',
+    bleed_mm_unavailable: '出血尚未啟用，請先執行 migration（2026-10-07-product-bleed.sql）',
     max_pages_unavailable: '最多頁數還不能存：D1 migration（2026-10-06-product-max-pages.sql）尚未執行',
   };
 
@@ -114,6 +116,14 @@
     return '';
   }
 
+  // A product's bleed as a short label: '出血 3 mm' / '出血 2.5 mm'. '' for null or 0 (null = 0 mm = no
+  // bleed asked) and for anything that is not a finite number in 0–10. Albums and prints alike.
+  function bleedText(p) {
+    const v = p ? p.bleed_mm : null;
+    if (typeof v !== 'number' || !Number.isFinite(v) || v <= 0 || v > 10) return '';
+    return `出血 ${v} mm`;
+  }
+
   // "name 規格" — a line's display name.
   function lineName(i) {
     return i.option_label ? `${i.name} · ${i.option_label}` : i.name;
@@ -140,6 +150,6 @@
 
   window.Orders = {
     KIND_LABEL, STATUS_LABEL, METHOD_LABEL, SOURCE_LABEL, STATUS_MOVES, PAYMENT_LABEL,
-    esc, money, errorText, paymentState, lineName, platformImageUrl, pageRangeText, client,
+    esc, money, errorText, paymentState, lineName, platformImageUrl, pageRangeText, bleedText, client,
   };
 })();

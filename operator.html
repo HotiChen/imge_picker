@@ -218,6 +218,7 @@
         ${retired ? '<span class="pill pill-off">已下架</span>' : ''}
         ${p.kind === 'album' && p.photo_count ? `<span class="hint">指定 ${O.esc(p.photo_count)} 張</span>` : ''}
         ${O.pageRangeText(p) ? `<span class="hint" data-page-range>${O.esc(O.pageRangeText(p))}</span>` : ''}
+        ${O.bleedText(p) ? `<span class="hint" data-bleed>${O.esc(O.bleedText(p))}</span>` : ''}
         ${p.description ? `<div class="hint">${O.esc(p.description)}</div>` : ''}
         <ul class="prod-opts">${opts}</ul>
       </div>
@@ -278,7 +279,7 @@
 
   function openForm(product, note) {
     const editing = !!product;
-    const p = product || { kind: 'album', name: '', description: '', photo_count: null, min_pages: null, max_pages: null, options: [] };
+    const p = product || { kind: 'album', name: '', description: '', photo_count: null, min_pages: null, max_pages: null, bleed_mm: null, options: [] };
     const opts = editing ? (p.options || []).filter(o => o.active) : [];
     addBtn.hidden = true;
     formBox.innerHTML = `<div class="prod-form" id="op-form" data-mode="${editing ? 'edit' : 'new'}">
@@ -317,6 +318,12 @@
         </div>
         <div class="hint" style="flex-basis:100%;margin-top:-6px;margin-bottom:12px;">內頁的跨頁數，1 跨頁 = 1 P，封面與封底不算；1–200 的整數，選填，留空 = 不限。</div>
       </div>
+      <div class="field-group" id="opf-bleed-group">
+        <label for="opf-bleed-mm">出血（mm，選填，留空 = 0）</label>
+        <input id="opf-bleed-mm" class="field" type="number" min="0" max="10" step="0.5" inputmode="decimal" autocomplete="off" value="${p.bleed_mm != null ? O.esc(p.bleed_mm) : ''}">
+        <div id="opf-bleed-mm-err" class="err" data-field-err></div>
+        <div class="hint">每一邊要多留的出血，0–10 mm，可填小數（例如 2.5）。相本與輸出品都適用。</div>
+      </div>
       ${imageSectionHtml(product)}
       <div class="opt-head"><span class="opt-label">規格</span><span class="opt-vendor">廠商成本 NT$</span><span class="opt-plat">平台價 NT$</span><span class="opt-warn"></span><span class="opt-del"></span></div>
       <div id="opf-options">${(opts.length ? opts : [{}]).map(optRowHtml).join('')}</div>
@@ -341,6 +348,7 @@
     syncKind();
     kindSel.addEventListener('change', syncKind);
     pagesGroup.addEventListener('input', clearPageErrors);
+    $('opf-bleed-group').addEventListener('input', clearBleedError);
     const optsBox = $('opf-options');
     const formErr = $('opf-err');
     optsBox.querySelectorAll('.opt-row').forEach(syncWarn);
@@ -385,6 +393,25 @@
     $(id).focus();
   }
 
+  // bleed (mm): blank = null, else a finite number 0–10 — what the Worker accepts
+  const readBleed = raw => {
+    const v = raw.trim();
+    if (v === '') return { value: null };
+    if (!/^\d+(\.\d+)?$/.test(v)) return { bad: true };
+    const n = Number(v);
+    return Number.isFinite(n) && n >= 0 && n <= 10 ? { value: n } : { bad: true };
+  };
+  function clearBleedError() {
+    const input = $('opf-bleed-mm'), msg = $('opf-bleed-mm-err');
+    if (input) input.removeAttribute('aria-invalid');
+    if (msg) msg.textContent = '';
+  }
+  function bleedError(code) {
+    $('opf-bleed-mm').setAttribute('aria-invalid', 'true');
+    $('opf-bleed-mm-err').textContent = O.errorText({ code });
+    $('opf-bleed-mm').focus();
+  }
+
   async function saveForm(product) {
     const formErr = $('opf-err');
     formErr.textContent = '';
@@ -405,6 +432,10 @@
       if (lo.value !== null && hi.value !== null && hi.value < lo.value) { pageError('opf-max-pages', 'invalid_page_range'); return; }
       minPages = lo.value; maxPages = hi.value;
     }
+    // the bleed belongs to albums and prints alike: always judged, always sent (null clears)
+    clearBleedError();
+    const bleed = readBleed($('opf-bleed-mm').value);
+    if (bleed.bad) { bleedError('invalid_bleed_mm'); return; }
     const options = [];
     for (const row of document.querySelectorAll('#opf-options .opt-row')) {
       const v = row.querySelector('.opt-vendor').value.trim();
@@ -422,6 +453,7 @@
       // a print does not send the page bounds at all (the Worker clears both
       // when a product leaves album); an album sends null to clear one
       ...(kind === 'album' ? { min_pages: minPages, max_pages: maxPages } : {}),
+      bleed_mm: bleed.value,
       options,
     };
     const btn = $('opf-save');

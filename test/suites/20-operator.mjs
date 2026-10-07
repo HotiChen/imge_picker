@@ -201,7 +201,7 @@ const PNG_BYTES = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAD
       const post = o.st.calls.find(c => c.method === 'POST' && c.path === '/api/operator/products');
       ok('POST carries kind, name, description, photo_count and options with vendor_cost and platform_price',
         JSON.stringify(post?.body) === JSON.stringify({
-          kind: 'album', name: '相本書', description: '20 頁精裝', photo_count: 20, min_pages: null, max_pages: null,
+          kind: 'album', name: '相本書', description: '20 頁精裝', photo_count: 20, min_pages: null, max_pages: null, bleed_mm: null,
           options: [{ label: '8×8 吋', vendor_cost: 1400, platform_price: 1500 }, { label: '12×12 吋', vendor_cost: 2300, platform_price: 2400 }],
         }), JSON.stringify(post?.body));
       ok('after creating, the form stays open on the new product in edit mode, now with the image section', (await page.$('#opf-file')) !== null && (await T(page, '#op-ok')).includes('已建立'));
@@ -257,7 +257,7 @@ const PNG_BYTES = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAD
       const put = o.st.calls.find(c => c.method === 'PUT');
       ok('PUT goes to the product; the kept option carries its id, the new one none, the dropped one is absent; blank count = null',
         put?.path === '/api/operator/products/plat-album' && put.auth === 'Bearer op' && JSON.stringify(put.body) === JSON.stringify({
-          kind: 'album', name: '相本書', description: '20 頁精裝', photo_count: null, min_pages: null, max_pages: null,
+          kind: 'album', name: '相本書', description: '20 頁精裝', photo_count: null, min_pages: null, max_pages: null, bleed_mm: null,
           options: [{ label: '8×8 吋', vendor_cost: 1400, platform_price: 1600, id: 'popt-album-s' }, { label: '10×10 吋', vendor_cost: 1800, platform_price: 1900 }],
         }), JSON.stringify(put));
       await page.waitForFunction(() => document.querySelector('[data-product-id="plat-album"]')?.textContent.includes('NT$1,900'), null, { timeout: 3000 });

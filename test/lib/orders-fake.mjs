@@ -21,7 +21,7 @@ export function ordersFake(opts = {}) {
     platform: opts.platform || [],   // platform catalogue: {id, kind, name, …, min_pages?, max_pages?, options: [{id, label, vendor_cost, platform_price, active, sort}]}
     // which page-bound columns the fake database has (worker.js pageColumns): a
     // missing one reads null and refuses a number (500 <col>_unavailable)
-    pageColumns: { min_pages: true, max_pages: true, ...(opts.pageColumns || {}) },
+    pageColumns: { min_pages: true, max_pages: true, bleed_mm: true, ...(opts.pageColumns || {}) },
     imageSeq: 0,
     operatorToken: opts.operatorToken || 'op',
     orders: opts.orders || [],
@@ -99,9 +99,9 @@ export function ordersFake(opts = {}) {
   const viewProduct = p => {
     const pp = p.platform_product_id ? platformOf(p.platform_product_id) : null;
     const adopted = !!p.platform_product_id;
-    const v = { ...p, platform_active: adopted ? (pp ? pp.active : 0) : null, min_pages: null, max_pages: null };
+    const v = { ...p, platform_active: adopted ? (pp ? pp.active : 0) : null, min_pages: null, max_pages: null, bleed_mm: null };
     if (pp) Object.assign(v, { kind: pp.kind, name: pp.name, description: pp.description, photo_count: pp.photo_count,
-      min_pages: pageRead(pp, 'min_pages'), max_pages: pageRead(pp, 'max_pages'),
+      min_pages: pageRead(pp, 'min_pages'), max_pages: pageRead(pp, 'max_pages'), bleed_mm: bleedRead(pp),
       has_image: pp.has_image, image_type: pp.image_type, image_updated_at: pp.image_updated_at });
     v.options = p.options.map(o => {
       if (!o.platform_option_id) return { ...o };
@@ -113,7 +113,7 @@ export function ordersFake(opts = {}) {
     return v;
   };
   const platView = pp => ({ id: pp.id, kind: pp.kind, name: pp.name, description: pp.description, photo_count: pp.photo_count,
-    min_pages: pageRead(pp, 'min_pages'), max_pages: pageRead(pp, 'max_pages'),
+    min_pages: pageRead(pp, 'min_pages'), max_pages: pageRead(pp, 'max_pages'), bleed_mm: bleedRead(pp),
     active: pp.active, sort: pp.sort, has_image: pp.has_image, image_type: pp.image_type, image_updated_at: pp.image_updated_at,
     created_at: NOW, updated_at: NOW, options: pp.options.map(o => ({ ...o })) });
   // the photographer's option, as an order line reads it
@@ -140,6 +140,17 @@ export function ordersFake(opts = {}) {
   };
   const albumOnly = (kind, v) => (kind === 'album' && v != null ? v : null);
   const pageRead = (pp, col) => (st.pageColumns[col] ? albumOnly(pp.kind, pp[col]) : null);
+  // platform_products.bleed_mm (worker.js: bleedWrite, BLEED_MM_MAX): a finite number 0–10
+  // or null, albums AND prints; absent from a PUT keeps it; a number for a missing
+  // column is 500 bleed_mm_unavailable; a missing column reads null
+  const bleedRead = pp => (st.pageColumns.bleed_mm && pp.bleed_mm != null ? pp.bleed_mm : null);
+  function bleedWrite(body) {
+    if (!('bleed_mm' in body)) return { set: {} };
+    const v = body.bleed_mm;
+    if (v !== null && !(typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= 10)) return { bad: 'invalid_bleed_mm' };
+    if (v !== null && !st.pageColumns.bleed_mm) return { unavailable: { error: '出血設定功能尚未啟用', code: 'bleed_mm_unavailable' } };
+    return { set: { bleed_mm: v } };
+  }
   // returns {set} (the bounds to store) | {bad} | {unavailable}
   function pageBoundsWrite(body, kind, current) {
     const named = {};
@@ -250,10 +261,13 @@ export function ordersFake(opts = {}) {
       if (f.bad) return bad(f.bad);
       const bounds = pageBoundsWrite(body, f.set.kind, null);
       if (bounds.bad) return bad(bounds.bad);
+      const bleed = bleedWrite(body);
+      if (bleed.bad) return bad(bleed.bad);
       const opts = checkOptions(body.options, new Set(), PLATFORM_MONEY);
       if (opts.bad) return bad(opts.bad);
       if (bounds.unavailable) return { status: 500, body: bounds.unavailable };
-      const pp = { id: id('plat'), description: '', photo_count: null, sort: 0, ...f.set, ...bounds.set, active: 1, has_image: false, image_type: null, image_updated_at: null,
+      if (bleed.unavailable) return { status: 500, body: bleed.unavailable };
+      const pp = { id: id('plat'), description: '', photo_count: null, sort: 0, ...f.set, ...bounds.set, ...bleed.set, active: 1, has_image: false, image_type: null, image_updated_at: null,
         options: opts.options.map(o => ({ id: id('popt'), label: o.label, vendor_cost: o.vendor_cost, platform_price: o.platform_price, active: 1, sort: o.sort })) };
       if (pp.kind !== 'album') pp.photo_count = null;
       st.platform.push(pp);
@@ -266,6 +280,8 @@ export function ordersFake(opts = {}) {
       if (f.bad) return bad(f.bad);
       const bounds = pageBoundsWrite(body, f.set.kind ?? pp.kind, pp);
       if (bounds.bad) return bad(bounds.bad);
+      const bleed = bleedWrite(body);
+      if (bleed.bad) return bad(bleed.bad);
       let opts = null;
       if ('options' in body) {
         const c = checkOptions(body.options, new Set(pp.options.map(o => o.id)), PLATFORM_MONEY);
@@ -273,7 +289,8 @@ export function ordersFake(opts = {}) {
         opts = c.options;
       }
       if (bounds.unavailable) return { status: 500, body: bounds.unavailable };
-      Object.assign(pp, f.set, bounds.set);
+      if (bleed.unavailable) return { status: 500, body: bleed.unavailable };
+      Object.assign(pp, f.set, bounds.set, bleed.set);
       if (pp.kind !== 'album') pp.photo_count = null;
       if (opts) {
         const keep = new Set(opts.filter(o => o.id).map(o => o.id));
@@ -353,7 +370,7 @@ export function ordersFake(opts = {}) {
       const p = st.products.find(x => x.id === m[1]);
       if (!p) return { status: 404, body: { error: 'Not found' } };
       if (p.platform_product_id) {
-        if (['kind', 'name', 'description', 'photo_count'].some(k => k in body)) return bad('platform_managed');
+        if (['kind', 'name', 'description', 'photo_count', 'min_pages', 'max_pages', 'bleed_mm'].some(k => k in body)) return bad('platform_managed');
         const f = checkFields(body, true, []);
         if (f.bad) return bad(f.bad);
         let opts = null;

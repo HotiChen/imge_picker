@@ -61,6 +61,8 @@ html.cp-on footer.app-footer { display: none !important; }
 .cp-studio-name { min-width: 0; overflow-wrap: anywhere; }
 .cp-title { margin: 0; font-family: var(--cp-serif); font-weight: 600; font-size: clamp(28px, 5vw, 48px); line-height: 1.2; letter-spacing: .02em; overflow-wrap: anywhere; text-wrap: balance; }
 .cp-thanks { margin: 16px 0 0; font-size: 16px; line-height: 1.8; color: var(--cp-ink-70); text-wrap: balance; }
+.cp-shoot { margin: 10px 0 0; font-size: 14px; letter-spacing: .08em; color: var(--cp-ink-70); }
+.cp-shoot[hidden] { display: none; }
 .cp-confirmed { display: inline-block; margin: 18px 0 0; padding: 6px 16px; border-radius: 999px; background: var(--cp-mint); color: var(--cp-mint-ink); font-size: 14px; font-weight: 600; }
 
 /* sections */
