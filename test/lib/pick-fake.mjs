@@ -120,6 +120,16 @@ export function pickMarksCanonFake(marks) {
 // and the PATCH/create validation (docs/project-plan.md, "Worker contract").
 export const EXTRA_MAX_MAX_FAKE = 500, EXTRA_MAX_DEFAULT_FAKE = 10, MONEY_MAX_FAKE = 10000000;
 export const isExtraMaxFake = v => Number.isSafeInteger(v) && v >= 0 && v <= EXTRA_MAX_MAX_FAKE;
+// worker.js isShootDateInput: null / '' / a real 'YYYY-MM-DD' (years 1900-2100)
+export const isShootDateInputFake = v => {
+  if (v === null || v === '') return true;
+  const m = typeof v === 'string' ? /^(\d{4})-(\d{2})-(\d{2})$/.exec(v) : null;
+  if (!m) return false;
+  const [y, mo, d] = [+m[1], +m[2], +m[3]];
+  if (y < 1900 || y > 2100) return false;
+  const t = new Date(Date.UTC(y, mo - 1, d));
+  return t.getUTCFullYear() === y && t.getUTCMonth() === mo - 1 && t.getUTCDate() === d;
+};
 export function settingsShapeFake(st) {
   const x = st.default_extra_max ?? null;
   return { studio_name: null, booking_url: null, default_pick_limit: null, default_extra_price: null,
@@ -159,6 +169,7 @@ export function pickFakeWorker(opts = {}) {
       allow_proof_download: !!opts.allowProofDownload,
       // docs/delivery.md client confirmation: null until confirmed;
       // 'guest' | 'photographer' says who
+      shoot_date: opts.shootDateColumn === false ? null : (opts.shootDate ?? null),
       client_confirmed_at: opts.confirmedAt || null,
       client_confirmed_by: opts.confirmedAt ? (opts.confirmedBy || 'guest') : null,
     },
@@ -245,6 +256,8 @@ export function pickFakeWorker(opts = {}) {
           // docs/delivery.md: the same for owner and viewers; null / false /
           // null outside the delivered mode, never who confirmed
           confirmed_at: scope.mode === 'delivered' ? state.project.client_confirmed_at : null,
+          // projects.shoot_date: only while delivered AND confirmed, null in every other state (docs/delivery.md)
+          shoot_date: scope.mode === 'delivered' && state.project.client_confirmed_at ? (state.project.shoot_date ?? null) : null,
           revision_open: scope.mode === 'delivered' && openRevisions().length > 0,
           // the text goes to the seat owner only; a viewer always gets null
           // (opts.leakViewerMessage: a misbehaving Worker, to prove the page itself never shows it)
@@ -514,6 +527,7 @@ export function pickFakeWorker(opts = {}) {
           delivered_at: state.project.delivered_at,
           final_folders: state.project.final_folders,
           allow_proof_download: state.project.allow_proof_download,
+          shoot_date: state.project.shoot_date ?? null,
           client_confirmed_at: state.project.client_confirmed_at,
           client_confirmed_by: state.project.client_confirmed_by,
           open_revision_count: openRevisions().length,
@@ -533,11 +547,20 @@ export function pickFakeWorker(opts = {}) {
         if (!('extra_max' in (body || {}))) extra_max = settingsShapeFake(state.settings).effective_default_extra_max;
         else if (body.extra_max === null || isExtraMaxFake(body.extra_max)) extra_max = body.extra_max;
         else return json({ error: 'extra_max must be a whole number from 0 to 500' }, 400);
+        // shoot_date (worker.js isShootDateInput / SHOOT_DATE_UNAVAILABLE): '' / null / absent = none,
+        // else a real 'YYYY-MM-DD'; bad = 400 invalid_shoot_date; a date before the migration = 500
+        let shoot_date = null;
+        if (body && 'shoot_date' in body) {
+          if (!isShootDateInputFake(body.shoot_date)) return json({ error: 'shoot_date must be YYYY-MM-DD', code: 'invalid_shoot_date' }, 400);
+          shoot_date = body.shoot_date === '' ? null : body.shoot_date;
+        }
+        if (shoot_date !== null && opts.shootDateColumn === false) return json({ error: '拍攝日期功能尚未啟用', code: 'shoot_date_unavailable' }, 500);
+        state.project.shoot_date = shoot_date;
         return json({
           project: {
             id: state.project.id, title: body.title || '', folders: body.folders,
             pick_limit: body.pick_limit ?? null, extra_price: body.extra_price ?? null,
-            extra_max, photographer_id: 'default',
+            extra_max, shoot_date, photographer_id: 'default',
           },
           token: 'PICK-TOKEN', expires_at: '2027-01-01T00:00:00.000Z',
         }, 201);
@@ -682,15 +705,17 @@ export function pickFakeWorker(opts = {}) {
           pick_limit: v => v === null || (Number.isSafeInteger(v) && v >= 0),
           extra_price: v => v === null || (Number.isSafeInteger(v) && v >= 0 && v <= MONEY_MAX_FAKE),
           extra_max: v => v === null || isExtraMaxFake(v),
+          shoot_date: isShootDateInputFake,
         };
         const keys = body && typeof body === 'object' && !Array.isArray(body) ? Object.keys(body) : [];
         if (!keys.length || keys.some(k => !good[k] || !good[k](body[k])))
           return json({ error: 'Invalid body', code: 'invalid_body' }, 400);
-        const planKey = keys.some(k => k !== 'allow_proof_download');
+        const planKey = keys.some(k => k !== 'allow_proof_download' && k !== 'shoot_date');
+        if (keys.includes('shoot_date') && opts.shootDateColumn === false) return json({ error: '拍攝日期功能尚未啟用', code: 'shoot_date_unavailable' }, 500);
         if (planKey && state.project.archived_at)
           return json({ error: 'Project is archived; unarchive it first', code: 'archived' }, 409);
-        for (const k of keys) state.project[k] = body[k];
-        return json({ ok: true, ...body });
+        for (const k of keys) state.project[k] = k === 'shoot_date' && body[k] === '' ? null : body[k];
+        return json({ ok: true, ...body, ...(keys.includes('shoot_date') ? { shoot_date: state.project.shoot_date } : {}) });
       }
 
       // A pick link's reads (docs/delivery.md): a listing outside the link's

@@ -65,6 +65,12 @@
         if (max != null) return `最多 ${max} 跨頁`;
         return null;
     }
+    // projects.shoot_date is 'YYYY-MM-DD' (the Worker checks it); anything else shows nothing.
+    // Plain string work, no Date: a calendar day has no time zone to shift it.
+    function shootDateText(v) {
+        if (typeof v !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(v)) return null;
+        return `拍攝日期 ${v.replace(/-/g, '.')}`;
+    }
     const formatPrice = n => Util.formatPrice(n);   // NT$5,000 (js/util.js, loaded before this file)
     const bound = v => (Number.isSafeInteger(v) && v >= 1 ? v : null);
 
@@ -100,7 +106,7 @@
     }
 
     const CompletionPage = {
-        cleanProducts, productImageUrl, rangeText, formatPrice, bookingLink,
+        cleanProducts, productImageUrl, rangeText, shootDateText, formatPrice, bookingLink,
 
         root: null, ctx: null, albumSec: null, coverKey: null,
         _shopTok: 0, _shopDone: false, _planBase: null, _hadPlanBase: false,
@@ -130,7 +136,7 @@
             const text = el('div', 'cp-hero-text');
             text.append(el('div', 'cp-studio', null, 'cpStudio'), el('h1', 'cp-title', null, 'cpTitle'),
                 el('p', 'cp-thanks', '謝謝你的信任，願這些照片陪你把這一天留得久一點。', 'cpThanks'),
-                el('p', 'cp-confirmed', null, 'cpConfirmed'));
+                el('p', 'cp-confirmed', null, 'cpConfirmed'), el('p', 'cp-shoot', null, 'cpShootDate'));
             hero.append(text);
 
             // 2. gallery
@@ -193,6 +199,10 @@
             const c = this.ctx || {}, r = this.root;
             r.querySelector('#cpTitle').textContent = c.title || '精修成品';
             r.querySelector('#cpConfirmed').textContent = c.confirmedText || '';
+            const shoot = shootDateText(c.shootDate);
+            const sd = r.querySelector('#cpShootDate');
+            sd.textContent = shoot || '';
+            sd.hidden = !shoot;
             const box = r.querySelector('#cpStudio');
             box.replaceChildren();
             const s = c.studio;
