@@ -200,7 +200,7 @@ for (const [label, ctxOpts, phone] of [['桌面', undefined, false], ['手機 39
       await page.goto(`${base}/upload.html`, { waitUntil: 'load' });
       const r2 = await read(page, '.header .btn-back', 'header.header');
       check(ok, 'upload (no project)', r2, { phone, textLink: true });
-      ok('upload (no project): 「← 返回選圖」 -> index.html', r2.text === '← 返回選圖' && (await page.$eval('.btn-back', a => a.getAttribute('href'))) === 'index.html');
+      ok('upload (no project): 「← 返回後台」 -> dashboard.html', r2.text === '← 返回後台' && (await page.$eval('.btn-back', a => a.getAttribute('href'))) === 'dashboard.html');
       ok('the header does not overflow: logo name right edge inside the viewport', await page.evaluate(() => { const l = document.querySelector('.header-logo').getBoundingClientRect(); return l.right <= innerWidth; }));
       return out;
     },

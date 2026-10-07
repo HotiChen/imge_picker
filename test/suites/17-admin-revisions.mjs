@@ -242,20 +242,20 @@ await suite('upload — ?project= 的 id 有特殊字元：href 正確編碼（�
     return [href === 'admin.html#project=' + encodeURIComponent('a b&c#d') ? 'ok    id encoded with encodeURIComponent' : `FAIL  ${href}`];
   });
 
-await suite('upload — 沒有 ?project=（或空值）：返回鍵維持「← 返回選圖」→ index.html（舊行為不變）',
+await suite('upload — 沒有 ?project=（或空值）：返回鍵是「← 返回後台」→ dashboard.html（不再指向選圖頁）',
   `${base}/upload.html`,
   async page => {
     const read = () => page.$eval('.btn-back', a => ({ text: a.textContent.trim(), href: a.getAttribute('href') }));
     const out = [];
     const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
     const a = await read();
-    ok('no param: ← 返回選圖 → index.html', a.text === '← 返回選圖' && a.href === 'index.html', JSON.stringify(a));
+    ok('no param: ← 返回後台 → dashboard.html', a.text === '← 返回後台' && a.href === 'dashboard.html', JSON.stringify(a));
     await page.goto(`${base}/upload.html?folder=${encodeURIComponent('x/')}`, { waitUntil: 'load' });
     const b = await read();
-    ok('only ?folder=: unchanged', b.text === '← 返回選圖' && b.href === 'index.html', JSON.stringify(b));
+    ok('only ?folder=: same', b.text === '← 返回後台' && b.href === 'dashboard.html', JSON.stringify(b));
     await page.goto(`${base}/upload.html?project=`, { waitUntil: 'load' });
     const c = await read();
-    ok('empty ?project=: unchanged', c.text === '← 返回選圖' && c.href === 'index.html', JSON.stringify(c));
+    ok('empty ?project=: same', c.text === '← 返回後台' && c.href === 'dashboard.html', JSON.stringify(c));
     return out;
   });
 
