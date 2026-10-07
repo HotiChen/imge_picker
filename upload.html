@@ -359,12 +359,49 @@ details[open] > .tree-dir-summary .tree-chevron { transform: rotate(90deg); }
 .tree-dir-name { font-family: 'IBM Plex Mono', monospace; color: var(--ink-90); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tree-dir-meta { color: var(--ink-55); white-space: nowrap; font-size: 0.68rem; flex-shrink: 0; }
 .tree-children { padding-left: 14px; margin-top: 2px; display: flex; flex-direction: column; gap: 2px; }
+
+/* ── Retry controls (failed uploads) ── */
+button[hidden] { display: none !important; }
+.queue-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+.queue-item.error { grid-template-columns: 18px 1fr auto auto auto; }
+.qi-retry { padding: 3px 12px; font-size: 0.72rem; }
+
+/* ── Phone (<= 768px): the folder tree is a full-width panel ABOVE the drop zone, with its own scroll
+   (max 40vh). A collapsible toggle was the alternative; a scroll panel keeps the tree visible and
+   needs no extra state. The page itself scrolls as a document. Above 768px nothing here applies. ── */
+@media (max-width: 768px) {
+    html, body { height: auto; min-height: 100%; overflow: visible; }
+    .header { padding: 0 12px; gap: 10px; }
+    .back-btn, .btn-back, .header-logo { min-height: 44px; }
+    .layout { flex-direction: column; height: auto; overflow: visible; }
+    .sidebar { width: 100%; max-height: 40vh; border-right: 0; border-bottom: 1px solid var(--rule); }
+    .sidebar-header { padding: 4px 8px 4px 14px; }
+    .sidebar-refresh { min-width: 44px; min-height: 44px; font-size: 1.1rem; }
+    .sb-row { height: 44px; }
+    .sb-toggle { width: 44px; height: 44px; }
+    .sb-name { min-height: 44px; font-size: 0.85rem; }
+    .sb-row .sb-add { display: flex; width: 44px; height: 44px; margin-right: 0; border: 0; background: none; border-radius: 0; font-size: 1.2rem; }
+    .sb-new-row { height: 44px; }
+    .sb-new-input { min-height: 36px; font-size: 16px; }
+    .main { flex: none; width: 100%; overflow: visible; padding: 16px 16px 40px; }
+    .target-bar { margin-bottom: 16px; }
+    .target-path { white-space: normal; word-break: break-all; }
+    .drop-zone { padding: 28px 16px; margin-bottom: 16px; }
+    .drop-btns .btn-secondary { flex: 1 1 140px; min-height: 44px; }
+    .queue-header { flex-wrap: wrap; gap: 8px; }
+    .queue-actions { justify-content: flex-start; }
+    .btn-danger, .queue-actions .btn-secondary { min-height: 44px; min-width: 44px; padding: 8px 14px; }
+    .tree-dir-summary { min-height: 44px; }
+    .queue-item, .queue-item.error { grid-template-columns: 18px minmax(0, 1fr) auto; }
+    .qi-status { grid-column: 2; min-width: 0; text-align: left; white-space: normal; }
+    .qi-retry { grid-column: 3; min-height: 44px; min-width: 64px; }
+}
 </style>
 </head>
 <body>
 
 <header class="header">
-    <a href="index.html" class="back-btn btn-back">← 返回選圖</a>
+    <a href="dashboard.html" class="back-btn btn-back">← 返回後台</a>
     <a class="header-logo" href="index.html">
         <div class="logo-mark">選</div>
         <span class="logo-name">Image Picker Studio</span>
@@ -436,7 +473,10 @@ details[open] > .tree-dir-summary .tree-chevron { transform: rotate(90deg); }
         <div id="queueSection" style="display:none;">
             <div class="queue-header">
                 <span class="queue-title" id="queueTitle">佇列</span>
-                <button class="btn-danger" id="clearDoneBtn">清除已完成</button>
+                <div class="queue-actions">
+                    <button class="btn-secondary" id="retryAllBtn" hidden>重試全部失敗項目</button>
+                    <button class="btn-danger" id="clearDoneBtn">清除已完成</button>
+                </div>
             </div>
             <div class="queue-list" id="queueList"></div>
         </div>
@@ -450,6 +490,10 @@ details[open] > .tree-dir-summary .tree-chevron { transform: rotate(90deg); }
 <script src="js/util.js?v=20261007h"></script>
 <script>
 const CONCURRENCY = 4;
+// Auto retry: only network errors, timeouts, HTTP 5xx and 429; waits 2 s then 5 s. Anything else (401/403/413/other 4xx)
+// is shown with its reason and left to the 重試 button.
+const RETRY_DELAYS = [2000, 5000];
+const UPLOAD_TIMEOUT_MS = 15 * 60 * 1000;   // per file; a stalled connection ends as a retryable timeout
 const IMAGE_EXTS = /\.(jpe?g|png|webp|heic|heif|tiff?|gif|avif|bmp)$/i;
 
 // Sizes the Worker serves for ?w=. Descending, because each thumbnail is
@@ -473,6 +517,9 @@ function fmtSize(bytes) {
     if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(0) + ' KB';
     return (bytes / 1024 / 1024).toFixed(1) + ' MB';
 }
+// the folder tree is on the left on a desktop and above on a phone (<= 768px, see the @media block)
+const isNarrow = () => window.matchMedia('(max-width: 768px)').matches;
+const sideWord = () => isNarrow() ? '上方' : '左側';
 function toast(msg) {
     const el = document.createElement('div');
     el.style.cssText = 'position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:var(--surface);border:1px solid var(--accent);color:var(--ink-90);box-shadow:0 8px 24px rgba(90,60,20,.18);padding:9px 18px;border-radius:999px;font-size:0.82rem;z-index:9999;pointer-events:none;white-space:nowrap;';
@@ -717,7 +764,7 @@ dz.addEventListener('dragleave', e => { if (!dz.contains(e.relatedTarget)) dz.cl
 dz.addEventListener('drop', async e => {
     e.preventDefault();
     dz.classList.remove('drag-over');
-    if (!targetFolder) { toast('請先從左側選擇目標資料夾'); return; }
+    if (!targetFolder) { toast(`請先從${sideWord()}選擇目標資料夾`); return; }
     const items = Array.from(e.dataTransfer.items).filter(i => i.kind === 'file');
     const entries = items.map(i => i.webkitGetAsEntry ? i.webkitGetAsEntry() : null).filter(Boolean);
     if (!entries.length) { addFiles(Array.from(e.dataTransfer.files), ''); return; }
@@ -747,7 +794,7 @@ async function traverseEntry(entry, prefix) {
 
 // ── Add files to queue ──
 function addFiles(input, prefix = '') {
-    if (!targetFolder) { toast('請先從左側選擇目標資料夾'); return; }
+    if (!targetFolder) { toast(`請先從${sideWord()}選擇目標資料夾`); return; }
     const items = Array.isArray(input) && input.length && input[0] instanceof File
         ? input.map(f => ({ file: f, path: (prefix || '') + f.name }))
         : input;
@@ -755,7 +802,7 @@ function addFiles(input, prefix = '') {
     if (!filtered.length) { toast('沒有找到支援的圖片格式'); return; }
     for (const { file, path } of filtered) {
         const id = crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2);
-        queue.push({ id, file, path, state: 'pending', progress: 0, error: null });
+        queue.push({ id, file, path, state: 'pending', progress: 0, error: null, attempts: 0 });
     }
     renderQueue();
     $('overallWrap').classList.add('visible');
@@ -766,9 +813,17 @@ function addFiles(input, prefix = '') {
 
 // ── Upload pump ──
 function pump() {
+    // offline: leave everything pending (nothing burns a retry); the `online` event pumps again
+    if (!navigator.onLine) { updateOverall(); return; }
     const pending = queue.filter(q => q.state === 'pending');
     const slots = CONCURRENCY - activeCount;
     pending.slice(0, slots).forEach(startUpload);
+}
+window.addEventListener('offline', () => { updateQueueRows(); updateOverall(); });
+window.addEventListener('online', () => { updateQueueRows(); updateOverall(); pump(); });
+
+function whenOnline() {
+    return navigator.onLine ? Promise.resolve() : new Promise(res => window.addEventListener('online', res, { once: true }));
 }
 
 async function startUpload(item) {
@@ -785,7 +840,30 @@ async function startUpload(item) {
     updateOverall();
     const key = targetFolder + item.path;
     try {
-        await uploadWithProgress(item, key);
+        // the same key is overwritten, so sending a photo again is always safe
+        for (;;) {
+            try {
+                await uploadWithProgress(item, key);
+                break;
+            } catch (err) {
+                if (!err.retryable) throw err;
+                item.progress = 0;
+                if (!navigator.onLine) {
+                    // no connection is not the server's fault: wait for it without using up a retry
+                    item.waiting = true;
+                    updateItemEl(item); updateOverall();
+                    await whenOnline();
+                    item.waiting = false;
+                    continue;
+                }
+                if (item.attempts >= RETRY_DELAYS.length) throw err;
+                const delay = RETRY_DELAYS[item.attempts++];
+                item.retrying = true;
+                updateItemEl(item); updateOverall();
+                await new Promise(res => setTimeout(res, delay));
+                item.retrying = false;
+            }
+        }
         // the photo itself is safely stored either way — a thumbnail problem
         // only means browsing this one stays slow, so it is a warning
         item.thumbWarning = await uploadThumbnails(item, key);
@@ -795,11 +873,42 @@ async function startUpload(item) {
         item.state = 'error';
         item.error = err.message || '上傳失敗';
     }
+    item.retrying = false;
+    item.waiting = false;
     activeCount--;
     updateItemEl(item);
     updateOverall();
     pump();
 }
+
+// A failed row goes back to the queue as the SAME entry (same id, same key): never a second row.
+// Its thumbnails are generated and uploaded again because startUpload runs the whole path.
+function retryItem(item) {
+    if (item.state !== 'error') return;
+    item.state = 'pending';
+    item.progress = 0;
+    item.error = null;
+    item.attempts = 0;
+    item.thumbWarning = null;
+    item.retrying = false;
+    item.waiting = false;
+    updateItemEl(item);
+}
+$('queueList').addEventListener('click', e => {
+    const btn = e.target.closest('.qi-retry');
+    if (!btn) return;
+    const row = btn.closest('.queue-item');
+    const item = row && queue.find(q => q.id === row.dataset.id);
+    if (!item) return;
+    retryItem(item);
+    updateOverall();
+    pump();
+});
+$('retryAllBtn').addEventListener('click', () => {
+    queue.filter(q => q.state === 'error').forEach(retryItem);
+    updateOverall();
+    pump();
+});
 
 // ── Thumbnails ──
 // Browsing used to download the full-resolution original for every 150px tile.
@@ -900,10 +1009,26 @@ async function uploadThumbnails(item, key) {
     return bad.length ? `縮圖上傳失敗（${bad[0]}）` : null;
 }
 
+// Why an upload failed, and whether trying again can help. `retryable` is true only for a dead
+// connection, a timeout, HTTP 5xx and 429; auth, size and other client errors are the person's to fix.
+function uploadError(message, retryable) {
+    const e = new Error(message);
+    e.retryable = retryable;
+    return e;
+}
+function httpUploadError(status) {
+    if (status === 401) return uploadError('未登入（HTTP 401），請重新整理頁面重新登入', false);
+    if (status === 403) return uploadError('沒有權限（HTTP 403）', false);
+    if (status === 413) return uploadError('檔案太大（HTTP 413）', false);
+    if (status === 429 || status >= 500) return uploadError(`伺服器忙碌（HTTP ${status}）`, true);
+    return uploadError(`HTTP ${status}`, false);
+}
+
 function uploadWithProgress(item, key) {
     return new Promise((resolve, reject) => {
         const xhr = new XMLHttpRequest();
         xhr.open('PUT', `${CONFIG.WORKER_URL}/${encodeURIComponent(key)}`);
+        xhr.timeout = UPLOAD_TIMEOUT_MS;
         xhr.setRequestHeader('Content-Type', item.file.type || 'application/octet-stream');
         if (CONFIG.PHOTOGRAPHER_TOKEN) xhr.setRequestHeader('Authorization', `Bearer ${CONFIG.PHOTOGRAPHER_TOKEN}`);
         xhr.upload.addEventListener('progress', e => {
@@ -914,15 +1039,16 @@ function uploadWithProgress(item, key) {
             }
         });
         xhr.addEventListener('load', () => {
+            if (xhr.status >= 200 && xhr.status < 300) return resolve();
             if (xhr.status === 401) {
                 sessionStorage.removeItem('studio_token');
                 CONFIG.PHOTOGRAPHER_TOKEN = '';
-                reject(new Error('HTTP 401 (token 錯誤，請重新整理頁面並輸入正確密碼)'));
-            } else {
-                xhr.status >= 200 && xhr.status < 300 ? resolve() : reject(new Error(`HTTP ${xhr.status}`));
             }
+            reject(httpUploadError(xhr.status));
         });
-        xhr.addEventListener('error', () => reject(new Error('網路錯誤')));
+        xhr.addEventListener('error', () => reject(uploadError('網路錯誤', true)));
+        xhr.addEventListener('abort', () => reject(uploadError('網路錯誤', true)));
+        xhr.addEventListener('timeout', () => reject(uploadError('連線逾時', true)));
         xhr.send(item.file);
     });
 }
@@ -991,26 +1117,28 @@ function makeItemEl(item) {
         `<span class="qi-icon">${icon}</span>` +
         `<span class="qi-name" title="${escHtml(item.path)}">${escHtml(item.file.name)}</span>` +
         `<span class="qi-size">${fmtSize(item.file.size)}</span>` +
-        `<span class="qi-status ${item.state}${item.thumbWarning ? ' warn' : ''}"${item.thumbWarning ? ` title="${escHtml(item.thumbWarning)}"` : ''}>${statusText}</span>` +
+        `<span class="qi-status ${item.state}${item.thumbWarning ? ' warn' : ''}"${item.thumbWarning ? ` title="${escHtml(item.thumbWarning)}"` : ''}>${escHtml(statusText)}</span>` +
+        (item.state === 'error' ? `<button type="button" class="btn-secondary qi-retry">重試</button>` : '') +
         `<div class="item-bar"><div class="item-bar-fill" style="width:${item.progress}%"></div></div>`;
     return el;
 }
 
+// a state change rebuilds the row (the retry button comes and goes with it); progress ticks use updateItemProgress
 function updateItemEl(item) {
     const el = document.querySelector(`[data-id="${item.id}"]`);
     if (!el) return;
-    el.className = `queue-item ${item.state}`;
-    el.querySelector('.qi-icon').textContent = { pending:'○', uploading:'↑', done:'✓', error:'✕' }[item.state] || '○';
-    const st = el.querySelector('.qi-status');
-    st.className = `qi-status ${item.state}${item.thumbWarning ? ' warn' : ''}`;
-    st.textContent = itemStatusText(item);
-    if (item.thumbWarning) st.title = item.thumbWarning;
+    el.replaceWith(makeItemEl(item));
 }
+function updateQueueRows() { queue.forEach(updateItemEl); }
 
 function itemStatusText(item) {
-    if (item.state === 'uploading') return `${item.progress}%`;
-    if (item.state === 'error') return item.error || '失敗';
-    if (item.state === 'pending') return '待上傳';
+    if (item.state === 'uploading') {
+        if (item.waiting) return '離線，等待網路';
+        if (item.retrying) return `重試中 ${item.attempts}/${RETRY_DELAYS.length}…`;
+        return `${item.progress}%`;
+    }
+    if (item.state === 'error') return (item.error || '失敗') + (item.attempts ? ` · 已重試 ${item.attempts} 次` : '');
+    if (item.state === 'pending') return navigator.onLine ? '待上傳' : '離線，等待網路';
     // uploaded, but this photo will still load at full size when browsing
     return item.thumbWarning ? '完成 · 無縮圖' : '完成';
 }
@@ -1042,9 +1170,13 @@ function renderOverall() {
     bar.style.width = pct + '%';
     bar.className = 'bar-fill' + (errs && done + errs === total ? ' has-error' : pct === 100 ? ' complete' : '');
     $('overallPct').textContent = pct + '%';
-    $('overallLabel').textContent = pct === 100 && !activeCount
+    const waiting = queue.some(q => q.state === 'pending' || q.state === 'uploading');
+    $('overallLabel').textContent = !navigator.onLine && waiting
+        ? `離線，恢復網路後自動重試（${done} / ${total} 完成）`
+        : pct === 100 && !activeCount
         ? (errs ? `完成（${done} 成功 · ${errs} 失敗）` : `全部上傳完成（${done} 張）`)
         : `${done} / ${total} 完成${activeCount ? ` · 上傳中 ${activeCount}` : ''}`;
+    $('retryAllBtn').hidden = errs === 0;
     updateQueueTitle();
 }
 
@@ -1059,6 +1191,7 @@ $('clearDoneBtn').addEventListener('click', () => {
     if (!queue.length) { $('queueSection').style.display = 'none'; }
     else renderQueue();
     updateQueueTitle();
+    updateOverall();
 });
 
 // ── Pre-fill from URL ──
@@ -1070,9 +1203,10 @@ if (pre && params.get('lock') === '1') {
     $('targetBar').dataset.locked = '1';
 }
 if (pre) selectFolder(pre.endsWith('/') ? pre : pre + '/', { initial: true });
+if (!targetFolder && isNarrow()) $('targetDisplay').textContent = '↑ 從上方點選資料夾';
 
-// ── Back link: arriving from a project (?project=<id>), go back to it rather
-// than to the picker — uploading is not picking. No param: index.html as before.
+// ── Back link: arriving from a project (?project=<id>), go back to it. Without one, back to the
+// dashboard (the markup default): the picker page is an empty dead end on a phone.
 const fromProject = params.get('project');
 if (fromProject) {
     const back = document.querySelector('.header .btn-back');
