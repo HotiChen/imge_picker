@@ -34,9 +34,9 @@ const invalid = (page, which) => page.$eval(`#opf-${which}-pages`, e => e.getAtt
       await page.waitForSelector('#op-list .hint', { timeout: 5000 });
       await page.click('#op-add-btn');
       await page.waitForSelector('#op-form');
-      ok('a new product starts as an album: both page fields are shown (computed display), blank',
+      ok('a new product starts as an album: both page fields are shown (computed display), min prefilled 10, max blank',
         (await disp(page, '#opf-pages-group')) !== 'none' && (await shown(page, '#opf-min-pages')) && (await shown(page, '#opf-max-pages'))
-        && (await page.inputValue('#opf-min-pages')) === '' && (await page.inputValue('#opf-max-pages')) === '');
+        && (await page.inputValue('#opf-min-pages')) === '10' && (await page.inputValue('#opf-max-pages')) === '');
       ok('the labels read 最少頁數（跨頁） and 最多頁數（跨頁）', (await T(page, 'label[for="opf-min-pages"]')) === '最少頁數（跨頁）' && (await T(page, 'label[for="opf-max-pages"]')) === '最多頁數（跨頁）');
       ok('they sit right after 相本指定張數 (same form, after the count group)',
         await page.evaluate(() => { const c = document.getElementById('opf-count-group'), g = document.getElementById('opf-pages-group'); return !!(c.compareDocumentPosition(g) & Node.DOCUMENT_POSITION_FOLLOWING) && c.parentElement === g.parentElement; }));

@@ -823,11 +823,11 @@ export function pickFakeWorker(opts = {}) {
 // and an image. min_pages / max_pages are SPREADS and null on a print; image_url is RELATIVE to the Worker
 // origin; price is the photographer's option price (an integer, NT$); label is '' on a single option.
 export const SHOP_PRINT_FAKE = {
-  id: 'prod-print', kind: 'print', name: '無框畫', description: '木框', photo_count: null, min_pages: null, max_pages: null, image_url: null,
+  id: 'prod-print', kind: 'print', name: '無框畫', description: '木框', photo_count: null, min_pages: null, max_pages: null, extra_page_price: null, image_url: null,
   options: [{ id: 'opt-print-1', label: '16×20', price: 3000 }],
 };
 export const SHOP_ALBUM_FAKE = {
-  id: 'prod-album', kind: 'album', name: '相本書', description: '精裝 20×20', photo_count: 20, min_pages: 10, max_pages: 30,
+  id: 'prod-album', kind: 'album', name: '相本書', description: '精裝 20×20', photo_count: 20, min_pages: 10, max_pages: 30, extra_page_price: null,
   image_url: '/api/platform/products/pp-album/image?v=2026-10-05T00%3A00%3A00.000Z',
   options: [{ id: 'opt-album-1', label: '20×20', price: 5000 }, { id: 'opt-album-2', label: '30×30', price: 7000 }],
 };
