@@ -490,3 +490,24 @@ CREATE TABLE IF NOT EXISTS revision_pins (
   updated_at      TEXT NOT NULL,
   PRIMARY KEY (project_id, photo_key)
 );
+
+-- ─── Product interests (docs/guest-shop.md, product interest) ──────────────
+-- A new table, from the hand-run worker/migrations/2026-10-08-product-interests.sql.
+-- 「我有興趣」 on the completion page (delivered and confirmed by the client):
+-- one row per project and product, written only by POST /api/pick/interest
+-- (one upsert: the first tap inserts, a later one bumps tap_count / last_at
+-- and re-snapshots name / kind). A demand signal, not an order. At most 20
+-- products per project. The photographer is emailed on the first tap and
+-- again only when last_emailed_at is NULL or 24 h old. Read by the admin
+-- project detail only; deliver / undeliver / reopen leave it as history.
+CREATE TABLE IF NOT EXISTS product_interests (
+  project_id      TEXT NOT NULL,
+  product_id      TEXT NOT NULL,       -- products.id, from the guest shop of the project's photographer
+  product_name    TEXT NOT NULL,       -- snapshot at the latest tap
+  product_kind    TEXT NOT NULL,       -- snapshot at the latest tap ('print' | 'album')
+  first_at        TEXT NOT NULL,
+  last_at         TEXT NOT NULL,
+  tap_count       INTEGER NOT NULL DEFAULT 1,
+  last_emailed_at TEXT,                -- NULL = never emailed
+  PRIMARY KEY (project_id, product_id)
+);

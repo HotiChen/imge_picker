@@ -1912,6 +1912,72 @@ async function sendRevisionRoundNotification(env, project, pickerName, note, pin
   return true;
 }
 
+// ─── 「我有興趣」 (docs/guest-shop.md, product interest) ──────────────────────
+// On the completion page (delivered AND confirmed by the client) the seat
+// holder taps 「我有興趣」 on a shop product. A demand signal, not an order: one
+// row per project and product (product_interests), the photographer emailed
+// on the first tap and again at most once per INTEREST_EMAIL_INTERVAL_MS.
+// Change the limits here only.
+const INTEREST_TABLE = 'product_interests';
+const INTEREST_PRODUCTS_MAX = 20;
+const INTEREST_EMAIL_INTERVAL_MS = 24 * 60 * 60 * 1000;
+const INTEREST_BODY_MAX = 1024;
+const INTEREST_PRODUCT_ID_MAX = 200;
+const INTEREST_UNAVAILABLE = { error: '有興趣功能尚未啟用', code: 'interest_unavailable' };
+const INTEREST_KIND_LABELS = { album: '相本', print: '輸出' };
+
+// Whether the product-interests migration has run.
+async function interestReady(env) {
+  try {
+    await env.DB.prepare(`SELECT COUNT(*) AS n FROM ${INTEREST_TABLE} WHERE 0`).first();
+    return true;
+  } catch (e) {
+    if (!isMissingSchema(e)) throw e;
+    return false;
+  }
+}
+
+// The project's interests for the admin detail, newest tap first; [] before
+// the migration. Named fields only (never last_emailed_at).
+async function interestsFor(env, projectId) {
+  return withoutMissingSchema(async () => (await env.DB.prepare(
+    `SELECT product_id, product_name, product_kind, first_at, last_at, tap_count FROM ${INTEREST_TABLE} ` +
+    `WHERE project_id = ? ORDER BY last_at DESC, first_at DESC, product_id LIMIT ${INTEREST_PRODUCTS_MAX * 2}`
+  ).bind(projectId).all()).results, () => []);
+}
+
+// Tells the photographer the client is interested in a product. Same
+// transport and rules as the other notifications: the subject on one line,
+// every value through oneLine (no control or bidi characters) and escaped in
+// the HTML part. The only guest text is the picker's name; the product name
+// is our own catalogue's, snapshotted at this tap.
+async function sendInterestNotification(env, project, pickerName, product, tapCount) {
+  if (!env.NOTIFY_EMAIL || !env.PHOTOGRAPHER_EMAIL) {
+    console.warn('interest notification skipped: NOTIFY_EMAIL or PHOTOGRAPHER_EMAIL is not configured');
+    return false;
+  }
+  const title = oneLine(project.title || '未命名專案');
+  const name = oneLine(pickerName || '客人');
+  const productName = oneLine(product.name || '商品');
+  const kind = INTEREST_KIND_LABELS[product.kind] || '商品';
+  const link = `${STUDIO_ADMIN_URL}#project=${encodeURIComponent(project.id)}`;
+  const subject = oneLine(`[有興趣] ${title} — ${name}：${productName}`);
+  const lead = tapCount > 1
+    ? `客人在完成頁又點了「我有興趣」（共 ${tapCount} 次）。這不是訂單，可以主動聯絡客人。`
+    : '客人在完成頁點了「我有興趣」。這不是訂單，可以主動聯絡客人。';
+  const fields = [['專案', title], ['客人', name], ['商品', `${productName}（${kind}）`]];
+  const text = fields.map(([k, v]) => `${k}：${v}`).join('\n') + `\n\n${lead}\n\n打開專案：${link}`;
+  const html = '<table>' +
+    fields.map(([k, v]) => `<tr><th align="left">${escapeHtml(k)}</th><td>${escapeHtml(v)}</td></tr>`).join('') +
+    `</table><p>${escapeHtml(lead)}</p><p><a href="${escapeHtml(link)}">打開專案</a></p>`;
+  await env.NOTIFY_EMAIL.send({
+    to: env.PHOTOGRAPHER_EMAIL,
+    from: env.NOTIFY_FROM || env.PHOTOGRAPHER_EMAIL,
+    subject, html, text,
+  });
+  return true;
+}
+
 // The project behind a pick token and, when the request carries a picker key,
 // the picker it belongs to. The key is looked up by its hash and only within
 // the token's own project, so a key from another project finds nobody. null
@@ -2663,6 +2729,9 @@ export default {
       // the guest's 要求修改, newest first (docs/delivery.md); none before the
       // client-confirm migration
       const revisions = await revisionRequestsFor(env, project.id);
+      // 「我有興趣」 taps, newest first (docs/guest-shop.md); [] before the
+      // product-interests migration. Admin only: no guest route reads them
+      const interests = await interestsFor(env, project.id);
       return jsonOk({
         project: {
           ...project, folders, extra_max: project.extra_max ?? null, shoot_date: project.shoot_date ?? null, project_type: project.project_type ?? null, ...deliveryFields(project),
@@ -2673,6 +2742,7 @@ export default {
         owner: pickers.find(p => p.id === project.owner_picker_id) || null,
         pickers, selections, tokens, submissions, unnotified_submissions: unnotified,
         revision_requests: revisions.rows,
+        interests,
       }, 200, ADMIN_ONLY_HEADERS);
     }
 
@@ -3879,6 +3949,85 @@ export default {
         const products = typeof owner === 'string' && owner ? await readGuestShop(env, owner) : [];
         if (!products) return jsonOk(SHOP_UNAVAILABLE, 500, SHARED_LINK_HEADERS);
         return jsonOk({ products }, 200, SHARED_LINK_HEADERS);
+      }
+
+      // POST /api/pick/interest {product_id} — 「我有興趣」 on the completion
+      // page (docs/guest-shop.md, product interest). The link (401 above),
+      // the method (405), the seat (403 not_owner), delivered AND confirmed
+      // by the client now (409 not_confirmed, before the body), the body
+      // (413 / 400), the product in this project's photographer's guest shop
+      // (404 not_found), the migration (500 interest_unavailable), then one
+      // gated upsert. The photographer is emailed in the background, at most
+      // once per INTEREST_EMAIL_INTERVAL_MS per product; a mail that fails
+      // never fails the tap nor undoes it. Answers {ok, already} only.
+      if (route === 'interest') {
+        const out = (data, status = 200) => jsonOk(data, status, SHARED_LINK_HEADERS);
+        if (request.method !== 'POST') return jsonOk({ error: 'Method not allowed' }, 405, { ...SHARED_LINK_HEADERS, Allow: 'POST' });
+        const notOwner = () => out({ error: '只有挑選人可以表示有興趣', code: 'not_owner' }, 403);
+        const notConfirmed = () => out({ error: '確認完成後才能表示有興趣', code: 'not_confirmed' }, 409);
+        if (!isOwner) return notOwner();
+        if (pickReadScope(s).mode !== 'delivered' || !project.client_confirmed_at) return notConfirmed();
+        const read = await readJsonCapped(request, INTEREST_BODY_MAX);
+        if (read.refused) return read.refused;
+        const { body } = read;
+        const productId = isPlainObject(body) ? body.product_id : undefined;
+        if (typeof productId !== 'string' || !productId || productId.length > INTEREST_PRODUCT_ID_MAX) {
+          return out({ error: 'Invalid body', code: 'invalid_body' }, 400);
+        }
+        // the product as the guest shop shows it now: the project's
+        // photographer, never the request's; its name and kind come from here
+        const owner = project.photographer_id;
+        const products = typeof owner === 'string' && owner ? await readGuestShop(env, owner) : [];
+        if (!products) return out(SHOP_UNAVAILABLE, 500);
+        const product = products.find(p => p.id === productId);
+        if (!product) return out({ error: 'Not found', code: 'not_found' }, 404);
+        if (!await interestReady(env)) return out(INTEREST_UNAVAILABLE, 500);
+        // One INSERT … ON CONFLICT holds every rule inside the write: the
+        // seat, delivered and confirmed now (an undeliver, a reopen, a seat
+        // reset or an archive after the checks makes it a no-op), and the cap
+        // (a product already there always counts its tap). The email slot is
+        // taken in the same statement — last_emailed_at moves to this tap's
+        // time only when it was NULL or older than the interval — so of two
+        // racing taps one mails.
+        const nowMs = Date.now();
+        const at = new Date(nowMs).toISOString();
+        const cutoff = new Date(nowMs - INTEREST_EMAIL_INTERVAL_MS).toISOString();
+        let row;
+        try {
+          row = await env.DB.prepare(
+            `INSERT INTO ${INTEREST_TABLE} (project_id, product_id, product_name, product_kind, first_at, last_at, tap_count, last_emailed_at) ` +
+            'SELECT ?1, ?2, ?3, ?4, ?5, ?5, 1, ?5 ' +
+            'WHERE EXISTS (SELECT 1 FROM projects WHERE id = ?1 AND owner_picker_id = ?6 AND archived_at IS NULL ' +
+            "AND phase = 'retouching' AND delivered_at IS NOT NULL AND final_folders IS NOT NULL AND client_confirmed_at IS NOT NULL) " +
+            `AND ((SELECT COUNT(*) FROM ${INTEREST_TABLE} WHERE project_id = ?1) < ${INTEREST_PRODUCTS_MAX} ` +
+            `OR EXISTS (SELECT 1 FROM ${INTEREST_TABLE} WHERE project_id = ?1 AND product_id = ?2)) ` +
+            'ON CONFLICT(project_id, product_id) DO UPDATE SET tap_count = tap_count + 1, last_at = excluded.last_at, ' +
+            'product_name = excluded.product_name, product_kind = excluded.product_kind, ' +
+            'last_emailed_at = CASE WHEN last_emailed_at IS NULL OR last_emailed_at <= ?7 THEN excluded.last_emailed_at ELSE last_emailed_at END ' +
+            // mail: this statement inserted the row, or took the slot (a
+            // slot taken by a tap in the same millisecond as the first one
+            // has first_at = ?5 and does not count twice)
+            'RETURNING tap_count, (tap_count = 1 OR (last_emailed_at = ?5 AND first_at <> ?5)) AS mail'
+          ).bind(project.id, product.id, product.name, product.kind, at, picker.id, cutoff).first();
+        } catch (e) {
+          if (isMissingSchema(e)) return out(INTEREST_UNAVAILABLE, 500);
+          throw e;
+        }
+        if (!row) {
+          // re-read to say why, in the order the checks above run
+          const now = await env.DB.prepare('SELECT * FROM projects WHERE id = ?').bind(project.id).first();
+          if (!now || now.archived_at) return jsonOk({ error: 'Unauthorized' }, 401, SHARED_LINK_HEADERS);
+          if (now.owner_picker_id !== picker.id) return notOwner();
+          if (now.phase !== 'retouching' || !pickFinals(now) || !now.client_confirmed_at) return notConfirmed();
+          return out({ error: `最多可對 ${INTEREST_PRODUCTS_MAX} 項商品表示有興趣`, code: 'interest_cap', max: INTEREST_PRODUCTS_MAX }, 409);
+        }
+        if (row.mail) {
+          const notify = Promise.resolve()
+            .then(() => sendInterestNotification(env, project, picker.name, product, row.tap_count))
+            .catch(e => console.error('interest notification failed:', e?.message || e));
+          if (ctx?.waitUntil) ctx.waitUntil(notify); else await notify;
+        }
+        return out({ ok: true, already: row.tap_count > 1 });
       }
 
       // GET /api/pick/state — what anyone holding the link may see

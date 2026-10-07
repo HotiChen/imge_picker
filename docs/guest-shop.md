@@ -507,3 +507,63 @@ When S3 builds `POST /api/pick/orders` with an album `layout`:
 - New error codes for the S2 list: `pages_below_min`, `pages_above_max`.
 - The test `albumPagesProblem is not wired to any route yet` fails once the
   helper is called; update it then.
+
+## Product interest 「我有興趣」 — Worker (2026-10-08)
+
+Tim decided: on the 完成頁 (delivered **and** client-confirmed) the client taps
+「我有興趣」 on a shop product card. The photographer gets one email and the
+project keeps a record. A demand test, **not an order**: no payment, no order
+row, not a CRM.
+
+**Migration** (Tim runs it in the D1 Console before the merge):
+`worker/migrations/2026-10-08-product-interests.sql`, one
+`CREATE TABLE IF NOT EXISTS product_interests (...)`, re-runnable. Until it
+has run the route answers 500 `interest_unavailable` and the admin detail says
+`interests: []`.
+
+**`POST /api/pick/interest`** body `{product_id}` (pick link, `X-Picker-Key`).
+Checks, in order:
+
+| Status | code | when |
+|---|---|---|
+| 401 | — | dead link (unknown, expired, revoked, archived project) |
+| 405 | — | not POST (`Allow: POST`), viewers too |
+| 403 | `not_owner` | no key / wrong key / key from before a seat reset |
+| 409 | `not_confirmed` | not delivered, or delivered but not confirmed (picking, retouching, undelivered, reopened) — before the body is read |
+| 413 | `too_large` | body over 1 KB |
+| 400 | `Invalid JSON` (error) / `invalid_body` | not JSON / `product_id` not a 1–200 char string |
+| 404 | `not_found` | not one of the products `readGuestShop` returns for the project's photographer right now (hidden, inactive, another photographer's, unknown) |
+| 500 | `shop_unavailable` / `interest_unavailable` | catalogue tables / this migration missing |
+| 409 | `interest_cap` (`max: 20`) | a 21st distinct product on this project (a product already there always counts) |
+| 200 | — | `{ok: true, already: boolean}` — `already` = this project had tapped this product before |
+
+Every answer carries `Cache-Control: private, no-store`.
+
+**The write** is one statement: `INSERT … SELECT … WHERE <seat, not archived,
+phase retouching, delivered_at, final_folders, client_confirmed_at all set>
+AND <under the cap or already there> ON CONFLICT(project_id, product_id) DO
+UPDATE SET tap_count + 1, last_at, name/kind re-snapshotted, last_emailed_at
+moved only when NULL or ≥ 24 h old RETURNING tap_count, mail`. So an undeliver,
+reopen, seat reset or archive landing after the checks makes it a no-op (then
+re-read: 401 / 403 / 409 `not_confirmed` / 409 `interest_cap`), and of two
+racing taps one emails. The name and kind come from our catalogue
+(`readGuestShop`), never from the request.
+
+**Email** (same `NOTIFY_EMAIL` / `PHOTOGRAPHER_EMAIL` / `NOTIFY_FROM` binding as
+the other notifications): on the first tap, and again only when the last email
+about that product is 24 h old. Subject `[有興趣] <title> — <picker>：<product>`,
+everything through `oneLine` (control and bidi characters → spaces), HTML
+escaped, link `https://imhoti.tw/studio/admin.html#project=<id>`. Sent in the
+background after the write (`ctx.waitUntil`): a failed or missing mailer never
+fails the tap and never undoes it. The slot is taken before the send, so a
+failed send is retried only by a tap 24 h later (the record is in the admin
+anyway). Residual: two taps on an old row inside the same millisecond after
+24 h could both email.
+
+**Admin**: `GET /api/admin/projects/:id` has `interests: [{product_id,
+product_name, product_kind, first_at, last_at, tap_count}]`, newest tap first
+(`last_at DESC`), `[]` when none or before the migration. No guest route
+(`/api/pick/state`, `/shop`, `/rounds`, `?list=`) carries it.
+
+Deliver / undeliver / reopen do not touch `product_interests`: the record stays
+as history; a new tap needs the project confirmed again.
