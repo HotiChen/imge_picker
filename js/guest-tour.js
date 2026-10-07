@@ -63,10 +63,10 @@
         for (const el of document.querySelectorAll(sel)) if (visible(el)) return el;
         return null;
     }
-    // TEST PHASE SWITCH: while FORCE_DEFAULT is true the tour shows on every visit (the stored "seen" is ignored and
-    // never written, so nobody is marked as having seen it). To go live as first-visit-only, set it to false
-    // (a page may also set window.GUEST_TOUR_FORCE = true / false before this file loads; the test harness does).
-    const FORCE_DEFAULT = true;
+    // TEST SWITCH (off = the shipped behaviour: the tour shows on a first visit only): while FORCE_DEFAULT is true the tour
+    // shows on every visit (the stored "seen" is ignored and never written). A page may also set
+    // window.GUEST_TOUR_FORCE = true / false before this file loads (the test harness does).
+    const FORCE_DEFAULT = false;
     function forced() { return typeof window.GUEST_TOUR_FORCE === 'boolean' ? window.GUEST_TOUR_FORCE : FORCE_DEFAULT; }
     function seen(phase) {
         if (mem[phase]) return true;   // finished or skipped on this page load: do not restart it until a reload

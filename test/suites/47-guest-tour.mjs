@@ -445,4 +445,31 @@ for (const reduce of [true, false]) {
     }, { before: m.attach, initScript: `${seed(true, true)}window.GUEST_TOUR_FORCE = false;`, contextOptions: MOBILE });
 }
 
+
+// ═══ the shipped default (window.GUEST_TOUR_FORCE not set at all): first visit only ═══
+{
+  const m = pickWorld();
+  await sx('guest tour (390px) — DEFAULT (no switch set): both seen keys set → no tour; the ？ button is there',
+    URL_, async (page, ok) => {
+      ok('the page really has no GUEST_TOUR_FORCE set (the shipped default is under test)', (await page.evaluate(() => typeof window.GUEST_TOUR_FORCE)) === 'undefined');
+      await page.waitForSelector('.photo-card', { timeout: 8000 }).catch(() => {});
+      await sleep(1200);
+      ok('no tour card for a returning visitor', !(await hasCard(page)));
+      ok('the ？ button is still there', !!(await page.$('.gt-help')));
+    }, { before: m.attach, initScript: `${seed(true, true)}delete window.GUEST_TOUR_FORCE;`, contextOptions: MOBILE });
+}
+{
+  const m = pickWorld();
+  await sx('guest tour (390px) — DEFAULT (no switch set): a first visit shows it, finishing writes the seen key, a reload shows none',
+    URL_, async (page, ok) => {
+      ok('GUEST_TOUR_FORCE is not set', (await page.evaluate(() => typeof window.GUEST_TOUR_FORCE)) === 'undefined');
+      ok('the tour card appears on a first visit', await waitCard(page));
+      await page.click('.gt-skip');
+      ok('closed', await until(async () => !(await page.$('.gt-card'))));
+      ok('the seen key was written', (await page.evaluate(k => localStorage.getItem(k), KA)) === '1');
+      await page.reload();
+      await sleep(1500);
+      ok('a reload shows no tour', !(await hasCard(page)));
+    }, { before: m.attach, initScript: `${OWNER}delete window.GUEST_TOUR_FORCE;`, contextOptions: MOBILE });
+}
 }
