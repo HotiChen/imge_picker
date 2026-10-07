@@ -236,9 +236,19 @@
   #project-detail-panel .empty { padding: 8px 0; text-align: left; }
   #project-detail-panel.panel { margin-bottom: 12px; }
   .pd-back-bar { padding: 14px 18px 0; }
-  #pd-back-btn { min-height: 36px; padding: 6px 16px; font-size: 13px; }
+  /* page-level back: a text link at the top-left, never a pill (shared convention; upload.html / styles.css / book_editor.css carry their own copy) */
+  .back-btn { background: none; border: 0; color: var(--ink-70); padding: 0 8px; margin-left: -8px; min-height: 36px; border-radius: 6px; cursor: pointer; font-size: 13px; font-family: inherit; text-decoration: none; display: inline-flex; align-items: center; gap: 6px; }
+  .back-btn:hover { color: var(--ink-90); text-decoration: underline; }
+  .back-btn:focus-visible { outline: 2px solid var(--ink-90); outline-offset: 2px; }
+  @media (max-width: 640px) { .back-btn { min-height: 44px; } }
   .proj-notice { margin: 0 0 14px; padding: 10px 14px; border-radius: 10px; background: var(--accent-dim); color: var(--ink-90); font-size: 13px; line-height: 1.6; }
   .pd-head { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
+  .pd-title-wrap { display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
+  .pd-title-wrap h3 { overflow-wrap: anywhere; }
+  .pd-title-wrap[hidden], .pd-rename-form[hidden] { display: none; }
+  .pd-rename-form { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; flex: 1 1 100%; }
+  .pd-rename-form .field { flex: 1 1 220px; min-width: 0; width: auto; }
+  .pd-rename-hint { flex: 1 1 100%; color: var(--ink-55); font-size: 12px; }
   .pd-owner { color: var(--ink-55); font-size: 13px; margin-bottom: 14px; }
   .pd-shoot-text { color: var(--ink-55); font-size: 13px; }
   .pd-shoot-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; font-size: 13px; color: var(--ink-55); }
@@ -426,7 +436,7 @@
     </div>
 
     <div id="project-detail-panel" class="panel" style="display:none;">
-      <div class="pd-back-bar"><button id="pd-back-btn" class="btn btn-outline" type="button">← 返回專案列表</button></div>
+      <div class="pd-back-bar"><button id="pd-back-btn" class="back-btn" type="button">← 返回專案列表</button></div>
       <div class="panel-body" id="project-detail-body"></div>
     </div>
 
@@ -1523,6 +1533,54 @@
       }
     });
   }
+  const RENAME_INVALID = '專案名稱格式不正確（1–200 字）';
+  function wireRename(project) {
+    const wrap = document.getElementById('pd-title-wrap');
+    const form = document.getElementById('pd-rename-form');
+    const input = document.getElementById('pd-rename-input');
+    const save = document.getElementById('pd-rename-save');
+    const err = document.getElementById('pd-rename-err');
+    if (!wrap || !form) return;
+    const open = () => {
+      err.textContent = '';
+      input.value = project.title || '';
+      wrap.hidden = true; form.hidden = false;
+      input.focus(); input.select();
+    };
+    const close = () => {
+      form.hidden = true; wrap.hidden = false;
+      document.getElementById('pd-rename-btn').focus();
+    };
+    document.getElementById('pd-rename-btn').addEventListener('click', open);
+    document.getElementById('pd-rename-cancel').addEventListener('click', close);
+    input.addEventListener('keydown', e => { if (e.key === 'Escape') { e.preventDefault(); close(); } });
+    form.addEventListener('submit', async e => {
+      e.preventDefault();
+      if (save.disabled) return;
+      err.textContent = '';
+      const title = input.value.trim().slice(0, 200);
+      if (!title) { err.textContent = '專案名稱不能空白'; input.focus(); return; }
+      save.disabled = true;
+      try {
+        const r = await fetch(`${WORKER_URL}/api/admin/projects/${encodeURIComponent(project.id)}`, {
+          method: 'PATCH',
+          headers: { 'Authorization': `Bearer ${getToken()}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ title }),
+        });
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok) { err.textContent = data && data.code === 'invalid_body' ? RENAME_INVALID : '儲存失敗，請再試一次'; return; }
+        project.title = typeof data.title === 'string' && data.title ? data.title : title;
+        document.getElementById('pd-title').textContent = project.title || '（未命名）';
+        const row = projectsCache.find(x => x.id === project.id);
+        if (row) { row.title = project.title; drawProjectList(); }
+        close();
+      } catch (e2) {
+        err.textContent = '儲存失敗，請再試一次';
+      } finally {
+        save.disabled = false;
+      }
+    });
+  }
   function wireShootDate(project) {
     const input = document.getElementById('pd-shoot-input');
     const save = document.getElementById('pd-shoot-save');
@@ -1561,7 +1619,17 @@
     secProject = project;
     body.innerHTML = `
       <div class="pd-head">
-        <h3>${escHtml(project.title || '（未命名）')}</h3>
+        <span class="pd-title-wrap" id="pd-title-wrap">
+          <h3 id="pd-title" data-pd-title>${escHtml(project.title || '（未命名）')}</h3>
+          <button id="pd-rename-btn" class="btn btn-outline" type="button" aria-label="改專案名稱">改名</button>
+        </span>
+        <form id="pd-rename-form" class="pd-rename-form" hidden>
+          <input id="pd-rename-input" class="field" type="text" maxlength="200" aria-label="專案名稱" autocomplete="off">
+          <button id="pd-rename-save" class="btn btn-accent" type="submit">儲存</button>
+          <button id="pd-rename-cancel" class="btn btn-outline" type="button">取消</button>
+          <span class="pd-rename-hint">只改專案名稱，資料夾名稱不變</span>
+          <span id="pd-rename-err" class="err" role="alert"></span>
+        </form>
         <span class="pd-shoot-text" id="pd-shoot-text" data-shoot-date></span>
         <span class="pt-tag" id="pd-type-tag" hidden></span>
         ${phaseBadgeHtml(project)}
@@ -1659,6 +1727,7 @@
 
     renderShootDateHeader(project);
     wireShootDate(project);
+    wireRename(project);
     renderTypeTag(project);
     wireProjectType(project);
 

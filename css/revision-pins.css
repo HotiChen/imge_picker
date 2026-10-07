@@ -81,6 +81,7 @@ html.rh-open, html.rh-open body { overflow: hidden; }
   flex: 0 0 auto; min-width: 44px; min-height: 44px; padding: 0 14px; background: transparent; color: var(--ink);
   border: 1px solid var(--ink-35); font: inherit; font-size: 14px; cursor: pointer;
 }
+.rh-btn.back-btn { border: 0; min-width: 0; padding: 0 10px; min-height: 44px; font-size: 14px; }
 .rh-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; padding: 12px 16px calc(24px + env(safe-area-inset-bottom, 0px)); }
 .rh-note { margin: 0 0 12px; padding-left: 10px; border-left: 2px solid var(--border); color: var(--ink-70); white-space: pre-wrap; font-size: 14px; }
 .rh-msg { color: var(--ink-70); font-size: 14px; margin: 8px 0; }

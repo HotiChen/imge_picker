@@ -726,17 +726,19 @@ export function pickFakeWorker(opts = {}) {
           extra_max: v => v === null || isExtraMaxFake(v),
           shoot_date: isShootDateInputFake,
           project_type: isProjectTypeInputFake,
+          // worker contract: a string, trimmed, 1-200 chars; blank/invalid refuses the whole body; works when archived
+          title: v => typeof v === 'string' && v.trim().length >= 1 && v.trim().length <= 200,
         };
         const keys = body && typeof body === 'object' && !Array.isArray(body) ? Object.keys(body) : [];
         if (!keys.length || keys.some(k => !good[k] || !good[k](body[k])))
           return json({ error: 'Invalid body', code: 'invalid_body' }, 400);
         if (keys.includes('project_type') && opts.projectTypeColumn === false) return json({ error: 'project_type unavailable', code: 'project_type_unavailable' }, 500);
-        const planKey = keys.some(k => k !== 'allow_proof_download' && k !== 'shoot_date' && k !== 'project_type');
+        const planKey = keys.some(k => k !== 'allow_proof_download' && k !== 'shoot_date' && k !== 'project_type' && k !== 'title');
         if (keys.includes('shoot_date') && opts.shootDateColumn === false) return json({ error: '拍攝日期功能尚未啟用', code: 'shoot_date_unavailable' }, 500);
         if (planKey && state.project.archived_at)
           return json({ error: 'Project is archived; unarchive it first', code: 'archived' }, 409);
-        for (const k of keys) state.project[k] = k === 'project_type' ? (body[k] === '' || body[k] === null ? null : body[k].trim()) : (k === 'shoot_date' && body[k] === '' ? null : body[k]);
-        return json({ ok: true, ...body, ...(keys.includes('shoot_date') ? { shoot_date: state.project.shoot_date } : {}), ...(keys.includes('project_type') ? { project_type: state.project.project_type } : {}) });
+        for (const k of keys) state.project[k] = k === 'title' ? body[k].trim() : k === 'project_type' ? (body[k] === '' || body[k] === null ? null : body[k].trim()) : (k === 'shoot_date' && body[k] === '' ? null : body[k]);
+        return json({ ok: true, ...body, ...(keys.includes('title') ? { title: state.project.title } : {}), ...(keys.includes('shoot_date') ? { shoot_date: state.project.shoot_date } : {}), ...(keys.includes('project_type') ? { project_type: state.project.project_type } : {}) });
       }
 
       // A pick link's reads (docs/delivery.md): a listing outside the link's
