@@ -192,7 +192,7 @@ class App {
             : '';
 
         nav.innerHTML = `
-            <button class="btn btn-text breadcrumb-back" onclick="app.navigateBack()">← 返回</button>
+            <button class="btn btn-text breadcrumb-back" onclick="app.navigateBack()">← 上一層</button>
             <nav class="breadcrumb">${crumbs}${current}</nav>
         `;
 

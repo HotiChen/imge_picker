@@ -641,6 +641,11 @@ html, body {
 .btn-danger:hover:not(:disabled) { background: rgba(255,71,87,0.25); }
 
 .btn-icon { width: 32px; height: 32px; padding: 0; background: transparent; color: var(--text-secondary); border: 1px solid var(--border); border-radius: var(--radius-sm); }
+/* page-level back (shared convention): a text link at the top-left, never a pill; 44px on phones */
+.back-btn { display: inline-flex; align-items: center; gap: 6px; min-height: 36px; padding: 0 8px; background: none; border: 0; border-radius: var(--radius-sm); color: var(--text-secondary); font: inherit; font-size: 0.85rem; text-decoration: none; white-space: nowrap; cursor: pointer; flex-shrink: 0; }
+.back-btn:hover { color: var(--text-primary); text-decoration: underline; }
+.back-btn:focus-visible { outline: 2px solid var(--text-primary); outline-offset: 2px; }
+@media (max-width: 640px) { .back-btn { min-height: 44px; } }
 .btn-icon:hover { background: var(--bg-card); color: var(--text-primary); }
 
 .btn-block { width: 100%; }

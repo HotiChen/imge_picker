@@ -53,8 +53,10 @@ input::placeholder { color: var(--ink-55); opacity: 1; }
 .logo-mark { width: 24px; height: 24px; background: var(--accent); color: var(--ink-90); display: flex; align-items: center; justify-content: center; font-family: 'IBM Plex Mono', monospace; font-weight: 600; font-size: 11px; flex-shrink: 0; border-radius: 6px; }
 .logo-name { font-weight: 600; font-size: 0.9rem; color: var(--ink-90); }
 .header-sep { flex: 1; }
-.btn-back { background: none; border: 1px solid var(--accent-dim); color: var(--ink-70); padding: 5px 12px; border-radius: 999px; cursor: pointer; font-size: 0.8rem; font-family: inherit; transition: color 0.15s, border-color 0.15s; text-decoration: none; display: inline-flex; align-items: center; gap: 6px; }
-.btn-back:hover { color: var(--ink-90); border-color: var(--accent); }
+/* page-level back: a text link at the top-left, never a pill (shared convention, see .back-btn elsewhere) */
+.back-btn, .btn-back { background: none; border: 0; color: var(--ink-70); padding: 0 8px; margin-left: -8px; min-height: 36px; border-radius: 6px; cursor: pointer; font-size: 0.85rem; font-family: inherit; transition: color 0.15s; text-decoration: none; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; flex-shrink: 0; }
+.back-btn:hover, .btn-back:hover { color: var(--ink-90); text-decoration: underline; }
+@media (max-width: 640px) { .back-btn, .btn-back { min-height: 44px; } }
 
 /* ── App layout ── */
 .layout {
@@ -266,7 +268,7 @@ body.folder-locked .sidebar { display: none; }
 .btn-secondary:hover { color: var(--ink-90); border-color: var(--accent); }
 .btn-danger { background: var(--surface); border: 1px solid var(--danger); color: var(--danger); padding: 6px 12px; border-radius: 999px; cursor: pointer; font-size: 0.78rem; font-family: inherit; transition: opacity 0.15s; }
 .btn-danger:hover { opacity: 0.75; }
-.btn-primary:focus-visible, .btn-secondary:focus-visible, .btn-danger:focus-visible, .btn-back:focus-visible { outline: 2px solid var(--ink-90); outline-offset: 2px; }
+.btn-primary:focus-visible, .btn-secondary:focus-visible, .btn-danger:focus-visible, .btn-back:focus-visible, .back-btn:focus-visible { outline: 2px solid var(--ink-90); outline-offset: 2px; }
 
 /* ── Drop zone ── */
 .drop-zone {
@@ -362,13 +364,13 @@ details[open] > .tree-dir-summary .tree-chevron { transform: rotate(90deg); }
 <body>
 
 <header class="header">
+    <a href="index.html" class="back-btn btn-back">← 返回選圖</a>
     <a class="header-logo" href="index.html">
         <div class="logo-mark">選</div>
         <span class="logo-name">Image Picker Studio</span>
     </a>
     <span id="buildVersion"></span>
     <div class="header-sep"></div>
-    <a href="index.html" class="btn-back">← 回選圖</a>
 </header>
 
 <div class="layout">
@@ -1074,7 +1076,7 @@ if (pre) selectFolder(pre.endsWith('/') ? pre : pre + '/', { initial: true });
 const fromProject = params.get('project');
 if (fromProject) {
     const back = document.querySelector('.header .btn-back');
-    back.textContent = '← 回專案';
+    back.textContent = '← 返回專案';
     back.setAttribute('href', 'admin.html#project=' + encodeURIComponent(fromProject));
 }
 

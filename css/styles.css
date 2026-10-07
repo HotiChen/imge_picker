@@ -2248,7 +2248,12 @@ span.pick-heart-btn { cursor: default; }
    (an <a href>, a <button>), styled as ordinary .btn so they read as
    clickable, not stray underlined words (task: 專案選片 — banner button
    visibility). */
-.pv-banner-btn { flex-shrink: 0; }
+.pv-banner-btn { flex-shrink: 0; min-height: 36px; }
+/* page-level back (shared convention): a text link at the top-left, never a pill; 44px on phones */
+.back-btn { background: none; border: 0; color: var(--ink-70); padding: 0 8px; min-height: 36px; border-radius: 6px; cursor: pointer; font: inherit; font-size: 14px; text-decoration: none; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; flex-shrink: 0; }
+.back-btn:hover { color: var(--ink); text-decoration: underline; }
+.back-btn:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+@media (max-width: 640px) { .back-btn { min-height: 44px; } }
 /* 客人選的 / 全部毛片 — the review view's two-way toggle (js/project-view.js) */
 .pv-mode-toggle { display: inline-flex; gap: 6px; flex-shrink: 0; }
 .pv-mode-btn.on { background: var(--accent); color: var(--bg); border-color: var(--accent); font-weight: 600; }
@@ -2263,6 +2268,7 @@ span.pick-heart-btn { cursor: default; }
   .pick-filter-btn { min-height: 44px; }
   #submitJobBtn, #pickSubmitConfirmBtn, #pickSubmitCancelBtn { min-height: 44px; }
   .pv-banner-btn { min-height: 44px; padding: 10px 16px; }
+  #pickOverBackBtn { min-height: 44px; }
   /* 確認完成 / 需要修改: full-width halves; the modal sits at the top so the
      keyboard (which shrinks dvh) does not cover the textarea */
   .delivery-done { padding: 10px 12px; font-size: 13px; }

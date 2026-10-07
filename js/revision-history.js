@@ -325,7 +325,7 @@
             const view = el('div', 'rh-view');
             view.id = 'revHistoryView';
             const bar = el('div', 'rh-bar');
-            const back = el('button', 'rh-btn', '‹ 返回');
+            const back = el('button', 'rh-btn back-btn', '← 返回');
             back.id = 'rhBack';
             back.type = 'button';
             back.addEventListener('click', () => this._closeBig());

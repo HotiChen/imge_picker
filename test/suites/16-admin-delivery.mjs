@@ -146,8 +146,8 @@ const pfWaitFinalsLink = page => page.waitForSelector('#pd-upload-final-btn[data
       ok('looks like its sibling button: no underline, same height, same row', look.deco === 'none' && look.dh <= 2 && look.sameRow, JSON.stringify(look));
       // following it lands on upload.html with the back link pointing at the project
       await page.goto(await page.$eval('#pd-upload-final-btn', l => l.href), { waitUntil: 'load' });
-      ok('upload.html then offers ← 回專案 to this project',
-        (await page.$eval('.btn-back', e => e.textContent.trim())) === '← 回專案' &&
+      ok('upload.html then offers ← 返回專案 to this project',
+        (await page.$eval('.btn-back', e => e.textContent.trim())) === '← 返回專案' &&
         (await page.$eval('.btn-back', e => e.getAttribute('href'))) === 'admin.html#project=proj-up');
       return out;
     },

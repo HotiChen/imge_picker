@@ -432,8 +432,8 @@ async function rvAssertChrome(page, ok) {
     RV_GONE_HEADER_TEXT.filter(t => r.hdrText.includes(t)).join());
   ok('the right side of the top bar shows only the avatar and 登出 (no empty group or placeholder left)',
     JSON.stringify(r.hrVisible) === JSON.stringify(['userAvatarStudio', 'studio-logout']), JSON.stringify(r.hrVisible));
-  ok('kept: 回專案 / 複製選片連結 / 張數列 are visible', r.kept.back && r.kept.copy && r.kept.count
-    && r.kept.backText.includes('回專案') && r.kept.copyText === '複製選片連結' && r.kept.countText.includes('Zed') && r.kept.countText.includes('3 張'), JSON.stringify(r.kept));
+  ok('kept: 返回專案 / 複製選片連結 / 張數列 are visible', r.kept.back && r.kept.copy && r.kept.count
+    && r.kept.backText.includes('返回專案') && r.kept.copyText === '複製選片連結' && r.kept.countText.includes('Zed') && r.kept.countText.includes('3 張'), JSON.stringify(r.kept));
   ok('kept: avatar and 登出 are visible', r.kept.avatar && r.kept.avatarText === 'HC' && r.kept.logout && r.kept.logoutText === '登出', JSON.stringify(r.kept));
   ok('no horizontal page scroll', r.docW <= r.winW, `${r.docW}/${r.winW}`);
   return r;
@@ -757,7 +757,7 @@ async function rvInteract(page, ok, errs) {
 
 {
   const m = pickFakeWorker({ ownerName: 'Tina', projectId: 'proj-btn' });
-  await suite('index.html — 專案選片：「← 回專案」是明顯的按鈕（仍是可 middle-click 的 <a>）',
+  await suite('index.html — 專案選片：「← 返回專案」是明顯的按鈕（仍是可 middle-click 的 <a>）',
     `${base}/index.html?project=proj-btn`,
     async page => {
       const out = [];
@@ -775,7 +775,7 @@ async function rvInteract(page, ok, errs) {
     },
     { before: m.attach, initScript: ADMIN });
 
-  await suite('index.html — 專案選片：手機版「← 回專案」至少 44px 高',
+  await suite('index.html — 專案選片：手機版「← 返回專案」至少 44px 高',
     `${base}/index.html?project=proj-btn`,
     async page => {
       const out = [];
