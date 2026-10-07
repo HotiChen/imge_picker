@@ -49,7 +49,8 @@ outside this list.
 
 **Parked — do not start:** referral, client hub, online payment, vendor
 accounts, AI (layout or otherwise), more products, big operator console,
-complex membership, any new engine. The notes further down stay as
+complex membership, any new engine. (Video results and Travel Story are recorded under
+"Future / not scheduled"; not started.) The notes further down stay as
 reference only.
 
 ## Earlier roadmap notes (reference only — THE ORDER above wins)
@@ -244,6 +245,74 @@ Replaces the seat-passing proposal in docs/pick-handover.md §3+ (kept only as h
 - Link a registered client account to a pick seat (`pickers.user_id`).
 - Storage usage tracking per photographer (limit by GB, not album count).
 - Cap the number of photo keys listed in the change-notification email.
+
+## Future / not scheduled: 成果 content (video) and Travel Story (written 2026-10-07, ideas only)
+Nothing here is built or started. THE ORDER wins: real jobs first (step 2), then the
+guest ordering path (shop S2/S3), then the photographer interviews (step 5). Neither
+item starts without evidence from real photographers (see "Start only if" below).
+
+Shared frame: a delivered project is a **成果** (finished work): photos, and later
+video, album, products. The photographer controls what is published; the client only
+sees what was published. Never a file hub (Dropbox / Drive), never a shared album.
+
+### A. Video results (P1, after the order above)
+- **Phase 1, link only (the cheap test):** per project, 影片成果 = title, description,
+  an unlisted YouTube / Vimeo link, optional cover. A 發布 switch decides whether the
+  client sees it (驗收頁 and 完成頁). No upload, no storage, no transcoding, no 180-day
+  problem. Cost is about a third of phase 2. Known weakness: an unlisted link can be
+  forwarded, say so to the photographer.
+- **Phase 2, upload to R2 (only if photographers ask for it):** table `project_videos`
+  (project, title, description, r2 key, cover key, size, published, sort; a new
+  migration); H.264 MP4 only, checked by its `ftyp` header, one file up to ~2 GB;
+  the photographer supplies the cover (no thumbnail generation); progressive MP4 via
+  the existing object route (it already honours Range).
+- **Hard parts, in order:** (1) upload size: a Worker request body has a size limit
+  (this file already notes ~150–250 MB hits it), wedding highlights are 0.5–2 GB, so
+  this needs R2 multipart upload with resume, which is most of the work, not playback;
+  (2) the gate: video is delivery content, readable only when `delivered_at` is set
+  AND the video is published, a new read path next to `pickFinals`, High tier
+  (opus, full TDD, security review); (3) the 180-day R2 lifecycle deletes videos too,
+  so say it in the UI (the photographer keeps the original); (4) HEVC does not play
+  everywhere, accept H.264 only, no transcoding, no HLS, no multi-resolution;
+  (5) LINE in-app browser needs `playsinline`, real-phone check; (6) every play is
+  many Range requests, watch Worker request counts.
+- **Where it shows:** a 🎬 section on the 完成頁 between the gallery and the products.
+- **Start only if:** at least 2 of the 5 interviewed photographers say they would
+  attach video at delivery (add this question to `docs/photographer-interviews.md`).
+  Phase 2 only if links are not enough.
+
+### B. Travel Story (add-on for group-tour photographers)
+Idea: the photographer walks a group through a trip; the platform turns itinerary +
+the photographer's photos + each member's own picks into a story-shaped result, which
+feeds the album (chapters by day / place) and products. An add-on of a Project, not a
+new product and not a shared album.
+- **MVP, six things only:** (1) project type 旅行／跟團攝影 (this builds on
+  `projects.project_type`, already shipped); (2) a Travel Story switch; (3) Day 1 / 2 / 3
+  itinerary; (4) per-day text + place; (5) per-day photographer-chosen photos;
+  (6) 成果 photos → Story Album (chapters from the days).
+- **Rules to lock:** a member sees only their own photos (never "everyone's photos");
+  the story layer is separate from folders (an itinerary day is not a folder); the
+  public story only shows photos the photographer picked; the story is free for
+  members, money comes from the album / 無框畫 / extra photos; photographers may pay
+  per Travel project or for a plan (test NT$300–1,000 per project, decide later).
+- **Not in the MVP:** member photo uploads (phase 2 as 「加入旅行回憶」, at most 5, private
+  to that member), a one-line personal memory in the album (phase 2), group memorial
+  album for the leader / agency (a second product), map, GPS, weather, flights, AI
+  travel writing, community, comments, likes, chat.
+- **Open architecture question (decide before building):** our model is one project
+  per client and a link per seat, with no parent "trip" or "group" entity. A story
+  shared by many members (one itinerary, many members' private photos) needs either a
+  parent entity that owns the story and owns many member projects, or the story is
+  copied into each member project. The first is a new table and new gates (High
+  tier); the second is cheap but the photographer edits the itinerary N times. Pick
+  one with Tim before any code.
+- **Three business assumptions to test, in this order:** (1) will a tour photographer
+  type the itinerary into the system at all (if it feels like homework, stop);
+  (2) does a member who sees 「我的旅行成果」 buy an album more often than after a plain
+  delivery; (3) will the photographer pay for every member getting their own result.
+- **How to test cheaply:** run one real 跟團攝影 job on today's flow (Project → Picker →
+  Retouch → Delivery → 成果 → Album) with `project_type` set, log the snags here, and
+  only then decide whether Travel Story becomes a first-class feature.
 
 ## Technical debt / security
 - `book_editor/js/layouts.js` `renderPageHTML` writes `src="${src}"` unescaped and
