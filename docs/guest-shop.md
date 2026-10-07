@@ -440,6 +440,7 @@ last-seen stamp).
     "min_pages": 10 | null,           // album only: fewest inside spreads (1 spread = 1 P, cover/back not counted)
     "max_pages": 30 | null,           // album only: most inside spreads, same unit, >= min_pages
     "bleed_mm": 3 | 2.5 | null,       // prints and albums: mm of bleed on each side, 0–10; null = 0 mm
+    "extra_page_price": 150 | null,   // album only: NT$ per spread above min_pages (option price covers up to min_pages); null = not priced
     "image_url": "/api/platform/products/<id>/image?v=<stamp>" | null,  // relative to the Worker origin, public
     "options": [ { "id": "<product_options.id>", "label": "20×20", "price": 5000 } ]  // label '' when single
 } ] }
@@ -460,13 +461,16 @@ last-seen stamp).
   product id appears only inside `image_url`.
 - **Sorted** by the photographer's `sort` (then created), options in their
   set order. **Capped** at 50 products (sellable ones, by sort) × 20 options.
-- Before the `min_pages` / `max_pages` / `bleed_mm` migrations everything
-  works with that field `null` (each column on its own).
+- Before the `min_pages` / `max_pages` / `bleed_mm` / `extra_page_price`
+  migrations everything works with that field `null` (each column on its own).
+- `extra_page_price` is a customer-facing price (the operator's number, as
+  is); still no cost field of any kind in the shop.
 
 ## Album page range — where the refusal lives (S3, not built yet)
 
 Tim (2026-10-05): an album outside its platform product's page range is
-**refused**, never charged per extra spread. The range is
+**refused**, never charged per extra spread. (2026-10-07: inside the range, spreads
+above `min_pages` may cost `extra_page_price` each — see below.) The range is
 `platform_products.min_pages` / `max_pages` (`docs/products-orders.md`),
 inside spreads, both nullable.
 
@@ -493,6 +497,13 @@ When S3 builds `POST /api/pick/orders` with an album `layout`:
   the check; the photographer lays it out within the range.
 - The guest page uses `min_pages` / `max_pages` from `GET /api/pick/shop` to
   guide the layout, but the Worker's check is the only one that counts.
+- Extra spreads: once the line fits, `albumExtraPagesCost(product, spreads)`
+  (`worker.js`, pure, reads `pp.extra_page_price` / `min_pages` / `max_pages`
+  live) gives `{extraPages, cost}`; add `cost` to the line server-side (never
+  a price from the request). `null` = extra pages not priced or not
+  computable: then an album with spreads above `min_pages` must not be sold
+  at the bare option price by accident — S3 decides (refuse, or treat as
+  photographer-priced). Not wired anywhere yet.
 - New error codes for the S2 list: `pages_below_min`, `pages_above_max`.
 - The test `albumPagesProblem is not wired to any route yet` fails once the
   helper is called; update it then.

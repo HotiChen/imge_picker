@@ -829,7 +829,8 @@ const CUSTOM_PRODUCTS_DISABLED = { error: '目前只能從平台加入商品', c
 // counted). The operator's, bound to the platform product; NULL = no bound;
 // albums only (a print stores NULL, like photo_count); 1–PAGE_BOUND_MAX; when
 // both are set, max ≥ min. An album order outside the range is refused, never
-// charged per extra spread (Tim) — albumPagesProblem below, for S3.
+// charged its way back in (Tim) — albumPagesProblem below, for S3. Spreads
+// inside the range but above min_pages may cost extra_page_price each.
 // Each column arrives in its own hand-run migration
 // (2026-10-06-product-min-pages.sql, …-max-pages.sql), and either may be
 // missing: pageColumns says which are there, a missing one reads null, and
@@ -843,13 +844,21 @@ const PAGE_BOUND_MAX = 200;
 // hand-run migration (2026-10-07-product-bleed.sql), degrading exactly like
 // the page bounds: it rides along in pageColumns / pageSelect / pageBoundsFit.
 const BLEED_MM_MAX = 10;
+// platform_products.extra_page_price: NT$ per inside spread above min_pages
+// (the option price covers the book up to min_pages), a whole number checked
+// by isMoney, or NULL = extra pages not priced. Albums only, exactly like the
+// page bounds (a print stores NULL, leaving album clears it, entering album
+// does not bring a leftover back). Its own hand-run migration
+// (2026-10-07-product-extra-page-price.sql), riding the same machinery.
+// albumExtraPagesCost below turns it into a line's extra.
 // every optional platform_products column a hand-run migration adds, in the
-// order a write judges them (min first, then max, then bleed)
-const PRODUCT_LATE_COLUMNS = [...PAGE_BOUNDS, 'bleed_mm'];
+// order a write judges them (min, max, bleed, then extra-page price)
+const PRODUCT_LATE_COLUMNS = [...PAGE_BOUNDS, 'bleed_mm', 'extra_page_price'];
 const PAGES_UNAVAILABLE = {
   min_pages: { error: '最少頁數功能尚未啟用', code: 'min_pages_unavailable' },
   max_pages: { error: '最多頁數功能尚未啟用', code: 'max_pages_unavailable' },
   bleed_mm: { error: '出血設定功能尚未啟用', code: 'bleed_mm_unavailable' },
+  extra_page_price: { error: '加頁價格功能尚未啟用', code: 'extra_page_price_unavailable' },
 };
 // The bleed an operator write names: {set: {bleed_mm}} (empty when the body
 // leaves it out: the stored value stays) or {bad: 'invalid_bleed_mm'}.
@@ -859,10 +868,25 @@ function bleedWrite(body) {
   if (v !== null && !(typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= BLEED_MM_MAX)) return { bad: 'invalid_bleed_mm' };
   return { set: { bleed_mm: v } };
 }
+// The extra-page price an operator write ends with ({set} as pageBoundsWrite:
+// the column to write, if any) or {bad: 'invalid_extra_page_price'}. A named
+// value is validated on any kind; on a non-album it is stored NULL (and a
+// write leaving album clears it); a write entering album that does not name
+// it clears a print's leftover; one that stays album and leaves it out keeps
+// the stored value (and does not write it back).
+function extraPagePriceWrite(body, kind, current) {
+  const named = hasField(body, 'extra_page_price');
+  const v = named ? body.extra_page_price : null;
+  if (v !== null && !isMoney(v)) return { bad: 'invalid_extra_page_price' };
+  const was = current ? current.kind : null;
+  if (kind !== 'album') return { set: named || was === 'album' ? { extra_page_price: null } : {} };
+  if (named) return { set: { extra_page_price: v } };
+  return { set: current !== null && was !== 'album' ? { extra_page_price: null } : {} };
+}
 // a platform product's page bound as every response shows it: albums only
 const albumOnly = (kind, v) => (kind === 'album' && v != null ? v : null);
 
-// Which late columns this database has: {min_pages, max_pages, bleed_mm},
+// Which late columns this database has: {min_pages, max_pages, bleed_mm, extra_page_price},
 // each a boolean, by a query that names the column and reads no row.
 async function pageColumns(env) {
   const has = async col => {
@@ -880,7 +904,7 @@ async function pageColumns(env) {
 // the late columns for a SELECT on platform products aliased `alias`, NULL
 // for one this database does not have
 const pageSelect = (cols, alias = 'pp') => PRODUCT_LATE_COLUMNS.map(c => `${cols[c] ? `${alias}.${c}` : 'NULL'} AS ${c}`).join(', ');
-const ALL_PAGE_COLUMNS = { min_pages: true, max_pages: true, bleed_mm: true };
+const ALL_PAGE_COLUMNS = { min_pages: true, max_pages: true, bleed_mm: true, extra_page_price: true };
 // `query(cols)` as if both columns are there (one round trip on a migrated
 // database); only when that fails on a missing column, probe which are and
 // run it again. Another missing column fails the retry too: never a looser
@@ -950,6 +974,29 @@ function albumPagesProblem(spreads, product) {
   if (min !== null && spreads < min) return 'pages_below_min';
   if (max !== null && spreads > max) return 'pages_above_max';
   return null;
+}
+
+// What an album line's spreads above min_pages cost (docs/products-orders.md,
+// extra_page_price): {extraPages, cost} with extraPages = max(0, spreads −
+// min_pages) (a missing min_pages counts as 0) and cost = extraPages ×
+// extra_page_price. null when the product is not an album, extra pages are
+// not priced (extra_page_price not a whole number ≥ 0), `spreads` is not a
+// whole number ≥ 1, spreads exceed max_pages (albumPagesProblem's
+// pages_above_max: refused, never priced) or the cost leaves the safe-integer
+// range. Below min_pages it is {0, 0}: that refusal is albumPagesProblem's.
+// Pure; calls only albumPagesProblem (a test takes both sources).
+// Not called yet: no order path carries an album layout.
+function albumExtraPagesCost(product, spreads) {
+  if (!product || product.kind !== 'album') return null;
+  const price = product.extra_page_price;
+  if (!(Number.isSafeInteger(price) && price >= 0)) return null;
+  if (!(Number.isSafeInteger(spreads) && spreads >= 1)) return null;
+  if (albumPagesProblem(spreads, product) === 'pages_above_max') return null;
+  const min = Number.isSafeInteger(product.min_pages) && product.min_pages >= 1 ? product.min_pages : 0;
+  const extraPages = Math.max(0, spreads - min);
+  const cost = extraPages * price;
+  if (!Number.isSafeInteger(cost)) return null;
+  return { extraPages, cost };
 }
 
 // 400 {error, code}, the settings route's shape
@@ -1128,6 +1175,7 @@ async function readProducts(env, id = null) {
     ...p,
     min_pages: albumOnly(p.kind, p.min_pages),
     max_pages: albumOnly(p.kind, p.max_pages),
+    extra_page_price: albumOnly(p.kind, p.extra_page_price),
     has_image: !!p.has_image,
     options: options.filter(o => o.product_id === p.id).map(({ product_id, ...o }) => ({
       ...o,
@@ -1157,6 +1205,7 @@ async function readPlatformProducts(env, id = null) {
     ...p,
     min_pages: albumOnly(p.kind, p.min_pages),
     max_pages: albumOnly(p.kind, p.max_pages),
+    extra_page_price: albumOnly(p.kind, p.extra_page_price),
     has_image: !!p.has_image,
     options: options.filter(o => o.platform_product_id === p.id).map(({ platform_product_id, ...o }) => o),
   }));
@@ -1209,6 +1258,8 @@ async function readGuestShop(env, photographerId) {
       max_pages: albumOnly(p.kind, p.max_pages),
       // mm on each side, prints and albums; null = 0 mm
       bleed_mm: p.bleed_mm ?? null,
+      // album only: NT$ per spread above min_pages; null = not priced
+      extra_page_price: albumOnly(p.kind, p.extra_page_price),
       // the public image route (relative to the Worker), versioned by when
       // the operator last changed it
       image_url: p.has_image
@@ -3120,12 +3171,14 @@ export default {
         if (bounds.bad) return orderBad(bounds.bad);
         const bleed = bleedWrite(body);
         if (bleed.bad) return orderBad(bleed.bad);
+        const extra = extraPagePriceWrite(body, fields.set.kind, null);
+        if (extra.bad) return orderBad(extra.bad);
         const opts = productOptions(body.options, new Set(), PLATFORM_MONEY);
         if (opts.bad) return orderBad(opts.bad);
         // a NULL bound for a column the database does not have is dropped,
         // so a product without one is made before its migration too; the
         // columns are probed only when the body names a bound or the bleed
-        const late = { ...bounds.set, ...bleed.set };
+        const late = { ...bounds.set, ...bleed.set, ...extra.set };
         const fit = Object.keys(late).length ? pageBoundsFit(late, await pageColumns(env)) : { set: {} };
         if (fit.unavailable) return done(fit.unavailable, 500);
         const pageCols = Object.keys(fit.set);
@@ -3166,6 +3219,8 @@ export default {
       if (bounds.bad) return orderBad(bounds.bad);
       const bleed = bleedWrite(body);
       if (bleed.bad) return orderBad(bleed.bad);
+      const extra = extraPagePriceWrite(body, kind, current);
+      if (extra.bad) return orderBad(extra.bad);
       let opts = null;
       if (hasField(body, 'options')) {
         const { results } = await env.DB.prepare('SELECT id FROM platform_product_options WHERE platform_product_id = ?').bind(id).all();
@@ -3175,7 +3230,7 @@ export default {
       }
       // a number for a column this database does not have yet: 500, before
       // anything is written; a NULL for one is dropped (nothing to clear)
-      const fit = pageBoundsFit({ ...bounds.set, ...bleed.set }, cols);
+      const fit = pageBoundsFit({ ...bounds.set, ...bleed.set, ...extra.set }, cols);
       if (fit.unavailable) return done(fit.unavailable, 500);
       if (kind !== 'album') fields.set.photo_count = null;
       await env.DB.batch(catalogueWrites(env, PLATFORM_TABLES, id, { ...fields.set, ...fit.set }, opts, now));
@@ -3273,6 +3328,7 @@ export default {
           ...p,
           min_pages: albumOnly(p.kind, p.min_pages),
           max_pages: albumOnly(p.kind, p.max_pages),
+          extra_page_price: albumOnly(p.kind, p.extra_page_price),
           has_image: !!p.has_image,
           options: options.filter(o => o.platform_product_id === p.id).map(({ platform_product_id, ...o }) => o),
         })).filter(p => p.options.length);
@@ -3362,7 +3418,7 @@ export default {
         if (!current) return jsonErr('Not found', 404);
         let statements;
         if (current.platform_product_id) {
-          if (['kind', 'name', 'description', 'photo_count', 'min_pages', 'max_pages', 'bleed_mm'].some(k => hasField(body, k))) return orderBad('platform_managed');
+          if (['kind', 'name', 'description', 'photo_count', 'min_pages', 'max_pages', 'bleed_mm', 'extra_page_price'].some(k => hasField(body, k))) return orderBad('platform_managed');
           const fields = productFields(body, true);
           if (fields.bad) return orderBad(fields.bad);
           let opts = null;

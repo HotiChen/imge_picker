@@ -2,9 +2,10 @@
 // hand-run album page-bound migrations (platform_products.min_pages from
 // 2026-10-06-product-min-pages.sql, max_pages from
 // 2026-10-06-product-max-pages.sql), plus the state before the later
-// bleed_mm migration (2026-10-07-product-bleed.sql). The four page states
-// all lack bleed_mm too: its migration comes after both of theirs, and ALTER
-// only appends, so a page state + its migrations + BLEED_SQL is schema.sql.
+// bleed_mm migration (2026-10-07-product-bleed.sql) and the state before the
+// extra_page_price migration (2026-10-07-product-extra-page-price.sql). Every
+// earlier state lacks the later columns too (ALTER only appends), so a state
+// + its migrations + BLEED_SQL + EXTRA_SQL is schema.sql.
 // Not a test file: imported only.
 import { readFileSync } from 'node:fs';
 
@@ -16,8 +17,10 @@ const cutFrom = (src, re, to) => {
   return out;
 };
 
+// extra_page_price not there yet (everything before it is)
+export const NO_EXTRA = cutFrom(FRESH, /(bleed_mm\s+REAL),\n(?:\s*--[^\n]*\n)*\s*extra_page_price\s+INTEGER\n\);/, '$1\n);');
 // bleed_mm not there yet (min_pages and max_pages are)
-export const NO_BLEED = cutFrom(FRESH, /(max_pages\s+INTEGER),\n(?:\s*--[^\n]*\n)*\s*bleed_mm\s+REAL\n\);/, '$1\n);');
+export const NO_BLEED = cutFrom(NO_EXTRA, /(max_pages\s+INTEGER),\n(?:\s*--[^\n]*\n)*\s*bleed_mm\s+REAL\n\);/, '$1\n);');
 const cut = (re, to) => cutFrom(NO_BLEED, re, to);
 
 // neither migration has run
@@ -33,3 +36,4 @@ export const NO_MIN = cut(/(updated_at\s+TEXT NOT NULL),\n(?:\s*--[^\n]*\n)*\s*m
 export const MIN_SQL = readFileSync(new URL('../migrations/2026-10-06-product-min-pages.sql', import.meta.url), 'utf8');
 export const MAX_SQL = readFileSync(new URL('../migrations/2026-10-06-product-max-pages.sql', import.meta.url), 'utf8');
 export const BLEED_SQL = readFileSync(new URL('../migrations/2026-10-07-product-bleed.sql', import.meta.url), 'utf8');
+export const EXTRA_SQL = readFileSync(new URL('../migrations/2026-10-07-product-extra-page-price.sql', import.meta.url), 'utf8');

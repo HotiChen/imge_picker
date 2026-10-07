@@ -413,7 +413,15 @@ CREATE TABLE IF NOT EXISTS platform_products (
   -- database by
   --   ALTER TABLE platform_products ADD COLUMN bleed_mm REAL;
   -- (worker/migrations/2026-10-07-product-bleed.sql, after the two above).
-  bleed_mm         REAL
+  bleed_mm         REAL,
+  -- album: NT$ per inside spread above min_pages (the option price covers up
+  -- to min_pages; 1 spread = 1 P, cover and back not counted), a whole number
+  -- 0–10,000,000 (isMoney); NULL = extra pages not priced, always NULL on a
+  -- print. Operator only; shown to photographers and guests. Added to a
+  -- deployed database by
+  --   ALTER TABLE platform_products ADD COLUMN extra_page_price INTEGER;
+  -- (worker/migrations/2026-10-07-product-extra-page-price.sql, after the three above).
+  extra_page_price INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_platform_products_sort ON platform_products(active, sort);
 

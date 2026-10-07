@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import { readFileSync, existsSync } from 'node:fs';
 import { fakeDB } from './fakes.mjs';
 import { SECRET, CUSTOM_ON, setup, call, rows, one } from './pick-helpers.mjs';
-import { FRESH, NO_PAGES, MAX_SQL, BLEED_SQL } from './page-schemas.mjs';
+import { FRESH, NO_PAGES, MAX_SQL, BLEED_SQL, EXTRA_SQL } from './page-schemas.mjs';
 
 const OP = 'operator-secret';
 const envOp = (extra = {}) => setup({ OPERATOR_TOKEN: OP, ...extra });
@@ -58,7 +58,7 @@ test('migration: one append-only ALTER, noted in schema.sql; the fixture really 
   const old = fakeDB({ schema: PRE_MIGRATION });
   assert.throws(() => old._db.prepare('SELECT min_pages FROM platform_products').all(), /no such column/);
   const shape = db => db._db.prepare('PRAGMA table_info(platform_products)').all();
-  assert.deepEqual(shape(fakeDB({ schema: PRE_MIGRATION + '\n' + sql + '\n' + MAX_SQL + '\n' + BLEED_SQL })), shape(fakeDB()));
+  assert.deepEqual(shape(fakeDB({ schema: PRE_MIGRATION + '\n' + sql + '\n' + MAX_SQL + '\n' + BLEED_SQL + '\n' + EXTRA_SQL })), shape(fakeDB()));
   const twice = fakeDB({ schema: PRE_MIGRATION + '\n' + sql });
   assert.throws(() => twice._db.exec(sql), /duplicate column/);
 });
