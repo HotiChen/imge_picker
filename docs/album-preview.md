@@ -483,7 +483,7 @@ wins. (c) `planCore`, with a hard `maxSpreads`: the cap loop does not stop at th
 one cap higher and takes the plan that lacks least (the bounds still come first). Everything is deterministic.
 
 ```
-result.variety = { distinctCounts, maxSameRun, repeatedTemplates, distinctTemplates, heroSpreads }   // absent with variety off
+result.variety = { distinctCounts, maxSameRun, repeatedTemplates, distinctTemplates, heroSpreads, heroWanted }   // absent with variety off
 ```
 `repeatedTemplates` = spreads using the template of the spread right before; `heroSpreads` = lone through-spreads.
 
@@ -494,6 +494,33 @@ rules: no hero in 8 of its control books, a run of one count over 2 in 14, 5,5,5
 `preferred_per_spread.test.mjs` wrappers pass `variety: 0` (they pin the engine without it), `plan_spreads_foldsafe` lists the new
 result key. `AlbumPreview.PLAN_OPTS` needs nothing (default on). **Not verified:** tuned on synthetic photos only; whether the
 mix looks right, whether the lone through-spread lands on a photo worth it, and the extra white from rule 4 need a real album.
+
+### More full-bleed spreads: `heroRate` (default **0.2**; `0` / `false` / `null` = the previous behaviour)
+
+**Why (Tim, a ~20-photo preview: "滿版單張多一點").** The variety rounds wanted exactly one hero, and only from 6 spreads on; the
+`planSpreads` bonus alone also seats weak photos on a through-spread now and then. `heroRate` asks for more, from suitable photos only.
+`result.variety.heroWanted` is what the plan was asked for, `heroSpreads` what it has (fewer is fine and reported).
+
+- **Wanted**: `round(spreads * heroRate)` from 8 spreads (0.2 = about one per 5), at least 1 from 4 spreads (a 20-photo book),
+  0 below that; with `heroRate: 0` the old rule (1 from 6 spreads). Capped by the number of suitable photos and by the gap
+  (`ceil(spreads / 5)`: a hero needs 4 other spreads before the next).
+- **Suitable** = landscape or square, sharpness at or above the book's median (a tie counts), fold-safe, not the cover. The bonus
+  of the variety rounds (`SP_HERO_STEPS`, growing each round while heroes are short) is paid for those photos only, and in a book
+  of >= 8 photos a lone photo below the median on a through-spread costs `SP_HERO_WEAK` extra (soft). Hard rules unchanged: the gap,
+  `foldSafe`, `min/maxSpreads` (they win; the rounds solve under the same bounds), deterministic.
+- **Cost.** More, smaller spreads: 30 photos 8.8 -> 9.7 spreads on average, 44 photos 12.2 -> 13.7, 60 photos up to +37% on one seed
+  (so `plan_variety`'s "within 30%" became 40%, 30% kept for `heroRate: 0`). Synthetic books, 6 seeds, known-low fold risk:
+  heroes over the 6 seeds 4 -> 4 / 4 -> 6 / 8 -> 12 / 6 -> 16 for 12 / 20 / 30 / 44 photos.
+
+**Why the real preview can still have no hero: `foldRisk`.** The preview does measure it: `AutoLayout.analyze` (called with only
+`urlFor` and `signal`) reads the 400px thumbnail three times (9x8 hash, 32x32 sharpness/focus, 64x40 fold grid) and sets
+`foldRisk`. It is `null` only when the pixels cannot be read (tainted canvas after the no-CORS fallback in `defaultLoadImage`, a
+failed read); then sharpness is 0 and the hash empty too. Unknown counts as high risk (default deny, pinned by
+`fold_risk.test.mjs` / `plan_spreads_foldsafe.test.mjs`): a hero with the subject on the gutter is a visible print defect, a missing
+hero is only less variety, so **unknown is deliberately not relaxed**. The result now says how many photos were unknown:
+`result.foldUnknown` (absent when 0). A measured high risk (subject in the centre band) also forbids a hero by design; a book of
+portraits of a couple in the middle has few suitable photos and gets few heroes. Which of the two Tim's album was, is not known
+from here: check `plan.foldUnknown` and the photos' `foldRisk` in the console on the real album.
 
 ## Fold safety: no photo across the fold when its subject is on the fold
 

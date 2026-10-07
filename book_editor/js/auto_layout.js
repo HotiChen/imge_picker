@@ -431,6 +431,7 @@ const AutoLayout = (() => {
             focus: { x: f && Number.isFinite(f.x) ? f.x : 0.5, y: f && Number.isFinite(f.y) ? f.y : 0.5 },
             // 0..1; no number (no pixel data, junk) = 1 = high risk
             fold: it && typeof it.foldRisk === 'number' && Number.isFinite(it.foldRisk) ? clamp(it.foldRisk, 0, 1) : 1,
+            foldKnown: !!it && typeof it.foldRisk === 'number' && Number.isFinite(it.foldRisk),
         };
     }
 
@@ -732,6 +733,11 @@ const AutoLayout = (() => {
     const SP_VAR_NEAR = 10;            // the same template again within a few spreads costs this many times more (polish)
     const SP_VAR_ROUNDS = 10;
     const SP_VAR_HERO_BOOK = 6;       // books of this many spreads get a lone through-spread when a suitable photo exists
+    const SP_HERO_RATE = 0.2;         // heroRate default: about one lone through-spread per 5 spreads...
+    const SP_HERO_RATE_BOOK = 8;      // ...from this many spreads on
+    const SP_HERO_MIN_BOOK = 4;       // heroRate on: a book of this many spreads (a ~20-photo album) wants one hero (heroRate 0: from SP_VAR_HERO_BOOK)
+    const SP_HERO_STEPS = [0.3, 0.6, 1, 1.5, 2.2, 3];   // the bonus steps while a heroRate book still has fewer heroes than wanted (only on suitable photos)
+    const SP_HERO_WEAK = 3;           // heroRate on: a photo below the median sharpness across the fold (soft, above any bonus, so only a forced seat takes it)
     const SP_VAR_MAX_RUN = 2;         // spreads with one photo count in a row
     const SP_VAR_CAP_EXTRA = 1;       // tight maximum: the preferred cap may rise this much for the sake of variety alone
     const SP_MAX_MAX = 60;            // photosAllowed: not computed (null) for a wanted maximum above this
@@ -847,6 +853,7 @@ const AutoLayout = (() => {
                         if (lay.span[s]) {
                             c += 1.0 * sharp;
                             if (ctx.foldSafe && r.fold >= FOLD.LIMIT) c += SP_FOLD_BLOCK;   // never across the fold: the group is skipped below
+                            if (ctx.heroGate && r.sharp < ctx.medSharp) c += SP_HERO_WEAK;
                             if (r.orientation !== 'square' && r.orientation !== 'landscape') c += ctx.contain ? SP_HERO_WRONG_CONTAIN : SP_HERO_WRONG_COVER;
                             if (r.id === ctx.coverId) c += 10;                  // the cover is already that picture
                         } else {
@@ -1080,7 +1087,7 @@ const AutoLayout = (() => {
     // photo count; repeatedTemplates: spreads using the template of the spread right before; distinctTemplates; heroSpreads:
     // lone-photo through-spreads. `lack` is what the planner works down (0 = nothing to improve): runs of one count over
     // SP_VAR_MAX_RUN, the same template twice running, too few distinct counts (3 from SP_VAR_HERO_BOOK spreads, 2 from 3 spreads).
-    function varietyStatsOf(spreads) {
+    function varietyStatsOf(spreads, heroWanted) {
         const S = spreads.length;
         let maxSameRun = S ? 1 : 0, run = 1, over = 0, repeated = 0;
         for (let j = 1; j < S; j++) {
@@ -1093,7 +1100,8 @@ const AutoLayout = (() => {
         const need = S >= SP_VAR_HERO_BOOK ? 3 : S >= 3 ? 2 : 1;
         return {
             stats: { distinctCounts, maxSameRun, repeatedTemplates: repeated,
-                distinctTemplates: new Set(spreads.map(x => x.template)).size, heroSpreads: spreads.filter(x => x.k === 1 && x.hero).length },
+                distinctTemplates: new Set(spreads.map(x => x.template)).size, heroSpreads: spreads.filter(x => x.k === 1 && x.hero).length,
+                heroWanted: heroWanted || 0 },
             lack: over + repeated + Math.max(0, need - distinctCounts),
         };
     }
@@ -1163,6 +1171,7 @@ const AutoLayout = (() => {
         const simWindow = Number.isFinite(opts.similarWindow) ? Math.floor(opts.similarWindow) : D.similarWindow;
         const seed = Number.isFinite(opts.seed) ? Math.trunc(opts.seed) : 0;
         const varOn = !varietyOff(opts.variety);       // variety: default on
+        const heroRate = opts.heroRate === undefined ? SP_HERO_RATE : (Number.isFinite(opts.heroRate) && opts.heroRate > 0 ? Math.min(opts.heroRate, 1) : 0);
         const foldSafe = opts.foldSafe !== false;    // default on: no high-risk photo across the fold; only an explicit false gives the old behaviour
         const contain = opts.fit !== 'cover';        // 'contain' (whole photo, nothing cropped) unless 'cover' is asked for
         const spreadsOpt = v => (Number.isFinite(v) && v >= 1 ? Math.floor(v) : 0);      // integer >= 1, else "none"
@@ -1240,6 +1249,7 @@ const AutoLayout = (() => {
         const sharps = kept.map(r => r.sharp).sort((a, b) => a - b);
         const below = v => { let lo = 0, hi = sharps.length; while (lo < hi) { const mid = (lo + hi) >> 1; if (sharps[mid] < v) lo = mid + 1; else hi = mid; } return lo; };
         const pct = new Map(kept.map(r => [r.id, kept.length > 1 ? below(r.sharp) / (kept.length - 1) : 1]));
+        const medSharp = sharps[Math.floor(sharps.length / 2)];   // a tie at the median counts as sharp enough (all-equal sharpness must not forbid every hero)
 
         const coverRec = contain ? pickCoverContain(kept, coverAspect) : pickCover(kept, coverAspect);
         const cover = contain
@@ -1273,7 +1283,7 @@ const AutoLayout = (() => {
         const memo = new Map();
         const costsFor = (oi, level) => {
             const key = oi + ':' + level;
-            if (!memo.has(key)) memo.set(key, spreadCosts(orders[oi].P, cat, { pct, coverId: coverRec.id, seed, cfg, contain, foldSafe, simCnt: orders[oi].simCnt }, level));
+            if (!memo.has(key)) memo.set(key, spreadCosts(orders[oi].P, cat, { pct, coverId: coverRec.id, seed, cfg, contain, foldSafe, heroGate: heroRate > 0 && kept.length >= SP_HERO_RATE_BOOK, medSharp, simCnt: orders[oi].simCnt }, level));
             return memo.get(key);
         };
         // look-alike pairs left sharing a spread under order oi, and the spreads they are on
@@ -1374,8 +1384,20 @@ const AutoLayout = (() => {
         const heroTpl = cat.map(t => t.hero && t.k === 1);
         const heroPossible = heroTpl.some(Boolean) && inner.some(r => r.id !== coverRec.id && r.orientation !== 'portrait'
             && pct.get(r.id) >= 0.5 && !(foldSafe && r.fold >= FOLD.LIMIT));
-        const lackOfGroups = groups => varietyStatsOf(groups.map(t => ({ k: cat[t].k, template: cat[t].id, hero: cat[t].hero }))).lack
-            + (groups.length >= SP_VAR_HERO_BOOK && heroPossible && !groups.some(t => heroTpl[t]) ? 1 : 0);
+        // Which photos may be a hero: landscape / square, sharp (at or above the median sharpness), fold-safe, not the cover. The count
+        // of them and the gap cap how many heroes are wanted; heroRate asks for round(spreads * rate) from SP_HERO_RATE_BOOK
+        // spreads on, a book of SP_HERO_MIN_BOOK spreads or more wants at least one (SP_VAR_HERO_BOOK with heroRate 0: the old rule).
+        const heroOk = r => r.id !== coverRec.id && r.orientation !== 'portrait' && r.sharp >= medSharp && !(foldSafe && r.fold >= FOLD.LIMIT);
+        const heroEligible = inner.filter(heroOk).length;
+        const heroWantedOf = S => {
+            if (!heroPossible) return 0;
+            let w = S >= (heroRate > 0 ? SP_HERO_MIN_BOOK : SP_VAR_HERO_BOOK) ? 1 : 0;
+            if (heroRate > 0 && S >= SP_HERO_RATE_BOOK) w = Math.max(w, Math.round(S * heroRate));
+            return Math.min(w, heroEligible, Math.ceil(S / (cfg.heroGap + 1)));
+        };
+        const heroCount = groups => groups.reduce((n, t) => n + (heroTpl[t] ? 1 : 0), 0);
+        const varStats = groups => varietyStatsOf(groups.map(t => ({ k: cat[t].k, template: cat[t].id, hero: cat[t].hero })), heroWantedOf(groups.length));
+        const lackOfGroups = groups => varStats(groups).lack + Math.max(0, heroWantedOf(groups.length) - heroCount(groups));
         const varietyRounds = sol => {
             let best = { groups: sol.groups, costs: sol.costs }, bestLack = lackOfGroups(sol.groups);
             const T = cat.length, price = new Float64Array(T);
@@ -1385,10 +1407,13 @@ const AutoLayout = (() => {
                 cur.forEach(t => uses.set(cat[t].k, (uses.get(cat[t].k) || 0) + 1));
                 const allowed = Math.max(2, Math.ceil(cur.length / 3));
                 for (let t = 0; t < T; t++) { const c = uses.get(cat[t].k) || 0; if (c > allowed) price[t] += SP_VAR_PRICE * (c - allowed); }
-                const wantHero = cur.length >= SP_VAR_HERO_BOOK && heroPossible && !cur.some(t => heroTpl[t]);
+                const wantHero = heroCount(cur) < heroWantedOf(cur.length);
                 if (wantHero) heroStep++;
-                const boost = wantHero ? SP_VAR_HERO[Math.min(heroStep, SP_VAR_HERO.length) - 1] : 0;
-                const cost = Float64Array.from(sol.costs.cost, (c, i) => c + price[i % T] - (heroTpl[i % T] ? boost : 0));
+                const steps = heroRate > 0 ? SP_HERO_STEPS : SP_VAR_HERO;
+                const boost = wantHero ? steps[Math.min(heroStep, steps.length) - 1] : 0;
+                // the bonus goes to the photos that may be a hero (a heroRate book); the old rule paid it for any photo
+                const ok = heroRate > 0 ? Uint8Array.from(sol.P, heroOk) : null;
+                const cost = Float64Array.from(sol.costs.cost, (c, i) => c + price[i % T] - (heroTpl[i % T] && (!ok || ok[(i / T) | 0]) ? boost : 0));
                 const costs = { cost, seat: sol.costs.seat, simCnt: sol.costs.simCnt };
                 const g = spreadSolve(costs, cat, m, sol.used, sol.wcfg);
                 if (!g) break;
@@ -1449,6 +1474,10 @@ const AutoLayout = (() => {
             // Both only when > 0, so a book with nothing to report is the old object. (The comparison plan costs one more planning; not for synthetic runs.)
             const spans = spreads.filter(sp => sp.slots.some(x => x.slot.face === 'span')).length;
             if (spans > 0) out.foldSpans = spans;
+            // foldUnknown: photos whose fold risk was not measured (pixels unreadable: tainted canvas, failed read). They count as high-risk,
+            // so none of them is a hero; a book where this is most photos is flat for that reason (docs/album-preview.md, "Hero spreads").
+            const unknown = inner.filter(r => !r.foldKnown).length;
+            if (unknown > 0) out.foldUnknown = unknown;
             if (!synthetic && inner.some(r => r.fold >= FOLD.LIMIT)) {
                 const foldOf = new Map(inner.map(r => [r.id, r.fold]));
                 const old = planCore(items, { ...opts, foldSafe: false }, true);
@@ -1463,7 +1492,7 @@ const AutoLayout = (() => {
             out.similarSpreads = left.spreads.map(n => `spread-${n + 1}`);
         }
         if (varOn) {
-            out.variety = varietyStatsOf(sol.groups.map(t => ({ k: cat[t].k, template: cat[t].id, hero: cat[t].hero }))).stats;
+            out.variety = varStats(sol.groups).stats;
             Object.defineProperty(out, '_lack', { value: lackOfGroups(sol.groups), enumerable: false });   // for planCore's choice between caps
         }
         return withBounds(out, spreads.length);
