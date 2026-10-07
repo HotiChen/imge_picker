@@ -279,10 +279,12 @@ const near = (a, b, tol) => Math.abs(a - b) <= tol;
       await page.waitForTimeout(450);
       const z1 = await albZ(page);
       ok('a double tap zooms to 2.5x', near(z1.s, 2.5, 0.02) && z1.attr === '2.50', JSON.stringify([z1.s, z1.attr]));
+      // (the 再次編排 row made the stage shorter: the 2.5x spread, about 690px, is now only slightly taller than it, and the pan is then
+      // clamped to the edges instead of following the finger, so a page less than 40px taller only has to cover the stage)
       // sideways the page is wider than the window, so the tapped spot can stay put; vertically the 2.5x
       // spread (about 690px) is still shorter than the stage, so it stays centred rather than leaving a gap
       ok('the tapped spot is still under the finger (sideways), and the page stays centred up and down while it is shorter than the window',
-        near(z1.page.l + u * z1.page.w, tapX, 3) && (z1.page.h > z1.stage.h + 1 ? near(z1.page.t + v * z1.page.h, tapY, 3) : near((z1.page.t + z1.page.b) / 2, (z1.stage.t + z1.stage.b) / 2, 1)), JSON.stringify([z1.page, z1.stage, u, v, tapX, tapY]));
+        near(z1.page.l + u * z1.page.w, tapX, 3) && (z1.page.h > z1.stage.h + 40 ? near(z1.page.t + v * z1.page.h, tapY, 3) : z1.page.h > z1.stage.h + 1 ? (z1.page.t <= z1.stage.t + 0.6 && z1.page.b >= z1.stage.b - 0.6) : near((z1.page.t + z1.page.b) / 2, (z1.stage.t + z1.stage.b) / 2, 1)), JSON.stringify([z1.page, z1.stage, u, v, tapX, tapY]));
       ok('the page is bigger than the window now, and the label did not change (no flip)', z1.page.w > z1.stage.w * 2 && z1.label === lab, JSON.stringify([z1.page.w, z1.label, lab]));
       ok('control: the zoomed page still covers the window (no blank edge) on the sides it is wider than', z1.page.l <= z1.stage.l + 0.6 && z1.page.r >= z1.stage.r - 0.6, JSON.stringify([z1.page, z1.stage]));
       await albShot(page, 'zoom-2.5-390');
