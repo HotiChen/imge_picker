@@ -27,6 +27,8 @@ export function ordersFake(opts = {}) {
     orders: opts.orders || [],
     titles: opts.titles || {},
     extra: opts.extra || { count: null, pick_limit: null, extra_price: null, extra: 0, fee: 0, order_id: null, order_extra: null, matches: true },
+    delivered: opts.delivered || {},   // project id -> delivered now? (absent = true)
+    migrated: opts.migrated !== false, // false = the S2 guest-order columns are not there (erase-contact answers 500 orders_unavailable)
     inject: null,            // (method, path, body) => {status, body} | null
     calls: [],
     n: 0,
@@ -40,18 +42,26 @@ export function ordersFake(opts = {}) {
     const outstanding = ['confirmed', 'fulfilled'].includes(o.status) ? Math.max(0, total - o.paid_amount) : 0;
     return { subtotal, total, cost, outstanding };
   };
-  const view = o => ({ ...o, project_title: st.titles[o.project_id] ?? '', ...money(o), items: o.items.map(({ vendor_cost, ...i }) => ({ ...i, photo_keys: [...i.photo_keys] })) });
+  // The admin answer shape of S2 (docs/guest-shop.md, 「Photographer side」): contact {name, phone, line, erased_at} | null
+  // (null on admin / system orders), delivery_method, consent_version, project_delivered; lines gain list_price and layout
+  // (parsed object | null). `delivered` maps project id -> boolean, a project not listed reads delivered (the usual case).
+  const view = o => ({ ...o, project_title: st.titles[o.project_id] ?? '', ...money(o),
+    contact: o.contact ? { ...o.contact } : null,
+    project_delivered: st.delivered[o.project_id] ?? true,
+    items: o.items.map(({ vendor_cost, ...i }) => ({ ...i, photo_keys: [...i.photo_keys] })) });
   st.addOrder = (o = {}) => {
     const order = {
       id: o.id || id('ord'), photographer_id: 'default', project_id: o.project_id || 'proj-1', source: o.source || 'admin',
       status: o.status || 'confirmed', picker_id: null, discount: o.discount || 0, paid_amount: o.paid_amount || 0,
-      paid_at: o.paid_at || null, paid_method: o.paid_method || null, note: o.note || '', guest_note: '',
+      paid_at: o.paid_at || null, paid_method: o.paid_method || null, note: o.note || '', guest_note: o.guest_note || '',
+      contact: o.contact === undefined ? null : o.contact, delivery_method: o.delivery_method ?? null, consent_version: o.consent_version ?? null,
       created_at: o.created_at || NOW, updated_at: o.updated_at || NOW,
       confirmed_at: NOW, fulfilled_at: null, cancelled_at: null,
       items: (o.items || []).map(i => ({
         id: i.id || id('item'), order_id: '', kind: i.kind || 'album', product_id: i.product_id ?? 'prod-x', option_id: i.option_id ?? 'opt-x',
         name: i.name, option_label: i.option_label || '', unit_price: i.unit_price, unit_cost: i.unit_cost || 0, qty: i.qty || 1,
         photo_keys: i.photo_keys || [], platform_option_id: i.platform_option_id ?? null, vendor_cost: i.vendor_cost || 0,
+        list_price: i.list_price ?? null, layout: i.layout ?? null,
       })),
     };
     order.items.forEach(i => { i.order_id = order.id; });
@@ -515,6 +525,16 @@ export function ordersFake(opts = {}) {
         o.paid_amount = amount; o.paid_method = body.paid_method;
         o.paid_at = body.paid_at ? new Date(body.paid_at).toISOString() : NOW;
       } else { o.paid_amount = 0; o.paid_method = null; o.paid_at = null; }
+      return { body: { order: view(o) } };
+    }
+    // POST /api/admin/orders/:id/erase-contact — 404 unknown, 500 orders_unavailable before the migration, 409 no_contact
+    // (admin / system order), else 200 {order}: phone and LINE ID null, erased_at set, the name kept; twice writes nothing
+    if ((m = /^\/api\/admin\/orders\/([^/]+)\/erase-contact$/.exec(path)) && method === 'POST') {
+      const o = st.orders.find(x => x.id === m[1]);
+      if (!o) return { status: 404, body: { error: 'Not found' } };
+      if (!st.migrated) return { status: 500, body: { error: '客人訂購功能尚未啟用', code: 'orders_unavailable' } };
+      if (!o.contact) return { status: 409, body: { error: '這筆訂單沒有客人聯絡資料', code: 'no_contact' } };
+      if (!o.contact.erased_at) o.contact = { name: o.contact.name, phone: null, line: null, erased_at: NOW };
       return { body: { order: view(o) } };
     }
     if ((m = /^\/api\/admin\/orders\/([^/]+)\/status$/.exec(path)) && method === 'POST') {

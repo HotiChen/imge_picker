@@ -48,9 +48,18 @@ export function dashSettingsMock(opts = {}) {
         return route.fulfill({ status: 200, contentType: 'image/png', body: PIXEL });
       if (auth !== `Bearer ${token}`) return json({ error: 'Unauthorized' }, 401);
 
-      if (u.pathname === '/api/admin/settings' && method === 'GET') return json(settingsShapeFake(state.settings));
+      if (u.pathname === '/api/admin/settings' && method === 'GET') return json({ transfer_info: null, ...settingsShapeFake(state.settings) });
       if (u.pathname === '/api/admin/settings' && method === 'PUT') {
         if (state.settingsPutStatus !== 200) return json(state.settingsPutBody || { error: 'bad' }, state.settingsPutStatus);
+        // transfer_info (worker.js transferInfoValue / paragraphText): a string of at most 500 characters, line breaks kept,
+        // trimmed, '' / null clears, a control character -> 400 invalid_transfer_info; before the migration a PUT naming it -> 500 orders_unavailable
+        if ('transfer_info' in (body || {})) {
+          const v = body.transfer_info;
+          const bad = v !== null && (typeof v !== 'string' || [...v].length > 500 || /[\u0000-\u0008\u000B-\u001F\u007F-\u009F\u200E\u200F\u202A-\u202E\u2066-\u2069]/.test(v));
+          if (bad) return json({ error: 'transfer_info 格式不正確', code: 'invalid_transfer_info' }, 400);
+          if (opts.ordersMigrated === false) return json({ error: '客人訂購功能尚未啟用', code: 'orders_unavailable' }, 500);
+          body = { ...body, transfer_info: v === null || !v.trim() ? null : v.trim() };
+        }
         // default_extra_max: null or a whole number 0-500, else 400 (nothing written)
         if ('default_extra_max' in (body || {}) && body.default_extra_max !== null && !isExtraMaxFake(body.default_extra_max))
           return json({ error: 'default_extra_max must be a whole number from 0 to 500', code: 'invalid_default_extra_max' }, 400);

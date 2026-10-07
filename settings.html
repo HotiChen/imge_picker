@@ -105,6 +105,9 @@
   .panel-note strong { color: var(--ink-90); font-weight: 600; }
   .panel-result { color: var(--ink-55); font-size: 12px; margin-left: 10px; }
   .pick-price { width: 110px; flex: none; }
+  #set-transfer-info { resize: vertical; min-height: 84px; line-height: 1.6; }
+  .transfer-count { font-family: 'IBM Plex Mono', monospace; }
+  .transfer-count.over { color: var(--danger); font-weight: 600; }
 </style>
 </head>
 <body>
@@ -148,6 +151,11 @@
           <div class="hint" id="set-extra-max-hint">客人可在精修張數之外多挑幾張。0 = 不可加選。未設定時為 10。</div>
         </div>
         <div class="hint" style="margin-bottom:12px;">建立新選片專案時會預先帶入這些值，仍可依專案調整。</div>
+        <div class="field-group">
+          <label for="set-transfer-info">匯款資訊</label>
+          <textarea id="set-transfer-info" class="field" rows="4" maxlength="500" placeholder="例如：玉山銀行 808&#10;帳號 1234-5678-9012&#10;戶名 王小明"></textarea>
+          <div class="hint"><span id="set-transfer-count" class="transfer-count">0/500</span>　客人要等你確認訂單後才看得到這段文字；換行會保留。</div>
+        </div>
         <button id="set-save-btn" class="btn btn-accent" type="button">儲存設定</button>
         <div id="set-err" class="err"></div>
         <div id="set-ok" class="ok-msg"></div>
@@ -280,6 +288,18 @@
     // only when it changed, so saving other settings never depends on the
     // extra-max migration having been run
     let loadedExtraMax = null;
+    // 匯款資訊 as loaded: a PUT names transfer_info only when it changed (works before its migration)
+    let loadedTransfer = '';
+    const transferInput = document.getElementById('set-transfer-info');
+    const transferCount = document.getElementById('set-transfer-count');
+    const TRANSFER_MAX = 500;
+    const transferLen = () => [...transferInput.value].length;
+    function updateTransferCount() {
+      const n = transferLen();
+      transferCount.textContent = `${n}/${TRANSFER_MAX}`;
+      transferCount.classList.toggle('over', n > TRANSFER_MAX);
+    }
+    transferInput.addEventListener('input', updateTransferCount);
     const saveBtn = document.getElementById('set-save-btn');
     const errEl = document.getElementById('set-err');
     const okEl = document.getElementById('set-ok');
@@ -322,6 +342,9 @@
         extraMaxInput.value = loadedExtraMax != null ? loadedExtraMax : '';
         const eff = s.effective_default_extra_max != null ? s.effective_default_extra_max : 10;
         extraMaxInput.placeholder = `未設定時為 ${eff}`;
+        loadedTransfer = typeof s.transfer_info === 'string' ? s.transfer_info : '';
+        transferInput.value = loadedTransfer;
+        updateTransferCount();
         renderLogo(!!s.has_logo);
       } catch (e) {
         if (e.message !== '401') errEl.textContent = '無法連線到 Worker';
@@ -336,6 +359,8 @@
       invalid_default_extra_price: '預設加選單價需為 0 以上整數',
       invalid_default_extra_max: '最多可加選需為 0–500 的整數',
       extra_max_unavailable: '請先在 D1 執行 extra-max migration',
+      invalid_transfer_info: '匯款資訊格式不正確（500 字以內，不可含特殊控制字元）',
+      orders_unavailable: '客人訂購功能尚未啟用，請先執行 migration',
     };
 
     saveBtn.addEventListener('click', async function () {
@@ -364,6 +389,9 @@
       if (extra_max !== null && (!Number.isInteger(extra_max) || extra_max < 0 || extra_max > 500)) {
         errEl.textContent = ERROR_LABEL.invalid_default_extra_max; return;
       }
+      if (transferLen() > TRANSFER_MAX) {
+        errEl.textContent = `匯款資訊最多 ${TRANSFER_MAX} 字（目前 ${transferLen()} 字）`; return;
+      }
       const putBody = {
         studio_name: nameInput.value.trim() === '' ? '' : nameInput.value.trim(),
         booking_url: bookingUrl,
@@ -371,6 +399,7 @@
         default_extra_price: extra_price,
       };
       if (extra_max !== loadedExtraMax) putBody.default_extra_max = extra_max;
+      if (transferInput.value !== loadedTransfer) putBody.transfer_info = transferInput.value;
       saveBtn.disabled = true;
       try {
         const r = await authedFetch('/api/admin/settings', {
@@ -384,6 +413,7 @@
           return;
         }
         if ('default_extra_max' in putBody) loadedExtraMax = extra_max;
+        if ('transfer_info' in putBody) loadedTransfer = transferInput.value;
         okEl.textContent = '已儲存';
         setTimeout(() => { okEl.textContent = ''; }, 2500);
       } catch (e) {
