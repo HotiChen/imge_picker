@@ -183,6 +183,14 @@
   .proj-recent-row[data-project-row] { cursor: pointer; transition: background .12s, border-color .12s; }
   .proj-recent-row[data-project-row]:hover { background: var(--card); border-color: var(--accent); }
   .proj-recent-row[data-project-row]:focus-visible { outline: 2px solid var(--accent-ink); outline-offset: 2px; background: var(--card); }
+  /* 攝影類別 tag + list filter bar */
+  .pt-tag { display: inline-block; font-size: 11px; line-height: 1.5; padding: 0 8px; border-radius: 999px; background: var(--bg); border: 1px solid var(--accent-dim); color: var(--ink-70); vertical-align: middle; }
+  .pt-tag[hidden] { display: none; }
+  .pl-filter { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px; }
+  .pl-filter .field { width: auto; padding: 7px 10px; font-size: 13px; }
+  .pl-filter #pl-q { flex: 1; min-width: 160px; }
+  .pl-count { font-size: 12px; color: var(--ink-55); margin-bottom: 8px; min-height: 1em; }
+  #proj-type-other { margin-top: 6px; }
   /* 交件 notice dialog */
   .dn-box { padding: 16px 18px; gap: 10px; }
   .dn-box h4 { margin: 0; font-size: 15px; }
@@ -369,6 +377,13 @@
         <div id="proj-folder-note" class="proj-folder-note" aria-live="polite" hidden></div>
         <div class="pick-admin-row">
           <div class="pick-admin-field">
+            <label for="proj-type">攝影類別</label>
+            <select id="proj-type" class="field"></select>
+            <input id="proj-type-other" class="field" type="text" maxlength="20" placeholder="自行輸入（最多 20 字）" style="display:none;">
+          </div>
+        </div>
+        <div class="pick-admin-row">
+          <div class="pick-admin-field">
             <label for="proj-pick-limit">精修張數上限（留空 = 不限）</label>
             <input id="proj-pick-limit" class="field" type="number" min="0" step="1">
           </div>
@@ -397,6 +412,16 @@
     <label style="font-size:13px;display:inline-flex;align-items:center;gap:6px;margin-bottom:8px;">
       <input type="checkbox" id="proj-show-archived-toggle"> 顯示已封存
     </label>
+    <div class="pl-filter" id="pl-filter">
+      <input id="pl-q" class="field" type="search" placeholder="搜尋專案名稱或客戶" aria-label="搜尋專案名稱或客戶" autocomplete="off">
+      <select id="pl-status" class="field" aria-label="狀態"></select>
+      <select id="pl-type" class="field" aria-label="攝影類別"></select>
+      <select id="pl-sort" class="field" aria-label="排序">
+        <option value="default">預設排序</option>
+        <option value="me">待我處理優先</option>
+      </select>
+    </div>
+    <div class="pl-count" id="pl-count" aria-live="polite"></div>
     <div id="proj-recent-list" style="margin-bottom:24px;"></div>
     </div>
 
@@ -499,6 +524,26 @@
     return location.hash === '#clients' ? 'clients' : 'projects';
   }
 
+  // The hash is `#project=<id>` (the detail) and/or the list's filters
+  // (`#q=…&status=…&type=…&sort=…`, only what differs from the default), so a reload, a link and
+  // Back all land on the same list. parseHash / buildHash are the only readers and writers.
+  const LIST_STATUSES = [['all', '全部狀態'], ['picking', '選片中'], ['submitted', '已送出'], ['retouching', '精修中'],
+    ['delivered', '已交件'], ['confirmed', '客戶已確認'], ['revising', '待修改']];
+  const listFilter = { q: '', status: 'all', type: 'all', sort: 'default' };
+  function parseHash() { return new URLSearchParams(location.hash.replace(/^#/, '')); }
+  function buildHash(projectId) {
+    const p = new URLSearchParams();
+    if (projectId) p.set('project', projectId);
+    if (listFilter.q) p.set('q', listFilter.q);
+    if (listFilter.status !== 'all') p.set('status', listFilter.status);
+    if (listFilter.type !== 'all') p.set('type', listFilter.type);
+    if (listFilter.sort !== 'default') p.set('sort', listFilter.sort);
+    const str = p.toString();
+    return str ? '#' + str : '';
+  }
+  // the address of the list as it stands (what 返回 falls back to when there is no entry behind the detail)
+  const listUrl = () => location.pathname + location.search + buildHash(null);
+
   function applyView() {
     currentView = viewFromHash();
     const v = VIEWS[currentView];
@@ -516,10 +561,12 @@
       if (!loaded.projects) {
         loaded.projects = true;
         loadProjectDefaults();
+        initListControls();
         initCreateForm();
         loadProjectList();
       }
-      if (/^#project=(.+)$/.test(location.hash)) {
+      syncFilterFromHash();
+      if (projectIdFromHash()) {
         restoreProjectFromHash();
       } else {
         // No project in the hash (menu click on 選片專案, browser Back from a detail,
@@ -556,9 +603,7 @@
   // this is a fresh load after Back/the phone back gesture, or just this
   // browser still holding an old link from earlier.
   function projectIdFromHash() {
-    const m = /^#project=(.+)$/.exec(location.hash);
-    if (!m) return null;
-    try { return decodeURIComponent(m[1]); } catch (e) { return m[1]; }
+    return parseHash().get('project') || null;
   }
   function restoreProjectFromHash() {
     const id = projectIdFromHash();
@@ -605,7 +650,7 @@
   // the list (封存, 刪除) does.
   function leaveProjectDetail() {
     if (history.state && history.state.pdDetail) { history.back(); return; }   // hashchange → applyView → list
-    history.replaceState(null, '', location.pathname + location.search);
+    history.replaceState(null, '', listUrl());
     setProjectsMode(false);
   }
   document.getElementById('pd-back-btn')?.addEventListener('click', leaveProjectDetail);
@@ -960,15 +1005,109 @@
 
   // Client confirmation badge (docs/delivery.md), only for a delivered project
   // and only in addition to 已交件: confirmed (by whom) wins over open requests.
-  function confirmBadgeHtml(p) {
-    if (!p || !p.delivered_at) return '';
-    if (p.client_confirmed_at) {
-      return p.client_confirmed_by === 'photographer'
-        ? '<span class="badge badge-approved st-done" data-confirm-badge="photographer">已標記完成</span>'
-        : '<span class="badge badge-approved st-done" data-confirm-badge="confirmed">客戶已確認</span>';
+  // The ONE status computation: the badges below and the list's status filter / 待我處理 sort all read it.
+  //   confirm: null | 'photographer' | 'confirmed' | 'revising' (only ever set for a delivered project)
+  function projectStatus(p) {
+    const delivered = !!(p && p.delivered_at);
+    const open = Number(p && p.open_revision_count) || 0;
+    let confirm = null;
+    if (delivered) {
+      if (p.client_confirmed_at) confirm = p.client_confirmed_by === 'photographer' ? 'photographer' : 'confirmed';
+      else if (open > 0) confirm = 'revising';
     }
-    const n = Number(p.open_revision_count) || 0;
-    return n > 0 ? `<span class="badge badge-pending st-action" data-confirm-badge="revising">待修改 ${escHtml(n)}</span>` : '';
+    return { phase: p ? p.phase : null, delivered, confirm, open };
+  }
+  function confirmBadgeHtml(p) {
+    const st = projectStatus(p);
+    if (st.confirm === 'photographer') return '<span class="badge badge-approved st-done" data-confirm-badge="photographer">已標記完成</span>';
+    if (st.confirm === 'confirmed') return '<span class="badge badge-approved st-done" data-confirm-badge="confirmed">客戶已確認</span>';
+    if (st.confirm === 'revising') return `<span class="badge badge-pending st-action" data-confirm-badge="revising">待修改 ${escHtml(st.open)}</span>`;
+    return '';
+  }
+  // the photographer's turn: a selection is in (已送出), or the client asked for changes
+  const needsPhotographer = p => { const st = projectStatus(p); return st.phase === 'submitted' || st.confirm === 'revising'; };
+  function statusMatches(p, key) {
+    if (key === 'all') return true;
+    const st = projectStatus(p);
+    switch (key) {
+      case 'picking': return st.phase === 'picking';
+      case 'submitted': return st.phase === 'submitted';
+      case 'retouching': return st.phase === 'retouching' && !st.delivered;
+      case 'delivered': return st.delivered;
+      case 'confirmed': return st.confirm === 'confirmed' || st.confirm === 'photographer';
+      case 'revising': return st.confirm === 'revising';
+      default: return true;
+    }
+  }
+  // projects.project_type: '' = unset. A value off the SHOOT_TYPES list was typed under 其他.
+  const projectTypeOf = p => (p && typeof p.project_type === 'string' ? p.project_type.trim() : '');
+  function typeMatches(p, key) {
+    if (key === 'all') return true;
+    const v = projectTypeOf(p);
+    if (key === 'none') return v === '';
+    if (key === SHOOT_TYPE_OTHER) return v !== '' && (v === SHOOT_TYPE_OTHER || !SHOOT_TYPES.includes(v));
+    return v === key;
+  }
+  function searchMatches(p, q) {
+    const n = q.trim().toLowerCase();
+    if (!n) return true;
+    return String(p.title || '').toLowerCase().includes(n) || String(p.owner_name || '').toLowerCase().includes(n);
+  }
+  function projectTypeOptionsHtml(value) {
+    const typed = value !== '' && !SHOOT_TYPES.includes(value);
+    const picked = typed ? SHOOT_TYPE_OTHER : value;
+    return `<option value=""${picked === '' ? ' selected' : ''}>未分類</option>` + SHOOT_TYPES.map(t =>
+      `<option value="${escHtml(t)}"${t === picked ? ' selected' : ''}>${escHtml(t)}</option>`).join('');
+  }
+  // the value a (select, typed box) pair stands for: the category, or the typed text for 其他.
+  // 其他 with nothing typed is NOT a category (null) — never the literal '其他'.
+  function projectTypeValue(sel, other) {
+    return sel.value === SHOOT_TYPE_OTHER ? (other.value.trim() || null) : sel.value;
+  }
+  function wireTypePair(sel, other) {
+    sel.addEventListener('change', () => {
+      const isOther = sel.value === SHOOT_TYPE_OTHER;
+      other.style.display = isOther ? '' : 'none';
+      if (isOther) other.focus(); else other.value = '';
+    });
+  }
+  const PROJECT_TYPE_ERRORS = {
+    invalid_project_type: '攝影類別不正確（最多 20 字）',
+    project_type_unavailable: '攝影類別尚未啟用，請先執行 migration（2026-10-07-project-type.sql）',
+  };
+
+  // ── list filters ──
+  let projectsCache = [];
+  function initListControls() {
+    document.getElementById('pl-status').innerHTML = LIST_STATUSES.map(([v, t]) => `<option value="${escHtml(v)}">${escHtml(t)}</option>`).join('');
+    document.getElementById('pl-type').innerHTML = [['all', '全部類別'], ['none', '未分類']].concat(SHOOT_TYPES.map(t => [t, t]))
+      .map(([v, t]) => `<option value="${escHtml(v)}">${escHtml(t)}</option>`).join('');
+    document.getElementById('proj-type').innerHTML = projectTypeOptionsHtml('');
+    wireTypePair(document.getElementById('proj-type'), document.getElementById('proj-type-other'));
+    const onChange = () => {
+      listFilter.q = document.getElementById('pl-q').value.trim().slice(0, 100);
+      listFilter.status = document.getElementById('pl-status').value;
+      listFilter.type = document.getElementById('pl-type').value;
+      listFilter.sort = document.getElementById('pl-sort').value;
+      history.replaceState(history.state, '', listUrl());
+      drawProjectList();
+    };
+    ['pl-q'].forEach(id => document.getElementById(id).addEventListener('input', onChange));
+    ['pl-status', 'pl-type', 'pl-sort'].forEach(id => document.getElementById(id).addEventListener('change', onChange));
+  }
+  // the hash → listFilter → the controls → the list (page load, Back, a link). Unknown values are ignored.
+  function syncFilterFromHash() {
+    const p = parseHash();
+    const status = p.get('status'), type = p.get('type'), sort = p.get('sort');
+    listFilter.q = (p.get('q') || '').slice(0, 100);
+    listFilter.status = LIST_STATUSES.some(([v]) => v === status) ? status : 'all';
+    listFilter.type = type === 'none' || SHOOT_TYPES.includes(type) ? type : 'all';
+    listFilter.sort = sort === 'me' ? 'me' : 'default';
+    document.getElementById('pl-q').value = listFilter.q;
+    document.getElementById('pl-status').value = listFilter.status;
+    document.getElementById('pl-type').value = listFilter.type;
+    document.getElementById('pl-sort').value = listFilter.sort;
+    drawProjectList();
   }
 
   // The phase badge by colour: 選片中 / 精修中 amber (in progress), 已送出 coral (waiting for
@@ -979,13 +1118,26 @@
   }
 
   function renderProjectList(projects) {
+    projectsCache = projects;
+    drawProjectList();
+  }
+
+  function drawProjectList() {
     const box = document.getElementById('proj-recent-list');
     if (!box) return;
-    if (!projects.length) { box.innerHTML = '<div class="empty">尚未建立過專案</div>'; return; }
+    const count = document.getElementById('pl-count');
+    if (count) count.textContent = '';
+    if (!projectsCache.length) { box.innerHTML = '<div class="empty">尚未建立過專案</div>'; return; }
+    let projects = projectsCache.filter(p => statusMatches(p, listFilter.status) && typeMatches(p, listFilter.type) && searchMatches(p, listFilter.q));
+    if (listFilter.sort === 'me') projects = projects.filter(needsPhotographer).concat(projects.filter(p => !needsPhotographer(p)));
+    const filtering = listFilter.q !== '' || listFilter.status !== 'all' || listFilter.type !== 'all';
+    if (count && filtering) count.textContent = `顯示 ${projects.length} / ${projectsCache.length} 個專案`;
+    if (!projects.length) { box.innerHTML = '<div class="empty">沒有符合的專案</div>'; return; }
     box.innerHTML = projects.map(p => `
       <div class="proj-recent-row" data-project-row="${escHtml(p.id)}" role="button" tabindex="0">
         <div>
           <span>${escHtml(p.title || '（未命名）')}</span>
+          ${projectTypeOf(p) ? `<span class="pt-tag" data-project-type-tag>${escHtml(projectTypeOf(p))}</span>` : ''}
           ${phaseBadgeHtml(p)}
           ${p.delivered_at ? '<span class="badge badge-approved st-done" data-delivered-badge>已交件</span>' : ''}
           ${confirmBadgeHtml(p)}
@@ -1062,6 +1214,8 @@
     // the date field is the shoot date (it also names the folder): the project keeps it for the 完成頁
     const createBody = { title: folderPlan.title, folders: [folderPlan.proofFolder], pick_limit, extra_price, shoot_date: document.getElementById('proj-date').value };
     if (extraMaxNum !== undefined) createBody.extra_max = extraMaxNum;
+    const typeValue = projectTypeValue(document.getElementById('proj-type'), document.getElementById('proj-type-other'));
+    if (typeValue) createBody.project_type = typeValue;   // 未分類 sends nothing
     this.disabled = true;
     try {
       const r = await fetch(`${WORKER_URL}/api/admin/projects`, {
@@ -1070,12 +1224,15 @@
         body: JSON.stringify(createBody),
       });
       const data = await r.json().catch(() => ({}));
-      if (!r.ok) { errEl.textContent = data.code && SHOOT_DATE_ERRORS[data.code] && data.code !== 'invalid_body' ? SHOOT_DATE_ERRORS[data.code] : data.error || `建立失敗（${r.status}）`; return; }
+      if (!r.ok) { errEl.textContent = data.code && PROJECT_TYPE_ERRORS[data.code] ? PROJECT_TYPE_ERRORS[data.code] : data.code && SHOOT_DATE_ERRORS[data.code] && data.code !== 'invalid_body' ? SHOOT_DATE_ERRORS[data.code] : data.error || `建立失敗（${r.status}）`; return; }
       const link = projectLink(data.token);
       const linkOut = document.getElementById('proj-link-output');
       linkOut.value = link;
       document.getElementById('proj-create-result').style.display = 'block';
       await loadProjectList();
+      document.getElementById('proj-type').value = '';
+      document.getElementById('proj-type-other').value = '';
+      document.getElementById('proj-type-other').style.display = 'none';
       document.getElementById('proj-title').value = '';
       document.getElementById('proj-date').value = todayTaipei();
       document.getElementById('proj-pick-limit').value = '';
@@ -1145,7 +1302,7 @@
     // with a plain <a> (same tab), so the browser Back / phone back gesture returns to
     // admin.html on that project; the hash is what lets this page reopen it, whether
     // the browser replays the page from bfcache or does a fresh load.
-    if (projectIdFromHash() !== id) history.pushState({ pdDetail: 1 }, '', '#project=' + encodeURIComponent(id));
+    if (projectIdFromHash() !== id) history.pushState({ pdDetail: 1 }, '', location.pathname + location.search + buildHash(id));
     showProjectNotice('');
     setProjectsMode(true);
     if (entering) {
@@ -1159,7 +1316,7 @@
       if (seq !== openSeq || !detailMode) return;   // another project was opened, or 返回 was pressed
       if (r.status === 404) {
         // a deleted project, a mistyped or stale link: say so on the list instead of a blank page
-        history.replaceState(null, '', location.pathname + location.search);
+        history.replaceState(null, '', listUrl());
         body.innerHTML = '';
         setProjectsMode(false);
         showProjectNotice('找不到這個專案，可能已被刪除。');
@@ -1329,6 +1486,43 @@
     el.textContent = d ? `拍攝日期 ${d}` : '';
     el.hidden = !d;
   }
+  function renderTypeTag(project) {
+    const el = document.getElementById('pd-type-tag');
+    if (!el) return;
+    const v = projectTypeOf(project);
+    el.textContent = v;
+    el.hidden = !v;
+  }
+  function wireProjectType(project) {
+    const sel = document.getElementById('pd-type-select');
+    const other = document.getElementById('pd-type-other');
+    const save = document.getElementById('pd-type-save');
+    const err = document.getElementById('pd-type-err');
+    wireTypePair(sel, other);
+    save.addEventListener('click', async () => {
+      err.textContent = '';
+      save.disabled = true;
+      try {
+        const value = projectTypeValue(sel, other);
+        if (sel.value === SHOOT_TYPE_OTHER && value === null) { err.textContent = '請輸入類別名稱'; return; }
+        const r = await fetch(`${WORKER_URL}/api/admin/projects/${encodeURIComponent(currentProjectId)}`, {
+          method: 'PATCH',
+          headers: { 'Authorization': `Bearer ${getToken()}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ project_type: value || null }),   // 未分類 clears it
+        });
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok) { err.textContent = PROJECT_TYPE_ERRORS[data && data.code] || (data && data.code === 'invalid_body' ? PROJECT_TYPE_ERRORS.invalid_project_type : null) || (data && data.error) || `儲存失敗（${r.status}）`; return; }
+        project.project_type = data.project_type ?? null;
+        renderTypeTag(project);
+        const row = projectsCache.find(x => x.id === project.id);
+        if (row) { row.project_type = project.project_type; drawProjectList(); }
+      } catch (e) {
+        err.textContent = '無法連線到 Worker';
+      } finally {
+        save.disabled = false;
+      }
+    });
+  }
   function wireShootDate(project) {
     const input = document.getElementById('pd-shoot-input');
     const save = document.getElementById('pd-shoot-save');
@@ -1369,6 +1563,7 @@
       <div class="pd-head">
         <h3>${escHtml(project.title || '（未命名）')}</h3>
         <span class="pd-shoot-text" id="pd-shoot-text" data-shoot-date></span>
+        <span class="pt-tag" id="pd-type-tag" hidden></span>
         ${phaseBadgeHtml(project)}
         ${project.delivered_at ? '<span class="badge badge-approved st-done" data-delivered-badge>已交件</span>' : ''}
         <span id="pd-confirm-badge-slot" style="display:contents">${confirmBadgeHtml(project)}</span>
@@ -1382,6 +1577,15 @@
         <input id="pd-shoot-input" class="field" type="date" value="${escHtml(shootDateOf(project))}">
         <button id="pd-shoot-save" class="btn btn-outline" type="button">儲存</button>
         <span id="pd-shoot-err" class="err" role="alert"></span>
+      </div>
+      <div class="pd-shoot-row" id="pd-type-row">
+        <label for="pd-type-select">攝影類別</label>
+        <select id="pd-type-select" class="field">${projectTypeOptionsHtml(projectTypeOf(project))}</select>
+        <input id="pd-type-other" class="field" type="text" maxlength="20" placeholder="自行輸入（最多 20 字）"
+          value="${escHtml(projectTypeOf(project) && !SHOOT_TYPES.includes(projectTypeOf(project)) ? projectTypeOf(project) : '')}"
+          style="${projectTypeOf(project) && !SHOOT_TYPES.includes(projectTypeOf(project)) ? '' : 'display:none;'}">
+        <button id="pd-type-save" class="btn btn-outline" type="button">儲存</button>
+        <span id="pd-type-err" class="err" role="alert"></span>
       </div>
       ${projectFolderLineHtml(project)}
       <div class="pd-actions">
@@ -1455,6 +1659,8 @@
 
     renderShootDateHeader(project);
     wireShootDate(project);
+    renderTypeTag(project);
+    wireProjectType(project);
 
     document.getElementById('pd-reset-seat-btn').addEventListener('click', async () => {
       if (!confirm('確定要重設選片人嗎？選取結果與送出紀錄都會保留。\n新的主人會接手目前所有選片，並可修改或刪除')) return;

@@ -130,6 +130,10 @@ export const isShootDateInputFake = v => {
   const t = new Date(Date.UTC(y, mo - 1, d));
   return t.getUTCFullYear() === y && t.getUTCMonth() === mo - 1 && t.getUTCDate() === d;
 };
+// projects.project_type (worker contract): null / '' = unset, else a string of 1-20 characters (the SHOOT_TYPES
+// entries, or what was typed under 其他); a non-string or a longer one is 400 invalid_project_type.
+export const isProjectTypeInputFake = v => v === null || v === '' || (typeof v === 'string' && v.trim().length > 0 && v.trim().length <= 20);
+
 export function settingsShapeFake(st) {
   const x = st.default_extra_max ?? null;
   return { studio_name: null, booking_url: null, default_pick_limit: null, default_extra_price: null,
@@ -170,6 +174,7 @@ export function pickFakeWorker(opts = {}) {
       // docs/delivery.md client confirmation: null until confirmed;
       // 'guest' | 'photographer' says who
       shoot_date: opts.shootDateColumn === false ? null : (opts.shootDate ?? null),
+      project_type: opts.projectTypeColumn === false ? null : (opts.projectType ?? null),
       client_confirmed_at: opts.confirmedAt || null,
       client_confirmed_by: opts.confirmedAt ? (opts.confirmedBy || 'guest') : null,
     },
@@ -514,7 +519,7 @@ export function pickFakeWorker(opts = {}) {
         const live = liveToken();
         const wantArchived = u.searchParams.get('archived') === '1';
         const isArchived = !!state.project.archived_at;
-        const projects = (!state.deleted && (wantArchived ? isArchived : !isArchived)) ? [{
+        const mainRow = {
           id: state.project.id,
           title: state.project.title,
           phase: state.project.phase,
@@ -528,6 +533,7 @@ export function pickFakeWorker(opts = {}) {
           final_folders: state.project.final_folders,
           allow_proof_download: state.project.allow_proof_download,
           shoot_date: state.project.shoot_date ?? null,
+          project_type: opts.projectTypeColumn === false ? null : (state.project.project_type ?? null),
           client_confirmed_at: state.project.client_confirmed_at,
           client_confirmed_by: state.project.client_confirmed_by,
           open_revision_count: openRevisions().length,
@@ -535,7 +541,12 @@ export function pickFakeWorker(opts = {}) {
           last_submitted_at: subs.length ? subs[subs.length - 1].created_at : null,
           unnotified_submissions: unnotifiedCountFake(subs),
           token: live ? live.token : null,
-        }] : [];
+        };
+        const projects = (!state.deleted && (wantArchived ? isArchived : !isArchived)) ? [mainRow] : [];
+        // opts.extraProjects: more list rows (list-only: no detail behind them), same row shape
+        for (const x of opts.extraProjects || []) {
+          if (wantArchived ? !!x.archived_at : !x.archived_at) projects.push({ project_type: null, open_revision_count: 0, submission_count: 0, owner_name: null, delivered_at: null, archived_at: null, ...x });
+        }
         return json({ projects });
       }
 
@@ -556,11 +567,19 @@ export function pickFakeWorker(opts = {}) {
         }
         if (shoot_date !== null && opts.shootDateColumn === false) return json({ error: '拍攝日期功能尚未啟用', code: 'shoot_date_unavailable' }, 500);
         state.project.shoot_date = shoot_date;
+        // project_type: '' / null / absent = unset; bad = 400 invalid_project_type; before the migration a write naming it = 500
+        let project_type = null;
+        if (body && 'project_type' in body) {
+          if (!isProjectTypeInputFake(body.project_type)) return json({ error: 'invalid project_type', code: 'invalid_project_type' }, 400);
+          if (opts.projectTypeColumn === false) return json({ error: 'project_type unavailable', code: 'project_type_unavailable' }, 500);
+          project_type = body.project_type === '' || body.project_type === null ? null : body.project_type.trim();
+        }
+        state.project.project_type = project_type;
         return json({
           project: {
             id: state.project.id, title: body.title || '', folders: body.folders,
             pick_limit: body.pick_limit ?? null, extra_price: body.extra_price ?? null,
-            extra_max, shoot_date, photographer_id: 'default',
+            extra_max, shoot_date, project_type, photographer_id: 'default',
           },
           token: 'PICK-TOKEN', expires_at: '2027-01-01T00:00:00.000Z',
         }, 201);
@@ -706,16 +725,18 @@ export function pickFakeWorker(opts = {}) {
           extra_price: v => v === null || (Number.isSafeInteger(v) && v >= 0 && v <= MONEY_MAX_FAKE),
           extra_max: v => v === null || isExtraMaxFake(v),
           shoot_date: isShootDateInputFake,
+          project_type: isProjectTypeInputFake,
         };
         const keys = body && typeof body === 'object' && !Array.isArray(body) ? Object.keys(body) : [];
         if (!keys.length || keys.some(k => !good[k] || !good[k](body[k])))
           return json({ error: 'Invalid body', code: 'invalid_body' }, 400);
-        const planKey = keys.some(k => k !== 'allow_proof_download' && k !== 'shoot_date');
+        if (keys.includes('project_type') && opts.projectTypeColumn === false) return json({ error: 'project_type unavailable', code: 'project_type_unavailable' }, 500);
+        const planKey = keys.some(k => k !== 'allow_proof_download' && k !== 'shoot_date' && k !== 'project_type');
         if (keys.includes('shoot_date') && opts.shootDateColumn === false) return json({ error: '拍攝日期功能尚未啟用', code: 'shoot_date_unavailable' }, 500);
         if (planKey && state.project.archived_at)
           return json({ error: 'Project is archived; unarchive it first', code: 'archived' }, 409);
-        for (const k of keys) state.project[k] = k === 'shoot_date' && body[k] === '' ? null : body[k];
-        return json({ ok: true, ...body, ...(keys.includes('shoot_date') ? { shoot_date: state.project.shoot_date } : {}) });
+        for (const k of keys) state.project[k] = k === 'project_type' ? (body[k] === '' || body[k] === null ? null : body[k].trim()) : (k === 'shoot_date' && body[k] === '' ? null : body[k]);
+        return json({ ok: true, ...body, ...(keys.includes('shoot_date') ? { shoot_date: state.project.shoot_date } : {}), ...(keys.includes('project_type') ? { project_type: state.project.project_type } : {}) });
       }
 
       // A pick link's reads (docs/delivery.md): a listing outside the link's
