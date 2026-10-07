@@ -39,6 +39,10 @@
     // is spreads, two pages side by side (420 x 297). The same values go to
     // planSpreads() and to the renderer, so a crop is drawn on the shape it was
     // made for.
+    // The preview pages are A4 (a cover / back is one page, a spread is two side by side): this is the only
+    // physical size the preview knows, so bleed_mm is turned into a fraction of it (docs/album-preview.md "Bleed").
+    const PAGE_MM = { w: 210, h: 297 };
+    const BLEED_MAX = 10;     // the Worker refuses more (platform_products.bleed_mm is 0-10)
     const COVER_ASPECT = 210 / 297;
     const SPREAD_ASPECT = 420 / 297;
 
@@ -72,6 +76,8 @@
         if (aria) b.setAttribute('aria-label', aria);
         return b;
     };
+    // bleed_mm as the page shows it: a finite number above 0, at most BLEED_MAX; anything else (null, 0, junk) is 0 = no guide
+    const normBleed = v => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? Math.min(v, BLEED_MAX) : 0);
     const abortError = () => {
         if (typeof DOMException === 'function') return new DOMException('Aborted', 'AbortError');
         const e = new Error('Aborted'); e.name = 'AbortError'; return e;
@@ -506,13 +512,33 @@
             page.dataset.layout = pageData.layout;
             page.style.background = '#ffffff';
             const pct = v => `${+(v * 100).toFixed(3)}%`;
+            // Bleed: the page box is the whole printed sheet and the template's fractions are the finished page, which
+            // sits inside it. Edge photos that fill their frame (cover) run on out to the sheet edge so the cut finds
+            // paper with picture on it; a whole photo (contain) stays inside the trim. Only the outer edges of the
+            // sheet bleed: the middle of a spread is a fold, not a cut.
+            const bleed = normBleed(AlbumPreview.bleedMm);
+            const bw = pageData.kind === 'spread' ? 2 * PAGE_MM.w : PAGE_MM.w;
+            const bx = bleed / bw, by = bleed / PAGE_MM.h;
+            if (bleed) page.dataset.bleed = String(bleed);
+            const EDGE_TOL = 0.001;
             pageData.slots.forEach(slot => {
                 if (!slot || !slot.photoId || !slot.slot) return;
                 const sd = slot.slot;
                 const contain = slot.fit === 'contain';       // absent = cover, as layouts.js reads slot.fit
                 const box = text('div', 'album-slot');
                 if (contain) box.dataset.fit = 'contain';
-                box.style.cssText = `left:${pct(sd.x)};top:${pct(sd.y)};width:${pct(sd.w)};height:${pct(sd.h)};`;
+                if (!bleed) box.style.cssText = `left:${pct(sd.x)};top:${pct(sd.y)};width:${pct(sd.w)};height:${pct(sd.h)};`;
+                else {
+                    let l = bx + sd.x * (1 - 2 * bx), t = by + sd.y * (1 - 2 * by);
+                    let r = bx + (sd.x + sd.w) * (1 - 2 * bx), b = by + (sd.y + sd.h) * (1 - 2 * by);
+                    if (!contain) {
+                        if (sd.x <= EDGE_TOL) l = 0;
+                        if (sd.y <= EDGE_TOL) t = 0;
+                        if (sd.x + sd.w >= 1 - EDGE_TOL) r = 1;
+                        if (sd.y + sd.h >= 1 - EDGE_TOL) b = 1;
+                    }
+                    box.style.cssText = `left:${pct(l)};top:${pct(t)};width:${pct(r - l)};height:${pct(b - t)};`;
+                }
                 const wrap = text('div', 'album-slot-crop');
                 const crop = slot.crop || {};
                 const img = new Image();
@@ -533,6 +559,14 @@
                 box.appendChild(wrap);
                 page.appendChild(box);
             });
+            if (bleed) {
+                // the trim line: dashed, with everything outside it dimmed (the part the printer cuts off)
+                const guide = text('div', 'album-bleed-guide');
+                guide.setAttribute('aria-hidden', 'true');
+                guide.style.cssText = `position:absolute;z-index:3;pointer-events:none;box-sizing:border-box;left:${pct(bx)};top:${pct(by)};right:${pct(bx)};bottom:${pct(by)};` +
+                    'border:1px dashed rgba(255,255,255,.9);box-shadow:0 0 0 1px rgba(0,0,0,.45),0 0 0 100vmax rgba(0,0,0,.38);';
+                page.appendChild(guide);
+            }
             return page;
         },
 
@@ -784,6 +818,9 @@
         LIST_MAX_FOLDERS: 200,    // the listing never walks more folders than this
         PLAN_OPTS: {},            // extra options for AutoLayout.planSpreads (e.g. { back: true, minSpreads, maxSpreads }); the shapes above always win
         folders: [],
+        // mm of bleed the printer trims off each outer edge (the product's bleed_mm; null / 0 = none = the page is
+        // drawn exactly as before). Read when a page is drawn, so set it before the viewer opens.
+        bleedMm: 0,
         onResult: null,           // optional (hint: string | null) => void, called after every run (the page behind the viewer shows the hint)
         boundsHint,
 
@@ -802,7 +839,8 @@
         // least one final folder), or remove it — and close the viewer if it
         // is open — when `show` is false. Idempotent: pick.js calls it on
         // every re-render.
-        syncEntry({ show, after, folders }) {
+        syncEntry({ show, after, folders, bleedMm }) {
+            if (bleedMm !== undefined) this.bleedMm = normBleed(bleedMm);
             let entry = document.getElementById('albumPreviewEntry');
             if (!show || !after || !after.parentNode || !Array.isArray(folders) || !folders.length) {
                 if (Viewer.isOpen()) Viewer.close();

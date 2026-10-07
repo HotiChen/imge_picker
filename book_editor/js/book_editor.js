@@ -37,6 +37,8 @@ class BookEditor {
         this.libFilter = { minRating: 0 };
         this.showGuides = false;
         this._draggedPageIdx = -1;
+        // read now: _initBookId() rewrites the query string to ?id=...
+        try { this._bleedParam = new URLSearchParams(location.search).get('bleed'); } catch (e) { this._bleedParam = null; }
 
         this.init();
     }
@@ -94,6 +96,10 @@ class BookEditor {
                 this.saveToStorage();
             }
 
+            // The product's bleed_mm handed over in the link (?bleed=2.5): the book takes it, the same number
+            // the 出血 box edits. Only 0-10 mm is accepted; anything else leaves the book's own number alone.
+            this._applyBleedParam();
+
             // Why: Ensure the current page index is within the boundaries of loaded pages
             if (this.currentPageIndex >= this.book.pages.length) {
                 this.currentPageIndex = Math.max(0, this.book.pages.length - 1);
@@ -129,6 +135,18 @@ class BookEditor {
             console.error("Failed to initialize book editor:", err);
             toast.error("載入相本失敗: " + err.message, 10000);
         }
+    }
+
+    // bleed_mm from the shop's product (platform_products.bleed_mm, 0-10 mm) as ?bleed=<mm>.
+    // Returns the applied number, or null when the link carries none / an unusable one.
+    _applyBleedParam() {
+        const raw = this._bleedParam;
+        if (raw === null || raw === undefined || raw === '' || !/^\d+(\.\d+)?$/.test(raw)) return null;
+        const mm = parseFloat(raw);
+        if (!Number.isFinite(mm) || mm < 0 || mm > 10) return null;
+        this.book.settings = { ...(this.book.settings || {}), bleed: mm };
+        this.saveToStorage();
+        return mm;
     }
 
     // ─── 頁面管理 ─────────────────────────────

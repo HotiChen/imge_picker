@@ -795,3 +795,34 @@ zoomed page shows the same thumbnail bucket (1200 / 1600), not a sharper re-requ
 **Not built: swapping a photo, choosing another template for a spread, saving the
 layout, a share link of its own, a purchase button or price (stages 2 and 3), face
 detection.** `analyze` has no `onProgress`; adding one would let the chunking go.
+
+## Bleed (出血) — 2026-10-07
+
+`platform_products.bleed_mm` (docs/products-orders.md "bleed_mm", `GET /api/pick/shop` → `products[].bleed_mm`,
+`null` = 0) is the mm the printer trims off every **outer** edge of the sheet. Three places show or honour it:
+
+**Editor (already there, now product-driven).** The book keeps one number, `book.settings.bleed` (the 出血 box
+`#bookBleed`, default 3 mm). `appendPageGuides` (layouts.js) draws the red bleed ring, the blue 3 mm safe margin and the
+green spine line in the editor and in `view.html`; `exporter.js` makes the sheet bigger by the bleed on every side and
+lets a slot that touches a page edge keep painting into it (`outL/outT/outR/outB`); `exportSizeHint` says the
+exported size in cm. New: `book_editor/index.html?bleed=<mm>` sets `book.settings.bleed` (only a plain number 0–10;
+anything else is ignored and the book keeps its own). Page size in mm is known there (`settings.width/height`, cm), so
+nothing is derived. Captions / text layers are not moved by the exporter: keeping them inside the blue safe margin is
+still the photographer's job (not enforced).
+
+**Guest preview (`js/album-preview.js`).** The preview knows no real size: its pages are nominal A4 (a spread is two,
+420 × 297 mm), so bleed becomes a fraction of that (`bleed/210` of a cover width, `bleed/420` of a spread width,
+`bleed/297` of the height). `AlbumPreview.bleedMm` (default 0; also `AlbumPreview.syncEntry({ …, bleedMm })`) is
+normalised: a finite number above 0, capped at 10; null, 0, junk and negatives are 0.
+- `bleedMm` 0: the markup is exactly the old one (no `data-bleed`, no guide; tested equal across 0/null/undefined/junk).
+- `bleedMm` > 0: the page box is the whole printed sheet; the template's fractions are mapped into the trim rectangle
+  inside it. `page.dataset.bleed` carries the number; an `.album-bleed-guide` (dashed trim line, the strip outside it
+  dimmed, `pointer-events:none`, `aria-hidden`) is drawn above the photos. A `fit: 'cover'` slot that touches an outer
+  edge of the sheet is extended to the sheet edge (picture runs into the bleed); the fold in the middle of a spread is
+  not an edge. A `fit: 'contain'` photo (the default plan) stays inside the trim: nothing is put in the strip.
+- Not done: faces in an extended cover photo are not steered away from the strip (the planner is unchanged).
+
+**Wiring the completion page** (`js/completion-page.js`, not touched here): after the shop products load, set the
+album product's number before the viewer opens, e.g. `AlbumPreview.bleedMm = Number(albumProduct.bleed_mm) || 0;` or pass
+`bleedMm` in the `syncEntry({ show, after, folders, bleedMm })` call that pick.js / the completion page already makes.
+To open the editor with the same number: `book_editor/index.html?bleed=<bleed_mm>`.
