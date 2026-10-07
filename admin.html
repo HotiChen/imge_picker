@@ -8,6 +8,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@600;900&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="css/revision-rounds-view.css?v=20261007e">
+<link rel="stylesheet" href="css/side-nav.css?v=20261007e">
 <style>
   /* Bright theme, shared with home.html / dashboard.html / settings.html — cream
      ground, white cards, dark ink, warm accent, soft pastel pills. The photographer's
@@ -58,16 +59,6 @@
   header .spacer { flex: 1; }
   header .refresh-info { color: var(--ink-55); font-size: 11px; font-family: 'IBM Plex Mono', monospace; }
 
-  /* Shared side menu (js/side-nav.js) — also in dashboard.html / settings.html */
-  .app-shell { display: flex; align-items: stretch; min-height: calc(100vh - 52px); }
-  .side-nav { width: 190px; flex-shrink: 0; background: var(--surface); border-right: 1px solid var(--rule); padding: 20px 14px; }
-  .side-nav-brand { color: var(--ink-55); font-size: 10px; letter-spacing: 0.2em; padding: 0 10px 12px; border-bottom: 1px solid var(--rule); margin-bottom: 10px; }
-  .side-nav-list { display: flex; flex-direction: column; gap: 2px; }
-  .side-nav-item { display: block; text-align: left; background: none; border: none; color: var(--ink-70); text-decoration: none; padding: 9px 10px; border-radius: 999px; font-size: 13px; font-family: inherit; cursor: pointer; }
-  .side-nav-item:hover { background: var(--card); color: var(--ink-90); }
-  .side-nav-item.active { background: var(--accent-dim); color: var(--ink-90); font-weight: 600; }
-  .side-nav-logout { margin-top: 14px; border-top: 1px solid var(--rule); border-radius: 0; padding-top: 14px; color: var(--ink-55); }
-  .side-nav-logout:hover { color: var(--danger); background: none; }
 
   main { flex: 1; min-width: 0; padding: 24px; max-width: 1100px; }
 
