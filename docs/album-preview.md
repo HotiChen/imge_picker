@@ -914,7 +914,7 @@ unchanged.
 - Planner option **`variant`** (`AutoLayout.planSpreads`): a non-negative integer. **0, absent or junk = exactly the plan as before**
   (byte for byte; `plan_variant.test.mjs` pins it with digests made on the commit before it existed; `result.variant` is absent then).
   `n > 0` multiplies the soft jitter on the spread cost by `VARIANT_JITTER` (8) and hashes it with the variant, so only choices that were
-  near-ties change. Everything hard is untouched: all photos kept, same cover, min / maxSpreads, preferredPerSpread, foldSafe, hero
+  near-ties change. Everything hard is untouched: all photos kept, min / maxSpreads, preferredPerSpread, foldSafe, hero
   gap, fit. Deterministic for (photos, options, variant). `result.variant = n` when n > 0. (Why 8: 4 left small books with only 2
   distinct plans; 12 added waste.) The synthetic min/max searches always run with variant 0.
 - Measured on 11 books x 5 seeds (12..60 photos, with and without bounds): variants 1..5 give at least 3 distinct plans on every
@@ -928,3 +928,24 @@ unchanged.
   and is forgotten on close. Caption under the buttons: 「這是系統自動排版的示意，換個排法看看」.
 - Tests: `book_editor/test/plan_variant.test.mjs`, `test/suites/53-album-cover-title-relayout.mjs`. Synthetic photos, Chromium only:
   how it looks on a real album and on an iPhone / LINE browser needs Tim.
+
+### Re-layout feedback and small books — 2026-10-07
+Tim pressed 再次編排 on a 4-photo project: nothing changed and nothing said so (for small books most variants were the same plan).
+- **Planner, variant > 0 only** (variant 0 stays byte for byte): besides the louder jitter on the template choice,
+  (a) with 4+ photos the **cover** is the candidate `variant mod 3` among the 3 sharpest photos that pass the same cover rules as the
+  normal pick (the same waste tier: <= 25% of the A4 page, else <= 45%; 60% fit in cover mode); under 4 photos the cover is untouched;
+  (b) inside one spread two photos of the **same orientation** may trade slots when the waste cost grows by at most 0.3 and neither
+  slot ends up wasting more than max(before, 30%); (c) a spread may be **mirrored** left-right (`spread.mirrored = true`, slot x -> 1 - x - w,
+  left <-> right face, a span slot stays a span slot with the same photo, so the fold rule holds exactly as before). Photos never leave
+  their spread, so the shooting-order grouping, spread count, hero spacing and bounds are untouched. Deterministic (hashed with the variant).
+- Distinct plans among variants 1..5, signature = cover + template + mirror + slot position of every photo (6 seeds each), before -> after:
+  4 photos 2..4 -> 4..5; 6: 2..5 -> 5; 8: 2..5 -> 5; 10: 3..5 -> 5; 12: 3..5 -> 5; 20, 30, 60: 5 -> 5. Test bound: at least 3 everywhere,
+  mean waste +0.03, any one book +0.2 (the worst is a 4-photo book where a variant picks 2 spreads instead of 1).
+- **Viewer**: a status line next to the buttons (`#albumRelayoutStatus`, role=status, aria-live=polite, textContent): 「已換成排法 N」
+  (N = variant + 1; the first plan is 排法 1), 「已回到原本排法」, or 「這本相本照片不多，目前只有這個排法」. A chip 「排法 N」 sits next to
+  回到原本 while a variant is shown. The viewer compares a **signature of what is shown** (`planSignature`: cover photo, template, mirror,
+  slot positions) and never presents an unchanged plan as new: 再次編排 moves on to the next variant that looks different (up to 12
+  tried); if none does, it says the sentence above and leaves the plan, the number and the button alone. A ~250ms fade of the stage
+  (`.album-redraw`) shows the pages were drawn again; none under prefers-reduced-motion.
+- Tests: `book_editor/test/plan_variant_small.test.mjs`, `test/suites/55-album-relayout-feedback.mjs`. Synthetic photos; the real album
+  look, the fade on an iPhone and in the LINE browser need Tim.
