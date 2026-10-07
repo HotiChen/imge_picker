@@ -1938,24 +1938,25 @@ body {
 .pick-save-status[data-state="retry"] { color: var(--danger); }
 
 /* The bottom bar is a phone/tablet thing (<= 1024px, always on there). On a
-   wide screen the pick page shows just the counter as a small pill,
-   bottom-left; the header's 完成挑圖 stays the submit button. A viewer with no
+   wide screen the pick page shows the counter + 完成提交 as a small pill,
+   bottom-left. A viewer with no
    seat gets no bar at all. */
 @media (min-width: 1025px) {
+  /* One stacked pill (counter above 完成提交, the one submit button at every
+     width), bottom-left INSIDE the 280px sidebar column: the old one-row pill
+     was ~372px wide and covered the first grid column. left 8 + 264 < 280. */
   body.pick-active .mobile-action-bar {
     display: flex !important;
-    right: auto; left: 16px; bottom: 16px;
-    padding: 8px 14px;
+    flex-direction: column; align-items: stretch; justify-content: flex-start;
+    right: auto; left: 8px; bottom: 8px; width: 264px; box-sizing: border-box;
+    gap: 10px; padding: 8px 14px;
     border: 1px solid var(--border);
     border-radius: 8px;
   }
-  /* the bottom bar's 完成提交 is the one submit button at every width:
-     counter + button as one pill, bottom-left */
-  body.pick-active .mobile-action-bar { gap: 14px; }
   body.pick-active .mobile-action-bar > .btn { flex: none; margin-left: 0; min-height: 40px; }
-  /* keep the pill off the last folder row / the last grid row */
-  body.pick-active .sidebar { padding-bottom: 88px; }
-  body.pick-active .content { padding-bottom: 84px; }
+  body.pick-active .mobile-action-bar .pick-counter { font-size: 13px; white-space: nowrap; }
+  /* keep the pill off the last folder row */
+  body.pick-active .sidebar { padding-bottom: 130px; }
 }
 #pickSubmitBtn { min-height: 44px; }
 body .mobile-action-bar.pick-bar-off,

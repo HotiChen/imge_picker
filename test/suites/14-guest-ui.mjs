@@ -245,12 +245,12 @@ const GUI_GONE = ['#sidebarToggle', '#sidebarBackdrop', 'aside.sidebar', '.sideb
         const c = document.getElementById('pickCounter').getBoundingClientRect();
         const bb = btn.getBoundingClientRect();
         return { disp: getComputedStyle(document.getElementById('mobileActionBar')).display, t: b.top, b: b.bottom, l: b.left, r: b.right, vw: innerWidth, vh: innerHeight,
-          btnShown: getComputedStyle(btn).display !== 'none' && btn.getClientRects().length > 0, btn: [bb.left, bb.right], counter: [c.left, c.right],
+          btnShown: getComputedStyle(btn).display !== 'none' && btn.getClientRects().length > 0, btn: [bb.left, bb.right, bb.top], counter: [c.left, c.right, c.bottom],
           text: document.getElementById('pickCounter').textContent,
           hit: document.elementFromPoint((bb.left + bb.right) / 2, (bb.top + bb.bottom) / 2)?.closest('#pickSubmitBtn') !== null };
       });
       ok('bottom pill is shown with 已選 N / limit 張 next to a visible 完成提交, inside the viewport',
-        bar.disp === 'flex' && bar.btnShown && bar.text === '已選 0 / 5 張' && bar.b <= bar.vh && bar.r <= bar.vw && bar.counter[1] <= bar.btn[0] + 1, JSON.stringify(bar));
+        bar.disp === 'flex' && bar.btnShown && bar.text === '已選 0 / 5 張' && bar.b <= bar.vh && bar.r <= bar.vw && bar.counter[2] <= bar.btn[2] + 1, JSON.stringify(bar)); // stacked pill: counter above the button (see 54-desktop-pick-bar)
       ok('the button is really clickable there (hit-test)', bar.hit);
       const submits = await page.evaluate(() => [...document.querySelectorAll('button, a')].filter(e => /完成挑圖|完成提交/.test(e.textContent)).map(e => e.id));
       ok('exactly one submit element: #pickSubmitBtn', JSON.stringify(submits) === '["pickSubmitBtn"]', JSON.stringify(submits));
