@@ -466,7 +466,7 @@ const detailOpen = page => page.evaluate(() => {
 
 {
   const m = rowWorld();
-  await suite('35 整列可點 — 點列裡的「複製連結」只複製，不開專案',
+  await suite('35 整列可點 — 點列裡的「複製連結」複製連結並跳出分享視窗（見 56），但不開專案',
     `${base}/admin.html`,
     async page => {
       const out = [], ok = okFn(out);

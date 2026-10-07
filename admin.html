@@ -1182,11 +1182,9 @@
       });
     });
     box.querySelectorAll('[data-copy-link]').forEach(btn => {
-      btn.addEventListener('click', async () => {
-        try {
-          await navigator.clipboard.writeText(projectLink(btn.dataset.copyLink));
-          flashGreen(btn);
-        } catch (e) { /* clipboard unavailable — nothing else to fall back to here */ }
+      btn.addEventListener('click', () => {
+        const row = projectsCache.find(x => x.token === btn.dataset.copyLink);
+        copyLinkAndShare(btn, row ? row.title : '', btn.dataset.copyLink);
       });
     });
   }
@@ -1237,6 +1235,8 @@
       const link = projectLink(data.token);
       const linkOut = document.getElementById('proj-link-output');
       linkOut.value = link;
+      linkOut.dataset.title = typeof data.project?.title === 'string' ? data.project.title : (createBody.title || '');
+      linkOut.dataset.token = data.token;
       document.getElementById('proj-create-result').style.display = 'block';
       await loadProjectList();
       document.getElementById('proj-type').value = '';
@@ -1259,12 +1259,9 @@
     }
   });
 
-  document.getElementById('proj-copy-link-btn')?.addEventListener('click', async function () {
-    const val = document.getElementById('proj-link-output').value;
-    try {
-      await navigator.clipboard.writeText(val);
-      flashGreen(document.getElementById('proj-link-output'));
-    } catch (e) { /* clipboard unavailable — the link is already on screen, selectable */ }
+  document.getElementById('proj-copy-link-btn')?.addEventListener('click', function () {
+    const out = document.getElementById('proj-link-output');
+    if (out.dataset.token) copyLinkAndShare(out, out.dataset.title || '', out.dataset.token);
   });
 
   function pickerNameOf(pickers, id) {
@@ -1784,12 +1781,7 @@
       }
     });
     body.querySelectorAll('[data-copy-link]').forEach(btn => {
-      btn.addEventListener('click', async () => {
-        try {
-          await navigator.clipboard.writeText(projectLink(btn.dataset.copyLink));
-          flashGreen(btn);
-        } catch (e) { /* clipboard unavailable — nothing else to fall back to here */ }
-      });
+      btn.addEventListener('click', () => copyLinkAndShare(btn, project.title, btn.dataset.copyLink));
     });
     body.querySelectorAll('[data-revoke-token]').forEach(btn => {
       btn.addEventListener('click', async () => {
@@ -2168,6 +2160,78 @@
     } catch (e) { ok = false; }
     ta.remove();
     return ok;
+  }
+  // 複製連結 → the link is copied at once (as before) AND a dialog shows a ready-to-send message (title + link +
+  // how to open it) in a read-only textarea, so it can be copied whole or selected by hand where the clipboard is blocked.
+  function shareLinkMessage(title, link) {
+    return [
+      `${title} 的選片連結在這裡：`,
+      link,
+      '',
+      '請用手機打開，由負責選片的人先打開（第一位打開的人會成為挑選人，其他人用同一條連結只能看）。',
+      '選好之後按「完成提交」，我就會收到了。',
+    ].join('\n');
+  }
+  let closeShareDialog = null;   // cleanup of the dialog on screen, so a second open leaves no Esc listener behind
+  function showShareLinkDialog(title, token, linkCopied) {
+    if (closeShareDialog) closeShareDialog();
+    const link = projectLink(token);
+    const text = shareLinkMessage(title || '專案', link);
+    const overlay = document.createElement('div');
+    overlay.id = 'pd-share-link';
+    overlay.className = 'picker-overlay';
+    const box = document.createElement('div');
+    box.className = 'picker-box dn-box';
+    box.setAttribute('role', 'dialog');
+    box.setAttribute('aria-modal', 'true');
+    box.setAttribute('aria-labelledby', 'sl-title');
+    const h = document.createElement('h4');
+    h.id = 'sl-title';
+    h.textContent = '傳給客人';
+    const note = document.createElement('p');
+    note.className = 'dn-note';
+    note.textContent = linkCopied ? '連結已複製。要連同說明一起傳給客人，複製下面這段貼到 LINE。' : '要傳給客人，複製下面這段貼到 LINE（複製不了就長按文字手動複製）。';
+    const ta = document.createElement('textarea');
+    ta.id = 'sl-text';
+    ta.className = 'dn-text';
+    ta.readOnly = true;
+    ta.value = text;
+    const actions = document.createElement('div');
+    actions.className = 'dn-actions';
+    const copy = document.createElement('button');
+    copy.id = 'sl-copy-btn';
+    copy.type = 'button';
+    copy.className = 'btn btn-accent';
+    copy.textContent = '📋 複製這段文字';
+    const status = document.createElement('span');
+    status.id = 'sl-status';
+    status.className = 'dn-status';
+    status.setAttribute('role', 'status');
+    const close = document.createElement('button');
+    close.id = 'sl-close-btn';
+    close.type = 'button';
+    close.className = 'btn btn-ghost';
+    close.textContent = '關閉';
+    actions.append(copy, status, close);
+    box.append(h, note, ta, actions);
+    overlay.appendChild(box);
+    document.body.appendChild(overlay);
+    const onKey = e => { if (e.key === 'Escape') done(); };
+    const done = () => { overlay.remove(); document.removeEventListener('keydown', onKey); if (closeShareDialog === done) closeShareDialog = null; };
+    closeShareDialog = done;
+    document.addEventListener('keydown', onKey);
+    close.addEventListener('click', done);
+    overlay.addEventListener('click', e => { if (e.target === overlay) done(); });
+    copy.addEventListener('click', async () => {
+      const ok = await copyText(text);
+      status.textContent = ok ? '已複製' : '複製失敗，請長按文字手動複製';
+    });
+    copy.focus();
+  }
+  async function copyLinkAndShare(btn, title, token) {
+    const ok = await copyText(projectLink(token));
+    if (ok && btn) flashGreen(btn);
+    showShareLinkDialog(title, token, ok);
   }
   function showDeliverNotice(project, tokens) {
     if (!project || !project.delivered_at) return;
