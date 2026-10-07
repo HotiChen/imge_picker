@@ -144,6 +144,22 @@
                 body: JSON.stringify({ product_id: productId }),
             });
         },
+        // POST/GET /api/pick/orders, POST /api/pick/orders/:id/cancel (docs/guest-shop.md, S2): token in the query,
+        // key only in the X-Picker-Key header (this.headers()), never in a URL.
+        orderApi() {
+            const q = `?t=${encodeURIComponent(this.token)}`;
+            return {
+                post: body => this._json(`/api/pick/orders${q}`, { method: 'POST', headers: this.headers({ 'Content-Type': 'application/json' }), body: JSON.stringify(body) }),
+                list: () => this._json(`/api/pick/orders${q}`, { headers: this.headers() }),
+                cancel: id => this._json(`/api/pick/orders/${encodeURIComponent(id)}/cancel${q}`, { method: 'POST', headers: this.headers() }),
+            };
+        },
+        // the finals a print can be ordered from (keys), the same walk as 下載全部精修
+        async listFinalPhotos() {
+            return window.AlbumPreview && AlbumPreview.listFinalIds
+                ? AlbumPreview.listFinalIds(this.finalFolders)
+                : (this.app ? this.app.photos.map(p => p.id) : []);
+        },
         claim(name) {
             return this._json('/api/pick/claim', {
                 method: 'POST',
@@ -391,6 +407,10 @@
                 fetchShop: () => this.fetchShop(),
                 isOwner: this.isOwner,
                 onInterest: id => this.postInterest(id),
+                confirmed: !!this.confirmedAt,
+                orderApi: this.orderApi(),
+                listFinals: () => this.listFinalPhotos(),
+                thumbUrl: key => driveManager.getImageUrl({ id: key }, 400),
                 onShopSettled: () => this._renderAlbumEntry(),
             };
             const fresh = !CompletionPage.isMounted();

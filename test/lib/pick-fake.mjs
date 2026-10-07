@@ -306,7 +306,8 @@ export function pickFakeWorker(opts = {}) {
         if (method !== 'GET') return send({ error: 'Method not allowed' }, 405, { Allow: 'GET' });
         if (pickScopeFake(state.project).mode !== 'delivered') return send({ error: '尚未交件', code: 'not_delivered' }, 409);
         if (opts.shopUnavailable) return send({ error: '商品資訊暫時無法顯示', code: 'shop_unavailable' }, 500);
-        return send({ products: opts.shopProducts || [] }, 200);
+        // `ordering` (docs/guest-shop.md, S2): null = switch off / migration not run; opts.ordering is the object the Worker would send
+        return send({ products: opts.shopProducts || [], ordering: opts.ordering ?? null }, 200);
       }
 
       if (u.pathname === '/api/pick/claim' && method === 'POST') {

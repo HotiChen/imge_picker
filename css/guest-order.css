@@ -1,0 +1,100 @@
+/* ══════════════════════════════════════════════════════
+   Guest ordering on the 完成頁 (js/guest-order.js, docs/guest-shop.md S2).
+   Light, phone-first. Every rule is under `.cp` (the 完成頁 root) or a `.go-*` class that only exists inside it;
+   the one rule outside is `html.go-open` (page scroll lock while the sheet is up). css/styles.css is untouched.
+   ══════════════════════════════════════════════════════ */
+
+html.go-open, html.go-open body { overflow: hidden; }
+
+.cp .go-bar { display: flex; flex-direction: column; gap: 10px; margin-top: 20px; }
+.cp .go-bar .cp-btn { width: 100%; }
+.cp .go-bar [hidden] { display: none; }
+.cp .go-order-btn { width: 100%; }
+.cp .go-unorderable { margin: 8px 0 0; font-size: 14px; color: var(--cp-ink-70); }
+
+/* the sheet: a bottom sheet on a phone, a centred card on a wide screen */
+.cp .go-layer { position: fixed; inset: 0; z-index: 900; display: flex; align-items: flex-end; justify-content: center; }
+.cp .go-backdrop { position: absolute; inset: 0; background: rgba(35, 27, 18, .5); }
+.cp .go-sheet {
+  position: relative; display: flex; flex-direction: column; width: 100%; max-width: 560px;
+  max-height: 92vh; max-height: 92dvh; background: var(--cp-bg); color: var(--cp-ink);
+  border-radius: 18px 18px 0 0; box-shadow: 0 -8px 30px rgba(35, 27, 18, .25); outline: none; overflow: hidden;
+}
+@media (min-width: 700px) { .cp .go-layer { align-items: center; } .cp .go-sheet { border-radius: 18px; } }
+.cp .go-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 0 16px 16px; -webkit-overflow-scrolling: touch; }
+.cp .go-foot { flex: 0 0 auto; display: flex; flex-direction: column; gap: 10px; padding: 12px 16px calc(12px + env(safe-area-inset-bottom, 0px)); background: var(--cp-surface); border-top: 1px solid var(--cp-rule); }
+.cp .go-foot[hidden] { display: none; }
+.cp .go-foot .cp-btn { width: 100%; }
+
+.cp .go-head { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; gap: 8px; margin: 0 -16px 8px; padding: 10px 8px 10px 16px; background: var(--cp-bg); border-bottom: 1px solid var(--cp-rule); }
+.cp .go-title { flex: 1 1 auto; min-width: 0; margin: 0; font-family: var(--cp-serif); font-weight: 600; font-size: 20px; line-height: 1.3; overflow-wrap: anywhere; outline: none; }
+.cp .go-icon { flex: 0 0 auto; width: 44px; height: 44px; border: 0; border-radius: 50%; background: transparent; color: var(--cp-ink); font: inherit; font-size: 26px; line-height: 1; cursor: pointer; }
+.cp .go-icon:hover { background: var(--cp-surface); }
+
+.cp .go-sec { padding: 12px 0 4px; }
+.cp .go-sec--row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.cp .go-h3 { margin: 0 0 8px; font-size: 16px; font-weight: 600; }
+.cp .go-sec--row .go-h3 { margin: 0; }
+.cp .go-desc, .cp .go-sub { margin: 0 0 10px; font-size: 14px; line-height: 1.6; color: var(--cp-ink-70); overflow-wrap: anywhere; }
+.cp .go-fixed { margin: 0; font-size: 15px; }
+.cp .go-msg { margin: 8px 0; font-size: 14px; color: var(--cp-ink-70); }
+.cp .go-msg--err, .cp .go-banner { padding: 10px 12px; border-radius: 8px; background: #fdece6; border: 1px solid #f0b9a4; color: #8a2b0e; font-size: 14px; line-height: 1.6; }
+.cp .go-banner { margin: 8px 0; background: #fff1d6; border-color: #f0cf8a; color: #6b4a00; }
+.cp .go-msg--err[hidden] { display: none; }
+
+.cp .go-opts { display: flex; flex-direction: column; gap: 8px; }
+.cp .go-opt { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 48px; padding: 8px 14px; background: var(--cp-surface); border: 2px solid var(--cp-rule); border-radius: 12px; font: inherit; font-size: 16px; color: var(--cp-ink); text-align: left; cursor: pointer; }
+.cp .go-opt[aria-pressed="true"] { border-color: var(--cp-ink); background: #fff3de; }
+.cp .go-opt-label { min-width: 0; overflow-wrap: anywhere; }
+.cp .go-opt-price { font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+.cp .go-photos { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; max-height: 42vh; overflow-y: auto; padding: 2px; }
+.cp .go-photo { position: relative; aspect-ratio: 1; min-height: 44px; padding: 0; border: 3px solid transparent; border-radius: 8px; background: var(--cp-rule); overflow: hidden; cursor: pointer; }
+.cp .go-photo img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.cp .go-photo[aria-pressed="true"] { border-color: var(--cp-ink); box-shadow: 0 0 0 2px var(--cp-accent); }
+
+.cp .go-stepper { display: inline-flex; align-items: center; gap: 4px; }
+.cp .go-step { width: 44px; height: 44px; border: 2px solid var(--cp-ink); border-radius: 50%; background: var(--cp-surface); color: var(--cp-ink); font: inherit; font-size: 22px; line-height: 1; cursor: pointer; }
+.cp .go-step:disabled { opacity: .35; cursor: default; }
+.cp .go-step-n { min-width: 36px; text-align: center; font-size: 18px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.cp .go-price { margin: 0; font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; }
+
+.cp .go-lines { list-style: none; margin: 8px 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.cp .go-line { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 12px; background: var(--cp-surface); border: 1px solid var(--cp-rule); border-radius: 12px; min-width: 0; }
+.cp .go-line-thumb { width: 56px; height: 56px; border-radius: 8px; object-fit: cover; background: var(--cp-rule); }
+.cp .go-line-info { flex: 1 1 140px; min-width: 0; }
+.cp .go-line-name { font-weight: 600; overflow-wrap: anywhere; }
+.cp .go-line-detail { font-size: 13px; color: var(--cp-ink-70); overflow-wrap: anywhere; }
+.cp .go-line-price { font-size: 14px; font-variant-numeric: tabular-nums; }
+.cp .go-line-acts { display: flex; align-items: center; gap: 8px; flex: 1 1 100%; justify-content: space-between; }
+.cp .go-remove { min-height: 44px; padding: 0 12px; border: 0; background: transparent; color: #8a2b0e; font: inherit; font-size: 15px; text-decoration: underline; cursor: pointer; }
+.cp .go-total { margin: 10px 0; font-size: 20px; font-weight: 700; text-align: right; font-variant-numeric: tabular-nums; }
+
+.cp .go-field { margin: 12px 0; }
+.cp .go-label { display: block; margin-bottom: 4px; font-size: 14px; font-weight: 600; }
+.cp .go-input { display: block; width: 100%; min-height: 48px; padding: 10px 12px; border: 2px solid #d9ccb8; border-radius: 10px; background: var(--cp-surface); color: var(--cp-ink); font: inherit; font-size: 16px; }
+.cp .go-textarea { min-height: 88px; resize: vertical; }
+.cp .go-input:focus { border-color: var(--cp-ink); }
+.cp .go-hint { margin: 4px 0 0; font-size: 13px; color: var(--cp-ink-70); }
+.cp .go-consent { margin: 16px 0; padding: 12px; background: var(--cp-surface); border: 1px solid var(--cp-rule); border-radius: 10px; }
+.cp .go-notice { margin: 0 0 10px; font-size: 13px; line-height: 1.7; color: var(--cp-ink-70); }
+.cp .go-consent-row { display: flex; align-items: flex-start; gap: 10px; min-height: 44px; font-size: 15px; cursor: pointer; }
+.cp .go-check { flex: 0 0 auto; width: 24px; height: 24px; margin: 8px 0 0; accent-color: var(--cp-accent-shadow); }
+.cp .go-who { margin: 8px 0; font-size: 15px; }
+.cp .go-who p { margin: 2px 0; overflow-wrap: anywhere; }
+.cp .go-note { white-space: pre-wrap; }
+
+.cp .go-orders { display: flex; flex-direction: column; gap: 14px; }
+.cp .go-order { padding: 14px; background: var(--cp-surface); border: 1px solid var(--cp-rule); border-radius: 14px; }
+.cp .go-order-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.cp .go-status { padding: 4px 12px; border-radius: 999px; background: #fff1d6; color: #6b4a00; font-size: 14px; font-weight: 600; }
+.cp .go-status[data-status="confirmed"], .cp .go-status[data-status="fulfilled"] { background: var(--cp-mint); color: var(--cp-mint-ink); }
+.cp .go-status[data-status="cancelled"] { background: var(--cp-rule); color: var(--cp-ink-70); }
+.cp .go-order-date { font-size: 13px; color: var(--cp-ink-70); }
+.cp .go-order .go-lines { margin: 10px 0 0; }
+.cp .go-order .go-line { background: var(--cp-bg); }
+.cp .go-transfer { margin: 12px 0 0; padding: 12px; border-radius: 10px; background: var(--cp-mint); color: var(--cp-mint-ink); }
+.cp .go-transfer-text { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 15px; }
+.cp .go-cancel-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.cp .go-cancel-row .cp-btn { min-height: 44px; padding: 0 18px; font-size: 15px; }
+.cp .go-cancel-row [hidden] { display: none; }
