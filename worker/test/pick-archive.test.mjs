@@ -492,13 +492,14 @@ test('the archive migration is one ALTER, and fresh == old migration + it', () =
   // the database as the guest-picking migration left it: no archived_at, and
   // none of the columns appended after it (delivered_at, which the next
   // migration adds, is appended on top so the column order is pinned too)
-  const deployed = fresh.replace(/,\n(?:\s*--[^\n]*\n)*\s*archived_at\s+TEXT,\n(?:\s*--[^\n]*\n)*\s*delivered_at\s+TEXT,\n(?:\s*--[^\n]*\n)*\s*final_folders\s+TEXT,\n\s*allow_proof_download[^\n]*\n(?:\s*--[^\n]*\n)*\s*extra_max\s+INTEGER,\n(?:\s*--[^\n]*\n)*\s*client_confirmed_at\s+TEXT,\n(?:\s*--[^\n]*\n)*\s*client_confirmed_by\s+TEXT,\n(?:\s*--[^\n]*\n)*\s*shoot_date\s+TEXT\n\);/, '\n);');
+  const deployed = fresh.replace(/,\n(?:\s*--[^\n]*\n)*\s*archived_at\s+TEXT,\n(?:\s*--[^\n]*\n)*\s*delivered_at\s+TEXT,\n(?:\s*--[^\n]*\n)*\s*final_folders\s+TEXT,\n\s*allow_proof_download[^\n]*\n(?:\s*--[^\n]*\n)*\s*extra_max\s+INTEGER,\n(?:\s*--[^\n]*\n)*\s*client_confirmed_at\s+TEXT,\n(?:\s*--[^\n]*\n)*\s*client_confirmed_by\s+TEXT,\n(?:\s*--[^\n]*\n)*\s*shoot_date\s+TEXT,\n(?:\s*--[^\n]*\n)*\s*project_type\s+TEXT\n\);/, '\n);');
   assert.doesNotMatch(deployed, /archived_at|delivered_at|final_folders|allow_proof_download|^\s*extra_max\s/m, 'fixture still has the column');
   const later = 'ALTER TABLE projects ADD COLUMN delivered_at TEXT;\n' +
     readFileSync(new URL('../migrations/2026-09-30-delivery.sql', import.meta.url), 'utf8') +
     '\nALTER TABLE projects ADD COLUMN extra_max INTEGER;\n' +
     readFileSync(new URL('../migrations/2026-10-04-client-confirm.sql', import.meta.url), 'utf8') +
-    '\n' + readFileSync(new URL('../migrations/2026-10-07-project-shoot-date.sql', import.meta.url), 'utf8');
+    '\n' + readFileSync(new URL('../migrations/2026-10-07-project-shoot-date.sql', import.meta.url), 'utf8') +
+    '\n' + readFileSync(new URL('../migrations/2026-10-07-project-type.sql', import.meta.url), 'utf8');
   const shape = db => db._db.prepare('PRAGMA table_info(projects)').all();
   assert.deepEqual(shape(fakeDB({ schema: deployed + '\n' + migration + '\n' + later })), shape(fakeDB({ schema: fresh })));
   assert.match(fresh, /ALTER TABLE projects ADD COLUMN archived_at TEXT;/, 'schema.sql names the hand-run ALTER');

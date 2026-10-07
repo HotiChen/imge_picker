@@ -175,7 +175,18 @@ CREATE TABLE IF NOT EXISTS projects (
   -- Appended, from a hand-run
   --   ALTER TABLE projects ADD COLUMN shoot_date TEXT;
   -- (worker/migrations/2026-10-07-project-shoot-date.sql).
-  shoot_date      TEXT
+  shoot_date      TEXT,
+  -- the photography category of the project: a js/shoot-types.js category
+  -- (婚紗 / 婚禮 / 親子 / 個人 / 活動) or text typed under 其他, trimmed, at
+  -- most 20 characters, no control / line-separator / bidi / BOM character;
+  -- NULL = not set. Set by the photographer (POST /api/admin/projects, PATCH
+  -- /api/admin/projects/:id; '', blank or null clears). Photographer-only:
+  -- the admin list and detail return it, no guest route ever does.
+  -- Not users.shoot_type, the client account's own registration answer.
+  -- Appended, from a hand-run
+  --   ALTER TABLE projects ADD COLUMN project_type TEXT;
+  -- (worker/migrations/2026-10-07-project-type.sql).
+  project_type    TEXT
 );
 
 -- Everyone who ever held the seat. key_hash is the SHA-256 of the bearer key
