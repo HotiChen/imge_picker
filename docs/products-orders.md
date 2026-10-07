@@ -488,6 +488,8 @@ CREATE TABLE IF NOT EXISTS platform_product_options (
 「我們的相本最少 10 頁，在 operator 設定，綁在商品上。」 Then: an order below
 the minimum is **refused** (no per-extra-spread charge), and the operator sets
 both a **minimum and a maximum** per album product.
+(2026-10-07: spreads *above* the minimum, within the maximum, may be charged
+per spread — `extra_page_price` below. Below the minimum is still refused.)
 
 - `platform_products.min_pages` / `max_pages INTEGER`, nullable: the fewest
   and the most **inside spreads** an album may have. One spread = 1 P; cover
@@ -563,3 +565,50 @@ both a **minimum and a maximum** per album product.
   missing-column failure, `null` everywhere before it, and an operator write
   of a number answers 500 `bleed_mm_unavailable` (after min / max) with
   nothing written; `null` or no field still works.
+
+## extra_page_price — album price per extra spread (2026-10-07)
+
+The option price covers an album up to `min_pages` spreads; each spread
+**above** `min_pages` (and up to `max_pages`) costs `extra_page_price`. Below
+`min_pages` or above `max_pages` is still refused (`albumPagesProblem`), never
+priced.
+
+- `platform_products.extra_page_price INTEGER`, nullable: NT$ per inside
+  spread above `min_pages` (1 spread = 1 P; cover and back not counted). NULL
+  = extra pages not priced (no price shown). **Albums only**, exactly like the
+  page bounds: on a print it is stored NULL; a PUT leaving album clears it;
+  coming back to album does not restore it (a print's leftover is never
+  inherited or shown).
+- **Operator only.** `POST /api/operator/products` and
+  `PUT /api/operator/products/:id` take `extra_page_price`: a whole number
+  validated like every other money field (`isMoney`: safe integer
+  0–`MONEY_MAX` = 10,000,000) or `null`, else 400 `invalid_extra_page_price`
+  (floats, negatives, strings, booleans, arrays refused; on any kind). A PUT
+  without the field keeps it (and does not write it back); `null` clears it.
+  Nothing is written on any 400. On an adopted product the photographer's
+  PUT naming it is 400 `platform_managed`; a custom product (service) reads
+  `null`.
+- **Reads:** wherever `min_pages` is (operator list/responses,
+  `GET /api/admin/products`, adopt / PUT responses,
+  `GET /api/admin/platform-products`) and the guest shop
+  (`GET /api/pick/shop`, `docs/guest-shop.md`). `null` on a non-album.
+  Note: it is the operator's number, shown to the guest as is; there is no
+  per-photographer extra-page price (yet).
+- **Migration** `worker/migrations/2026-10-07-product-extra-page-price.sql`
+  (`ALTER TABLE platform_products ADD COLUMN extra_page_price INTEGER`),
+  hand-run before the merge, after the bleed file. Same late-column machinery
+  (`PRODUCT_LATE_COLUMNS`): one query on a migrated database, `null`
+  everywhere before it, and an operator write of a number on an album answers
+  500 `extra_page_price_unavailable` (after min / max / bleed) with nothing
+  written; `null`, no field, or a print (stored NULL anyway) still works.
+- **Helper, not wired:** `albumExtraPagesCost(product, spreads)` in
+  `worker.js` (pure; unit-tested in
+  `worker/test/product-extra-page-price.test.mjs`) returns
+  `{extraPages, cost}` with `extraPages = max(0, spreads − (min_pages || 0))`
+  and `cost = extraPages × extra_page_price`, or `null` when: not an album,
+  `extra_page_price` null / not a whole number ≥ 0, `spreads` not a whole
+  number ≥ 1, `spreads > max_pages` (`albumPagesProblem` →
+  `pages_above_max`), or the cost would leave the safe-integer range. Below
+  `min_pages` it returns `{0, 0}` (the refusal is `albumPagesProblem`'s).
+  No order path calls it yet: admin orders carry no layout and guest
+  ordering (S2/S3) is not built; see `docs/guest-shop.md`.

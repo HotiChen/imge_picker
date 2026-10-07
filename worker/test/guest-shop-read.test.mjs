@@ -121,11 +121,11 @@ test('delivered: the shop lists the guest-visible products, sorted, in the exact
   assert.deepEqual(json, {
     products: [
       {
-        id: c.print.id, kind: 'print', name: '無框畫', description: '木框', photo_count: null, min_pages: null, max_pages: null, bleed_mm: null, image_url: null,
+        id: c.print.id, kind: 'print', name: '無框畫', description: '木框', photo_count: null, min_pages: null, max_pages: null, bleed_mm: null, extra_page_price: null, image_url: null,
         options: [{ id: c.print.options[0].id, label: '16×20', price: 3000 }],
       },
       {
-        id: c.album.id, kind: 'album', name: '相本書', description: '精裝 20×20', photo_count: 20, min_pages: 10, max_pages: 30, bleed_mm: null,
+        id: c.album.id, kind: 'album', name: '相本書', description: '精裝 20×20', photo_count: 20, min_pages: 10, max_pages: 30, bleed_mm: null, extra_page_price: null,
         image_url: `/api/platform/products/${c.ppAlbum.id}/image?v=${encodeURIComponent(c.imageStamp)}`,
         options: [
           { id: c.album.options[0].id, label: '20×20', price: 5000 },
@@ -159,7 +159,7 @@ test('no cost leaks: no cost, platform_price, vendor_cost or platform option id 
   const p = await delivered(env);
   const json = await okShop(env, p.token);
   const { keys, values } = walk(json);
-  assert.deepEqual([...keys].sort(), ['bleed_mm', 'description', 'id', 'image_url', 'kind', 'label', 'max_pages', 'min_pages', 'name', 'options', 'photo_count', 'price', 'products'].sort());
+  assert.deepEqual([...keys].sort(), ['bleed_mm', 'description', 'extra_page_price', 'id', 'image_url', 'kind', 'label', 'max_pages', 'min_pages', 'name', 'options', 'photo_count', 'price', 'products'].sort());
   for (const forbidden of [VENDOR, VENDOR + 1, PLATFORM, PLATFORM + 1]) assert.ok(!values.includes(forbidden), `value ${forbidden}`);
   const text = JSON.stringify(json);
   assert.doesNotMatch(text, /987651|987652|2987|2988|cost|platform_price|vendor|guest_visible|photographer/);

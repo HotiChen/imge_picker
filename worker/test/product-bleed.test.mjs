@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
 import { fakeDB } from './fakes.mjs';
 import { SECRET, MINE, THEIRS, setup, call, pick, save, claimed, rows, one, collectingCtx } from './pick-helpers.mjs';
-import { FRESH, NO_BLEED, NO_PAGES, BLEED_SQL, MIN_SQL, MAX_SQL } from './page-schemas.mjs';
+import { FRESH, NO_BLEED, NO_PAGES, BLEED_SQL, MIN_SQL, MAX_SQL, EXTRA_SQL } from './page-schemas.mjs';
 
 const OP = 'operator-secret';
 const envFor = (schema, extra = {}) => setup({ OPERATOR_TOKEN: OP, ...(schema ? { DB: fakeDB({ schema }) } : {}), ...extra });
@@ -68,8 +68,8 @@ test('migration: one ALTER adding bleed_mm REAL; schema.sql notes it; the fixtur
   assert.ok(!cols(NO_BLEED).includes('bleed_mm') && cols(NO_BLEED).includes('max_pages'));
   assert.ok(!cols(NO_PAGES).includes('bleed_mm'));
   // the paste on today's database = schema.sql; all three in order on one with none = schema.sql
-  assert.deepEqual(shape(fakeDB({ schema: NO_BLEED + '\n' + BLEED_SQL })), shape(fakeDB()));
-  assert.deepEqual(shape(fakeDB({ schema: NO_PAGES + '\n' + MIN_SQL + '\n' + MAX_SQL + '\n' + BLEED_SQL })), shape(fakeDB()));
+  assert.deepEqual(shape(fakeDB({ schema: NO_BLEED + '\n' + BLEED_SQL + '\n' + EXTRA_SQL })), shape(fakeDB()));
+  assert.deepEqual(shape(fakeDB({ schema: NO_PAGES + '\n' + MIN_SQL + '\n' + MAX_SQL + '\n' + BLEED_SQL + '\n' + EXTRA_SQL })), shape(fakeDB()));
   const twice = fakeDB({ schema: NO_BLEED + '\n' + BLEED_SQL });
   assert.throws(() => twice._db.exec(BLEED_SQL), /duplicate column/);
 });
@@ -174,7 +174,7 @@ test("photographer views and the guest shop carry the platform's live bleed_mm, 
   // the guest shape is a named list: bleed added, still no cost of any kind
   for (const p of shop) {
     assert.deepEqual(Object.keys(p).sort(),
-      ['bleed_mm', 'description', 'id', 'image_url', 'kind', 'max_pages', 'min_pages', 'name', 'options', 'photo_count'].sort());
+      ['bleed_mm', 'description', 'extra_page_price', 'id', 'image_url', 'kind', 'max_pages', 'min_pages', 'name', 'options', 'photo_count'].sort());
     for (const o of p.options) assert.deepEqual(Object.keys(o).sort(), ['id', 'label', 'price']);
   }
 });

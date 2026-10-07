@@ -11,7 +11,7 @@ import assert from 'node:assert/strict';
 import { readFileSync, existsSync } from 'node:fs';
 import { fakeDB } from './fakes.mjs';
 import { SECRET, MINE, THEIRS, setup, call, pick, save, claimed, rows, one, collectingCtx } from './pick-helpers.mjs';
-import { FRESH, NO_PAGES, NO_MAX, NO_MIN, MIN_SQL, MAX_SQL, BLEED_SQL } from './page-schemas.mjs';
+import { FRESH, NO_PAGES, NO_MAX, NO_MIN, MIN_SQL, MAX_SQL, BLEED_SQL, EXTRA_SQL } from './page-schemas.mjs';
 
 const OP = 'operator-secret';
 const envFor = (schema, extra = {}) => setup({ OPERATOR_TOKEN: OP, ...(schema ? { DB: fakeDB({ schema }) } : {}), ...extra });
@@ -72,8 +72,8 @@ test('migration: a second file with one ALTER for max_pages; the min_pages file 
   assert.ok(cols(NO_MAX).includes('min_pages') && !cols(NO_MAX).includes('max_pages'));
   assert.ok(!cols(NO_MIN).includes('min_pages') && cols(NO_MIN).includes('max_pages'));
   // both, in order, on a database with neither = schema.sql; max alone on top of min = schema.sql
-  assert.deepEqual(shape(fakeDB({ schema: NO_PAGES + '\n' + MIN_SQL + '\n' + MAX_SQL + '\n' + BLEED_SQL })), shape(fakeDB()));
-  assert.deepEqual(shape(fakeDB({ schema: NO_MAX + '\n' + MAX_SQL + '\n' + BLEED_SQL })), shape(fakeDB()));
+  assert.deepEqual(shape(fakeDB({ schema: NO_PAGES + '\n' + MIN_SQL + '\n' + MAX_SQL + '\n' + BLEED_SQL + '\n' + EXTRA_SQL })), shape(fakeDB()));
+  assert.deepEqual(shape(fakeDB({ schema: NO_MAX + '\n' + MAX_SQL + '\n' + BLEED_SQL + '\n' + EXTRA_SQL })), shape(fakeDB()));
   const twice = fakeDB({ schema: NO_MAX + '\n' + MAX_SQL });
   assert.throws(() => twice._db.exec(MAX_SQL), /duplicate column/);
 });
@@ -403,6 +403,10 @@ test('albumPagesProblem: a count that is not a whole number from 0 is invalid_la
 
 test('albumPagesProblem is not wired to any route yet: no order path carries a layout', () => {
   // documents the state Tim was told about: S3 is where it gets called
-  const calls = SRC.split('albumPagesProblem(').length - 1;
+  // albumExtraPagesCost (itself not wired, product-extra-page-price.test.mjs)
+  // calls it to refuse spreads above max_pages; that call is not a route
+  const helper = /^function albumExtraPagesCost\([\s\S]*?\n}\n/m.exec(SRC);
+  assert.ok(helper && helper[0].includes('albumPagesProblem('), 'the helper is there and calls it');
+  const calls = SRC.replace(helper[0], '').split('albumPagesProblem(').length - 1;
   assert.equal(calls, 1, 'only the definition — wire it in S3 and update this test');
 });
