@@ -2787,3 +2787,44 @@ html.fg-open, html.fg-open body { overflow: hidden; scrollbar-gutter: stable; }
 @media (prefers-reduced-motion: reduce) {
   .fg-cover, .fg-tile img, .fg-lb-img { transition: none; }
 }
+
+/* ══════════════════════════════════════════════════════
+   Photographer's picker on a phone (index.html with no ?t=, and the ?project= review view).
+   Every rule is scoped html:not(.guest-mode) (js/pick.js sets guest-mode on ?t=), so the guest page
+   keeps its header exactly. Nothing here touches :root or any width above 1024px.
+   - <= 768px: the header is ONE row. 上傳 / 相本書 / 登出 move into the ☰ sidebar (#phoneMenu), a
+     「← 返回後台」 link (dashboard.html) comes first. Why a menu in the existing sidebar and not an overflow
+     popover: the sidebar already opens/closes, scrolls and has a backdrop; a popover would be new state.
+     On the review view (body.pv-active) there is no sidebar, so 登出 stays in the header there, 44px high.
+   - <= 1024px (where the sidebar is a closed drawer): ☰ is 44x44 and the empty state names it.
+   ══════════════════════════════════════════════════════ */
+.back-to-admin { display: none; }
+.phone-menu { display: none; }
+.empty-state-text .es-phone { display: none; }
+
+@media (max-width: 1024px) {
+  html:not(.guest-mode) .sidebar-toggle-btn { min-width: 44px; min-height: 44px; padding: 0; }
+  html:not(.guest-mode) .empty-state-text .es-desktop { display: none; }
+  html:not(.guest-mode) .empty-state-text .es-phone { display: inline; }
+  /* keep the header (back link, ☰) tappable while the drawer is open: the backdrop starts below it */
+  html:not(.guest-mode) .sidebar-backdrop { top: 56px; }
+}
+
+@media (max-width: 768px) {
+  html:not(.guest-mode) .header-left { padding: 0 0 0 6px; gap: 6px; }
+  html:not(.guest-mode) .header-left .logo-label,
+  html:not(.guest-mode) .header-left #buildVersion { display: none; }
+  html:not(.guest-mode) .header-right { padding: 0 12px; gap: 8px; }
+  html:not(.guest-mode) .header-right .btn { min-height: 44px; }
+
+  html:not(.guest-mode) .header:has(#studio-logout) #backToAdminLink { display: inline-flex; min-height: 44px; }
+  body.pv-active #backToAdminLink { display: none !important; }
+
+  html:not(.guest-mode) #uploadPageBtn,
+  html:not(.guest-mode) #openBookEditorBtn,
+  html:not(.guest-mode) body:not(.pv-active) #studio-logout { display: none; }
+
+  html:not(.guest-mode) .phone-menu { display: block; }
+  html:not(.guest-mode) .phone-menu .btn { min-height: 44px; margin-top: 8px; justify-content: center; }
+  html:not(.guest-mode) body:not(:has(#studio-logout)) #phoneLogoutBtn { display: none; }
+}

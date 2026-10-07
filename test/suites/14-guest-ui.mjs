@@ -382,15 +382,20 @@ for (const [label, co] of [['1500px', undefined], ['390px', MOBILE]]) {
           sections: document.querySelectorAll('.sidebar > .sidebar-section').length,
         };
       });
-      ok('RATING / FLAGS / ANNOTATION+排序 / DATA / SOURCE all present', r.rating && r.flags && r.annot && r.data && r.source && r.sections === 5, JSON.stringify(r));
+      ok('RATING / FLAGS / ANNOTATION+排序 / DATA / SOURCE all present', r.rating && r.flags && r.annot && r.data && r.source && r.sections === 6, JSON.stringify(r));   // 5 tools + the phone menu (選單, hidden above 768px)
       ok('header 完成挑圖 button present', r.submit);
       ok('☰ and backdrop present; ☰ shown only on a phone', r.toggle && r.backdrop && r.toggleShown === (label === '390px'), JSON.stringify(r));
       ok('no guest bar, ♥ filter still hidden, no pick-active', !r.guestBar && r.filterBarHidden && !r.pickActive);
       ok('avatar still says HC', r.avatar === 'HC' && !r.avatarSvg, r.avatar);
       ok('logo label, 預約 link and header pills are untouched', r.label && r.booking && r.pill);
       if (label === '390px') {
+        const open = () => page.evaluate(() => document.querySelector('.sidebar').classList.contains('active') && document.getElementById('sidebarBackdrop').classList.contains('active'));
+        // an empty photographer page on a phone opens the drawer by itself, once (js/app.js autoOpenSidebarOnPhone)
+        ok('(empty page on a phone: the drawer is already open)', await open());
         await page.evaluate(() => document.getElementById('sidebarToggle').click());
-        ok('☰ opens the drawer', await page.evaluate(() => document.querySelector('.sidebar').classList.contains('active') && document.getElementById('sidebarBackdrop').classList.contains('active')));
+        ok('☰ closes the drawer', !(await open()));
+        await page.evaluate(() => document.getElementById('sidebarToggle').click());
+        ok('☰ opens the drawer', await open());
       }
       return out;
     },
