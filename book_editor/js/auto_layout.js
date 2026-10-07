@@ -1066,10 +1066,44 @@ const AutoLayout = (() => {
 
     // opts: { templates, coverAspect, spreadAspect, hashThreshold, window, maxPerFace, seed, order, back, fit,
     //         dedupe: 'separate' (default) | 'drop', similarThreshold, similarWindow, minSpreads, maxSpreads,
-    //         foldSafe: true (default) | false }
+    //         foldSafe: true (default) | false, preferredPerSpread: 5 (default) | n | 0 / null (no cap) }
     const planSpreads = (items, opts = {}) => planCore(items, opts || {}, false);
 
+    // preferredPerSpread: a spread normally holds at most that many photos. Only a preference: a hard maxSpreads beats it.
+    // The plan is made with the templates of <= cap photos; if that leaves it outside the hard bounds the cap is raised
+    // one photo at a time (least overflow) up to the library's real limit, and the closest plan wins when none fits.
+    const PREFERRED_DEFAULT = 5;
     function planCore(items, opts, synthetic) {
+        const pv = opts.preferredPerSpread;
+        const wanted = pv === undefined ? PREFERRED_DEFAULT : (Number.isFinite(pv) && pv >= 1 ? Math.floor(pv) : (typeof pv === 'number' || pv === null ? 0 : PREFERRED_DEFAULT));
+        if (wanted === 0) return planOnce(items, opts, synthetic, 0);
+        const report = res => {
+            const overflow = res.spreads.filter(sp => sp.slots.length > wanted).length;
+            res.preferredPerSpread = { wanted, met: overflow === 0, overflowSpreads: overflow };
+            return res;
+        };
+        const askedMax = Number.isFinite(opts.maxSpreads) && opts.maxSpreads >= 1 ? Math.floor(opts.maxSpreads) : 0;
+        const askedMin = Number.isFinite(opts.minSpreads) && opts.minSpreads >= 1 ? Math.floor(opts.minSpreads) : 0;
+        const first = planOnce(items, opts, synthetic, wanted);
+        const miss = r => (askedMin > 0 && !(askedMax > 0 && askedMin > askedMax) ? Math.max(0, askedMin - r.spreads.length) : 0)
+            + (askedMax > 0 ? Math.max(0, r.spreads.length - askedMax) : 0);
+        if ((askedMax === 0 && askedMin === 0) || miss(first) === 0) return report(first);
+        // the library's real limit: the biggest non-hero template that is allowed
+        const tpls = opts.templates !== undefined ? opts.templates : (typeof SpreadTemplates !== 'undefined' ? SpreadTemplates.TEMPLATES : null);
+        const full = Array.isArray(tpls) ? spreadCatalogue(tpls, num0(opts.spreadAspect, SPREAD_DEFAULTS.spreadAspect),
+            Number.isFinite(opts.maxPerFace) ? Math.max(1, Math.floor(opts.maxPerFace)) : SPREAD_DEFAULTS.maxPerFace) : [];
+        const kmax = full.reduce((mx, t) => Math.max(mx, t.k), 0);
+        let best = first;
+        for (let cap = wanted + 1; cap <= kmax; cap++) {
+            const r = planOnce(items, opts, synthetic, cap < kmax ? cap : 0);
+            if (miss(r) < miss(best)) best = r;
+            if (miss(r) === 0) break;
+        }
+        return report(best);
+    }
+    const num0 = (v, d) => (Number(v) > 0 && Number.isFinite(Number(v)) ? Number(v) : d);
+
+    function planOnce(items, opts, synthetic, cap) {
         const D = SPREAD_DEFAULTS;
         const num = (v, d) => (Number(v) > 0 && Number.isFinite(Number(v)) ? Number(v) : d);
         const coverAspect = num(opts.coverAspect, D.coverAspect);
@@ -1111,7 +1145,10 @@ const AutoLayout = (() => {
         };
         const templates = opts.templates !== undefined ? opts.templates
             : (typeof SpreadTemplates !== 'undefined' ? SpreadTemplates.TEMPLATES : null);
-        const cat = Array.isArray(templates) ? spreadCatalogue(templates, spreadAspect, maxPerFace) : null;
+        const fullCat = Array.isArray(templates) ? spreadCatalogue(templates, spreadAspect, maxPerFace) : null;
+        // preferredPerSpread (planCore): only templates of <= cap photos, unless that would leave nothing to seat 1-2 photos
+        const capped = fullCat && cap > 0 ? fullCat.filter(t => t.k <= cap) : fullCat;
+        const cat = capped && capped.some(t => t.k === 1) && capped.some(t => t.k === 2) ? capped : fullCat;
         // the smallest number of photos for which the planner reaches wantMin. A spread holds at least one photo, so
         // fewer than wantMin photos can never make wantMin spreads: start there. Then gallop (+1, +2, +4 ...) to the first
         // count that meets it and binary-search back inside the last gap.
@@ -1135,8 +1172,8 @@ const AutoLayout = (() => {
         // (1 to 8). For a template list without every size it is an upper bound. Under 4 photos in all the cover is not
         // repeated inside, so a tiny capacity is probed instead. Pinned against real planning in the tests.
         const photosAllowed = () => {
-            if (synthetic || conflict || wantMax > SP_MAX_MAX || !cat) return null;
-            const k = cat.reduce((mx, t) => (t.hero ? mx : Math.max(mx, t.k)), 0);
+            if (synthetic || conflict || wantMax > SP_MAX_MAX || !fullCat) return null;
+            const k = fullCat.reduce((mx, t) => (t.hero ? mx : Math.max(mx, t.k)), 0);
             if (k === 0) return null;
             if (k * wantMax >= 4) return k * wantMax;
             let n = 1;

@@ -424,6 +424,38 @@ The viewer's note 「已略過 N 張相近的照片」 reads `dropped`, which is
 `plan_spreads_maxspreads.test.mjs` (`plan_spreads.test.mjs` runs its two duplicate-drop assertions with `dedupe: 'drop'`;
 the 6-book cover golden is unchanged).
 
+### Preferred photos per spread: `preferredPerSpread` (default **5**)
+
+Tim's rule: a spread normally holds **at most 5 photos**. `opts.preferredPerSpread`: an integer >= 1 (a fraction rounds
+down); `undefined` or a non-number string = the default 5; `0`, `null` or a negative = no cap (the engine as it was, no
+report key). It is a **preference, not a rule**:
+
+- The plan is first made with only the templates of <= N photos (the library keeps 1 to 5: 5 / 4 / 6 / 9 / 6 templates).
+  Hero (through-spread) templates count by their photos like any other.
+- A hard bound wins. If that plan misses `maxSpreads` (too many spreads) or `minSpreads`, the cap is raised **one photo
+  at a time** (6, 7, ... up to the library's real limit, 8 with the shipped library, where it is simply the old planner
+  with all templates) and the first plan inside the bounds is taken; if none is, the closest one (the old densest-plan
+  fallback applies at the top). So 40 photos in `maxSpreads: 6` use spreads of up to 7 photos, not 8.
+- `minSpreads` needs fewer photos per spread, so the cap rarely matters to it; it is still checked and the uncapped
+  plan is tried if the capped one falls short.
+- `photosAllowed` stays `k * wanted` with the library's real k (8 per spread), **not** 5 per spread: it is the hard
+  capacity. A UI that wants to warn "more than 5 per spread on average" must compute that itself (`5 * maxSpreads`).
+- `dedupe`, `foldSafe`, similar grouping and `fit` are untouched (the cap only filters the template list the same search
+  runs on). `photosNeeded` is computed with the cap on (it is smaller: more spreads per photo).
+
+```
+result.preferredPerSpread = { wanted, met, overflowSpreads }   // present unless the cap is off
+```
+`overflowSpreads` = spreads with more than `wanted` photos; `met` = `overflowSpreads === 0`. Only the cap of the *final*
+plan is reported. The cap costs some template variety (the 44-photo periodic test book: 8 templates over 12 spreads
+uncapped, 10 over 14 with the cap; a few more, emptier spreads).
+
+**Callers.** `AlbumPreview.PLAN_OPTS` and `completion-page.js` (`_applyBounds`) need nothing: the default is on inside the
+planner, `maxSpreads` from `max_pages` still wins. To switch it off or change it, put `preferredPerSpread` in
+`PLAN_OPTS`. **Tests:** `book_editor/test/preferred_per_spread.test.mjs`; the older `plan_spreads*.test.mjs` wrappers now
+pass `preferredPerSpread: 0` (they pin the engine without the cap), and `plan_spreads_foldsafe` lists the new result key.
+**Not verified:** synthetic photos only; whether 5 per spread looks right on real albums is for Tim to see.
+
 ## Fold safety: no photo across the fold when its subject is on the fold
 
 **Problem (Tim, an iPhone screenshot).** A through-spread (`hero-bleed`, `hero-frame`, `hero-wide`, `hero-strip`: the only
