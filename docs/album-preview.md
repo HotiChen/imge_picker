@@ -456,6 +456,45 @@ planner, `maxSpreads` from `max_pages` still wins. To switch it off or change it
 pass `preferredPerSpread: 0` (they pin the engine without the cap), and `plan_spreads_foldsafe` lists the new result key.
 **Not verified:** synthetic photos only; whether 5 per spread looks right on real albums is for Tim to see.
 
+### Variety: `variety` (default **on**; `0` / `false` / `null` = the cheapest book as before)
+
+**Problem (Tim).** A ~20-photo preview looked flat: with `maxSpreads: 4` every spread held exactly 5 photos, and a lone
+through-spread (hero) was rare. He wants 1 to 5 photos per spread and "a bit of change on every page". All soft: the hard
+rules (`maxSpreads` / `minSpreads`, every photo kept under `dedupe: 'separate'`, `foldSafe`, `fit: 'contain'`, the hero gap,
+look-alikes kept apart) still win, and `variety` can only choose among plans that obey them.
+
+**Measurable rules** (`result.variety` reports them; recomputed from the spreads in the tests):
+
+1. At most **2** spreads in a row with the same photo count, and never the same template twice running.
+2. From **6 spreads** on: at least **3 distinct photo counts**, and a lone-photo through-spread when a suitable photo exists
+   (landscape or square, sharper than the median, not the cover, and fold-safe: with no `foldRisk` a photo counts as high-risk,
+   so such a book gets no hero, as before). The hero gap (4 other spreads between) holds.
+3. Under a tight `maxSpreads` (average over 5 per spread) the counts still vary (20 photos in 4 spreads: 4,5,5,6 or 6,4,5,5, not
+   5,5,5,5). The preferred cap (`preferredPerSpread`) may rise by **one more** photo than the least that fits when that makes the
+   plan less flat; the overflow is still reported in `preferredPerSpread`, and `photosAllowed` is unchanged (8 per spread).
+4. When the counts are forced (a library with only 5-photo templates, 20 photos in 4 spreads) the **templates** still differ: the
+   polish charges a repeated template `SP_VAR_NEAR` (10) times the old near-repeat charge.
+
+**How.** (a) the DP state gets "spreads in a row with this photo count" (1..2); a third costs `SP_VAR_KRUN` (soft, so it still
+finds a plan when one is forced). (b) `varietyRounds`: up to 10 re-solves of the same bounds and rules with a price on every photo
+count that carries more than max(2, a third) of the spreads, and, for books of >= 6 spreads with a suitable photo and no hero, a
+growing bonus on lone through-spreads (0.15, 0.3, 0.5, 0.8, 1.2, 2: the gentlest that yields one); the plan that lacks least
+wins. (c) `planCore`, with a hard `maxSpreads`: the cap loop does not stop at the first cap that meets the bound but also tries
+one cap higher and takes the plan that lacks least (the bounds still come first). Everything is deterministic.
+
+```
+result.variety = { distinctCounts, maxSameRun, repeatedTemplates, distinctTemplates, heroSpreads }   // absent with variety off
+```
+`repeatedTemplates` = spreads using the template of the spread right before; `heroSpreads` = lone through-spreads.
+
+**Cost (synthetic books, 6 seeds x 30 and 44 photos, no bounds).** Mean waste of a photo in its slot 8.8% -> 10.4% (the worst
+slot 0.33 -> 0.43, still under the 0.45 floor), 10.0 -> 10.5 spreads on average (a lone hero and a few pairs). Most of the waste
+comes from rule 4 (`SP_VAR_NEAR`; 3 gives 9.4%). **Tests:** `book_editor/test/plan_variety.test.mjs` (the old plans fail its
+rules: no hero in 8 of its control books, a run of one count over 2 in 14, 5,5,5,5 on every seed of the 20-in-4 example). The older `plan_spreads*.test.mjs` and
+`preferred_per_spread.test.mjs` wrappers pass `variety: 0` (they pin the engine without it), `plan_spreads_foldsafe` lists the new
+result key. `AlbumPreview.PLAN_OPTS` needs nothing (default on). **Not verified:** tuned on synthetic photos only; whether the
+mix looks right, whether the lone through-spread lands on a photo worth it, and the extra white from rule 4 need a real album.
+
 ## Fold safety: no photo across the fold when its subject is on the fold
 
 **Problem (Tim, an iPhone screenshot).** A through-spread (`hero-bleed`, `hero-frame`, `hero-wide`, `hero-strip`: the only

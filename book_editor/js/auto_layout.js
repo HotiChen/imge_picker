@@ -725,6 +725,15 @@ const AutoLayout = (() => {
     const SP_BIG = 1e6;               // "impossible" inside the assignment (crushed photo in a no-crush pass)
     const SP_PASSES = 8;              // variety polish: at most this many sweeps over the spreads
     const SP_SIM_PENALTY = 3;         // soft pass only: cost of one look-alike pair sharing a spread (when it cannot be avoided outright)
+    // variety (opts.variety, default on): soft preferences on top of the cheapest book, see docs/album-preview.md
+    const SP_VAR_KRUN = 1.2;          // a third spread in a row with the same photo count
+    const SP_VAR_PRICE = 0.6;         // per round, per spread over the allowed share of one photo count (re-solve)
+    const SP_VAR_HERO = [0.15, 0.3, 0.5, 0.8, 1.2, 2];   // extra bonus for a lone through-spread, one step per round that still has none (gentle: one is enough)
+    const SP_VAR_NEAR = 10;            // the same template again within a few spreads costs this many times more (polish)
+    const SP_VAR_ROUNDS = 10;
+    const SP_VAR_HERO_BOOK = 6;       // books of this many spreads get a lone through-spread when a suitable photo exists
+    const SP_VAR_MAX_RUN = 2;         // spreads with one photo count in a row
+    const SP_VAR_CAP_EXTRA = 1;       // tight maximum: the preferred cap may rise this much for the sake of variety alone
     const SP_MAX_MAX = 60;            // photosAllowed: not computed (null) for a wanted maximum above this
     const SP_DENSE_PRICE = 1000;      // best effort for a maximum nothing can meet: a price per spread so high that the fewest spreads win
     const SP_MIN_CAP_MUL = 8;         // photosNeeded: gives up (null) past this many photos per wanted spread
@@ -869,21 +878,21 @@ const AutoLayout = (() => {
     //     W..X spreads, or null when none exists under `rules` (the caller then relaxes a rule or packs as densely as it can).
     // rules.sim: a group holding two look-alikes (costs.simCnt) is not allowed.
     function spreadSolve(costs, cat, m, rules, cfg) {
-        const T = cat.length, NONE = T, H = cfg.heroGap, RUN = cfg.maxFamilyRun;
+        const T = cat.length, NONE = T, H = cfg.heroGap, RUN = cfg.maxFamilyRun, KR = cfg.kRun ? SP_VAR_MAX_RUN : 1;
         const X = cfg.maxSpreads > 0 ? Math.min(Math.floor(cfg.maxSpreads), m) : 0;
         const W = cfg.minSpreads > 0 ? Math.min(Math.floor(cfg.minSpreads), m) : 0, C = (X > 0 ? X : W) + 1;
         const K1 = SP_MAX_K + 1, simCnt = rules.sim ? costs.simCnt : null;
         let kMax = 0;
         for (const t of cat) kMax = Math.max(kMax, t.k);
-        const idx = (i, last, run, since, c) => ((((i * (T + 1) + last) * RUN + (run - 1)) * (H + 1) + since) * C) + c;
-        const size = (m + 1) * (T + 1) * RUN * (H + 1) * C;
+        const idx = (i, last, run, since, c, kr = 1) => (((((i * (T + 1) + last) * RUN + (run - 1)) * KR + (kr - 1)) * (H + 1) + since) * C) + c;
+        const size = (m + 1) * (T + 1) * RUN * KR * (H + 1) * C;
         const dp = new Float64Array(size).fill(Infinity);
         const from = new Int32Array(size).fill(-1);
         const via = new Int16Array(size).fill(-1);
         dp[idx(0, NONE, 1, H, 0)] = 0;
         for (let i = 0; i < m; i++) {
-            for (let last = 0; last <= T; last++) for (let run = 1; run <= RUN; run++) for (let since = 0; since <= H; since++) for (let c0 = 0; c0 < C; c0++) {
-                const here = idx(i, last, run, since, c0);
+            for (let last = 0; last <= T; last++) for (let run = 1; run <= RUN; run++) for (let kr = 1; kr <= KR; kr++) for (let since = 0; since <= H; since++) for (let c0 = 0; c0 < C; c0++) {
+                const here = idx(i, last, run, since, c0, kr);
                 const cur = dp[here];
                 if (cur === Infinity) continue;
                 for (let t = 0; t < T; t++) {
@@ -904,17 +913,19 @@ const AutoLayout = (() => {
                         if (nrun > RUN) { if (rules.run) continue; nrun = RUN; }
                     }
                     const ns = lay.hero ? 0 : Math.min(H, since + 1);
-                    const c = cur + pc + cfg.spreadPrice + (same ? SP_SAME_FAMILY : 0);
+                    let nkr = 1, kextra = 0;       // variety: spreads in a row with the same photo count (soft)
+                    if (KR > 1 && last !== NONE && cat[last].k === k) { nkr = kr + 1; if (nkr > KR) { nkr = KR; kextra = SP_VAR_KRUN; } }
+                    const c = cur + pc + cfg.spreadPrice + (same ? SP_SAME_FAMILY : 0) + kextra;
                     if (X > 0 && (c0 + 1 > X || m - i - k > (X - c0 - 1) * kMax)) continue;   // one spread too many, or too many photos left for the spreads left
-                    const to = idx(i + k, t, nrun, ns, X > 0 ? c0 + 1 : Math.min(W, c0 + 1));
+                    const to = idx(i + k, t, nrun, ns, X > 0 ? c0 + 1 : Math.min(W, c0 + 1), nkr);
                     if (c < dp[to]) { dp[to] = c; from[to] = here; via[to] = t; }
                 }
             }
         }
         let best = Infinity, bestT = -1;
         const scan = cc => {
-            for (let last = 0; last < T; last++) for (let run = 1; run <= RUN; run++) for (let since = 0; since <= H; since++) {
-                const t = idx(m, last, run, since, cc);
+            for (let last = 0; last < T; last++) for (let run = 1; run <= RUN; run++) for (let kr = 1; kr <= KR; kr++) for (let since = 0; since <= H; since++) {
+                const t = idx(m, last, run, since, cc, kr);
                 if (dp[t] < best) { best = dp[t]; bestT = t; }
             }
         };
@@ -927,7 +938,7 @@ const AutoLayout = (() => {
     }
 
     // charge for the same template on two spreads `d` apart (d = 1 is a hard rule, handled by `adj`)
-    const spNear = d => (d === 2 ? 0.9 : d === 3 ? 0.6 : d === 4 ? 0.35 : 0.15);
+    const spNear = (d, mul = 1) => mul * (d === 2 ? 0.9 : d === 3 ? 0.6 : d === 4 ? 0.35 : 0.15);
     function polishVariety(groups, costs, cat, m, rules, cfg) {
         const T = cat.length, S = groups.length, H = cfg.heroGap, RUN = cfg.maxFamilyRun;
         const g = groups.slice();
@@ -940,7 +951,7 @@ const AutoLayout = (() => {
             let c = costAt(j, t);
             if (j > 0 && cat[g[j - 1]].family === cat[t].family) c += SP_SAME_FAMILY;
             if (j + 1 < S && cat[g[j + 1]].family === cat[t].family) c += SP_SAME_FAMILY;
-            for (let o = 0; o < S; o++) if (o !== j && g[o] === t) c += spNear(Math.abs(o - j));
+            for (let o = 0; o < S; o++) if (o !== j && g[o] === t) c += spNear(Math.abs(o - j), cfg.nearMul || 1);
             return c;
         };
         const allowed = (j, t) => {
@@ -1064,9 +1075,34 @@ const AutoLayout = (() => {
         });
     }
 
+    // ── variety: how varied a plan is, and what it still lacks ──
+    // spreads = [{ k, template, hero }]. distinctCounts: different photo counts; maxSameRun: the longest run of spreads with one
+    // photo count; repeatedTemplates: spreads using the template of the spread right before; distinctTemplates; heroSpreads:
+    // lone-photo through-spreads. `lack` is what the planner works down (0 = nothing to improve): runs of one count over
+    // SP_VAR_MAX_RUN, the same template twice running, too few distinct counts (3 from SP_VAR_HERO_BOOK spreads, 2 from 3 spreads).
+    function varietyStatsOf(spreads) {
+        const S = spreads.length;
+        let maxSameRun = S ? 1 : 0, run = 1, over = 0, repeated = 0;
+        for (let j = 1; j < S; j++) {
+            run = spreads[j].k === spreads[j - 1].k ? run + 1 : 1;
+            if (run > maxSameRun) maxSameRun = run;
+            if (run > SP_VAR_MAX_RUN) over++;
+            if (spreads[j].template === spreads[j - 1].template) repeated++;
+        }
+        const distinctCounts = new Set(spreads.map(x => x.k)).size;
+        const need = S >= SP_VAR_HERO_BOOK ? 3 : S >= 3 ? 2 : 1;
+        return {
+            stats: { distinctCounts, maxSameRun, repeatedTemplates: repeated,
+                distinctTemplates: new Set(spreads.map(x => x.template)).size, heroSpreads: spreads.filter(x => x.k === 1 && x.hero).length },
+            lack: over + repeated + Math.max(0, need - distinctCounts),
+        };
+    }
+    const varietyOff = v => v === 0 || v === false || v === null;
+
     // opts: { templates, coverAspect, spreadAspect, hashThreshold, window, maxPerFace, seed, order, back, fit,
     //         dedupe: 'separate' (default) | 'drop', similarThreshold, similarWindow, minSpreads, maxSpreads,
-    //         foldSafe: true (default) | false, preferredPerSpread: 5 (default) | n | 0 / null (no cap) }
+    //         foldSafe: true (default) | false, preferredPerSpread: 5 (default) | n | 0 / null (no cap),
+    //         variety: on (default) | 0 / false / null (the cheapest book as before, no `variety` in the result) }
     const planSpreads = (items, opts = {}) => planCore(items, opts || {}, false);
 
     // preferredPerSpread: a spread normally holds at most that many photos. Only a preference: a hard maxSpreads beats it.
@@ -1076,6 +1112,7 @@ const AutoLayout = (() => {
     function planCore(items, opts, synthetic) {
         const pv = opts.preferredPerSpread;
         const wanted = pv === undefined ? PREFERRED_DEFAULT : (Number.isFinite(pv) && pv >= 1 ? Math.floor(pv) : (typeof pv === 'number' || pv === null ? 0 : PREFERRED_DEFAULT));
+        const varOn = !varietyOff(opts.variety);
         if (wanted === 0) return planOnce(items, opts, synthetic, 0);
         const report = res => {
             const overflow = res.spreads.filter(sp => sp.slots.length > wanted).length;
@@ -1087,17 +1124,27 @@ const AutoLayout = (() => {
         const first = planOnce(items, opts, synthetic, wanted);
         const miss = r => (askedMin > 0 && !(askedMax > 0 && askedMin > askedMax) ? Math.max(0, askedMin - r.spreads.length) : 0)
             + (askedMax > 0 ? Math.max(0, r.spreads.length - askedMax) : 0);
-        if ((askedMax === 0 && askedMin === 0) || miss(first) === 0) return report(first);
+        const lackOf = r => (r.variety ? (r._lack || 0) : 0);
+        const tp = opts.templates !== undefined ? opts.templates : (typeof SpreadTemplates !== 'undefined' ? SpreadTemplates.TEMPLATES : null);
         // the library's real limit: the biggest non-hero template that is allowed
-        const tpls = opts.templates !== undefined ? opts.templates : (typeof SpreadTemplates !== 'undefined' ? SpreadTemplates.TEMPLATES : null);
-        const full = Array.isArray(tpls) ? spreadCatalogue(tpls, num0(opts.spreadAspect, SPREAD_DEFAULTS.spreadAspect),
+        const full = Array.isArray(tp) ? spreadCatalogue(tp, num0(opts.spreadAspect, SPREAD_DEFAULTS.spreadAspect),
             Number.isFinite(opts.maxPerFace) ? Math.max(1, Math.floor(opts.maxPerFace)) : SPREAD_DEFAULTS.maxPerFace) : [];
         const kmax = full.reduce((mx, t) => Math.max(mx, t.k), 0);
-        let best = first;
+        // Variety under a hard maximum: the preferred cap would give every spread the same count (5,5,5,5), so it may rise a
+        // little (more photos on some spreads, fewer on others) when that makes the plan less flat. The hard bounds still come
+        // first: a plan inside the bounds always beats one outside; among those, the least `lack`, then the smaller cap.
+        const varietyHunt = varOn && !synthetic && askedMax > 0;
+        if ((askedMax === 0 && askedMin === 0) || (miss(first) === 0 && !(varietyHunt && lackOf(first) > 0))) return report(first);
+        let best = first, zeroCap = miss(first) === 0 ? wanted : -1;
         for (let cap = wanted + 1; cap <= kmax; cap++) {
+            if (varietyHunt && zeroCap >= 0 && (lackOf(best) === 0 || cap > zeroCap + SP_VAR_CAP_EXTRA)) break;
             const r = planOnce(items, opts, synthetic, cap < kmax ? cap : 0);
-            if (miss(r) < miss(best)) best = r;
-            if (miss(r) === 0) break;
+            const better = miss(r) < miss(best) || (varietyHunt && miss(r) === miss(best) && lackOf(r) < lackOf(best));
+            if (better) best = r;
+            if (miss(r) === 0) {
+                if (!varietyHunt) break;
+                if (zeroCap < 0) zeroCap = cap;
+            }
         }
         return report(best);
     }
@@ -1115,6 +1162,7 @@ const AutoLayout = (() => {
         const simThreshold = Number.isFinite(opts.similarThreshold) ? opts.similarThreshold : D.similarThreshold;
         const simWindow = Number.isFinite(opts.similarWindow) ? Math.floor(opts.similarWindow) : D.similarWindow;
         const seed = Number.isFinite(opts.seed) ? Math.trunc(opts.seed) : 0;
+        const varOn = !varietyOff(opts.variety);       // variety: default on
         const foldSafe = opts.foldSafe !== false;    // default on: no high-risk photo across the fold; only an explicit false gives the old behaviour
         const contain = opts.fit !== 'cover';        // 'contain' (whole photo, nothing cropped) unless 'cover' is asked for
         const spreadsOpt = v => (Number.isFinite(v) && v >= 1 ? Math.floor(v) : 0);      // integer >= 1, else "none"
@@ -1138,7 +1186,7 @@ const AutoLayout = (() => {
         const synthPlan = (n, extra) => {
             try {
                 return planCore(syntheticItems(kept.map(r => ({ aspect: r.aspect, sharp: r.sharp, fold: r.fold })), n),
-                    { ...opts, order: 'given', dedupe: 'drop', hashThreshold: -1, back: false, minSpreads: undefined, maxSpreads: undefined, ...extra }, true);
+                    { ...opts, order: 'given', dedupe: 'drop', hashThreshold: -1, back: false, minSpreads: undefined, maxSpreads: undefined, variety: false, ...extra }, true);
             } catch (e) {
                 return { minSpreads: { met: false }, maxSpreads: { met: false } };
             }
@@ -1204,7 +1252,7 @@ const AutoLayout = (() => {
 
         if (!cat) throw new Error('AutoLayout.planSpreads: load spread_templates.js first, or pass { templates }');
 
-        const cfg = { spreadPrice: D.spreadPrice, heroBonus: D.heroBonus, jitter: D.jitter, heroGap: D.heroGap, maxFamilyRun: D.maxFamilyRun };
+        const cfg = { spreadPrice: D.spreadPrice, heroBonus: D.heroBonus, jitter: D.jitter, heroGap: D.heroGap, maxFamilyRun: D.maxFamilyRun, kRun: varOn, nearMul: varOn ? SP_VAR_NEAR : 1 };
 
         // The orders the photos may be poured in: the shooting order, and, when look-alikes sit close together, a few
         // mild reorders that space them out (each photo within `shift` places of home). Only 'separate' mode.
@@ -1319,11 +1367,46 @@ const AutoLayout = (() => {
         // spread's photos, and try the other templates with the same number of slots, one spread at a time, taking a
         // swap when it lowers (cost + a charge for the same template showing up again within a few spreads, or at all).
         // Every hard rule is checked on each candidate, so none is bent. Deterministic; stops when nothing moves.
+        // Variety rounds (opts.variety). The cheapest book can be flat: the same photo count again and again, no lone photo.
+        // Re-solve a few times with a price on the photo counts that carry more than their share (so the counts spread out) and,
+        // when the book is long enough and a suitable photo exists (landscape, sharp, fold-safe, not the cover), a growing
+        // bonus on the lone through-spread. Same rules and bounds as the solve it starts from; the plan that lacks least wins.
+        const heroTpl = cat.map(t => t.hero && t.k === 1);
+        const heroPossible = heroTpl.some(Boolean) && inner.some(r => r.id !== coverRec.id && r.orientation !== 'portrait'
+            && pct.get(r.id) >= 0.5 && !(foldSafe && r.fold >= FOLD.LIMIT));
+        const lackOfGroups = groups => varietyStatsOf(groups.map(t => ({ k: cat[t].k, template: cat[t].id, hero: cat[t].hero }))).lack
+            + (groups.length >= SP_VAR_HERO_BOOK && heroPossible && !groups.some(t => heroTpl[t]) ? 1 : 0);
+        const varietyRounds = sol => {
+            let best = { groups: sol.groups, costs: sol.costs }, bestLack = lackOfGroups(sol.groups);
+            const T = cat.length, price = new Float64Array(T);
+            let cur = sol.groups, heroStep = 0;
+            for (let round = 1; round <= SP_VAR_ROUNDS && bestLack > 0; round++) {
+                const uses = new Map();
+                cur.forEach(t => uses.set(cat[t].k, (uses.get(cat[t].k) || 0) + 1));
+                const allowed = Math.max(2, Math.ceil(cur.length / 3));
+                for (let t = 0; t < T; t++) { const c = uses.get(cat[t].k) || 0; if (c > allowed) price[t] += SP_VAR_PRICE * (c - allowed); }
+                const wantHero = cur.length >= SP_VAR_HERO_BOOK && heroPossible && !cur.some(t => heroTpl[t]);
+                if (wantHero) heroStep++;
+                const boost = wantHero ? SP_VAR_HERO[Math.min(heroStep, SP_VAR_HERO.length) - 1] : 0;
+                const cost = Float64Array.from(sol.costs.cost, (c, i) => c + price[i % T] - (heroTpl[i % T] ? boost : 0));
+                const costs = { cost, seat: sol.costs.seat, simCnt: sol.costs.simCnt };
+                const g = spreadSolve(costs, cat, m, sol.used, sol.wcfg);
+                if (!g) break;
+                const l = lackOfGroups(g);
+                if (l < bestLack) { best = { groups: g, costs }; bestLack = l; }
+                cur = g;
+            }
+            return best;
+        };
         const finish = sol => {
-            let groups = sol.groups;
-            if (contain && groups.length > 1 && cat.length > 1) groups = spreadOutUsage(groups, sol.costs, cat, m, sol.used, sol.wcfg);
-            if (groups.length > 1 && cat.length > 1) groups = polishVariety(groups, sol.costs, cat, m, sol.used, sol.wcfg);
-            return { ...sol, groups };
+            let groups = sol.groups, costs = sol.costs;
+            if (varOn && groups.length > 1 && cat.length > 1) ({ groups, costs } = varietyRounds(sol));
+            if (contain && groups.length > 1 && cat.length > 1) {
+                const g = spreadOutUsage(groups, costs, cat, m, sol.used, sol.wcfg);
+                if (!varOn || lackOfGroups(g) <= lackOfGroups(groups)) groups = g;
+            }
+            if (groups.length > 1 && cat.length > 1) groups = polishVariety(groups, costs, cat, m, sol.used, sol.wcfg);
+            return { ...sol, groups, costs };
         };
 
         let sol = search(ladder, { lo: 0, hi: 0 }, m <= FEW_PHOTOS ? [true, false] : [false]);
@@ -1378,6 +1461,10 @@ const AutoLayout = (() => {
             const left = pairsOf(sol.groups, sol.oi);
             out.similarPairs = left.pairs;
             out.similarSpreads = left.spreads.map(n => `spread-${n + 1}`);
+        }
+        if (varOn) {
+            out.variety = varietyStatsOf(sol.groups.map(t => ({ k: cat[t].k, template: cat[t].id, hero: cat[t].hero }))).stats;
+            Object.defineProperty(out, '_lack', { value: lackOfGroups(sol.groups), enumerable: false });   // for planCore's choice between caps
         }
         return withBounds(out, spreads.length);
     }

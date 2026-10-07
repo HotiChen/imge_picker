@@ -289,7 +289,7 @@ test('every existing result field is still there; the cover, dropped and back ar
   for (const k of ['cover', 'spreads', 'back', 'dropped', 'minSpreads', 'maxSpreads']) assert.ok(k in p, k);
   assert.deepEqual(p.back, {});
   const o = AutoLayout.planSpreads(items, { back: true, minSpreads: 6, maxSpreads: 12, foldSafe: false });
-  assert.deepEqual(Object.keys(o).sort(), ['back', 'cover', 'dropped', 'maxSpreads', 'minSpreads', 'preferredPerSpread', 'spreads']);
+  assert.deepEqual(Object.keys(o).sort(), ['back', 'cover', 'dropped', 'maxSpreads', 'minSpreads', 'preferredPerSpread', 'spreads', 'variety']);
 });
 
 // ── determinism, purity, validity ───────────────────────────────────────────

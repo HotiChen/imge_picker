@@ -19,7 +19,7 @@ vm.runInThisContext(read('auto_layout.js'), { filename: 'auto_layout.js' });
 const AutoLayout = vm.runInThisContext('AutoLayout');
 // foldSafe (default true, plan_spreads_foldsafe.test.mjs) needs a foldRisk on every item; the fixtures here carry none,
 // so they run the planner without that rule (the behaviour every assertion in this file was written against).
-{ const planSpreads = AutoLayout.planSpreads; AutoLayout.planSpreads = (items, o = {}) => planSpreads(items, { foldSafe: false, preferredPerSpread: 0, ...o }); }
+{ const planSpreads = AutoLayout.planSpreads; AutoLayout.planSpreads = (items, o = {}) => planSpreads(items, { foldSafe: false, preferredPerSpread: 0, variety: 0, ...o }); }
 const ST = vm.runInThisContext('SpreadTemplates');
 const hamming = AutoLayout.util.hamming;
 

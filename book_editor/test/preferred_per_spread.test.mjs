@@ -17,7 +17,7 @@ vm.runInThisContext(read('layouts.js'), { filename: 'layouts.js' });
 vm.runInThisContext(read('spread_templates.js'), { filename: 'spread_templates.js' });
 vm.runInThisContext(read('auto_layout.js'), { filename: 'auto_layout.js' });
 const AutoLayout = vm.runInThisContext('AutoLayout');
-const plan = (items, o = {}) => AutoLayout.planSpreads(items, { foldSafe: false, ...o });
+const plan = (items, o = {}) => AutoLayout.planSpreads(items, { foldSafe: false, variety: 0, ...o });
 
 const HEX = '0123456789abcdef';
 const hashOf = n => {
