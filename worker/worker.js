@@ -538,6 +538,7 @@ const isExtraMax = v => Number.isSafeInteger(v) && v >= 0 && v <= EXTRA_MAX_MAX;
 // what PATCH /api/admin/projects/:id accepts, key by key (null clears the
 // plan fields; the proof switch is a plain boolean)
 const PROJECT_PATCH_FIELDS = {
+  title: v => isProjectTitleInput(v),
   allow_proof_download: v => typeof v === 'boolean',
   shoot_date: v => isShootDateInput(v),
   project_type: v => isProjectTypeInput(v),
@@ -547,7 +548,7 @@ const PROJECT_PATCH_FIELDS = {
 };
 const EXTRA_MAX_UNAVAILABLE = { error: '加選上限功能尚未啟用', code: 'extra_max_unavailable' };
 // PATCH keys that are not the plan: they still apply to an archived project
-const PROJECT_NON_PLAN_FIELDS = ['allow_proof_download', 'shoot_date', 'project_type'];
+const PROJECT_NON_PLAN_FIELDS = ['title', 'allow_proof_download', 'shoot_date', 'project_type'];
 
 // projects.shoot_date (docs/delivery.md, "Shoot date"): the day of the shoot,
 // for the completion page. Strictly 'YYYY-MM-DD', a real calendar day from
@@ -594,6 +595,20 @@ function isProjectTypeInput(v) {
 }
 // what a valid input stores: trimmed, '' (or blank) clears like null
 const projectTypeValue = v => (v === null ? null : v.trim() || null);
+
+// projects.title on a rename (PATCH /api/admin/projects/:id {title};
+// docs/delivery.md, "Renaming a project"): a string, 1 to PROJECT_TITLE_MAX
+// characters (code points) after the trim, none of the characters
+// PROJECT_TYPE_UNSAFE refuses. A rename never clears it: blank is refused,
+// not stored. Stored trimmed. Create keeps its own older rule (any string,
+// cut to 200 UTF-16 units). Only the title changes: no R2 folder is renamed.
+const PROJECT_TITLE_MAX = 200;
+function isProjectTitleInput(v) {
+  if (typeof v !== 'string') return false;
+  const t = v.trim();
+  const n = charCount(t);
+  return n >= 1 && n <= PROJECT_TITLE_MAX && !PROJECT_TYPE_UNSAFE.test(t);
+}
 
 // The only image types a logo may be, decided by the bytes themselves. The
 // client's Content-Type is never consulted: an SVG (script) or HTML file
@@ -2917,6 +2932,8 @@ export default {
     }
 
     // PATCH /api/admin/projects/:id — any non-empty subset of
+    // {title} (a rename: projects.title and its pick links' label, nothing in
+    // R2), {shoot_date, project_type},
     // {allow_proof_download: bool} (the proof-originals switch,
     // docs/delivery.md) and the plan {pick_limit, extra_price, extra_max}
     // (whole numbers from 0, or null; docs/project-plan.md). Any other key or
@@ -2933,24 +2950,34 @@ export default {
       const keys = isPlainObject(body) ? Object.keys(body) : [];
       if (!keys.length || !keys.every(k => hasField(PROJECT_PATCH_FIELDS, k) && PROJECT_PATCH_FIELDS[k](body[k]))) {
         return jsonOk({
-          error: "Send any of {allow_proof_download: true|false, pick_limit, extra_price, extra_max: a whole number from 0, or null, shoot_date: 'YYYY-MM-DD', '' or null, project_type: a label of up to 20 characters, '' or null}",
+          error: "Send any of {title: 1 to 200 characters, allow_proof_download: true|false, pick_limit, extra_price, extra_max: a whole number from 0, or null, shoot_date: 'YYYY-MM-DD', '' or null, project_type: a label of up to 20 characters, '' or null}",
           code: 'invalid_body',
         }, 400, ADMIN_ONLY_HEADERS);
       }
       const planEdit = keys.some(k => !PROJECT_NON_PLAN_FIELDS.includes(k));
-      // what each key stores (and what the response echoes, for the two that normalise)
-      const storedValue = k => k === 'shoot_date' ? shootDateValue(body[k]) : k === 'project_type' ? projectTypeValue(body[k]) : body[k];
+      // what each key stores (and what the response echoes, for the keys that normalise)
+      const storedValue = k => k === 'shoot_date' ? shootDateValue(body[k]) : k === 'project_type' ? projectTypeValue(body[k])
+        : k === 'title' ? body[k].trim() : body[k];
       const value = k => k === 'allow_proof_download' ? (body[k] ? 1 : 0) : storedValue(k);
       // column names are the allow-listed keys above, never free text
+      const archivedGate = planEdit ? ' AND archived_at IS NULL' : '';
       let result;
       try {
-        result = await env.DB.prepare(
-          `UPDATE projects SET ${keys.map(k => `${k} = ?`).join(', ')} WHERE id = ? AND photographer_id = ?` +
-          (planEdit ? ' AND archived_at IS NULL' : '')
-        ).bind(...keys.map(value), pathParts[3], DEFAULT_PHOTOGRAPHER_ID).run();
+        const update = env.DB.prepare(
+          `UPDATE projects SET ${keys.map(k => `${k} = ?`).join(', ')} WHERE id = ? AND photographer_id = ?` + archivedGate
+        ).bind(...keys.map(value), pathParts[3], DEFAULT_PHOTOGRAPHER_ID);
+        // a rename also rewrites the one stored copy of the title, the label
+        // of this project's own pick links (live or revoked), in the same
+        // batch and behind the same gate as the project's UPDATE: both land or
+        // neither does (docs/delivery.md, "Renaming a project")
+        const renameLinks = keys.includes('title') ? env.DB.prepare(
+          "UPDATE share_tokens SET label = ? WHERE kind = 'pick' AND project_id = ? " +
+          `AND EXISTS (SELECT 1 FROM projects WHERE id = ? AND photographer_id = ?${archivedGate})`
+        ).bind(storedValue('title'), pathParts[3], pathParts[3], DEFAULT_PHOTOGRAPHER_ID) : null;
+        result = renameLinks ? (await env.DB.batch([update, renameLinks]))[0] : await update.run();
       } catch (e) {
-        // extra_max or shoot_date before its hand-run migration: one
-        // statement, so nothing was written; the error names the column
+        // extra_max, shoot_date or project_type before its hand-run migration: one statement (or one batch
+        // with the rename), so nothing was written; the error names the column
         if (isMissingColumn(e) && keys.includes('project_type') && /project_type/.test(String(e?.message || ''))) {
           return jsonOk(PROJECT_TYPE_UNAVAILABLE, 500, ADMIN_ONLY_HEADERS);
         }

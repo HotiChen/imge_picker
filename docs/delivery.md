@@ -442,6 +442,42 @@ PROJECT (婚紗 / 婚禮 / 親子 …), for the photographer's own sorting. Not
   works, and a create or PATCH that names it (PATCH: even `null` / `''`) is 500
   `project_type_unavailable` with nothing written.
 
+## Renaming a project (Worker, 2026-10-07)
+
+The photographer renames a project with `PATCH /api/admin/projects/:id
+{title}`. Only `projects.title` changes: **no R2 folder is renamed** (see
+CLAUDE.md, "Decided not to do": folders are snapshotted into the project, its
+links and its selections, and R2 has no rename, only copy + delete).
+
+- **Value:** a string, 1–200 characters (code points) after the trim, stored
+  trimmed. Blank or whitespace-only is refused, never stored: a rename cannot
+  clear the title. Refused like `project_type`: any C0/DEL/C1 control, U+2028/
+  2029, bidi mark/override/isolate, BOM, lone surrogate. Anything else that is
+  not such a string (`null`, a number, an array) is refused too. Bad → 400
+  `invalid_body` for the whole body, nothing written. (Create keeps its older,
+  looser rule: any string, cut to 200 UTF-16 units, `''` allowed.)
+- **Combinable** with every other PATCH key; the answer echoes the stored
+  (trimmed) `title`. Not a plan field: an archived project takes it; a plan key
+  in the same body still answers 409 `archived` and nothing is written.
+- **Reads:** the admin list and detail read `projects.title` live, and so does
+  every guest route that shows it (`/api/pick/state` → `project.title`), the
+  notification mails and the orders list (`project_title` is a join, not a
+  copy). A rename shows up everywhere on the next read.
+
+Stored copies of the title, and whether each follows a rename:
+
+| Copy | Follows? | Why |
+|---|---|---|
+| `share_tokens.label` of this project's `kind = 'pick'` rows (live **and** revoked) | **Yes**, same `db.batch` as the project UPDATE, behind the same gate (same photographer; not archived when a plan key is in the body) | It is the project's name copied when the link was minted, not a record of anything. No route reads it for a pick link today; kept equal so it never disagrees. A link minted after the rename copies the new name. |
+| `share_tokens.label` of album/book links (`kind = 'client'`, `book_id`) and of another project's links | No | Not this project's name (the photographer types an album link's label separately). |
+| `submissions`, `orders` / `order_items`, `revision_requests`, `revision_pins`, `selections`, `pickers`, `project_members` | — | No title column (a worker test pins this). Frozen records keep the plan, keys and prices they had, not the name. |
+| Notification mails already sent | No | Sent mail is history. |
+
+Atomicity: the two UPDATEs go in one D1 batch, so a failure in either leaves
+both the project and its links as they were (a test forces the link UPDATE to
+fail and checks nothing changed). A PATCH without `title` issues no link
+write at all. No migration: both columns already exist.
+
 ## Out of scope for this step
 
 Zip download of everything; watermarks; a second link just for delivery;

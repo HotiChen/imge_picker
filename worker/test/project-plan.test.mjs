@@ -308,7 +308,7 @@ test('PATCH: a bad value, an unknown key or an empty body is 400 invalid_body an
     { extra_price: -1 }, { extra_price: MONEY_MAX + 1 }, { extra_price: '200' }, { extra_price: 1.5 }, { extra_price: false },
     { extra_max: -1 }, { extra_max: 501 }, { extra_max: '10' }, { extra_max: 1.5 }, { extra_max: true }, { extra_max: 1e300 },
     { allow_proof_download: 1 }, { allow_proof_download: null }, { allow_proof_download: 'true' },
-    { pick_limit: 30, foo: 1 }, { title: 'x' }, { phase: 'picking' }, { photographer_id: 'x' }, { archived_at: null },
+    { pick_limit: 30, foo: 1 }, { name: 'x' }, { title: 'x', foo: 1 }, { phase: 'picking' }, { photographer_id: 'x' }, { archived_at: null },
     // one bad key spoils the whole body
     { pick_limit: 30, extra_price: 100, extra_max: -1 }, { allow_proof_download: true, pick_limit: '1' },
   ];
