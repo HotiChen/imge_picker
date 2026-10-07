@@ -540,13 +540,14 @@ const isExtraMax = v => Number.isSafeInteger(v) && v >= 0 && v <= EXTRA_MAX_MAX;
 const PROJECT_PATCH_FIELDS = {
   allow_proof_download: v => typeof v === 'boolean',
   shoot_date: v => isShootDateInput(v),
+  project_type: v => isProjectTypeInput(v),
   pick_limit: v => v === null || (Number.isSafeInteger(v) && v >= 0),
   extra_price: v => v === null || isMoney(v),
   extra_max: v => v === null || isExtraMax(v),
 };
 const EXTRA_MAX_UNAVAILABLE = { error: '加選上限功能尚未啟用', code: 'extra_max_unavailable' };
 // PATCH keys that are not the plan: they still apply to an archived project
-const PROJECT_NON_PLAN_FIELDS = ['allow_proof_download', 'shoot_date'];
+const PROJECT_NON_PLAN_FIELDS = ['allow_proof_download', 'shoot_date', 'project_type'];
 
 // projects.shoot_date (docs/delivery.md, "Shoot date"): the day of the shoot,
 // for the completion page. Strictly 'YYYY-MM-DD', a real calendar day from
@@ -569,6 +570,30 @@ function isShootDate(v) {
 const isShootDateInput = v => v === null || v === '' || isShootDate(v);
 // what a valid input stores: '' clears like null
 const shootDateValue = v => (v === '' ? null : v);
+
+// projects.project_type (docs/delivery.md, "Project type"): the photography
+// category of the project, photographer-only (no guest route returns it).
+// The categories are js/shoot-types.js's, and its 其他 lets the photographer
+// type their own, so like users.shoot_type the Worker keeps no copy of the
+// list (it could only refuse what the UI allows; a test pins that every UI
+// entry is accepted). What it does refuse: anything but a string or null,
+// more than PROJECT_TYPE_MAX characters after the trim, and the characters
+// that disguise or break a label (C0/DEL/C1 controls, line and paragraph
+// separators, bidi marks/overrides/isolates, BOM, a lone surrogate). Stored
+// trimmed; '', blank or null clears it (NULL). Its own hand-run migration
+// (2026-10-07-project-type.sql): before it reads say null and a write naming
+// it answers 500 project_type_unavailable.
+const PROJECT_TYPE_MAX = 20;
+const PROJECT_TYPE_UNSAFE = /[\x00-\x1f\x7f-\x9f\u{61c}\u{200e}\u{200f}\u{2028}\u{2029}\u{202a}-\u{202e}\u{2066}-\u{2069}\u{feff}\u{d800}-\u{dfff}]/u;
+const PROJECT_TYPE_UNAVAILABLE = { error: '專案類型功能尚未啟用', code: 'project_type_unavailable' };
+function isProjectTypeInput(v) {
+  if (v === null) return true;
+  if (typeof v !== 'string') return false;
+  const t = v.trim();
+  return charCount(t) <= PROJECT_TYPE_MAX && !PROJECT_TYPE_UNSAFE.test(t);
+}
+// what a valid input stores: trimmed, '' (or blank) clears like null
+const projectTypeValue = v => (v === null ? null : v.trim() || null);
 
 // The only image types a logo may be, decided by the bytes themselves. The
 // client's Content-Type is never consulted: an SVG (script) or HTML file
@@ -2408,6 +2433,12 @@ export default {
         if (!isShootDateInput(body.shoot_date)) return jsonOk({ error: 'shoot_date must be YYYY-MM-DD', code: 'invalid_shoot_date' }, 400);
         shoot_date = shootDateValue(body.shoot_date);
       }
+      // project_type: optional category text; '', blank or null = not set
+      let project_type = null;
+      if (body && hasField(body, 'project_type')) {
+        if (!isProjectTypeInput(body.project_type)) return jsonOk({ error: 'project_type must be a short plain label', code: 'invalid_project_type' }, 400);
+        project_type = projectTypeValue(body.project_type);
+      }
       const id = crypto.randomUUID();
       const token = newShareToken();
       const now = Date.now();
@@ -2419,8 +2450,9 @@ export default {
       // the project, uncapped like every project before the feature. A
       // shoot date is named only when set; set on a database without its
       // column, both tries fail and nothing is written (500, below).
-      const shootCol = shoot_date === null ? '' : ', shoot_date';
-      const shootVal = shoot_date === null ? [] : [shoot_date];
+      // project_type likewise: named only when set
+      const shootCol = (shoot_date === null ? '' : ', shoot_date') + (project_type === null ? '' : ', project_type');
+      const shootVal = [...(shoot_date === null ? [] : [shoot_date]), ...(project_type === null ? [] : [project_type])];
       let inserted;
       try {
         inserted = await withoutMissingColumn(
@@ -2432,6 +2464,8 @@ export default {
           ).bind(id, cleanTitle, foldersJson, pick_limit, extra_price, createdAt, DEFAULT_PHOTOGRAPHER_ID, ...shootVal).run().then(() => null),
         );
       } catch (e) {
+        // the error names the column the database lacks
+        if (isMissingColumn(e) && project_type !== null && /project_type/.test(String(e?.message || ''))) return jsonOk(PROJECT_TYPE_UNAVAILABLE, 500);
         if (isMissingColumn(e) && shoot_date !== null) return jsonOk(SHOOT_DATE_UNAVAILABLE, 500);
         throw e;
       }
@@ -2441,7 +2475,7 @@ export default {
         "INSERT INTO share_tokens (token, book_id, label, kind, project_id, folders, created_at, expires_at) VALUES (?, '', ?, 'pick', ?, ?, ?, ?)"
       ).bind(token, cleanTitle, id, foldersJson, createdAt, expiresAt).run();
       return jsonOk({
-        project: { id, title: cleanTitle, folders: snapshot, pick_limit, extra_price, extra_max: inserted, shoot_date, photographer_id: DEFAULT_PHOTOGRAPHER_ID },
+        project: { id, title: cleanTitle, folders: snapshot, pick_limit, extra_price, extra_max: inserted, shoot_date, project_type, photographer_id: DEFAULT_PHOTOGRAPHER_ID },
         token, expires_at: expiresAt,
       }, 201);
     }
@@ -2500,10 +2534,18 @@ export default {
           ),
         ),
       );
-      const { results } = await withoutMissingColumn(() => chain(' p.shoot_date,'), () => chain(''));
+      // project_type from its own migration, which may land before or after
+      // shoot_date's: tried with both, then each alone, then neither
+      const { results } = await withoutMissingColumn(
+        () => chain(' p.shoot_date, p.project_type,'),
+        () => withoutMissingColumn(
+          () => chain(' p.shoot_date,'),
+          () => withoutMissingColumn(() => chain(' p.project_type,'), () => chain('')),
+        ),
+      );
       return jsonOk({
         projects: results.map(r => ({
-          ...r, extra_max: r.extra_max ?? null, shoot_date: r.shoot_date ?? null, ...deliveryFields(r),
+          ...r, extra_max: r.extra_max ?? null, shoot_date: r.shoot_date ?? null, project_type: r.project_type ?? null, ...deliveryFields(r),
           client_confirmed_at: r.client_confirmed_at ?? null,
           client_confirmed_by: r.client_confirmed_by ?? null,
           open_revision_count: r.open_revision_count ?? 0,
@@ -2557,7 +2599,7 @@ export default {
       const revisions = await revisionRequestsFor(env, project.id);
       return jsonOk({
         project: {
-          ...project, folders, extra_max: project.extra_max ?? null, shoot_date: project.shoot_date ?? null, ...deliveryFields(project),
+          ...project, folders, extra_max: project.extra_max ?? null, shoot_date: project.shoot_date ?? null, project_type: project.project_type ?? null, ...deliveryFields(project),
           client_confirmed_at: project.client_confirmed_at ?? null,
           client_confirmed_by: project.client_confirmed_by ?? null,
           open_revision_count: revisions.open,
@@ -2891,12 +2933,14 @@ export default {
       const keys = isPlainObject(body) ? Object.keys(body) : [];
       if (!keys.length || !keys.every(k => hasField(PROJECT_PATCH_FIELDS, k) && PROJECT_PATCH_FIELDS[k](body[k]))) {
         return jsonOk({
-          error: "Send any of {allow_proof_download: true|false, pick_limit, extra_price, extra_max: a whole number from 0, or null, shoot_date: 'YYYY-MM-DD', '' or null}",
+          error: "Send any of {allow_proof_download: true|false, pick_limit, extra_price, extra_max: a whole number from 0, or null, shoot_date: 'YYYY-MM-DD', '' or null, project_type: a label of up to 20 characters, '' or null}",
           code: 'invalid_body',
         }, 400, ADMIN_ONLY_HEADERS);
       }
       const planEdit = keys.some(k => !PROJECT_NON_PLAN_FIELDS.includes(k));
-      const value = k => k === 'allow_proof_download' ? (body[k] ? 1 : 0) : k === 'shoot_date' ? shootDateValue(body[k]) : body[k];
+      // what each key stores (and what the response echoes, for the two that normalise)
+      const storedValue = k => k === 'shoot_date' ? shootDateValue(body[k]) : k === 'project_type' ? projectTypeValue(body[k]) : body[k];
+      const value = k => k === 'allow_proof_download' ? (body[k] ? 1 : 0) : storedValue(k);
       // column names are the allow-listed keys above, never free text
       let result;
       try {
@@ -2907,6 +2951,9 @@ export default {
       } catch (e) {
         // extra_max or shoot_date before its hand-run migration: one
         // statement, so nothing was written; the error names the column
+        if (isMissingColumn(e) && keys.includes('project_type') && /project_type/.test(String(e?.message || ''))) {
+          return jsonOk(PROJECT_TYPE_UNAVAILABLE, 500, ADMIN_ONLY_HEADERS);
+        }
         if (isMissingColumn(e) && keys.includes('shoot_date') && /shoot_date/.test(String(e?.message || ''))) {
           return jsonOk(SHOOT_DATE_UNAVAILABLE, 500, ADMIN_ONLY_HEADERS);
         }
@@ -2921,7 +2968,7 @@ export default {
         }
         return jsonErr('Not found', 404);
       }
-      return jsonOk({ ok: true, ...Object.fromEntries(keys.map(k => [k, k === 'shoot_date' ? shootDateValue(body[k]) : body[k]])) }, 200, ADMIN_ONLY_HEADERS);
+      return jsonOk({ ok: true, ...Object.fromEntries(keys.map(k => [k, storedValue(k)])) }, 200, ADMIN_ONLY_HEADERS);
     }
     // any other write to /api/admin/projects/:id is not a route (without this
     // a PUT would fall through to the upload route and store it as a key)

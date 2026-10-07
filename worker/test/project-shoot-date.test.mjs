@@ -20,7 +20,8 @@ const OBJECTS = { [PA]: 'PROOF-A', 'shoot/精修/f1.jpg': 'FINAL-A' };
 const FRESH = readFileSync(new URL('../schema.sql', import.meta.url), 'utf8');
 const MIGRATION_FILE = new URL('../migrations/2026-10-07-project-shoot-date.sql', import.meta.url);
 // today's deployed database: everything up to the revision pins, no shoot_date
-const BEFORE = FRESH.replace(/(client_confirmed_by\s+TEXT),\n(?:\s*--[^\n]*\n)*\s*shoot_date\s+TEXT\n\);/, '$1\n);');
+// (nor project_type, appended after it by its own migration)
+const BEFORE = FRESH.replace(/(client_confirmed_by\s+TEXT),\n(?:\s*--[^\n]*\n)*\s*shoot_date\s+TEXT,\n(?:\s*--[^\n]*\n)*\s*project_type\s+TEXT\n\);/, '$1\n);');
 
 function setup({ schema } = {}) {
   return { imagepicker: fakeBucket(OBJECTS), DB: fakeDB(schema ? { schema } : {}), PHOTOGRAPHER_TOKEN: SECRET };
@@ -76,7 +77,9 @@ test('migration: one ALTER adding projects.shoot_date TEXT; schema.sql notes it;
   const shape = db => db._db.prepare('PRAGMA table_info(projects)').all();
   assert.ok(!shape(fakeDB({ schema: BEFORE })).some(c => c.name === 'shoot_date'));
   assert.ok(shape(fakeDB({ schema: BEFORE })).some(c => c.name === 'client_confirmed_by'));
-  assert.deepEqual(shape(fakeDB({ schema: BEFORE + '\n' + sql })), shape(fakeDB()));
+  // project_type comes back from its own migration on top, so the column order is pinned
+  const typeSql = readFileSync(new URL('../migrations/2026-10-07-project-type.sql', import.meta.url), 'utf8');
+  assert.deepEqual(shape(fakeDB({ schema: BEFORE + '\n' + sql + '\n' + typeSql })), shape(fakeDB()));
   const twice = fakeDB({ schema: BEFORE + '\n' + sql });
   assert.throws(() => twice._db.exec(sql), /duplicate column/);
 });
