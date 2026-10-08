@@ -59,7 +59,7 @@ await suite('util helpers — Util.fmtDate / todayTaipei / formatPrice: shapes, 
         pStr: [U.formatPrice('5000'), U.formatPrice('1234.6')],
       };
     });
-    ok('Util exposes escHtml and the three new functions (functions, nothing else)', JSON.stringify(r.keys) === '["escHtml","fmtDate","formatPrice","todayTaipei"]' && r.types.every(t => t === 'function'), JSON.stringify([r.keys, r.types]));
+    ok('Util exposes escHtml, the date / price functions and the pick-link message pair (nothing else)', JSON.stringify(r.keys) === '["PICK_LINK_DEFAULT","escHtml","fmtDate","formatPrice","pickLinkMessage","todayTaipei"]' && r.types.every(t => t === 'function'), JSON.stringify([r.keys, r.types]));
     ok("fmtDate 'ymd' is zh-TW numeric y/m/d (2026/9/21)", r.ymd === '2026/9/21', r.ymd);
     ok("fmtDate 'md' is zh-TW numeric m/d (9/21)", r.md === '9/21', r.md);
     ok("fmtDate 'mdhm' is zh-TW m/d hh:mm 24h in Taipei (9/27 22:52)", r.mdhm === '9/27 22:52', r.mdhm);

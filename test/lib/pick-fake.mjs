@@ -137,7 +137,7 @@ export const isProjectTypeInputFake = v => v === null || v === '' || (typeof v =
 export function settingsShapeFake(st) {
   const x = st.default_extra_max ?? null;
   return { studio_name: null, booking_url: null, default_pick_limit: null, default_extra_price: null,
-    has_logo: false, ...st, default_extra_max: x,
+    has_logo: false, pick_link_message: null, ...st, default_extra_max: x,
     effective_default_extra_max: isExtraMaxFake(x) ? x : EXTRA_MAX_DEFAULT_FAKE };
 }
 // Mirrors worker.js revisionMessage (docs/delivery.md, client confirmation):
@@ -554,7 +554,7 @@ export function pickFakeWorker(opts = {}) {
         return json({ projects });
       }
 
-      if (u.pathname === '/api/admin/settings' && method === 'GET') return json(settingsShapeFake(state.settings));
+      if (u.pathname === '/api/admin/settings' && method === 'GET') return opts.settingsGetStatus ? json({ error: 'down' }, opts.settingsGetStatus) : json(settingsShapeFake(state.settings));
       if (u.pathname === '/api/admin/projects' && method === 'POST') {
         // extra_max: a whole number 0-500 is stored, null = stored NULL (no plan
         // cap), LEFT OUT = the studio default (else 10); anything else is 400

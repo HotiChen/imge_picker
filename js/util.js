@@ -9,6 +9,7 @@
 //                                    'mdhm' 9/27 22:52    (zh-TW, 24h)
 //                                    'iso'  2026-09-21    (en-CA)
 //   Util.todayTaipei()       today's Taipei date, YYYY-MM-DD
+//   Util.PICK_LINK_DEFAULT / Util.pickLinkMessage(template, title, link)   the pick-link message text
 //   Util.formatPrice(n)      NT$5,000 (integer, thousands separators, no space; non-finite → NT$0)
 (function () {
   const MAP = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;', '`': '&#96;' };
@@ -47,6 +48,18 @@
     return 'NT$' + ((Number.isFinite(v) ? Math.round(v) : 0) || 0).toLocaleString('en-US');
   }
 
+  // The message the photographer sends a client with the pick link (settings 「傳給客人的選片訊息」,
+  // admin.html 「傳給客人」 dialog). {專案名稱} = the project title, {連結} = the pick link; plain text, replaced here.
+  const PICK_LINK_DEFAULT = '{專案名稱} 的選片連結來囉 😊\n{連結}\n\n麻煩用手機點開連結，慢慢挑喜歡的照片，選好之後按「完成提交」，我就會收到了。\n（請由負責選片的人先打開連結喔）';
+  // One pass over the template (split on the two placeholders, never String.replace with a replacement string, so a `$&` in
+  // a title stays literal, and a placeholder typed inside a title is not substituted again). A template without {連結} gets the
+  // link on a new last line; an empty / whitespace template (or a non-string) means the default.
+  function pickLinkMessage(template, title, link) {
+    const t = typeof template === 'string' && template.trim() ? template : PICK_LINK_DEFAULT;
+    const out = t.split(/(\{專案名稱\}|\{連結\})/).map(part => part === '{專案名稱}' ? String(title == null ? '' : title) : part === '{連結}' ? String(link == null ? '' : link) : part).join('');
+    return t.includes('{連結}') ? out : out + '\n' + String(link == null ? '' : link);
+  }
+
   window.escHtml = escHtml;
-  window.Util = { escHtml, fmtDate, todayTaipei, formatPrice };
+  window.Util = { escHtml, fmtDate, todayTaipei, formatPrice, PICK_LINK_DEFAULT, pickLinkMessage };
 })();

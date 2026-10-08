@@ -1,5 +1,5 @@
 // Browser suite: 複製連結 (project list row, create result, project detail links) also opens a dialog with a
-// ready-to-send message (title + link + how to open) in a read-only textarea, so the text can be selected by hand
+// ready-to-send message (title + link + how to open) in an editable textarea (the default text is set in 設定, suite 57), so it can be tweaked or selected by hand
 // where the clipboard is blocked. The link itself is still copied at once (suite 35 pins that).
 import { base, suite } from '../lib/harness.mjs';
 import { ADMIN } from '../lib/auth-mocks.mjs';
@@ -31,7 +31,7 @@ const dlg = page => page.evaluate(() => {
       await page.click('[data-project-row] [data-copy-link]');
       await page.waitForSelector('#pd-share-link', { timeout: 3000 });
       const d = await dlg(page);
-      ok('the dialog is visible with a read-only textarea', !!d && d.visible && d.readOnly, JSON.stringify(d));
+      ok('the dialog is visible with an editable textarea', !!d && d.visible && !d.readOnly, JSON.stringify(d));
       ok('the text names the project', d.text.includes('王小明 & 陳小美 婚紗'), d.text);
       ok('the text carries the pick link', /index\.html\?t=SL-TOK/.test(d.text), d.text);
       ok('the text says to open it on a phone and to submit', d.text.includes('手機') && d.text.includes('完成提交'), d.text);
