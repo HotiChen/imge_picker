@@ -6,9 +6,13 @@ Decided or discussed, not yet built. Newest decisions at the top of each group.
 say so in their heading.
 
 ## THE ORDER (agreed with Tim 2026-09-29 — the only main line)
-Run one real job end to end → connect Album / Proof / Delivery → validate
-with 5 photographers → only then multi-tenant SaaS. No new big features
-outside this list.
+Run one real job end to end → connect Album / Proof / Delivery → build
+multi-photographer in batches (open registration, operator approval, scope up
+to 我有興趣 only: no money flow, S2 ordering stays off for everyone;
+`docs/multi-photographer.md`) → validate with real photographers → only then
+widen to free sign-up / SaaS. No new big features outside this list.
+(Changed 2026-10-08 by Tim: multi-photographer used to wait for "validate with
+5 photographers" first.)
 
 1. **Make what exists run for real.**
    - Products / orders migration ✅ run, merged, deployed. `OPERATOR_TOKEN` set.
@@ -57,15 +61,18 @@ outside this list.
    delivery system, not just a picking tool.
    *Status 2026-10-08:* the photo side (picks → finals → confirm / revision pins →
    完成頁) is built; the album proof / approval leg is not.
-5. **5 photographers test it for real** (`docs/photographer-interviews.md`).
+5. **Photographers test it for real** (`docs/photographer-interviews.md`) —
+   on the multi-photographer build (open registration, operator approval,
+   up to 我有興趣; `docs/multi-photographer.md`, since 2026-10-08).
    Start booking during steps 2–4 — interviews cost no dev time. Three
    questions: would you use it? pay monthly? print albums / 無框畫 through
    the platform?
 6. **Decide the business model from the results:** monthly SaaS, platform
    products, print commission, own lab vs the photographer's lab. The 15%
    fee stays off until then.
-7. **Only then SaaS:** photographer accounts → multi-tenant → subscriptions
-   → isolation between photographers.
+7. **Only then widen to full SaaS:** free sign-up → subscriptions. (Photographer
+   accounts, multi-tenant isolation and per-photographer R2 paths are in
+   `docs/multi-photographer.md` (design only so far), to be built in its batches 1–5 before this step.)
 
 **Parked — do not start:** referral, client hub, online payment, vendor
 accounts, AI (layout or otherwise), more products, big operator console,
