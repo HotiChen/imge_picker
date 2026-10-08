@@ -85,7 +85,7 @@ function landOnce(env, re, fn) {
 const FRESH = readFileSync(new URL('../schema.sql', import.meta.url), 'utf8');
 const PRE_MIGRATION = FRESH
   .replace(/(allow_proof_download INTEGER NOT NULL DEFAULT 0),\n(?:\s*--[^\n]*\n)*\s*extra_max\s+INTEGER,\n(?:\s*--[^\n]*\n)*\s*client_confirmed_at\s+TEXT,\n(?:\s*--[^\n]*\n)*\s*client_confirmed_by\s+TEXT,\n(?:\s*--[^\n]*\n)*\s*shoot_date\s+TEXT,\n(?:\s*--[^\n]*\n)*\s*project_type\s+TEXT\n\);/, '$1\n);')
-  .replace(/(updated_at\s+TEXT),\n(?:\s*--[^\n]*\n)*\s*default_extra_max\s+INTEGER,\n(?:\s*--[^\n]*\n)*\s*transfer_info\s+TEXT\n\);/, '$1\n);');
+  .replace(/(updated_at\s+TEXT),\n(?:\s*--[^\n]*\n)*\s*default_extra_max\s+INTEGER,\n(?:\s*--[^\n]*\n)*\s*transfer_info\s+TEXT,\n(?:\s*--[^\n]*\n)*\s*pick_link_message\s+TEXT\n\);/, '$1\n);');
 const preMigrationEnv = () => setup({ DB: fakeDB({ schema: PRE_MIGRATION }) });
 
 // ─── the migration ──────────────────────────────────────────────────────────
@@ -112,7 +112,9 @@ test('migration: two append-only ALTERs, noted in schema.sql; the fixture really
   const confirmSql = readFileSync(new URL('../migrations/2026-10-04-client-confirm.sql', import.meta.url), 'utf8');
   const shootSql = readFileSync(new URL('../migrations/2026-10-07-project-shoot-date.sql', import.meta.url), 'utf8') + '\n' + readFileSync(new URL('../migrations/2026-10-07-project-type.sql', import.meta.url), 'utf8');
   // (studio_settings.transfer_info, appended after default_extra_max, comes from the S2 migration on top)
-  const transferSql = readFileSync(new URL('../migrations/2026-10-09-guest-orders.sql', import.meta.url), 'utf8').match(/ALTER TABLE studio_settings[^;]*;/)[0];
+  const transferSql = readFileSync(new URL('../migrations/2026-10-09-guest-orders.sql', import.meta.url), 'utf8').match(/ALTER TABLE studio_settings[^;]*;/)[0] +
+    // (and studio_settings.pick_link_message after it, from its own migration)
+    '\n' + readFileSync(new URL('../migrations/2026-10-10-pick-link-message.sql', import.meta.url), 'utf8');
   assert.deepEqual(shape(fakeDB({ schema: PRE_MIGRATION + '\n' + sql + '\n' + confirmSql + '\n' + shootSql + '\n' + transferSql })), shape(fakeDB()));
   // and a second paste fails loudly rather than doing anything
   const twice = fakeDB({ schema: PRE_MIGRATION + '\n' + sql });

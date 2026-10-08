@@ -149,6 +149,7 @@ test('settings start empty and never return the blob', async () => {
     studio_name: null, booking_url: null, default_pick_limit: null, default_extra_price: null,
     default_extra_max: null, effective_default_extra_max: 10, // docs/project-plan.md
     transfer_info: null, // docs/guest-shop.md S2
+    pick_link_message: null, // the 「複製連結」 default (pick-link-message.test.mjs)
     has_logo: false, logo_type: null, logo_updated_at: null, updated_at: null,
   });
   await putLogo(env, PNG);
@@ -566,7 +567,9 @@ test('the dashboard migration: fresh == archive-era database + it', () => {
     '\n' + readFileSync(new URL('../migrations/2026-10-07-project-shoot-date.sql', import.meta.url), 'utf8') +
     '\n' + readFileSync(new URL('../migrations/2026-10-07-project-type.sql', import.meta.url), 'utf8') +
     // (studio_settings.transfer_info, S2 guest ordering: the one statement of that file on this table)
-    '\n' + readFileSync(new URL('../migrations/2026-10-09-guest-orders.sql', import.meta.url), 'utf8').match(/ALTER TABLE studio_settings[^;]*;/)[0];
+    '\n' + readFileSync(new URL('../migrations/2026-10-09-guest-orders.sql', import.meta.url), 'utf8').match(/ALTER TABLE studio_settings[^;]*;/)[0] +
+    // (studio_settings.pick_link_message, appended after transfer_info)
+    '\n' + readFileSync(new URL('../migrations/2026-10-10-pick-link-message.sql', import.meta.url), 'utf8');
   const shape = db => ['projects', 'studio_settings'].map(t => db._db.prepare(`PRAGMA table_info(${t})`).all());
   assert.deepEqual(shape(fakeDB({ schema: deployed + '\n' + migration + '\n' + later })), shape(fakeDB({ schema: fresh })));
   assert.match(fresh, /ALTER TABLE projects ADD COLUMN delivered_at TEXT;/, 'schema.sql names the hand-run ALTER');

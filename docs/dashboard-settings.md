@@ -49,8 +49,8 @@ Responses carry `Cache-Control: private, no-store`.
 | `POST /api/admin/projects/:id/deliver` | `{ok: true, delivered_at}` (a repeat keeps the first stamp); 409 `{error, code: 'not_retouching', phase}` from picking/submitted; 404 unknown / other photographer |
 | `POST /api/admin/projects/:id/undeliver` | `{ok: true, delivered_at: null}`; 404 |
 | `GET /api/admin/projects` | rows gain `delivered_at` (detail has it via `project`) |
-| `GET /api/admin/settings` | `{studio_name, booking_url, default_pick_limit, default_extra_price, default_extra_max, effective_default_extra_max, has_logo, logo_type, logo_updated_at, updated_at}` — all null / `has_logo: false` before anything is set (`effective_default_extra_max` is then 10: what a new project gets, `docs/project-plan.md`); never the blob |
-| `PUT /api/admin/settings` | JSON; only the fields present change, `null` (or `''` for the strings) clears one, unknown fields ignored → same shape as GET. 400 `{error, code}` with `code` one of `invalid_studio_name` (not string/null, > 60 chars after trim), `invalid_booking_url`, `invalid_default_pick_limit`, `invalid_default_extra_price` (not a safe integer ≥ 0 or null), `invalid_default_extra_max` (not a safe integer 0–500 or null; 500 `extra_max_unavailable` before its migration); plain 400 for non-object JSON. Nothing written on any 400 |
+| `GET /api/admin/settings` | `{studio_name, booking_url, default_pick_limit, default_extra_price, default_extra_max, effective_default_extra_max, transfer_info, pick_link_message, has_logo, logo_type, logo_updated_at, updated_at}` — all null / `has_logo: false` before anything is set (`effective_default_extra_max` is then 10: what a new project gets, `docs/project-plan.md`); never the blob |
+| `PUT /api/admin/settings` | JSON; only the fields present change, `null` (or `''` for the strings) clears one, unknown fields ignored → same shape as GET. 400 `{error, code}` with `code` one of `invalid_studio_name` (not string/null, > 60 chars after trim), `invalid_booking_url`, `invalid_default_pick_limit`, `invalid_default_extra_price` (not a safe integer ≥ 0 or null), `invalid_default_extra_max` (not a safe integer 0–500 or null; 500 `extra_max_unavailable` before its migration), `invalid_pick_link_message` (see below); plain 400 for non-object JSON. Nothing written on any 400 |
 | `PUT /api/admin/settings/logo` | raw bytes → `{ok: true, has_logo: true, logo_type, logo_updated_at, size}`; 413 `{code: 'too_large', max: 204800}`; 415 `{code: 'unsupported_type'}` |
 | `DELETE /api/admin/settings/logo` | `{ok: true, has_logo: false}` (idempotent) |
 | `GET /api/studio/logo` | public. The bytes, `Content-Type` = sniffed type, `X-Content-Type-Options: nosniff`, `Content-Security-Policy: default-src 'none'`, `Cache-Control: public, max-age=300`, `ETag: "<logo_updated_at>"` (304 on `If-None-Match`); 404 when none. Other methods 405 |
@@ -82,3 +82,28 @@ admin token) → 405.
 - `todo` counts **projects**, non-archived: in `submitted`; with at least one
   submission newer than the last emailed one; with `modified_after_submit = 1`.
 - Two SQL statements: one pass for the counts, one grouped query for months.
+
+## The pick-link message default (`pick_link_message`)
+
+The photographer's own default for the message sent to a client with the pick
+link (admin.html 「複製連結」 dialog; the built-in text read cold). Column
+`studio_settings.pick_link_message TEXT`, from the hand-run
+`worker/migrations/2026-10-10-pick-link-message.sql` (one `ALTER TABLE`).
+
+- `GET /api/admin/settings` → `pick_link_message`: the stored string, or `null`
+  (= use the page's built-in text).
+- `PUT /api/admin/settings` with `pick_link_message`: a string of at most 1000
+  characters (code points, so an emoji is one), CRLF / CR stored as LF, line
+  breaks and tabs kept, trimmed at the ends. `''`, whitespace only or `null`
+  clear it (→ `null`). Not a string, over 1000, or holding any other control
+  character (C0 / DEL / C1), a bidi control, U+2028/2029, a BOM or a lone
+  surrogate → 400 `invalid_pick_link_message`, nothing written. A PUT without
+  the field leaves it alone.
+- Placeholders such as `{連結}` / `{專案名稱}` are plain text to the Worker: the
+  page fills them in when it builds the message.
+- Before the migration: GET reads `null`; a PUT naming the field answers 500
+  `pick_link_message_unavailable` and writes nothing (the other fields in that
+  body included); a PUT without it works as before.
+- Admin-only: no guest route (`/api/pick/state`, `shop`, `rounds`, orders,
+  `?list=`) returns it. The guest brand (`pickStudio`) passes only `name`,
+  `booking_url` and `has_logo` from the settings read.
