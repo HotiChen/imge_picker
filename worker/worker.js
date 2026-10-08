@@ -713,13 +713,14 @@ function cleanBookingUrl(raw) {
 // Everything the photographer set, minus the logo bytes. An absent row reads
 // as all-null.
 async function readStudioSettings(env, photographerId) {
-  // default_extra_max and transfer_info arrive in hand-run migrations (in
-  // that order); until then each reads unset
+  // default_extra_max, transfer_info and pick_link_message arrive in hand-run
+  // migrations (in that order); until then each reads unset
   const read = cols => env.DB.prepare(
     `SELECT studio_name, booking_url, default_pick_limit, default_extra_price${cols}, logo IS NOT NULL AS has_logo, logo_type, logo_updated_at, updated_at FROM studio_settings WHERE photographer_id = ?`
   ).bind(photographerId).first();
-  const row = await withoutMissingColumn(() => read(', default_extra_max, transfer_info'),
-    () => withoutMissingColumn(() => read(', default_extra_max'), () => read('')));
+  const row = await withoutMissingColumn(() => read(', default_extra_max, transfer_info, pick_link_message'),
+    () => withoutMissingColumn(() => read(', default_extra_max, transfer_info'),
+      () => withoutMissingColumn(() => read(', default_extra_max'), () => read(''))));
   const hasLogo = !!row?.has_logo;
   const extraMax = row?.default_extra_max ?? null;
   return {
@@ -730,6 +731,9 @@ async function readStudioSettings(env, photographerId) {
     default_extra_max: extraMax,
     // shown to a guest on a confirmed order (S2); null = not set
     transfer_info: row?.transfer_info ?? null,
+    // the photographer's default text sent with a pick link; null = the
+    // page's built-in one. Admin-only: pickStudio passes three other fields
+    pick_link_message: row?.pick_link_message ?? null,
     // what a new project gets when the create body leaves extra_max out
     effective_default_extra_max: isExtraMax(extraMax) ? extraMax : EXTRA_MAX_DEFAULT,
     has_logo: hasLogo,
@@ -1994,12 +1998,17 @@ const CONTACT_PHONE_MAX = 20;
 const CONTACT_PHONE = new RegExp(`^[0-9+\\-() ]{${CONTACT_PHONE_MIN},${CONTACT_PHONE_MAX}}$`);
 const CONTACT_PHONE_DIGITS = new RegExp(`^(?:[^0-9]*[0-9]){${CONTACT_PHONE_MIN}}`);
 const TRANSFER_INFO_MAX = 500;
-// a paragraph a guest or the photographer types: line feeds stay, every other
-// control, line-separator, bidi, BOM or lone-surrogate character is refused
-const PARAGRAPH_UNSAFE = /[\x00-\x09\x0b-\x1f\x7f-\x9f\u{61c}\u{200e}\u{200f}\u{2028}\u{2029}\u{202a}-\u{202e}\u{2066}-\u{2069}\u{feff}\u{d800}-\u{dfff}]/u;
+// a paragraph a guest or the photographer types: line feeds and tabs stay,
+// every other control, line-separator, bidi, BOM or lone-surrogate character
+// is refused (paragraphText turns a tab into a space first unless told not to)
+const PARAGRAPH_UNSAFE = /[\x00-\x08\x0b-\x1f\x7f-\x9f\u{61c}\u{200e}\u{200f}\u{2028}\u{2029}\u{202a}-\u{202e}\u{2066}-\u{2069}\u{feff}\u{d800}-\u{dfff}]/u;
 const ORDER_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const REQUEST_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const ORDERS_UNAVAILABLE = { error: '線上訂購功能尚未啟用', code: 'orders_unavailable' };
+// studio_settings.pick_link_message (admin.html 「複製連結」): a paragraph
+// whose tabs stay (people indent a list of steps)
+const PICK_LINK_MESSAGE_MAX = 1000;
+const PICK_LINK_MESSAGE_UNAVAILABLE = { error: '選片連結訊息預設尚未啟用', code: 'pick_link_message_unavailable' };
 const ORDERS_REQUESTED_URL = 'https://imhoti.tw/studio/orders.html?status=requested';
 const GUEST_ORDER_EMAIL_LINES_MAX = 20;
 // what /api/pick/shop tells the page when ordering is open
@@ -2064,13 +2073,15 @@ async function readTransferInfo(env, project) {
   }
 }
 
-// A paragraph as stored: CRLF / CR become LF, a tab a space, trimmed; null
-// (absent) or '' reads as ''. undefined when it is not a string, is over
-// `max` characters or holds a character PARAGRAPH_UNSAFE refuses.
-function paragraphText(value, max) {
+// A paragraph as stored: CRLF / CR become LF, a tab a space (kept with
+// keepTabs), trimmed; null (absent) or '' reads as ''. undefined when it is
+// not a string, is over `max` characters or holds a character
+// PARAGRAPH_UNSAFE refuses.
+function paragraphText(value, max, keepTabs = false) {
   if (value === undefined || value === null) return '';
   if (typeof value !== 'string') return undefined;
-  const t = value.replace(/\r\n?/g, '\n').replace(/\t/g, ' ').trim();
+  const lf = value.replace(/\r\n?/g, '\n');
+  const t = (keepTabs ? lf : lf.replace(/\t/g, ' ')).trim();
   if (overChars(t, max) || PARAGRAPH_UNSAFE.test(t)) return undefined;
   return t;
 }
@@ -2078,6 +2089,13 @@ function paragraphText(value, max) {
 // clears) or undefined when refused
 function transferInfoValue(value) {
   const t = paragraphText(value, TRANSFER_INFO_MAX);
+  return t === undefined ? undefined : t || null;
+}
+
+// studio_settings.pick_link_message from a settings PUT: like
+// transferInfoValue, but tabs stay. Placeholders ({連結}) are plain text.
+function pickLinkMessageValue(value) {
+  const t = paragraphText(value, PICK_LINK_MESSAGE_MAX, true);
   return t === undefined ? undefined : t || null;
 }
 
@@ -4229,6 +4247,12 @@ export default {
           if (v === undefined) return bad('transfer_info');
           set.transfer_info = v;
         }
+        // the photographer's default pick-link message (admin-only)
+        if (has('pick_link_message')) {
+          const v = pickLinkMessageValue(body.pick_link_message);
+          if (v === undefined) return bad('pick_link_message');
+          set.pick_link_message = v;
+        }
         // column names come from the fixed list above, never from the body
         const cols = [...Object.keys(set), 'updated_at'];
         const all = ['photographer_id', ...cols];
@@ -4238,8 +4262,11 @@ export default {
             `ON CONFLICT(photographer_id) DO UPDATE SET ${cols.map(k => `${k} = excluded.${k}`).join(', ')}`
           ).bind(DEFAULT_PHOTOGRAPHER_ID, ...Object.values(set), new Date().toISOString()).run();
         } catch (e) {
-          // default_extra_max / transfer_info before its migration: one
-          // statement, so nothing landed; the error names the column
+          // default_extra_max / transfer_info / pick_link_message before its
+          // migration: one statement, so nothing landed; the error names the column
+          if (isMissingColumn(e) && 'pick_link_message' in set && /pick_link_message/.test(String(e?.message || ''))) {
+            return jsonOk(PICK_LINK_MESSAGE_UNAVAILABLE, 500, ADMIN_ONLY_HEADERS);
+          }
           if (isMissingColumn(e) && 'transfer_info' in set && /transfer_info/.test(String(e?.message || ''))) {
             return jsonOk(ORDERS_UNAVAILABLE, 500, ADMIN_ONLY_HEADERS);
           }

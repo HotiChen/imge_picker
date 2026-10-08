@@ -291,7 +291,15 @@ CREATE TABLE IF NOT EXISTS studio_settings (
   -- through readTransferInfo only. Appended, from a hand-run
   --   ALTER TABLE studio_settings ADD COLUMN transfer_info TEXT;
   -- (worker/migrations/2026-10-09-guest-orders.sql).
-  transfer_info       TEXT
+  transfer_info       TEXT,
+  -- the photographer's own default for the message sent with a pick link
+  -- (admin.html 「複製連結」): at most 1000 characters, line breaks and tabs
+  -- kept, no other control or bidi character; placeholders such as {連結} are
+  -- plain text the page fills in. NULL = the built-in text. Admin-only: no
+  -- guest route returns it. Appended, from a hand-run
+  --   ALTER TABLE studio_settings ADD COLUMN pick_link_message TEXT;
+  -- (worker/migrations/2026-10-10-pick-link-message.sql).
+  pick_link_message   TEXT
 );
 
 -- ─── Products and orders (docs/products-orders.md) ─────────────────────────

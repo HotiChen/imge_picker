@@ -45,10 +45,12 @@ test('migration: eleven statements, each runnable on its own, noted in schema.sq
   assert.doesNotMatch(MIGRATION.replace(/--[^\n]*/g, ''), /ship|address|fee/i);
   assert.match(FRESH, /2026-10-09-guest-orders\.sql/);
   for (const s of statementsOf(MIGRATION)) assert.ok(FRESH.includes(s.replace(/ TEXT$| INTEGER$/, '')) || FRESH.includes(s), `schema.sql notes: ${s}`);
-  const env = { DB: fakeDB({ schema: s2Schema() }) };
+  // (studio_settings.pick_link_message, appended after transfer_info, comes from its own later migration on top)
+  const env = { DB: fakeDB({ schema: s2Schema({ settings: [...S2_SETTINGS_COLUMNS, 'pick_link_message'] }) }) };
   assert.throws(() => env.DB._db.prepare('SELECT request_id FROM orders').all(), /no such column/, 'the fixture lacks it');
   assert.throws(() => env.DB._db.prepare('SELECT transfer_info FROM studio_settings').all(), /no such column/);
   for (const s of statementsOf(MIGRATION)) env.DB._db.exec(s);
+  env.DB._db.exec(readFileSync(new URL('../migrations/2026-10-10-pick-link-message.sql', import.meta.url), 'utf8'));
   const fresh = fakeDB();
   for (const t of ['orders', 'order_items', 'studio_settings']) {
     const cols = d => d.prepare(`PRAGMA table_info(${t})`).all().map(c => ({ ...c }));
