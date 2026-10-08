@@ -98,6 +98,7 @@ Also flaky under load, reproduced on the pre-pins base feb9bd4 (5 of 8 runs red 
 "mobile preview — preloads i±1/i±2 … at the responsive width bucket (1200 on a 390px/DPR3 phone)".
 Also seen under load, green 3/3 alone: suite 10 "mobile preview — a fast burst of navigation only preloads around where it settles".
 Seen once in a full run, green 3/3 alone and in all 126 admin suites together: admin "訂單品項是平台商品：單價不能低於平台價（below_platform_price）…" (a 4000ms waitForFunction timeout).
+Also flaky, seen on the base too (c574078 failed 2 of 3 alone; 1 of 3 on HEAD): "guest tour lightbox (390px) … step 3/7 (navigation)" (the ring position on the real prev/next controls).
 Also seen once under load, green alone: dashboard "全部待處理歸零…" (3000ms waitForURL timeout). When the full suite shows
 only these, re-run the failing suite alone with `ONLY=` before calling it a regression.
 
