@@ -23,7 +23,7 @@ const admRevItems = page => page.$$eval('#pd-revisions .pd-rev', els => els.map(
     m.state.project.client_confirmed_at = confirmed || null;
     m.state.project.client_confirmed_by = confirmed ? by : null;
   };
-  await suite('admin 列表 — delivered project badges: 已交件 stays; plus 客戶已確認 / 已標記完成 / 待修改 N; nothing for an undelivered one',
+  await suite('admin 列表 — the ONE row badge of a delivered project: 已交件, or (higher priority) 客戶已確認 / 已標記完成 / 待修改 N; nothing for an undelivered one',
     `${base}/admin.html#projects`,
     async page => {
       const out = [];
@@ -35,13 +35,13 @@ const admRevItems = page => page.$$eval('#pd-revisions .pd-rev', els => els.map(
       put([{ message: 'a' }, { message: 'b' }, { message: 'c', resolved_at: '2026-09-22T00:00:00.000Z' }]);
       ok('fixture: the list row says 2 open (the resolved one does not count)', m.state.revisions.filter(r => !r.resolved_at).length === 2);
       b = await reload();
-      ok('2 open requests: 待修改 2 (data-confirm-badge=revising), 已交件 still there', b.some(x => x.c === 'revising' && x.t === '待修改 2') && b.some(x => x.d && x.t === '已交件'), JSON.stringify(b));
+      ok('2 open requests: 待修改 2 (data-confirm-badge=revising) replaces 已交件 (one badge per row)', b.length === 1 && b.some(x => x.c === 'revising' && x.t === '待修改 2') && !b.some(x => x.d), JSON.stringify(b));
       put([{ message: 'a' }], '2026-09-23T00:00:00.000Z', 'guest');
       b = await reload();
-      ok('confirmed by the guest: 客戶已確認 — and it wins over an open request; no 待修改', b.some(x => x.c === 'confirmed' && x.t === '客戶已確認') && !b.some(x => x.c === 'revising') && b.some(x => x.d), JSON.stringify(b));
+      ok('confirmed by the guest: 客戶已確認 — and it wins over an open request; no 待修改', b.length === 1 && b.some(x => x.c === 'confirmed' && x.t === '客戶已確認') && !b.some(x => x.c === 'revising') && !b.some(x => x.d), JSON.stringify(b));
       put([], '2026-09-23T00:00:00.000Z', 'photographer');
       b = await reload();
-      ok('confirmed by the photographer: 已標記完成 (told apart from the guest\'s), not 客戶已確認', b.some(x => x.c === 'photographer' && x.t === '已標記完成') && !b.some(x => x.t === '客戶已確認') && b.some(x => x.d), JSON.stringify(b));
+      ok('confirmed by the photographer: 已標記完成 (told apart from the guest\'s), not 客戶已確認', b.some(x => x.c === 'photographer' && x.t === '已標記完成') && !b.some(x => x.t === '客戶已確認') && b.length === 1 && !b.some(x => x.d), JSON.stringify(b));
       put([{ message: 'a' }, { message: 'b' }]);
       m.state.project.delivered_at = null;
       b = await reload();

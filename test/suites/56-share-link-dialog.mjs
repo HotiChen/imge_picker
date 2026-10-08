@@ -2,6 +2,7 @@
 // ready-to-send message (title + link + how to open) in an editable textarea (the default text is set in 設定, suite 57), so it can be tweaked or selected by hand
 // where the clipboard is blocked. The link itself is still copied at once (suite 35 pins that).
 import { base, suite } from '../lib/harness.mjs';
+import { openCreateForm } from '../lib/project-helpers.mjs';
 import { ADMIN } from '../lib/auth-mocks.mjs';
 import { pickFakeWorker } from '../lib/pick-fake.mjs';
 
@@ -139,6 +140,7 @@ const dlg = page => page.evaluate(() => {
     async page => {
       const out = [], ok = okFn(out);
       await page.waitForSelector('#admin-view', { state: 'visible', timeout: 5000 });
+      await openCreateForm(page);
       await page.fill('#proj-title', '新專案 A&B');
       await page.click('#proj-create-btn');
       await page.waitForSelector('#proj-create-result', { state: 'visible', timeout: 5000 });

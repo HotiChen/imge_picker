@@ -6,7 +6,7 @@ import { ADMIN } from '../lib/auth-mocks.mjs';
 import { SEED_TOKEN, dashSettingsMock } from '../lib/dashboard-mocks.mjs';
 import { PHOTOS } from '../lib/editor-mocks.mjs';
 import { pickFakeWorker } from '../lib/pick-fake.mjs';
-import { pickHeart, pickSubmits } from '../lib/project-helpers.mjs';
+import { pickHeart, pickSubmits, openCreateForm } from '../lib/project-helpers.mjs';
 
 export default async function register() {
 
@@ -93,6 +93,7 @@ const heartOn = (page, i) => page.locator('.photo-card').nth(i).locator('.pick-h
 // (the folders come from the project name + shoot date now, so "pick a folder" became "name the project")
 async function planPickFolder(page) {
   await page.waitForSelector('#admin-view', { state: 'visible', timeout: 5000 });
+  await openCreateForm(page);
   await page.fill('#proj-title', '王小明');
 }
 const createPosts = m => m.requests.filter(r => r.method === 'POST' && r.path === '/api/admin/projects');

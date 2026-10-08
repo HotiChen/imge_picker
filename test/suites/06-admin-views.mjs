@@ -100,7 +100,7 @@ const VIEW_STATE = () => {
     active: [...document.querySelectorAll('.side-nav-item.active')].map(e => e.textContent.trim()),
     clientsHref: document.querySelector('.side-nav-item[data-nav="clients"]')?.getAttribute('href'),
     // The rendered box, not just the style: a display:none ancestor has no size.
-    createBox: !!document.querySelector('#project-create-panel')?.getClientRects().length,
+    createBox: !!document.querySelector('#proj-new-btn')?.getClientRects().length,   // the form itself opens from this button
     tableBox: !!document.querySelector('#clients-table')?.getClientRects().length,
   };
 };
@@ -121,7 +121,7 @@ for (const [hash, want] of [
       ok(`the ${want} section is displayed`, v[want] === 'block', JSON.stringify(v));
       ok(`the ${other} section is display:none (computed)`, v[other] === 'none', JSON.stringify(v));
       if (want === 'projects') {
-        ok('the create form has a rendered box', v.createBox, JSON.stringify(v));
+        ok('the create entry (＋ 新增專案) has a rendered box', v.createBox, JSON.stringify(v));
         ok('the clients table has no box', !v.tableBox, JSON.stringify(v));
       } else {
         ok('the clients table has a rendered box', v.tableBox, JSON.stringify(v));

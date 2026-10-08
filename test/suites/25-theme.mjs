@@ -3,6 +3,7 @@
 import { join } from 'node:path';
 import { readFileSync } from 'node:fs';
 import { base, suite } from '../lib/harness.mjs';
+import { openCreateForm } from '../lib/project-helpers.mjs';
 import { ROOT } from '../lib/env.mjs';
 import { ADMIN, ADMIN_PLAIN, SHOOT_CLIENTS, adminMock, shareMock } from '../lib/auth-mocks.mjs';
 import { ADMIN_BUCKET, ADM_REVS, admDelivered } from '../lib/delivery-helpers.mjs';
@@ -249,15 +250,17 @@ for (const [tag, ctx] of [['1280', DESKTOP], ['390', PHONE]]) {
       // an archived project is hidden until 顯示已封存 is ticked
       await page.check('#proj-show-archived-toggle');
       await page.waitForSelector('[data-project-row]', { timeout: 5000 });
+      await openCreateForm(page);
       await page.fill('#proj-title', '王小明 & 陳小美 婚紗');
       await page.evaluate(() => { document.getElementById('proj-create-result').style.display = 'block'; document.getElementById('proj-link-output').value = 'https://imhoti.tw/studio/index.html?t=abc'; });
       await page.evaluate(() => { document.getElementById('proj-create-err').textContent = '請輸入專案名稱'; });
-      ok('the list row carries every badge (delivered, archived, modified, unnotified)',
-        await page.evaluate(() => { const t = document.querySelector('[data-project-row]').textContent; return /已交件/.test(t) && /已封存/.test(t) && /已修改/.test(t) && /未寄信/.test(t); }));
+      ok('the list row carries ONE badge (已交件) and still tells archived / modified / unnotified in its meta line',
+        await page.evaluate(() => { const r = document.querySelector('[data-project-row]'); const t = r.textContent; const bs = [...r.querySelectorAll('.badge')];
+          return bs.length === 1 && bs[0].textContent.trim() === '已交件' && /已封存/.test(t) && /已修改/.test(t) && /未寄信/.test(t); }));
       await tokenChecks(page, ok, 'admin 列表');
       await brightChecks(page, ok, 'admin 列表', { minItems: 25,
         named: ['#proj-title', '#proj-create-btn', '#proj-create-err', '.pick-admin-field label', '#proj-link-output', '[data-project-row] .badge-approved',
-          '[data-project-row] .badge-pending', '[data-project-row] .pd-owner', '[data-project-row] [data-open-project]', ...(tag === '1280' ? ['.side-nav-logout'] : []) /* on a phone the menu's 登出 is hidden, the header one stays */, '.btn-logout'] });
+          '[data-project-row] .pd-owner', '[data-project-row] [data-open-project]', ...(tag === '1280' ? ['.side-nav-logout'] : []) /* on a phone the menu's 登出 is hidden, the header one stays */, '.btn-logout'] });
       const row = await page.$eval('[data-project-row]', e => { const c = getComputedStyle(e); return { bg: c.backgroundColor }; });
       ok('a project row is a white card on the cream page', row.bg === WHITE, JSON.stringify(row));
       await shot(page, `admin-projects-${tag}`);

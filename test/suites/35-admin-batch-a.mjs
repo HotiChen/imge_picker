@@ -349,24 +349,24 @@ const scanBadges = (page, scope) => page.evaluate(sel => {
 }, scope);
 
 const STATES = [
-  { name: '選片中', opts: { phase: 'picking' }, expect: { '選片中': 'st-progress' } },
-  { name: '已送出（等攝影師）', opts: { phase: 'submitted' }, expect: { '已送出': 'st-action' } },
-  { name: '精修中', opts: { phase: 'retouching' }, expect: { '精修中': 'st-progress' } },
+  { name: '選片中', opts: { phase: 'picking' }, expect: { '選片中': 'st-progress' }, list: { '選片中': 'st-progress' } },
+  { name: '已送出（等攝影師）', opts: { phase: 'submitted' }, expect: { '已送出': 'st-action' }, list: { '已送出': 'st-action' } },
+  { name: '精修中', opts: { phase: 'retouching' }, expect: { '精修中': 'st-progress' }, list: { '精修中': 'st-progress' } },
   { name: '精修中 + 已交件', opts: { phase: 'retouching', deliveredAt: '2026-09-20T00:00:00.000Z', finalFolders: ['shoot/精修/'] },
-    expect: { '精修中': 'st-progress', '已交件': 'st-done' } },
+    expect: { '精修中': 'st-progress', '已交件': 'st-done' }, list: { '已交件': 'st-done' } },
   { name: '已交件 + 待修改 1', opts: { phase: 'retouching', deliveredAt: '2026-09-20T00:00:00.000Z', finalFolders: ['shoot/精修/'], revisions: [{ message: '背景路人' }] },
-    expect: { '精修中': 'st-progress', '已交件': 'st-done', '待修改 1': 'st-action' } },
+    expect: { '精修中': 'st-progress', '已交件': 'st-done', '待修改 1': 'st-action' }, list: { '待修改 1': 'st-action' } },
   { name: '客戶已確認', opts: { phase: 'retouching', deliveredAt: '2026-09-20T00:00:00.000Z', finalFolders: ['shoot/精修/'], confirmedAt: '2026-09-21T00:00:00.000Z' },
-    expect: { '已交件': 'st-done', '客戶已確認': 'st-done' } },
+    expect: { '已交件': 'st-done', '客戶已確認': 'st-done' }, list: { '客戶已確認': 'st-done' } },
   { name: '已送出 + 已修改', opts: { phase: 'submitted' }, mutate: m => { m.state.project.modified_after_submit = 1; },
-    expect: { '已送出': 'st-action', '已修改': 'st-neutral' } },
+    expect: { '已送出': 'st-action', '已修改': 'st-neutral' }, list: { '已送出': 'st-action' } },
   { name: '已標記完成', opts: { phase: 'retouching', deliveredAt: '2026-09-20T00:00:00.000Z', finalFolders: ['shoot/精修/'], confirmedAt: '2026-09-21T00:00:00.000Z', confirmedBy: 'photographer' },
-    expect: { '已交件': 'st-done', '已標記完成': 'st-done' } },
+    expect: { '已交件': 'st-done', '已標記完成': 'st-done' }, list: { '已標記完成': 'st-done' } },
 ];
 for (const st of STATES) {
   const m = pickFakeWorker({ projectId: 'proj-st', ownerName: 'Zoe', folders: ['shoot/毛片/'], ...st.opts });
   if (st.mutate) st.mutate(m);
-  await suite(`35 狀態顏色 — ${st.name}：列表與詳情標題的每個徽章各有自己的顏色類別、文字對比 ≥ 4.5`,
+  await suite(`35 狀態顏色 — ${st.name}：列表（每列只有一個徽章）與詳情標題（全部徽章）的每個徽章各有自己的顏色類別、文字對比 ≥ 4.5`,
     `${base}/admin.html`,
     async page => {
       const out = [], ok = okFn(out);
@@ -378,8 +378,11 @@ for (const st of STATES) {
         }
         const bs = await scanBadges(page, scope);
         const byText = Object.fromEntries(bs.map(b => [b.text, b]));
-        ok(`${where}: floor — scanned at least the ${Object.keys(st.expect).length} expected badges`, bs.length >= Object.keys(st.expect).length, JSON.stringify(bs.map(b => b.text)));
-        for (const [text, cls] of Object.entries(st.expect)) {
+        // the list row shows ONE badge (the most important state); the detail header keeps all of them
+        const expect = where === 'list row' ? st.list : st.expect;
+        ok(`${where}: floor — scanned at least the ${Object.keys(expect).length} expected badges`, bs.length >= Object.keys(expect).length, JSON.stringify(bs.map(b => b.text)));
+        if (where === 'list row') ok('list row: exactly one badge', bs.length === 1, JSON.stringify(bs.map(b => b.text)));
+        for (const [text, cls] of Object.entries(expect)) {
           const b = bs.find(x => x.text === text || x.text.startsWith(text));
           ok(`${where}: ${text} has ${cls}`, !!b && b.cls === cls, JSON.stringify(b));
           if (b && b.cls) { seenColours[GROUP_OF[b.cls]].push({ color: b.color, bg: b.bg }); }
@@ -415,7 +418,7 @@ await suite('35 狀態顏色 — 四組顏色（琥珀 / 珊瑚紅 / 綠 / 灰�
   `${base}/admin.html`,
   async () => {
     const out = [], ok = okFn(out);
-    ok('floor: badges were scanned in the state suites above', badgesScanned >= 30, String(badgesScanned));
+    ok('floor: badges were scanned in the state suites above', badgesScanned >= 22, String(badgesScanned));
     const groups = Object.keys(seenColours);
     for (const g of groups) {
       ok(`group ${g}: at least 2 badges seen`, seenColours[g].length >= 2, String(seenColours[g].length));

@@ -178,6 +178,21 @@
   /* 攝影類別 tag + list filter bar */
   .pt-tag { display: inline-block; font-size: 11px; line-height: 1.5; padding: 0 8px; border-radius: 999px; background: var(--bg); border: 1px solid var(--accent-dim); color: var(--ink-70); vertical-align: middle; }
   .pt-tag[hidden] { display: none; }
+  #project-create-panel[hidden] { display: none; }
+  .proj-new-btn { min-height: 44px; margin: 0 0 14px; }
+  #proj-create-result { margin: 0 0 14px; }
+  #proj-copy-link-btn { min-height: 44px; }
+  .proj-create-actions .btn { min-height: 44px; }
+  /* list row: title line (title + the ONE status badge), meta line, buttons */
+  .proj-recent-main { min-width: 0; flex: 1; }
+  .proj-row-title { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .proj-row-title .proj-row-name { min-width: 0; overflow-wrap: anywhere; font-weight: 500; }
+  .proj-row-meta { margin: 2px 0 0; }
+  @media (max-width: 768px) {
+    .proj-recent-row { flex-direction: column; align-items: stretch; gap: 6px; padding: 10px 12px; }
+    .proj-recent-row .actions { flex-wrap: nowrap; }
+    .proj-recent-row .actions .btn { flex: 1; min-height: 44px; }
+  }
   .pl-filter { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px; }
   .pl-filter .field { width: auto; padding: 7px 10px; font-size: 13px; }
   .pl-filter #pl-q { flex: 1; min-width: 160px; }
@@ -370,7 +385,8 @@
     <div id="projects-list-area">
     <h2>選片專案（Guest Picking）</h2>
     <div id="proj-notice" class="proj-notice" role="status" style="display:none;"></div>
-    <div id="project-create-panel" class="panel">
+    <button id="proj-new-btn" class="btn btn-accent proj-new-btn" type="button" aria-expanded="false" aria-controls="project-create-panel">＋ 新增專案</button>
+    <div id="project-create-panel" class="panel" hidden>
       <div class="panel-body">
         <div class="pick-admin-row">
           <div class="pick-admin-field">
@@ -407,15 +423,20 @@
             <input id="proj-extra-max" class="field" type="number" min="0" max="500" step="1">
           </div>
         </div>
-        <button id="proj-create-btn" class="btn btn-accent" type="button">建立專案並產生連結</button>
-        <div id="proj-create-err" class="err"></div>
-        <div id="proj-create-result" class="pick-admin-result" style="display:none;">
-          <div>連結已建立，傳給客人開始選片：</div>
-          <div class="pick-admin-link-row">
-            <input id="proj-link-output" class="field" readonly>
-            <button id="proj-copy-link-btn" class="btn btn-outline" type="button">複製連結</button>
-          </div>
+        <div class="actions proj-create-actions">
+          <button id="proj-create-btn" class="btn btn-accent" type="button">建立專案並產生連結</button>
+          <button id="proj-create-cancel" class="btn btn-outline" type="button">取消</button>
         </div>
+        <div id="proj-create-err" class="err"></div>
+      </div>
+    </div>
+
+    <!-- after a create the form closes; this box keeps the link to send (it hides on the next open) -->
+    <div id="proj-create-result" class="panel panel-body pick-admin-result" style="display:none;">
+      <div>連結已建立，傳給客人開始選片：</div>
+      <div class="pick-admin-link-row">
+        <input id="proj-link-output" class="field" readonly>
+        <button id="proj-copy-link-btn" class="btn btn-outline" type="button">複製連結</button>
       </div>
     </div>
 
@@ -1145,27 +1166,32 @@
     const filtering = listFilter.q !== '' || listFilter.status !== 'all' || listFilter.type !== 'all';
     if (count && filtering) count.textContent = `顯示 ${projects.length} / ${projectsCache.length} 個專案`;
     if (!projects.length) { box.innerHTML = '<div class="empty">沒有符合的專案</div>'; return; }
-    box.innerHTML = projects.map(p => `
-      <div class="proj-recent-row" data-project-row="${escHtml(p.id)}" role="button" tabindex="0">
-        <div>
-          <span>${escHtml(p.title || '（未命名）')}</span>
-          ${projectTypeOf(p) ? `<span class="pt-tag" data-project-type-tag>${escHtml(projectTypeOf(p))}</span>` : ''}
-          ${phaseBadgeHtml(p)}
-          ${p.delivered_at ? '<span class="badge badge-approved st-done" data-delivered-badge>已交件</span>' : ''}
-          ${confirmBadgeHtml(p)}
-          ${p.archived_at ? '<span class="badge badge-pending st-neutral">已封存</span>' : ''}
-          ${p.modified_after_submit ? '<span class="badge badge-pending st-neutral">已修改</span>' : ''}
-          ${p.unnotified_submissions ? `<span class="badge badge-pending st-neutral">${escHtml(p.unnotified_submissions)} 次送出未寄信</span>` : ''}
-          <div class="pd-owner" style="margin:2px 0 0;">
-            ${p.owner_name ? escHtml(p.owner_name) : '<span class="folder-none">尚無人認領</span>'}
-            · 送出 ${escHtml(p.submission_count)} 次
+    box.innerHTML = projects.map(p => {
+      const st = projectStatus(p);
+      // ONE visible badge per row: confirmed > client asked for changes > delivered > phase.
+      // The full set of states stays on the row element as data-* so filters / tests keep reading it.
+      const badge = st.confirm ? confirmBadgeHtml(p)
+        : st.delivered ? '<span class="badge badge-approved st-done" data-delivered-badge>已交件</span>'
+        : phaseBadgeHtml(p);
+      const flags = [p.archived_at ? 'archived' : '', p.modified_after_submit ? 'modified' : '', p.unnotified_submissions ? 'unnotified' : ''].filter(Boolean).join(' ');
+      const meta = [projectTypeOf(p) ? `<span data-project-type-tag>${escHtml(projectTypeOf(p))}</span>` : '',
+        escHtml(p.owner_name || '尚無人認領'), `送出 ${escHtml(p.submission_count)} 次`,
+        p.archived_at ? '已封存' : '', p.modified_after_submit ? '已修改' : '',
+        p.unnotified_submissions ? `${escHtml(p.unnotified_submissions)} 次送出未寄信` : ''].filter(Boolean);
+      return `
+      <div class="proj-recent-row" data-project-row="${escHtml(p.id)}" data-phase="${escHtml(p.phase || '')}" data-delivered="${st.delivered ? '1' : '0'}" data-confirm="${escHtml(st.confirm || '')}" data-flags="${escHtml(flags)}" role="button" tabindex="0">
+        <div class="proj-recent-main">
+          <div class="proj-row-title">
+            <span class="proj-row-name">${escHtml(p.title || '（未命名）')}</span>
+            ${badge}
           </div>
+          <div class="pd-owner proj-row-meta" data-row-meta>${meta.join(' · ')}</div>
         </div>
         <div class="actions">
           ${p.token ? `<button type="button" class="btn btn-outline" data-copy-link="${escHtml(p.token)}">複製連結</button>` : ''}
           <button type="button" class="btn btn-outline" data-open-project="${escHtml(p.id)}">開啟</button>
         </div>
-      </div>`).join('');
+      </div>`; }).join('');
     box.querySelectorAll('[data-open-project]').forEach(btn => {
       btn.addEventListener('click', () => openProjectDetail(btn.dataset.openProject));
     });
@@ -1197,6 +1223,43 @@
     const base = location.href.replace(/admin\.html.*$/, 'index.html');
     return `${base}?t=${encodeURIComponent(token)}`;
   }
+
+  // The create form lives in a panel that opens under 「＋ 新增專案」 and closes on 取消 / Esc / a
+  // successful create. Every open starts clean (fields, error, the old 連結已建立 box).
+  function resetCreateFields() {
+    document.getElementById('proj-type').value = '';
+    document.getElementById('proj-type-other').value = '';
+    document.getElementById('proj-type-other').style.display = 'none';
+    document.getElementById('proj-title').value = '';
+    document.getElementById('proj-date').value = todayTaipei();
+    document.getElementById('proj-pick-limit').value = '';
+    document.getElementById('proj-extra-price').value = '';
+    document.getElementById('proj-extra-max').value = '';
+    loadProjectDefaults();
+    updateCreateForm();
+  }
+  function openCreatePanel() {
+    document.getElementById('proj-create-err').textContent = '';
+    document.getElementById('proj-create-result').style.display = 'none';
+    resetCreateFields();
+    document.getElementById('project-create-panel').hidden = false;
+    document.getElementById('proj-new-btn').setAttribute('aria-expanded', 'true');
+    document.getElementById('proj-title').focus();
+  }
+  function closeCreatePanel() {
+    const panel = document.getElementById('project-create-panel');
+    if (!panel || panel.hidden) return;
+    panel.hidden = true;
+    const nb = document.getElementById('proj-new-btn');
+    nb.setAttribute('aria-expanded', 'false');
+  }
+  document.getElementById('proj-new-btn')?.addEventListener('click', () => {
+    if (document.getElementById('project-create-panel').hidden) openCreatePanel(); else closeCreatePanel();
+  });
+  document.getElementById('proj-create-cancel')?.addEventListener('click', closeCreatePanel);
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && !document.getElementById('project-create-panel').hidden) closeCreatePanel();
+  });
 
   document.getElementById('proj-create-btn')?.addEventListener('click', async function () {
     const errEl = document.getElementById('proj-create-err');
@@ -1242,18 +1305,9 @@
       linkOut.dataset.token = data.token;
       document.getElementById('proj-create-result').style.display = 'block';
       await loadProjectList();
-      document.getElementById('proj-type').value = '';
-      document.getElementById('proj-type-other').value = '';
-      document.getElementById('proj-type-other').style.display = 'none';
-      document.getElementById('proj-title').value = '';
-      document.getElementById('proj-date').value = todayTaipei();
-      document.getElementById('proj-pick-limit').value = '';
-      document.getElementById('proj-extra-price').value = '';
-      document.getElementById('proj-extra-max').value = '';
-      loadProjectDefaults();
-      updateCreateForm();
-      // Stay on the list: the 連結已建立 box with the link to send is up here, and
-      // opening the detail now would hide it. The new project is the first row.
+      closeCreatePanel();
+      resetCreateFields();
+      // Stay on the list: the panel closes, the new project is a row with its own 複製連結.
     } catch (e) {
       errEl.textContent = '無法連線到 Worker';
     } finally {

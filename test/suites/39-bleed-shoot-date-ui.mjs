@@ -3,6 +3,7 @@
 // docs/delivery.md "Shoot date". Fakes mirror the Worker (orders-fake.mjs bleedWrite, pick-fake.mjs shoot_date).
 // Registered by test/run.mjs in file-name order; see test/README.md.
 import { base, suite } from '../lib/harness.mjs';
+import { openCreateForm } from '../lib/project-helpers.mjs';
 import { ADMIN } from '../lib/auth-mocks.mjs';
 import { MOBILE } from '../lib/env.mjs';
 import { pickFakeWorker } from '../lib/pick-fake.mjs';
@@ -217,6 +218,7 @@ const shown = (page, sel) => page.$eval(sel, e => e.offsetParent !== null && e.g
     async page => {
       const out = [], ok = okFn(out);
       await page.waitForSelector('#admin-view', { state: 'visible', timeout: 5000 });
+      await openCreateForm(page);
       await page.fill('#proj-date', '2026-10-04');
       await page.fill('#proj-title', '王小明');
       await page.click('#proj-create-btn');
@@ -236,6 +238,7 @@ const shown = (page, sel) => page.$eval(sel, e => e.offsetParent !== null && e.g
     async page => {
       const out = [], ok = okFn(out);
       await page.waitForSelector('#admin-view', { state: 'visible', timeout: 5000 });
+      await openCreateForm(page);
       await page.fill('#proj-date', '2026-10-04');
       await page.fill('#proj-title', '王小明');
       await page.click('#proj-create-btn');

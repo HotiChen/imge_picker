@@ -6,6 +6,7 @@
 import { base, suite } from '../lib/harness.mjs';
 import { ADMIN_PLAIN } from '../lib/auth-mocks.mjs';
 import { pickFakeWorker } from '../lib/pick-fake.mjs';
+import { openCreateForm } from '../lib/project-helpers.mjs';
 
 export default async function register() {
 const ADMIN_URL = `${base}/admin.html`;
@@ -213,6 +214,7 @@ const setStatus = async (page, v, n) => { await page.selectOption('#pl-status', 
     async page => {
       const { out, ok } = lines();
       await waitList(page);
+      await openCreateForm(page);   // the form is behind 「＋ 新增專案」; open it so the not-shown check below is a real one
       const o = await page.$$eval('#proj-type option', os => os.map(x => ({ v: x.value, t: x.textContent.trim() })));
       ok('select: 未分類 first (value ""), then the SHOOT_TYPES list', o[0].v === '' && o[0].t === '未分類' && same(o.slice(1).map(x => x.v), ['婚紗', '婚禮', '親子', '個人', '活動', '其他']), JSON.stringify(o));
       ok('default is 未分類; the typed-text box is not shown', (await page.inputValue('#proj-type')) === '' && !(await shown(page, '#proj-type-other')));
@@ -221,6 +223,7 @@ const setStatus = async (page, v, n) => { await page.selectOption('#pl-status', 
       await page.waitForFunction(() => document.getElementById('proj-create-result').style.display === 'block', null, { timeout: 4000 });
       ok('unset → the POST has no project_type key', posts().length === 1 && !('project_type' in posts()[0].body), JSON.stringify(posts()[0]?.body));
 
+      await openCreateForm(page);
       await page.selectOption('#proj-type', '婚禮');
       await page.fill('#proj-title', '案二');
       await page.click('#proj-create-btn');
@@ -228,11 +231,13 @@ const setStatus = async (page, v, n) => { await page.selectOption('#pl-status', 
       ok('婚禮 → POST project_type "婚禮"', posts().length === 2 && posts()[1].body.project_type === '婚禮', JSON.stringify(posts()[1]?.body));
       ok('the form resets the category to 未分類 after a create', (await page.inputValue('#proj-type')) === '');
 
+      await openCreateForm(page);
       await page.selectOption('#proj-type', '其他');
       await page.fill('#proj-title', '案二b');
       await page.click('#proj-create-btn');
       await page.waitForFunction(() => document.getElementById('proj-title').value === '', null, { timeout: 4000 });
       ok('其他 with an empty box sends NO project_type (never the literal 其他)', posts().length === 3 && !('project_type' in posts()[2].body), JSON.stringify(posts()[2]?.body));
+      await openCreateForm(page);
       await page.selectOption('#proj-type', '其他');
       ok('其他 reveals the typed-text box (maxlength 20)', (await shown(page, '#proj-type-other')) && (await page.getAttribute('#proj-type-other', 'maxlength')) === '20');
       await page.fill('#proj-title', '案三');
@@ -243,6 +248,7 @@ const setStatus = async (page, v, n) => { await page.selectOption('#pl-status', 
       ok('after the create the typed box is hidden again', !(await shown(page, '#proj-type-other')));
 
       // server refusal → plain Chinese. maxlength is lifted on purpose so the Worker's 400 is reachable.
+      await openCreateForm(page);
       await page.selectOption('#proj-type', '其他');
       await page.$eval('#proj-type-other', e => e.removeAttribute('maxlength'));
       await page.fill('#proj-type-other', 'x'.repeat(21));
@@ -264,6 +270,7 @@ const setStatus = async (page, v, n) => { await page.selectOption('#pl-status', 
       const { out, ok } = lines();
       const MSG = '攝影類別尚未啟用，請先執行 migration（2026-10-07-project-type.sql）';
       await waitList(page);
+      await openCreateForm(page);
       await page.selectOption('#proj-type', '親子');
       await page.fill('#proj-title', '案五');
       await page.click('#proj-create-btn');

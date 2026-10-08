@@ -6,7 +6,7 @@ import { readFileSync } from 'node:fs';
 import { base, suite } from '../lib/harness.mjs';
 import { ADMIN } from '../lib/auth-mocks.mjs';
 import { pickFakeWorker } from '../lib/pick-fake.mjs';
-import { PF_NAMES, PF_ROOT, pfLists } from '../lib/project-helpers.mjs';
+import { PF_NAMES, PF_ROOT, pfLists, openCreateForm } from '../lib/project-helpers.mjs';
 
 export default async function register() {
 const pfPosts = m => m.requests.filter(r => r.method === 'POST' && r.path === '/api/admin/projects');
@@ -142,6 +142,7 @@ const pfPosts = m => m.requests.filter(r => r.method === 'POST' && r.path === '/
       const out = [];
       const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
       await page.waitForSelector('#admin-view', { state: 'visible', timeout: 5000 });
+      await openCreateForm(page);
       const f = await page.evaluate(() => {
         const panel = document.getElementById('project-create-panel');
         const lab = id => document.querySelector(`label[for="${id}"]`)?.textContent.trim() || null;
@@ -189,6 +190,7 @@ const pfPosts = m => m.requests.filter(r => r.method === 'POST' && r.path === '/
       const out = [];
       const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
       await page.waitForSelector('#admin-view', { state: 'visible', timeout: 5000 });
+      await openCreateForm(page);
       await page.fill('#proj-date', '2026-10-04');
       const state = async () => page.evaluate(() => ({ preview: document.getElementById('proj-folder-preview').textContent,
         disabled: document.getElementById('proj-create-btn').disabled, err: document.getElementById('proj-create-err').textContent }));
@@ -243,6 +245,7 @@ for (const [label, opts, want] of [
       const out = [];
       const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
       await page.waitForSelector('#admin-view', { state: 'visible', timeout: 5000 });
+      await openCreateForm(page);
       await page.fill('#proj-date', '2026-10-04');
       await page.fill('#proj-title', '王小明');
       await page.waitForSelector(`#proj-folder-note[data-state="${want.state}"]`, { timeout: 4000 }).catch(() => {});
@@ -268,6 +271,7 @@ for (const [tag, ctx] of [['390', { viewport: { width: 390, height: 844 }, hasTo
       const out = [];
       const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
       await page.waitForSelector('#admin-view', { state: 'visible', timeout: 5000 });
+      await openCreateForm(page);
       await page.fill('#proj-date', '2026-10-04');
       await page.fill('#proj-title', '王小明');
       await page.waitForSelector('#proj-folder-note[data-state="existing"]', { timeout: 4000 });
@@ -291,6 +295,7 @@ for (const [tag, ctx] of [['390', { viewport: { width: 390, height: 844 }, hasTo
       const out = [];
       const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
       await page.waitForSelector('#admin-view', { state: 'visible', timeout: 5000 });
+      await openCreateForm(page);
       await page.fill('#proj-date', '2026-10-04');
       await page.fill('#proj-title', '王小明');
       await page.waitForTimeout(600);   // past the debounce: the slow listing for 王小明 is now in flight

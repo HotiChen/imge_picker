@@ -3,6 +3,7 @@
 // hidden, 「← 返回專案列表」 on top); #project=<id> is the address of the detail view.
 // Registered by test/run.mjs in file-name order; see test/README.md.
 import { base, suite } from '../lib/harness.mjs';
+import { openCreateForm } from '../lib/project-helpers.mjs';
 import { MOBILE } from '../lib/env.mjs';
 import { ADMIN_PLAIN } from '../lib/auth-mocks.mjs';
 import { pickFakeWorker } from '../lib/pick-fake.mjs';
@@ -27,7 +28,7 @@ const see = (page, sel) => page.evaluate(SEE, sel);
 const isShown = async (page, sel) => (await see(page, sel)).shown;
 // hidden = in the DOM and takes no space on screen — not merely "absent"
 const isHidden = async (page, sel) => { const s = await see(page, sel); return s.exists && s.boxes === 0 && !s.shown; };
-const LIST_PARTS = ['#project-create-panel', '#proj-title', '#proj-create-btn', '#proj-show-archived-toggle', '#proj-recent-list', '[data-open-project]'];
+const LIST_PARTS = ['#proj-new-btn', '#project-create-panel', '#proj-title', '#proj-create-btn', '#proj-show-archived-toggle', '#proj-recent-list', '[data-open-project]'];
 const listState = async page => {
   const o = {};
   for (const s of LIST_PARTS) o[s] = (await see(page, s)).shown;
@@ -40,7 +41,8 @@ const listAllHidden = async page => {
 };
 const hashOf = page => page.evaluate(() => location.hash);
 const waitDetail = page => page.waitForSelector('#pd-sec-settings', { timeout: 5000 });
-const waitList = page => page.waitForSelector('[data-open-project]', { state: 'visible', timeout: 5000 });
+// the create form is behind 「＋ 新增專案」: open it here so the list/detail show-hide checks below cover the form parts for real
+const waitList = async page => { await page.waitForSelector('[data-open-project]', { state: 'visible', timeout: 5000 }); await openCreateForm(page); };
 // An entry for Back to land on that is not about:blank (the suite's init script cannot touch
 // sessionStorage there): a page of the same origin, then admin.html on top of it.
 const leaveBehind = async page => {
@@ -357,7 +359,8 @@ const lines = () => {
       await page.waitForTimeout(300);   // long enough for an (unwanted) detail to have opened
       ok('the create POST was sent', m.requests.some(r => r.method === 'POST' && r.path === '/api/admin/projects'));
       ok('the 連結已建立 box is shown with a link in it', await isShown(page, '#proj-create-result') && /t=PICK-TOKEN/.test(await page.inputValue('#proj-link-output')));
-      ok('the list, its rows and the create form are shown', await listAllShown(page), JSON.stringify(await listState(page)));
+      const ls = await listState(page);
+      ok('the list, its rows and the ＋ 新增專案 button are shown; the create form itself has closed after the create', ls['#proj-new-btn'] && ls['#proj-recent-list'] && ls['[data-open-project]'] && ls['#proj-show-archived-toggle'] && !ls['#project-create-panel'] && !ls['#proj-title'] && !ls['#proj-create-btn'], JSON.stringify(ls));
       ok('no detail opened: the panel is hidden and there is no #project hash', await isHidden(page, '#project-detail-panel') && !/project=/.test(await hashOf(page)), await hashOf(page));
       return out;
     },

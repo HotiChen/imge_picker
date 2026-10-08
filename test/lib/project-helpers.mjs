@@ -32,3 +32,9 @@ export async function openBigGuestPreview(page) {
 // ── one pick counter (bottom-left), over-limit colour, over-limit submit modal ──
 export const pickHeart = (page, i) => page.locator('.photo-card').nth(i).locator('.pick-heart-btn').click();
 export const pickSubmits = m => m.requests.filter(r => r.method === 'POST' && r.path === '/api/pick/submit');
+
+// admin.html: the create form sits behind 「＋ 新增專案」 (closed on load). Opens it; a re-open resets the fields.
+export async function openCreateForm(page) {
+  if (await page.$eval('#project-create-panel', e => e.hidden)) await page.click('#proj-new-btn');
+  await page.waitForSelector('#project-create-panel:not([hidden]) #proj-title', { state: 'visible', timeout: 5000 });
+}
