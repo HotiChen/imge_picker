@@ -20,6 +20,10 @@ jobs end to end first; no new big feature outside that list.
   photographer review view (`index.html?project=<id>`); `js/app.js` shared photo
   grid + preview modal; `js/annotation.js` pin drawing; `js/selection-export.js`
   CSV for the retoucher; `js/auth.js` login overlay.
+- `js/guest-tour.js` first-visit tour on the guest pick page (`FORCE_DEFAULT` /
+  `window.GUEST_TOUR_FORCE` = test switch; off = first visit only); `js/completion-page.js`
+  the 完成頁; `js/guest-order.js` the guest order sheet (S2); `css/side-nav.css` the
+  photographer pages' shared menu and phone layout.
 - `admin.html` project list/detail (delivery block, orders, downloads);
   `upload.html` upload; `book_editor/` album editor (own CSS `book_editor.css`,
   not `css/styles.css`); `test/run.mjs` the browser-suite runner (suites live in
@@ -73,7 +77,7 @@ Commands:
 - Album layout engine (seconds, CI does not run it): `node --test book_editor/test/auto_layout.test.mjs`
 - Album spread templates + planner (seconds, CI does not run it): `node --test book_editor/test/spread_templates.test.mjs book_editor/test/plan_spreads.test.mjs`
   (all three: `node --test book_editor/test/*.test.mjs`); PNG overview of the library: `node book_editor/test/render-templates.mjs <outDir>`
-- Browser (minutes): `NODE_PATH=/tmp/pwinstall/node_modules node test/run.mjs`
+- Browser (minutes): `NODE_PATH=/tmp/pwinstall/node_modules node test/run.mjs` (suites 01–56, no 44; `test/README.md`)
   - Only matching suites: `ONLY=<text in suite name> ...` (a filter matching nothing fails)
   - Playwright lives outside the repo; Chromium at /opt/pw-browsers. In the cloud
     session `/tmp/pwinstall` does not exist: use `NODE_PATH=/opt/node-tools/node_modules`.
@@ -148,6 +152,11 @@ empty scan passes.
   (never an original, never a download) of a key at index `i` of one of this project's frozen snapshots, to the
   seat owner only, only while delivered. It never takes a key from the request. `pickReadScope`, the object
   route and `?list=` must not learn about old rounds. Thumbnails are served only as jpeg/png/webp/avif.
+
+- Guest ordering (S2) is built but dark: `GUEST_ORDERS` in `worker/wrangler.toml` is `off`
+  (`pilot` + `GUEST_ORDERS_PILOT` project ids, or `on`); any other value, a typo included,
+  counts as off. Before it is turned on, `2026-10-09-guest-orders.sql` (11 statements, one by
+  one) must have been run and the privacy notice reviewed (`docs/guest-shop.md`).
 
 ## Decided not to do (do not re-propose without new evidence)
 - Service / Package / Template, quotes, contracts, booking, CRM: scope creep.
