@@ -1816,7 +1816,7 @@
     document.getElementById('pd-delete-btn')?.addEventListener('click', async function () {
       const errEl = document.getElementById('pd-action-err');
       if (errEl) errEl.textContent = '';
-      if (!confirm('確定刪除？此動作無法復原')) return;
+      if (!confirm(`確定刪除專案「${currentProject?.title || '未命名'}」？\n此動作無法復原：選取紀錄與分享連結都會一併移除`)) return;
       this.disabled = true;
       try {
         const r = await fetch(`${WORKER_URL}/api/admin/projects/${encodeURIComponent(currentProjectId)}`, {
@@ -2878,7 +2878,7 @@
 
   function downloadSelectedKeys(project, selected) {
     const keys = selected.map(s => s.photo_key);
-    const askRetouch = confirm(`共 ${keys.length} 張。要同時標記為開始精修嗎？`);
+    const askRetouch = confirm(`共 ${keys.length} 張。要同時標記為開始精修嗎？\n（取消 = 只下載清單，不標記；兩種都會下載）`);
     saveBlobAs(new Blob([keys.join('\n') + (keys.length ? '\n' : '')], { type: 'text/plain' }), project, 'txt');
     if (askRetouch) projectAction('start-retouch');
   }

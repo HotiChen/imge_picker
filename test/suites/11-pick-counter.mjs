@@ -383,7 +383,7 @@ await suite('desktop preview — arrow keys and mouse click still navigate/open 
       page.once('dialog', d => { dialogMsg = d.message(); d.dismiss(); });
       await page.click('#pd-delete-btn');
       await page.waitForTimeout(200);
-      ok('confirm says it cannot be undone', dialogMsg.includes('確定刪除？此動作無法復原'), dialogMsg);
+      ok('confirm names the project and says it cannot be undone', /確定刪除專案「.+」/.test(dialogMsg) && dialogMsg.includes('無法復原') && dialogMsg.includes('分享連結'), dialogMsg);
       ok('dismissing the confirm does not call DELETE',
         !m.requests.some(r => r.method === 'DELETE'));
 
