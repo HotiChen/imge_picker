@@ -767,9 +767,9 @@ export function pickFakeWorker(opts = {}) {
         const headers = { ...cors, 'Accept-Ranges': 'bytes', 'Cache-Control': 'private, max-age=86400' };
         if (isDownload) headers['Content-Disposition'] = attachmentFake(key);
         // opts.imageFor(key, w) -> a Buffer (a PNG of that photo's shape), for suites that
-        // need photos of different aspect ratios; opts.imageDelay(key) -> ms to hold the answer
+        // need photos of different aspect ratios; opts.imageDelay(key, w) -> ms to hold the answer
         const full = (opts.imageFor && opts.imageFor(key, u.searchParams.get('w'))) || opts.image || PIXEL;
-        if (opts.imageDelay && !isDownload) { const ms = opts.imageDelay(key); if (ms) await new Promise(r => setTimeout(r, ms)); }
+        if (opts.imageDelay && !isDownload) { const ms = opts.imageDelay(key, u.searchParams.get('w')); if (ms) await new Promise(r => setTimeout(r, ms)); }
         if (h['range']) {
           const m = /^bytes=(\d+)-(\d*)$/.exec(h['range']);
           if (m) {

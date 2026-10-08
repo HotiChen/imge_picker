@@ -1445,6 +1445,12 @@ body {
   border: 3px solid transparent; /* reserve the space so .pick-picked below never shifts layout */
 }
 
+/* A loading ring over the preview while the big file is on its way (js/annotation.js loadPhoto): the thumbnail stands
+   in underneath. pointer-events none so swipes and the nav buttons still work through it. */
+.canvas-loading { display: none; position: absolute; inset: 0; align-items: center; justify-content: center; pointer-events: none; z-index: 2; }
+.canvas-container.photo-loading .canvas-loading { display: flex; }
+.canvas-loading .spinner { width: 40px; height: 40px; border-color: rgba(255,255,255,.35); border-top-color: #fff; }
+
 /* Guest picking, mobile task: same treatment as the grid card — see
    .photo-card.pick-picked. No overlay on the image either. */
 .canvas-container.pick-picked { border-color: var(--danger); }

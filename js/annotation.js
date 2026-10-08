@@ -111,7 +111,7 @@ class AnnotationManager {
         // 監聽視窗縮放
         window.addEventListener('resize', () => {
             if (this.imageElement) {
-                this.resizeCanvas(this.imageElement);
+                this.resizeCanvas(this.imageElement, !!this._standIn);
                 this.redraw();
             }
         });
@@ -146,21 +146,60 @@ class AnnotationManager {
         this.updateZoomDisplay();
         this.updateUndoRedoUI();
 
+        // The previous photo must not stay on the canvas while this one's file is on its way (a second or two on a phone):
+        // clear it at once, put the card's own thumbnail (the grid asked for the same URL, so it is normally a cache hit; the Worker answers
+        // every image with Access-Control-Allow-Origin: *, so asking for it with CORS here costs nothing) up as a stand-in, and mark
+        // the container loading so a ring shows. A late answer for a photo the guest already left is dropped (token).
+        const token = this._loadToken = (this._loadToken || 0) + 1;
+        const container = this.canvas.parentElement;
+        container.classList.add('photo-loading');
+        if (!container.querySelector('.canvas-loading')) {
+            const ring = document.createElement('div');
+            ring.className = 'canvas-loading';
+            ring.setAttribute('role', 'status');
+            ring.setAttribute('aria-label', '載入中');
+            ring.innerHTML = '<span class="spinner"></span>';
+            container.appendChild(ring);
+        }
+        this.imageElement = null;
+        this._standIn = false;
+        this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+        const thumb = new Image();
+        thumb.crossOrigin = 'anonymous';
+        thumb.onload = () => {
+            // the real file (or a newer photo) got here first, or the real file already failed: not a stand-in any more
+            if (token !== this._loadToken || this.imageElement || !container.classList.contains('photo-loading')) return;
+            this.imageElement = thumb;
+            this._standIn = true; // drawn big until the real file lands (a resize keeps it big)
+            this.resizeCanvas(thumb, true);
+            this.redraw();
+        };
+        thumb.src = driveManager.getImageUrl(photo, 400);
+
         return new Promise((resolve, reject) => {
             const img = new Image();
             img.crossOrigin = 'anonymous'; // R2 支援 CORS，不需要 blob 下載
 
             img.onload = () => {
+                if (token !== this._loadToken) return resolve(); // a newer photo was asked for meanwhile
+                container.classList.remove('photo-loading');
                 this.imageElement = img;
+                this._standIn = false;
                 this.resizeCanvas(img);
                 this.redraw();
                 resolve();
             };
 
             img.onerror = (error) => {
+                if (token !== this._loadToken) return resolve();
+                container.classList.remove('photo-loading');
+                // the blurry stand-in is not this photo's file: clear it rather than leave it looking like a loaded one
+                this.imageElement = null;
+                this._standIn = false;
+                this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
                 console.error('載入圖片失敗:', error);
                 toast.error('載入圖片失敗');
-                reject(error);
+                resolve(); // the toast is the report; rejecting only made an unhandled rejection in openModal
             };
 
             // R2 直接使用 URL，不需 Auth Header — width is responsive (mobile
@@ -232,13 +271,13 @@ class AnnotationManager {
     // every saved annotation, which lives in that rect's pixels — lands on
     // the same screen spot as before; zoom/pan now just have the whole
     // container to spread into instead of being clipped to the rect.
-    resizeCanvas(img) {
+    resizeCanvas(img, upscale = false) {
         const container = this.canvas.parentElement;
         const maxWidth = container.clientWidth - 0; // 電影模式拿掉 padding
         const maxHeight = container.clientHeight - 0;
 
         // 計算縮放比例
-        const scale = Math.min(maxWidth / img.width, maxHeight / img.height, 1);
+        const scale = Math.min(maxWidth / img.width, maxHeight / img.height, upscale ? Infinity : 1);
 
         this.fitW = Math.floor(img.width * scale);
         this.fitH = Math.floor(img.height * scale);
