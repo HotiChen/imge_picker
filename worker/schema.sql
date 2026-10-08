@@ -82,6 +82,7 @@ CREATE TABLE IF NOT EXISTS share_tokens (
 );
 CREATE INDEX IF NOT EXISTS idx_share_tokens_book ON share_tokens(book_id);
 CREATE INDEX IF NOT EXISTS idx_share_tokens_user ON share_tokens(user_id);
+-- 2026-10-12 indexes: hand-run only, see worker/migrations/2026-10-12-indexes.sql (the reason they are not statements here is in its header).
 
 -- ─── Guest picking (docs/guest-picking.md) ─────────────────────────────────
 -- New tables, so a deployed database gets them from the same migration file
