@@ -1,7 +1,14 @@
 # Guest shop (Phase B) — design (2026-09-30, for review)
 
-> **狀態（2026-10-08）**：S1（只讀的 `GET /api/pick/shop`）與「我有興趣」已建好。
-> **S2 已重寫**，以文末 **「S2 客人自助訂購 — 設計稿（2026-10-08 改版）」** 為準；
+> **狀態（2026-10-08，晚）**：S1（只讀的 `GET /api/pick/shop`）、「我有興趣」、**S2 客人自助訂購都已建好，預設 dark**
+> （commit `dc79a76`／`85be8a3`／`976fdb5` Worker 與安全審查，`631c064` 客人端，`bc39235` 攝影師端；Worker 契約見文末 **「S2 — built (Worker, WP1, 2026-10-09)」**；
+> 客人端 `js/guest-order.js`；攝影師端 `orders.html`／`admin.html`／`settings.html`／`dashboard.html`）。
+> 開啟條件：Tim 跑完 `worker/migrations/2026-10-09-guest-orders.sql`（11 句，一句一句），個資聲明有人審閱、填好匯款資訊，
+> 再把 `worker/wrangler.toml` 的 `GUEST_ORDERS` 改成 `pilot`（加 `GUEST_ORDERS_PILOT` 專案名單）試跑，確認後才改 `on`；其他值或打錯字一律當關。
+> S3（客人換照片／刪照片／調順序）**還沒建**：`order_items.layout` 欄位已存在，目前只寫
+> `{"v":1,"mode":"photographer","source":"all_finals","spreads":N}`。
+> 「我有興趣」：表 `product_interests`、`POST /api/pick/interest`，每個產品每 24 小時最多寄一封信（`2026-10-08-product-interests.sql`）。
+> S2 的設計稿在文末 **「S2 客人自助訂購 — 設計稿（2026-10-08 改版）」**（該段開頭的狀態已更新為「已實作」）；
 > 下面 2026-09-30 的 S2 內容（Decisions 的 S2 部分、Data model 的 s2 migration、API 的 S2 列、
 > Guest UI S2、Photographer UI、Email、Abuse、Migrations、Tests、Work packages）
 > 只留作歷史，各段開頭有「已被取代」標記。例外：**PDPA** 仍是參考底稿（等審閱），
@@ -607,7 +614,7 @@ as history; a new tap needs the project confirmed again.
 
 # S2 客人自助訂購 — 設計稿（2026-10-08 改版）
 
-狀態：**設計稿，未實作**。取代上面 2026-09-30 的 S2 內容。基準：`17eee37`（S1 trimmed、「我有興趣」已在程式裡）。
+狀態：**設計稿；已實作（Worker、客人端、攝影師端都已建好，預設 dark，見文件開頭與下面「S2 — built」）**。取代上面 2026-09-30 的 S2 內容。寫稿時的基準：`17eee37`（S1 trimmed、「我有興趣」已在程式裡）。
 相關：`docs/products-orders.md`（訂單、狀態、平台價、`min_pages`/`max_pages`/`extra_page_price`）、
 `docs/delivery.md`（交件、客戶確認、完成頁）、`docs/project-plan.md`（專案預設值：運費）、
 `docs/backlog.md`（THE ORDER、Parked）、`CLAUDE.md`（不變量、不做清單、風險分級）。

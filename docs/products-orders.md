@@ -177,7 +177,9 @@ truth, nothing to drift. Fine at a studio's volume.
 Photo keys on a line must be inside the project's folders (`folderCovers`),
 checked on every write.
 
-## Phase B — guest shop (outline; detailed design before building)
+## Phase B — guest shop (outline; **S1, 「我有興趣」 and S2 are built, S2 dark: see `docs/guest-shop.md`**)
+
+> Status 2026-10-08: S1, 「我有興趣」 and S2 (dark by default) are built; the design and the built contract are in `docs/guest-shop.md`. The money flow (who is paid, the platform fee) is not decided yet. The outline below is the original sketch, kept for history.
 
 - The pick page shows products with `guest_visible = 1` and `active = 1`:
   a 「加購」 button on the preview, and a cart.
