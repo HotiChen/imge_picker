@@ -1,10 +1,10 @@
 # Project defaults and per-project plan (decided with Tim 2026-09-30)
 
 A photographer sets **defaults once** (settings); every new project starts from
-them and each project can then be **edited on its own**. Today `pick_limit` and
-`extra_price` exist on `projects` but can only be set at creation (no update
-route), and `studio_settings.default_pick_limit` / `default_extra_price` only
-prefill the create form.
+them and each project can then be **edited on its own**. (Status 2026-10-08: **built and
+in use** — the per-project edit route, `extra_max` and the submit-time cap all
+shipped 2026-09-30; the sentence that used to stand here, "can only be set at
+creation", is history.)
 
 ## The plan fields
 
@@ -15,7 +15,7 @@ prefill the create form.
 | **`extra_max`** | how many photos the guest may pick **above** `pick_limit`; **0 = no extra picks** | **10** | new |
 | `promo_days`, `promo_percent` | delivery promo window / discount (docs/guest-shop.md) | settings | later (S1) |
 | `shipping_fee` | NT$ added to a shipped order (docs/guest-shop.md) | settings | later (S2) |
-| `max_pickers` | how many people may pick on one link (1 first person + collaborators; the co-picking feature, not built yet) | **2** (a couple); raise per project for a family portrait | later (collaborators) |
+| `max_pickers` | how many people may pick on one link (1 first person + collaborators; the co-picking feature, **still not built** — no column, no code, as of 2026-10-08) | **2** (a couple); raise per project for a family portrait | later (collaborators) |
 
 Columns are added by append-only `ALTER`s, hand-run in the D1 Console before
 the merge that needs them (`projects.extra_max`,
@@ -93,11 +93,16 @@ projects from before the feature.
 
 | Key | Accepts |
 |---|---|
+| `title` | a string of 1–200 characters (a rename; the project's pick links' label follows, nothing in R2 changes — `docs/delivery.md`, "Renaming a project") |
+| `shoot_date` | `'YYYY-MM-DD'`, `''` or `null` (added 2026-10-07, `docs/delivery.md`) |
+| `project_type` | a label of up to 20 characters, `''` or `null` (added 2026-10-07, `docs/delivery.md`) |
 | `allow_proof_download` | `true` / `false` |
 | `pick_limit` | `null` or a safe integer ≥ 0 |
 | `extra_price` | `null` or a safe integer 0–`MONEY_MAX` (10,000,000) |
 | `extra_max` | `null` or a safe integer 0–500 |
 
+- (The table above is the full list since 2026-10-07; the plan keys are the original four.
+  `title` / `shoot_date` / `project_type` are not plan keys: they work on an archived project.)
 - Any other key, a bad value (strings, floats, negatives, booleans for
   numbers, over the bound), `{}`, a non-object or unparseable JSON → **400**
   `{error, code: 'invalid_body'}`, nothing written (one bad key spoils the

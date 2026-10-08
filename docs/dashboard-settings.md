@@ -21,6 +21,10 @@ CREATE TABLE IF NOT EXISTS studio_settings (
 Until it runs: the project list, stats and settings routes fail (500). Pick
 links keep working; `studio` reads as empty.
 
+Later settings columns each came with their own migration (`default_extra_max` in
+`2026-09-30-extra-max.sql`, `transfer_info` in `2026-10-09-guest-orders.sql`); the full
+list and run order is in `README.md`.
+
 ## Decisions
 
 - **Delivered is a stamp, not a phase.** `projects.delivered_at`; the phase
@@ -49,8 +53,8 @@ Responses carry `Cache-Control: private, no-store`.
 | `POST /api/admin/projects/:id/deliver` | `{ok: true, delivered_at}` (a repeat keeps the first stamp); 409 `{error, code: 'not_retouching', phase}` from picking/submitted; 404 unknown / other photographer |
 | `POST /api/admin/projects/:id/undeliver` | `{ok: true, delivered_at: null}`; 404 |
 | `GET /api/admin/projects` | rows gain `delivered_at` (detail has it via `project`) |
-| `GET /api/admin/settings` | `{studio_name, booking_url, default_pick_limit, default_extra_price, default_extra_max, effective_default_extra_max, has_logo, logo_type, logo_updated_at, updated_at}` — all null / `has_logo: false` before anything is set (`effective_default_extra_max` is then 10: what a new project gets, `docs/project-plan.md`); never the blob |
-| `PUT /api/admin/settings` | JSON; only the fields present change, `null` (or `''` for the strings) clears one, unknown fields ignored → same shape as GET. 400 `{error, code}` with `code` one of `invalid_studio_name` (not string/null, > 60 chars after trim), `invalid_booking_url`, `invalid_default_pick_limit`, `invalid_default_extra_price` (not a safe integer ≥ 0 or null), `invalid_default_extra_max` (not a safe integer 0–500 or null; 500 `extra_max_unavailable` before its migration); plain 400 for non-object JSON. Nothing written on any 400 |
+| `GET /api/admin/settings` | `{studio_name, booking_url, default_pick_limit, default_extra_price, default_extra_max, transfer_info, effective_default_extra_max, has_logo, logo_type, logo_updated_at, updated_at}` — all null / `has_logo: false` before anything is set (`effective_default_extra_max` is then 10: what a new project gets, `docs/project-plan.md`); never the blob |
+| `PUT /api/admin/settings` | JSON; only the fields present change, `null` (or `''` for the strings) clears one, unknown fields ignored → same shape as GET. 400 `{error, code}` with `code` one of `invalid_studio_name` (not string/null, > 60 chars after trim), `invalid_booking_url`, `invalid_default_pick_limit`, `invalid_default_extra_price` (not a safe integer ≥ 0 or null), `invalid_default_extra_max` (not a safe integer 0–500 or null; 500 `extra_max_unavailable` before its migration), `invalid_transfer_info` (匯款資訊 for guest orders, ≤ 500 characters; 500 `orders_unavailable` before `2026-10-09-guest-orders.sql`, see `docs/guest-shop.md`); plain 400 for non-object JSON. Nothing written on any 400 |
 | `PUT /api/admin/settings/logo` | raw bytes → `{ok: true, has_logo: true, logo_type, logo_updated_at, size}`; 413 `{code: 'too_large', max: 204800}`; 415 `{code: 'unsupported_type'}` |
 | `DELETE /api/admin/settings/logo` | `{ok: true, has_logo: false}` (idempotent) |
 | `GET /api/studio/logo` | public. The bytes, `Content-Type` = sniffed type, `X-Content-Type-Options: nosniff`, `Content-Security-Policy: default-src 'none'`, `Cache-Control: public, max-age=300`, `ETag: "<logo_updated_at>"` (304 on `If-None-Match`); 404 when none. Other methods 405 |
@@ -68,9 +72,17 @@ admin token) → 405.
   "delivered": 0,
   "archived": 0,
   "per_month": [{"month": "2026-09", "created": 0, "delivered": 0}],
-  "todo": {"submitted_not_retouching": 0, "unnotified_submissions": 0, "modified_after_submit": 0}
+  "todo": {"submitted_not_retouching": 0, "unnotified_submissions": 0, "modified_after_submit": 0,
+           "unpaid_orders": 0, "requested_orders": 0},
+  "revenue": [{"month": "2026-09", "paid": 0, "cost": 0, "margin": 0}],
+  "outstanding": 0
 }
 ```
+
+(Since 2026-09-29 / 2026-10-07 the answer also carries `revenue` (12 months, counted when
+paid, cancelled orders excluded; `docs/products-orders.md`), `outstanding` (unpaid balance
+over all orders), and two order counters in `todo`: `unpaid_orders` and `requested_orders`
+= guest orders (S2) waiting for the photographer's confirmation.)
 
 - Scoped to this photographer. `by_phase` excludes archived projects;
   `retouching` there excludes delivered ones (in progress only).

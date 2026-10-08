@@ -1,5 +1,15 @@
 # Iterative picking: submit-time cap, drafts, 傳送協作者 — design (proposed 2026-09-30)
 
+> **Status as of 2026-10-08 (read this first).** **§1 (plan cap at submit) and the §2 draft
+> reliability fixes are built, merged and in use** (409 `pick_cap` at submit, no cap while
+> hearting; contract in `docs/project-plan.md`, "Worker contract", and `docs/guest-picking.md`).
+> **§3–§4b (傳送協作者 / 要回選擇權 / seat passing) were never built and are superseded** by
+> the co-picking decision in `docs/backlog.md` ("Co-picking / collaborators"), which is itself
+> only decided in principle: there is no `max_pickers` column, no collaborator link, and
+> `worker/migrations/2026-10-01-handover.sql` does not exist. Treat everything below §2 as
+> history. The open questions at the end (Q4: a repeat submit over a lowered plan) are
+> still waiting for Tim; the built default refuses it.
+
 > **Status (2026-09-30): PROPOSAL — not scheduled.** Two parts, with different
 > standing. §1 (plan cap checked at submit, not at ♥) is needed and is the next
 > thing to build, together with the draft-reliability fixes in §2. §3–§4b

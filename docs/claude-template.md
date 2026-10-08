@@ -52,6 +52,18 @@ Known false-pass shapes — assert the positive case too:
 - fixture refused by an earlier guard, so the guard under test never runs
 - a test fake diverging from the real API — fakes must mirror real responses
 
+## Working with agents
+- Check the agent's base before it starts: its worktree can be created from an
+  older commit than the branch you are on. Tell it to run `git log` first and
+  report a wrong base instead of resetting on its own.
+- One agent per file area; agents commit in their own worktree, never push,
+  never touch main. The orchestrator merges, resolves conflicts, runs everything,
+  then pushes the topic branch.
+- A new test suite goes in its own new file, not into an existing one, so
+  parallel agents do not conflict.
+- Reports are not evidence: re-run the suites and read the diff yourself.
+- Keep the agents' worktree folder out of commits (`.git/info/exclude`).
+
 ## Security checklist for every feature
 1. Whose data is it? 2. Who can read? 3. Write? 4. Delete?
 5. Can an ID from A reach B's data? 6. Can a client skip the UI and call the API?
@@ -63,6 +75,10 @@ Server enforces every rule; the frontend only mirrors it. Fail closed.
 - Database migrations are run by Tim **before** the merge that needs them;
   schema changes append-only.
 - Never put secrets in files that are served publicly.
+- After every merge to main, end the reply with a checklist for Tim that is specific to
+  that merge: deploy succeeded, which DB migrations (or "none"), cache purge needed or not,
+  real-device checks with the expected result, what was NOT verified and what decision waits.
+- Visual / contrast tests need a floor on how many elements were scanned, or an empty scan passes.
 
 ---
 

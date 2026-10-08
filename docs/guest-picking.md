@@ -159,6 +159,29 @@ browser. This replaces the fake `submitJob()` in `js/app.js`.
   `project_members`.** Only an admin route may.
 - The old registered-client + `users.folder_path` flow stays as is.
 
+## Guest page, as built (2026-10-08)
+
+Frontend facts that the Worker contract below does not say (`js/pick.js`, `js/app.js`, `css/styles.css`):
+
+- Guest link only: two tools, **資料夾** and the **全部 ｜ ♥ 已選 N ｜ 未選** filter; one submit
+  button (the bottom one); no 預約拍攝 button; on a phone no drawer but an always-visible bar
+  under the header. The photographer's own `index.html?project=<id>` review view (`js/project-view.js`)
+  is read-only, with pins listed beside / below the photo.
+- **Counter**: one counter at the bottom-left; the plan cap is only shown as a warning at submit
+  (409 `pick_cap` → a dialog saying how many to remove).
+- **Desktop**: the bottom pill (count + submit) is stacked inside the sidebar column.
+- **Phone, photographer's picker header** (when the photographer opens the picker on a phone): back-to-admin
+  link and a menu section, the sidebar opens by itself, empty-state copy.
+- **First-visit tour** (`js/guest-tour.js`, `css/guest-tour.css`): seat owner only, never for viewers or on
+  the 完成頁. Picking walk-through in 7 steps (♥, open a photo, left/right, the enlarged view's ♥, 標示修改,
+  完成, submit) that really opens the enlarged view and closes what it opened; the tour never taps for the
+  guest. A delivered, not yet confirmed project gets a 3-step tour (the finals, how to mark a change,
+  確認完成). Seen state is `localStorage` `guestTourPickingV1` / `guestTourDeliveredV1`; a **？** button replays
+  the current phase's tour. Test switch: `FORCE_DEFAULT` in `js/guest-tour.js` (or `window.GUEST_TOUR_FORCE`)
+  forces the tour on every visit and never records "seen"; it is **false** (first visit only) in the shipped
+  code, and the browser harness sets `GUEST_TOUR_FORCE = false` in every suite (`test/README.md`).
+- Delivered views: `docs/delivery.md` (the finals gallery, the 驗收頁, the 完成頁), `docs/revision-pins.md`.
+
 ## Schema
 
 The guest-picking tables are in production
@@ -179,6 +202,12 @@ merging the Worker that enforces the plan cap. Until then every project is
 uncapped and everything works, except a PATCH naming `extra_max` or a settings
 PUT naming `default_extra_max` (500 `extra_max_unavailable`).
 
+Everything added after 2026-09-30 (delivery, client confirmation, revision pins, product
+and order columns, shoot date, project type, product interest, S2 guest orders) has its
+own file in `worker/migrations/` and its own doc; the complete list with run order and what
+each unlocks is in `README.md` ("D1 migration"). The `CREATE TABLE` block below is the
+2026-09-27 shape plus the first columns; the live schema is `worker/schema.sql`.
+
 ```sql
 CREATE TABLE IF NOT EXISTS projects (
   id              TEXT PRIMARY KEY,
@@ -197,6 +226,7 @@ CREATE TABLE IF NOT EXISTS projects (
   delivered_at    TEXT,                   -- NULL = not delivered (dashboard migration)
   -- final_folders, allow_proof_download: docs/delivery.md
   extra_max       INTEGER                 -- ♥ allowed above pick_limit; NULL = no plan cap (extra-max migration)
+  -- later: client_confirmed_at / _by (docs/delivery.md), shoot_date, project_type (docs/delivery.md)
 );
 CREATE TABLE IF NOT EXISTS pickers (
   id           TEXT PRIMARY KEY,
@@ -248,8 +278,8 @@ ALTER TABLE share_tokens ADD COLUMN project_id TEXT;
 | Route | Auth | Purpose |
 |---|---|---|
 | `POST /api/admin/projects` `{title?, folders, pick_limit?, extra_price?, extra_max?}` | admin | create project + mint pick link; `extra_max` 0–500 or `null`, left out → studio `default_extra_max` → 10 (`docs/project-plan.md`); the response's `project` carries `extra_max` |
-| `PATCH /api/admin/projects/:id` | admin | any non-empty subset of `{allow_proof_download: bool, pick_limit, extra_price, extra_max}` (`null` or whole numbers: `pick_limit` ≥ 0, `extra_price` ≤ 10,000,000, `extra_max` ≤ 500) → `{ok: true, ...keys sent}`; 400 `invalid_body` (other key, bad value, empty); 404 other photographer; 409 `archived` for a plan key on an archived project; never touches submissions |
-| `GET /api/admin/projects[?archived=1]` | admin | `{projects: [{id, title, phase, modified_after_submit, pick_limit, extra_price, extra_max, owner_name, created_at, archived_at, delivered_at, submission_count, last_submitted_at, unnotified_submissions, token}]}` newest first, this photographer only (`photographer_id = 'default'`), ≤ 200 rows, one SQL query; `owner_name` null when the seat is free; `token` is the newest live pick link (not revoked, not expired, inside the 180-day ceiling) or null. Archived projects are hidden; `?archived=1` returns only archived ones (any other value = default) |
+| `PATCH /api/admin/projects/:id` | admin | any non-empty subset of `{title, allow_proof_download: bool, pick_limit, extra_price, extra_max, shoot_date, project_type}` (plan keys: `null` or whole numbers: `pick_limit` ≥ 0, `extra_price` ≤ 10,000,000, `extra_max` ≤ 500; `title` 1–200 characters, `shoot_date` `YYYY-MM-DD`, `project_type` ≤ 20 characters: `docs/delivery.md`) → `{ok: true, ...keys sent}`; 400 `invalid_body` (other key, bad value, empty); 404 other photographer; 409 `archived` for a plan key on an archived project (title / shoot_date / project_type / the proof switch still work there); never touches submissions |
+| `GET /api/admin/projects[?archived=1]` | admin | `{projects: [{id, title, phase, modified_after_submit, pick_limit, extra_price, extra_max, owner_name, created_at, archived_at, delivered_at, final_folders, allow_proof_download, shoot_date, project_type, client_confirmed_at, client_confirmed_by, open_revision_count, submission_count, last_submitted_at, unnotified_submissions, token}]}` newest first, this photographer only (`photographer_id = 'default'`), ≤ 200 rows, one SQL query; `owner_name` null when the seat is free; `token` is the newest live pick link (not revoked, not expired, inside the 180-day ceiling) or null. Archived projects are hidden; `?archived=1` returns only archived ones (any other value = default) |
 | `GET /api/admin/projects/:id` | admin | project incl. `phase`, `modified_after_submit`, `last_notified_at`, `pick_limit`, `extra_price`, `extra_max` (`null` = no plan cap); owner, pickers, selections with `updated_by`, `note` and `marks` (parsed `[{x, y, note}]`, `null` when none), `tokens` (every pick link, newest first: `{token, created_at, expires_at, revoked_at, last_seen_at, status: 'live'\|'revoked'\|'expired'}`), `submissions` newest first, at most `PICK_MAX_SUBMISSIONS` (50) (`photo_keys` parsed, `notified` 0/1, `marks` parsed `{photo_key: [{x, y, note}]}` or `null`), `unnotified_submissions` |
 | `POST /api/admin/projects/:id/links` | admin | mint a new pick link → 201 `{token, expires_at, created_at, status: 'live'}` |
 | `POST /api/shares/:token/revoke` | admin | revoke any link, pick links included → `{ok: true}`; 404 if unknown or already revoked |
@@ -260,7 +290,7 @@ ALTER TABLE share_tokens ADD COLUMN project_id TEXT;
 | `POST /api/admin/projects/:id/start-retouch` | admin | `submitted` → `retouching`; 409 `not_submitted` from `picking` |
 | `POST /api/admin/projects/:id/reopen` | admin | `submitted`/`retouching` → `picking`, flag and `delivered_at` cleared (`final_folders` kept, see `docs/delivery.md`) |
 | `POST /api/admin/projects/:id/deliver` / `undeliver` | admin | stamp / clear `delivered_at` (deliver only from `retouching`, else 409 `not_retouching`) — see `docs/dashboard-settings.md` |
-| `GET /api/pick/state` | pick token (+ key) | owner name, am-I-owner, `project: {id, title, pick_limit, extra_price, extra_max, max_picks}` (`max_picks` = `pick_limit + extra_max`, `null` when either is NULL; owner and viewers alike), selections, `phase`, `studio: {name, booking_url, has_logo}`; owner also gets `modified_after_submit`, `submitted_at` (latest submission) and each selection as `{photo_key, rating, note, marks}` (`marks`: `[{x, y, note}]` or `null`); viewers get `{photo_key, rating}` only — no `note`, no `marks` key |
+| `GET /api/pick/state` | pick token (+ key) | (delivery-time fields — `mode`, `final_folders`, `confirmed_at`, `shoot_date`, `revision_*`, `revision_drafts` — are in `docs/delivery.md` and `docs/revision-pins.md`; the original contract:) owner name, am-I-owner, `project: {id, title, pick_limit, extra_price, extra_max, max_picks}` (`max_picks` = `pick_limit + extra_max`, `null` when either is NULL; owner and viewers alike), selections, `phase`, `studio: {name, booking_url, has_logo}`; owner also gets `modified_after_submit`, `submitted_at` (latest submission) and each selection as `{photo_key, rating, note, marks}` (`marks`: `[{x, y, note}]` or `null`); viewers get `{photo_key, rating}` only — no `note`, no `marks` key |
 | `POST /api/pick/claim` `{name}` | pick token | atomic claim → `picker_key` |
 | `PUT /api/pick/selections` `{upsert: [{photo_key, rating, note?, marks?}], delete: [photo_key]}` | token + key, owner only | batch upsert/delete → `{ok: true}`; 400 `invalid_photo_key` / `invalid_marks` / `Invalid JSON`; 403 not the owner or a key outside the link's folders; 409 `retouching` / `selection_cap` / `row_cap` / `marks_cap` (never `pick_cap`: the plan is checked at submit); 413 `too_large` (body > 2,000,000 bytes, or its items > 1,900,000 bytes as one value); 500 `marks_unavailable` (migration not run); raises the flag when `submitted`. `marks` rules: see "Retouch pins" |
 | `POST /api/pick/submit` `{relationship, email?}` | token + key, owner only | append `submissions` row with the photo-key and pin snapshots (none for a repeat of the latest keys **and** pins: 200 with the latest), phase → `submitted`, email with diff (throttled, see above); 409 `retouching` / `pick_cap` (`{count, max, over, limit, extra_max}`: more ♥ than `pick_limit + extra_max`, repeats included; checked first among the caps) / `marks_cap` (pin snapshot over 446,400 bytes — only reachable by hand-edited rows) / `submission_cap`; nothing written on any of them; 413 `too_large` (body > 16 KB) |
@@ -400,4 +430,6 @@ A save with no `marks` and no rating 0 item never names the column in SQL.
     `pick_cap` → `marks_cap` → `submission_cap`. PATCH
     takes only the four keys (400 `invalid_body`), is scoped to this
     photographer (404), refuses plan edits on archived projects (409
-    `archived`) and never rewrites a submission.
+    `archived`) and never rewrites a submission. (Since 2026-10-07 PATCH also takes
+    `title`, `shoot_date` and `project_type`; the "four keys" above is the 2026-09-30 state,
+    the current list is in the API table.)
