@@ -1,4 +1,6 @@
-> 注意：本文「目標技術棧」中的 Google Drive API 已過時（現為 Cloudflare Worker + R2 + D1）。此暗色設計已部分被明亮版入口取代（commit 527b6ad）。
+> **歷史文件（狀態 2026-10-08）**：這是 Studio Dark 設計稿的交接包，**不是目前的規格**。技術棧已過時（Google Drive API / Sheets 已被
+> Cloudflare Worker + R2 + D1 取代，見根目錄 `README.md`）。主題規則也已改變：攝影師端頁面用 `home.html` 的米色亮色主題（`--bg:#fff8ee`，commit 527b6ad 起），
+> 只有客人端（挑片頁、客戶登入、相本預覽）維持暗色，完成頁是淺色。要看現況請讀 `README.md`、`CLAUDE.md` 與 `docs/`；這份只留作視覺設計的參考。
 
 # Handoff · 選圖工作室 Studio Dark Redesign
 

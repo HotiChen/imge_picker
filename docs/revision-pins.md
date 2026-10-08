@@ -1,6 +1,8 @@
 # 交件後的修改標示（Revision pins）— 設計稿
 
-狀態：**Worker 已實作（WP1，2026-10-06）**；前端（WP3–WP5）未做。Tim 已決定 §11 全部照建議。
+狀態（2026-10-08）：**Worker 與前端都已實作並合併**（Worker WP1 2026-10-06；客人端與攝影師端 2026-10-06／07，見 §14）。
+migration `2026-10-07-revision-pins.sql` 需在 D1 執行（4 句）。Tim 已決定 §11 全部照建議。
+下面 §1–§12 是設計稿原文，保留當歷史；現況以 §13、§14 與程式為準。
 實作與本稿不同的地方集中列在 **§13**（以 §13 與程式為準）。
 基準：`main` a645be2（已部署版本）。
 相關文件：`docs/delivery.md`（交件、客戶確認、要求修改）、`docs/guest-picking.md`（毛片標示的存檔規則）、
@@ -686,3 +688,22 @@ Tim 要手動做的：
 - 真的 D1：`json_each` / `json_group_object` / 巢狀 `NOT EXISTS` 在 D1 上的行為只在 node:sqlite 上測過（D1 也是 SQLite，現有路由已用同類語法）。
 - 接近 446,400 bytes 快照的 INSERT 在真 D1 上沒測過。
 - `UPDATE projects SET id = id` 在 D1 上的 `meta.changes`（SQLite 語意是算到列；selections 存檔用的是同類寫法）。
+
+---
+
+## 14. 前端實作紀錄（2026-10-06／07）
+
+程式是準。檔案與測試：
+
+- 客人（驗收頁，座位持有人、已交件、未確認）：`js/revision-pins.js`（草稿 store、存檔佇列：debounce、重試、離開前 flush，
+  對應 `PUT /api/pick/revision-pins`）、`js/pin-layer.js`（pin 資料規則與疊在 `<img>` 上的 pin 圖層，也被毛片標示共用）、
+  `js/revision-history.js`（「上一輪的修改資訊」唯讀面板，pin 畫在舊照片上，縮圖走 `GET /api/pick/rounds/:id/photo`）、
+  `js/delivery-done.js`（確認完成／「送出修改（N 張）」按鈕，從 `js/pick.js` 搬出；送出前會重讀 state，
+  攝影師剛換過精修就擋下並請客人重新整理），`js/finals-gallery.js` 的 lightbox 掛勾；樣式 `css/revision-pins.css`。
+- 攝影師：`js/revision-rounds-view.js`（一輪一張卡片：第 k 輪、標示 N 張、時間、客人、未處理／已處理、總說明；
+  可摺疊的照片清單，pin 唯讀；點照片看 1200px；「下載此輪需求表 (CSV)」），`admin.html` 的交件區與
+  `js/project-view.js`（`index.html?project=<id>`）共用；樣式 `css/revision-rounds-view.css`。
+  照片用管理員憑證放在 Authorization header（fetch → blob），token 不進網址。
+- 完成頁（已確認）沒有任何標示元素（§11 Q11）。migration 沒跑（`revision_drafts: null`）時，客人頁沒有標示相關元素。
+- 瀏覽器測試：`test/suites/37-finals-pins-client.mjs`、`38-finals-pins-admin.mjs`（假 Worker：`test/lib/revision-pins-fake.mjs`）。
+- 沒有真機驗證：iPhone Safari／LINE 內建瀏覽器上放 pin 與長清單的缺圖（舊輪縮圖超過 180 天會被 R2 刪掉，面板顯示「照片已不在雲端」）。

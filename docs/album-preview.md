@@ -1,6 +1,9 @@
 # Album preview: the layout engine
 
-Status: engine built; stage 1 guest preview built (see "Stage 1: the guest preview" at the end); the preview is now
+Status (2026-10-08): engine built; stage 3's data path is partly there (S2 guest ordering
+stores `order_items.layout = {"v":1,"mode":"photographer","source":"all_finals","spreads":N}`
+on an album line, built dark behind `GUEST_ORDERS`; the guest's own layout is still not saved);
+stage 1 guest preview built (see "Stage 1: the guest preview" at the end); the preview is now
 an **A4 portrait album with a single-page cover and two-page spreads** (see "A4 album: spreads and the template
 library"). Roadmap anchor: `docs/backlog.md` THE ORDER #3 "Album chain" and `docs/guest-shop.md` S3.
 
@@ -36,7 +39,13 @@ it as a purchase. Everything is local arithmetic on the `?w=400` thumbnails
   (every template through the validator, and the validator against bad data) and
   `book_editor/test/plan_spreads.test.mjs` (the spread planner). Browser: the
   suite "auto layout — the smart style and the old styles in the editor, on real
-  pixels" and the "album preview …" suites in `test/run.mjs`.
+  pixels" (`test/suites/01-editor-layout.mjs`) and the "album preview …" suites
+  (`test/suites/26-album-preview.mjs`, `27-album-preview-spreads.mjs`, `40-album-bleed.mjs`,
+  `53-album-cover-title-relayout.mjs`, `55-album-relayout-feedback.mjs`). The planner's own
+  options each have a node test file in `book_editor/test/` (`plan_variety`, `plan_hero`,
+  `preferred_per_spread`, `plan_variant`, `plan_variant_small`, `plan_spreads_contain`,
+  `plan_spreads_foldsafe`, `plan_spreads_minspreads`, `plan_spreads_maxspreads`,
+  `plan_spreads_separate`).
 - `node book_editor/test/render-templates.mjs [outDir]` draws the library and sample plans as PNGs (see
   "Seeing the library").
 

@@ -133,8 +133,11 @@ undeliver and every pick link keep working (not delivered, switch off).
   goes through that check, so a kept snapshot is never readable through a
   link. Code (worker or page) must read delivery from `delivered_at`, never
   from `final_folders` being non-null.
-- The PATCH body takes only that one boolean key; anything else (other keys,
-  `1`, `"true"`, `null`, not an object) → 400 `invalid_body`.
+- The PATCH body originally took only that one boolean key. **Superseded:** it
+  now takes any non-empty subset of `title`, `allow_proof_download`, `shoot_date`,
+  `project_type` and the plan keys (`docs/project-plan.md`, "Edit"); a bad key or
+  value (`1`, `"true"`, `null` for the switch, not an object) is still a 400
+  `invalid_body` for the whole body.
 - `GET /api/admin/projects` rows and `GET /api/admin/projects/:id`'s
   `project` carry `final_folders` (array: the last chosen finals, which may
   be there while not delivered — admin.html prefills the deliver picker with
@@ -311,9 +314,10 @@ page case below.
 
 - A guest whose page still shows version 1 can confirm after the photographer
   already put version 2 up (the confirm lands on what is up now). The
-  mitigation is on the page and **not built yet**: pick.js should re-read
-  `/api/pick/state` before sending a confirm and say so if `final_folders`
-  changed. Binding the confirm to a version server-side would
+  mitigation is on the page and **built** (2026-10): `js/delivery-done.js` re-reads
+  `/api/pick/state` before sending a confirm (or a revision) and, if the finals, the
+  delivery or the open-request state changed, shows 「攝影師剛更新了照片，請重新整理後再確認」
+  instead of sending. Binding the confirm to a version server-side would
   only catch a renamed folder, not new files uploaded over the same folder,
   so it is not done.
 - Revision-request emails have no time throttle: flooding needs the owner's
@@ -371,6 +375,37 @@ the 下載毛片原檔 list keep the card grid and the sidebar. Files:
   URL). Owner and viewers both have the button.
 - Not done: download all, duplicate-photo hiding (a copy file in the folder
   shows like any other), a cover chosen by the photographer (needs a column).
+
+## The 完成頁 (completion page, built 2026-10-05..07)
+
+What the same link shows once the delivery is **confirmed** (`mode === 'delivered'`,
+`confirmed_at` set, by the guest or the photographer; owner and viewers alike). An
+unconfirmed delivery keeps the dark 驗收頁 with the 確認完成 bar. Files:
+`js/completion-page.js` (the page, `window.CompletionPage`), `css/completion-page.css`
+(light cream theme, everything under `.cp`; the client pages stay dark and
+`css/styles.css`'s `:root` is never changed), driven by `js/pick.js`; the gallery is
+`js/finals-gallery.js` mounted with `theme:'light'`. Top to bottom:
+
+1. **Hero**: a landscape final as the cover (the first one that is at least 1.2:1, probed
+   among the first 12, else the first final), the title, the studio, a thank-you,
+   「已確認完成（日期）」 and the **shoot date** (`state.shoot_date`, shown only here).
+2. **Gallery** (justified rows + lightbox, see the section above).
+3. **下載全部精修**: every final of every finals folder as one zip named
+   `<title>_精修_<N>張.zip`.
+4. **把這段回憶留下來**: the photographer's guest-visible platform products
+   (`GET /api/pick/shop`: name, description, price, options; albums also show the
+   extra-page price). Information only unless ordering is open (`GUEST_ORDERS`, then
+   訂購 per `docs/guest-shop.md`, seat owner only); otherwise each card has
+   **我有興趣** (`POST /api/pick/interest`, seat owner only; the photographer sees
+   the list under 客人興趣 in admin and gets at most one mail per product per 24 h).
+   Any failure or an empty list and the section is simply not in the DOM.
+5. **相本預覽** entry (`docs/album-preview.md`): the guest's finals laid out as an album,
+   with the first album product's `min_pages` / `max_pages` as the planner's spread
+   bounds, the cover title, 再次編排 and (when the product has `bleed_mm`) a trim guide.
+6. Share + contact footer (the studio's booking link, if set).
+
+Not on the 完成頁: revision pins and their history (`docs/revision-pins.md` Q11), and
+any button that writes except 我有興趣 / 訂購.
 
 ## Shoot date for the completion page (Worker, 2026-10-07)
 
@@ -480,6 +515,6 @@ write at all. No migration: both columns already exist.
 
 ## Out of scope for this step
 
-Zip download of everything; watermarks; a second link just for delivery;
+(Status 2026-10-08: the zip of all finals shipped on the 完成頁, 下載全部精修.) Watermarks; a second link just for delivery;
 emailing the guest when delivered (can reuse the mail binding later);
 long-term storage past 180 days (the 180-day countdown is still to do).

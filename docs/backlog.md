@@ -1,6 +1,9 @@
 # Backlog
 
 Decided or discussed, not yet built. Newest decisions at the top of each group.
+**Status refreshed 2026-10-08** (against `main` 25ae25a): items that have shipped are marked
+✅ in place or moved to "Shipped since 2026-09-29" below; sections kept for their decisions
+say so in their heading.
 
 ## THE ORDER (agreed with Tim 2026-09-29 — the only main line)
 Run one real job end to end → connect Album / Proof / Delivery → validate
@@ -10,33 +13,50 @@ outside this list.
 1. **Make what exists run for real.**
    - Products / orders migration ✅ run, merged, deployed. `OPERATOR_TOKEN` set.
    - Delivery (交件: finals separate from proofs on the same link, proof
-     original download switch) — `docs/delivery.md`; finishing now. Needs
-     `worker/migrations/2026-09-30-delivery.sql` in D1 before its merge, and
-     a check in `ping.html` for photos without thumbnails (they no longer fall
-     back to the original in the picking view).
-   - Client confirmation + revision requests (Publish ≠ Complete: after
-     交件 the guest taps 確認完成 or 要求修改; 精修二 goes out with the
-     existing 更換精修) — **in progress (2026-10-04)**: Worker side built
-     (`docs/delivery.md` → "Client confirmation and revision requests"),
-     frontend (pick.js buttons, admin.html badge / list / 標記完成) next.
-     Needs `worker/migrations/2026-10-04-client-confirm.sql` in D1 before its
-     merge.
+     original download switch) ✅ built and merged — `docs/delivery.md`
+     (needed `2026-09-30-delivery.sql`). Still worth a `ping.html` check for
+     photos without thumbnails (they no longer fall back to the original in
+     the picking view).
+   - Client confirmation + revision requests ✅ built and merged (Publish ≠
+     Complete: after 交件 the guest taps 確認完成 or asks for changes; 精修二
+     goes out with the existing 更換精修; the photographer can 標記完成) —
+     `docs/delivery.md` → "Client confirmation and revision requests"
+     (`2026-10-04-client-confirm.sql`).
+   - **Revision pins on the finals** ✅ built and merged (2026-10-06/07): the
+     text 要求修改 became pins + a note, sent as a frozen round (送出修改 N 張),
+     history for the guest, round cards and per-round CSV for the
+     photographer — `docs/revision-pins.md` (`2026-10-07-revision-pins.sql`).
+   - **完成頁** ✅ (a delivered project the client confirmed): light page with
+     hero, shoot date, gallery, 下載全部精修, 把這段回憶留下來 (products,
+     我有興趣), album preview — `docs/delivery.md` → "The 完成頁".
    - Email: Cloudflare Email Routing on, verify the photographer's inbox,
      `wrangler secret put PHOTOGRAPHER_EMAIL`, submit a test pick.
    - Real phone: iPhone / LINE in-app browser / Safari — picking, gestures,
      delivery gallery, admin pages.
-   - Fix known P0/P1 bugs (see Bugs): touch annotations never saved; orange
-     tools toggle covering ♥ on a 390px phone.
-2. **Tim runs 2–3 real jobs end to end:** project → upload → guest picks →
+   - ✅ The P0/P1 bugs are fixed (touch annotations were never saved; the orange
+     tools toggle covered ♥ — removed on the guest page and the review view).
+     Still needs a real-phone look: the 2026-10-07 phone layouts (photographer
+     pages `css/side-nav.css`, upload page, picker header on a phone), the guest
+     tour, the 完成頁 on iPhone Safari / LINE.
+2. **Tim runs 2–3 real jobs end to end** (*this is the step we are in; nothing here is
+   confirmed by the repo, only Tim can say how many jobs ran*): project → upload → guest picks →
    submission → retouch → products / 加挑 → order → manual print → delivery.
    Log every snag here. No new big features during this step.
 3. **Album back into the project:** Project → Picker → Retouch → Album.
    Integrate the existing `book_editor` (auto-layout, viewer, export); do not
    build a new album engine. Album layouts/print files and the 180-day rule:
    see item 3 "Album chain" in the earlier roadmap notes below.
+   *Status 2026-10-08, partly:* the guest sees an A4 album laid out from their own
+   finals on the 完成頁 (preview only, nothing saved: `docs/album-preview.md`,
+   planner with variety / heroRate / preferredPerSpread / variant / foldSafe,
+   min/max spreads from the product, bleed guide, cover title, 再次編排);
+   `book_editor` itself is not yet fed from the project. Print files and the
+   180-day rule are not built.
 4. **Proof → Approval → Delivery:** album → guest proofs → changes →
    approval → final → delivery. From here the product is a photo-project
    delivery system, not just a picking tool.
+   *Status 2026-10-08:* the photo side (picks → finals → confirm / revision pins →
+   完成頁) is built; the album proof / approval leg is not.
 5. **5 photographers test it for real** (`docs/photographer-interviews.md`).
    Start booking during steps 2–4 — interviews cost no dev time. Three
    questions: would you use it? pay monthly? print albums / 無框畫 through
@@ -53,10 +73,35 @@ complex membership, any new engine. (Video results and Travel Story are recorded
 "Future / not scheduled"; not started.) The notes further down stay as
 reference only.
 
+## Shipped since 2026-09-29 (all on `main` as of 25ae25a; `git log` has the detail)
+- Plan edit per project + submit-time extra-pick cap (`extra_max`, 409 `pick_cap`), guest
+  page cleanup (folders + filter only, one submit button, one counter), retouch pins on
+  the proofs (`docs/guest-picking.md`, `docs/project-plan.md`).
+- Delivery, client confirmation, revision pins, finals gallery, 完成頁, 下載全部精修
+  (`docs/delivery.md`, `docs/revision-pins.md`); project 命名 from 拍攝日期 + 專案名稱
+  (`js/project-folders.js`); `shoot_date`, `project_type`, rename (PATCH `title`).
+- Photographer admin: project detail as its own view with collapsible blocks,
+  list search + status / category filters + 待我處理 sort (filters in the URL hash),
+  back-button convention (← 返回 / ← 上一層, 44px, top-left), phone layout
+  (`css/side-nav.css`), upload page phone layout + retry, 複製連結 dialog with a
+  ready-to-send message, 看全部毛片, 交件通知文案.
+- Products: platform catalogue + operator console; album `min_pages` / `max_pages`
+  (spreads), `extra_page_price`, `bleed_mm` (`docs/products-orders.md`).
+- Album planner + guest album preview (`docs/album-preview.md`); shared helpers in
+  `js/util.js` (`escHtml`, `fmtDate`, `todayTaipei`, `formatPrice`).
+- Guest first-visit tour (`js/guest-tour.js`, `docs/guest-picking.md`).
+- 「我有興趣」 on the 完成頁 + 客人興趣 list in admin (`product_interests`, `docs/guest-shop.md`).
+- **S2 guest ordering — built but DARK**: Worker routes, 訂購 sheet / cart / receipt /
+  我的訂單 on the 完成頁, photographer orders UI, settings 匯款資訊. Off until Tim sets
+  `GUEST_ORDERS` in `worker/wrangler.toml` (`off` default, `pilot` + `GUEST_ORDERS_PILOT`,
+  `on`) after the privacy notice is reviewed and `2026-10-09-guest-orders.sql` has run.
+  Pickup only, money flow deferred (`docs/guest-shop.md`, "S2 — Tim 的決定").
+- Test layout: browser suites split into `test/suites/NN-*.mjs` + `test/lib/*` (`test/README.md`).
+
 ## Earlier roadmap notes (reference only — THE ORDER above wins)
 Done: back-office shell (dashboard, 已交付); studio settings (name, logo,
-default plan); products & orders A and platform catalogue A2 — built, waiting
-on the merge above. Design: `docs/products-orders.md`.
+default plan); products & orders A and platform catalogue A2 (merged, in use).
+Design: `docs/products-orders.md`.
 
 1. **180-day countdown.** Photos (and everything else in `imagepicker`) are
    deleted 180 days after upload. Show it: 「照片將於 X 月 X 日刪除」 on the
@@ -64,7 +109,9 @@ on the merge above. Design: `docs/products-orders.md`.
    photographer's archive — they keep their originals.
 2. **B — guest shop.** Platform products (photo, price) on the pick page;
    the guest orders, the photographer confirms, payment by transfer. The main
-   selling point. Detailed design before building (outline in the products doc).
+   selling point. *Status: S1 (product info) and 我有興趣 live; S2 ordering built
+   dark behind `GUEST_ORDERS`; S3 (album layout on the order) not built —
+   `docs/guest-shop.md`.*
 3. **Album chain.** Submit → auto-layout draft from the picks (`book_editor`
    already has auto_layout, a client viewer with approve, and a 300 dpi export)
    → guest checks and swaps photos on the phone → approve creates an album
@@ -122,14 +169,16 @@ a proof → photographer / client approves → printed → shipped (tracking no.
 - Open: how Tim sends jobs today (LINE + Drive?); does the client approve a
   layout proof, or only the photographer?
 
-## Guest pick page UI (decided with Tim 2026-09-30, from his iPhone test — not built yet)
+## Guest pick page UI (decided with Tim 2026-09-30, from his iPhone test — ✅ built 2026-09-30..10-07 except where marked)
 Guest link only (owner and viewers); the photographer's own index.html keeps every tool.
 - Only two tools for guests: **資料夾** and the **全部 ｜ ♥ 已選 N ｜ 未選** filter.
   Remove FLAGS (PICK/REVIEW/REJECT), ANNOTATION, 排序 and DATA from the guest view (from the DOM).
 - Phone: no ☰ / drawer for guests. An always-visible bar under the header:
   「資料夾：<current> ▾」 + the 3-way filter. Desktop: sidebar with only those two.
-- Delivered gallery: folder switch only (no filter, no ♥) — **plus (Tim, 2026-09-30,
-  scope still to confirm): 購買資訊 and a 分享 button.**
+- Delivered gallery: folder switch only (no filter, no ♥) — **plus (Tim, 2026-09-30):
+  購買資訊 and a 分享 button. ✅ Both exist now: 分享 on the gallery and the 完成頁;
+  購買資訊 is the 完成頁 product section (option A, info only, + 我有興趣), and ordering
+  (option B) is S2, built dark.**
   - 購買資訊: options — (A) info only: the photographer's guest-visible products
     (name, spec/price, photo) + a 「聯絡攝影師訂購」 link; a read-only guest route
     (delivered mode only, never cost); needs a guest_visible switch in settings
@@ -150,7 +199,8 @@ Guest link only (owner and viewers); the photographer's own index.html keeps eve
 - **No 預約拍攝 button on the guest page at all** (Tim: not wanted). The booking_url setting stays, unused on this page.
 - Top-left brand: the photographer's own studio logo / name from settings.
 - Replace the 「HC」 circle with a small person icon (placeholder for a future client login).
-- **Retouch pins (decided 2026-09-30, option A):** in preview the guest taps
+- **Retouch pins (decided 2026-09-30, option A; ✅ built 2026-09-30 — `docs/guest-picking.md`,
+  "Retouch pins"; the bullets below are the original decision text):** in preview the guest taps
   「標示修改」, then taps spots on the photo → numbered pins ①②…, each with a
   short note (「這裡痘痘」). No freehand circles for now (option B, later if
   clients need it; keep the data shape open for it).
@@ -210,30 +260,31 @@ Replaces the seat-passing proposal in docs/pick-handover.md §3+ (kept only as h
   a photographer-visible history, and a 「兩人都選」 filter (likely yes).
 
 ## Bugs
-- Phone preview: the orange tools toggle (`.mobile-tools-toggle`, fixed
-  bottom-right, 52px) covers the bottom bar's ♥ on a 390px phone. Predates
-  the zoom fix.
-- Annotations drawn by touch are never saved: `stopDrawing` gets a TouchEvent
-  with no `clientX`, so the end point is NaN.
-- Annotation coordinates are fitted-photo pixels, so a circle drawn at one
-  window size lands elsewhere at another. Fixing it changes the stored format
-  (localStorage `r2_photo_picker_annotations`) — needs a migration.
-- Minor: − / + zoom about the photo's top-left, not its centre; panning is
-  unbounded.
+Fixed (verified in `js/`, 2026-10-08), kept here for the record:
+- ✅ The orange tools toggle covering ♥ on a phone: removed on the guest page
+  (`js/pick.js`) and the review view (`js/project-view.js`).
+- ✅ Annotations drawn by touch were never saved: `stopDrawing` now reads
+  `changedTouches`.
+- ✅ − / + zoom now about the view centre (2026-09-30).
+- ✅ Pin coordinates are 0–1 fractions of the photo, not pixels.
+
+Still open:
+- The old freehand annotation tool (photographer's own `index.html`, localStorage
+  `r2_photo_picker_annotations`) may still store fitted-photo pixels; not re-checked.
+- Minor: panning is unbounded (not re-checked).
 
 ## Deferred features
-- Edit a project's 張數 / 加挑單價 after creation (today only set at create;
-  no update route). Submissions snapshot both at submit, so an edit only
-  affects later submits.
+- ✅ Done: edit a project's 張數 / 加挑單價 / 最多可加選 after creation
+  (`PATCH /api/admin/projects/:id`, 編輯方案; `docs/project-plan.md`). Submissions snapshot
+  the plan at submit, so an edit only affects later submits.
 - Edit a project's folders after creation — same edit screen as 張數 / 單價.
   Folders are snapshotted on the project and on every pick share token
-  (worker.js:1074, reissue copies the project at :1290), so an edit must
+  (grep `folders` in `worker/worker.js`; reissue copies the project), so an edit must
   update the live pick tokens too, or existing links keep the old scope.
   Decide what happens to picks in a removed folder (keep, but hide?).
   Security review: this widens what a live link can read.
-- Make "no extra picks" explicit: today a blank 加挑單價 only hides the price —
-  guests can still pick past the limit, nothing blocks. Add a choice
-  (可加選 NT$__ / 不可加選) and cap picks at the limit for 不可加選.
+- ✅ Done: "no extra picks" is `extra_max = 0` (submit refuses above `pick_limit + extra_max`;
+  a blank 加挑單價 still only hides the price).
 - Logo route per photographer (`/api/studio/:pid/logo`); today it always
   serves the default studio — fine until a second photographer exists.
 - Strip bidi / zero-width characters from `studio_name` (spoofing only; admin-set).
@@ -341,12 +392,17 @@ new product and not a shared album.
 - `notifyUrl` allowlist on book submit.
 - Cloudflare Cache Rule `imhoti.tw/studio/*` → Bypass (removes the need to
   purge after every deploy).
-- FLAGS: hide or finish. README sync.
+- FLAGS: hide or finish (hidden on the guest page; the photographer's own picker still has them).
 - GitHub "Security and quality" shows 1 alert — look at it.
 - Real D1 behaviour not yet proven in prod: `batch()` as a transaction under
   load, row/value size limits.
 
-## Open questions and where we stopped (2026-09-30, for whoever continues the discussion)
+## Open questions and where we stopped (2026-09-30 — HISTORY, partly resolved; for whoever continues the discussion)
+
+> Status 2026-10-08: the branch below was merged long ago (submit-time cap, drafts, pins and
+> the four `2026-09-30-*` migrations are all in `main`; the later migrations were written
+> assuming they had run). What is still open from this section: the co-picking questions
+> (nothing built), and "repeat submit over a lowered plan" (built as refuse; Tim's call).
 
 Open — need Tim's answer:
 - Collaborator limit "最多五個人": 5 total (A + 4, recommended) or 5 collaborators?
