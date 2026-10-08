@@ -60,6 +60,15 @@ export function dashSettingsMock(opts = {}) {
           if (opts.ordersMigrated === false) return json({ error: '客人訂購功能尚未啟用', code: 'orders_unavailable' }, 500);
           body = { ...body, transfer_info: v === null || !v.trim() ? null : v.trim() };
         }
+        // pick_link_message (worker.js): a string of at most 1000 characters, line breaks and tabs kept, trimmed, '' / null clears,
+        // any other control / bidi character -> 400 invalid_pick_link_message; before its migration a PUT naming it -> 500
+        if ('pick_link_message' in (body || {})) {
+          const v = body.pick_link_message;
+          const bad = v !== null && (typeof v !== 'string' || [...v].length > 1000 || /[\u0000-\u0008\u000B-\u001F\u007F-\u009F\u200E\u200F\u202A-\u202E\u2066-\u2069]/.test(v));
+          if (bad) return json({ error: 'pick_link_message 格式不正確', code: 'invalid_pick_link_message' }, 400);
+          if (opts.pickLinkMigrated === false) return json({ error: 'pick_link_message unavailable', code: 'pick_link_message_unavailable' }, 500);
+          body = { ...body, pick_link_message: v === null || !v.trim() ? null : v.trim() };
+        }
         // default_extra_max: null or a whole number 0-500, else 400 (nothing written)
         if ('default_extra_max' in (body || {}) && body.default_extra_max !== null && !isExtraMaxFake(body.default_extra_max))
           return json({ error: 'default_extra_max must be a whole number from 0 to 500', code: 'invalid_default_extra_max' }, 400);

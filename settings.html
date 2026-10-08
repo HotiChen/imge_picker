@@ -108,6 +108,11 @@
   #set-transfer-info { resize: vertical; min-height: 84px; line-height: 1.6; }
   .transfer-count { font-family: 'IBM Plex Mono', monospace; }
   .transfer-count.over { color: var(--danger); font-weight: 600; }
+  #set-pick-link-message { resize: vertical; min-height: 140px; line-height: 1.6; }
+  .pick-link-preview { margin-top: 8px; padding: 10px 12px; border: 1px dashed var(--rule); border-radius: 10px; background: var(--bg);
+    color: var(--ink-90); font-size: 13px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .pick-link-preview-label { color: var(--ink-55); font-size: 12px; margin-top: 8px; }
+  #set-pick-link-reset { min-height: 44px; min-width: 44px; margin-top: 8px; background: transparent; border: 1px solid var(--border); color: var(--ink-90); }
 </style>
 </head>
 <body>
@@ -155,6 +160,14 @@
           <label for="set-transfer-info">匯款資訊</label>
           <textarea id="set-transfer-info" class="field" rows="4" maxlength="500" placeholder="例如：玉山銀行 808&#10;帳號 1234-5678-9012&#10;戶名 王小明"></textarea>
           <div class="hint"><span id="set-transfer-count" class="transfer-count">0/500</span>　客人要等你確認訂單後才看得到這段文字；換行會保留。</div>
+        </div>
+        <div class="field-group">
+          <label for="set-pick-link-message">傳給客人的選片訊息</label>
+          <textarea id="set-pick-link-message" class="field" rows="6" maxlength="1000"></textarea>
+          <div class="hint"><span id="set-pick-link-count" class="transfer-count">0/1000</span>　在「傳給客人」視窗裡預設帶入這段文字。可以用 {專案名稱}（專案名稱）和 {連結}（選片連結）；沒寫 {連結} 的話，系統會自動把連結加在最後。</div>
+          <button id="set-pick-link-reset" class="btn btn-ghost" type="button">還原預設</button>
+          <div class="pick-link-preview-label">預覽（用範例資料）</div>
+          <div id="set-pick-link-preview" class="pick-link-preview"></div>
         </div>
         <button id="set-save-btn" class="btn btn-accent" type="button">儲存設定</button>
         <div id="set-err" class="err"></div>
@@ -300,6 +313,24 @@
       transferCount.classList.toggle('over', n > TRANSFER_MAX);
     }
     transferInput.addEventListener('input', updateTransferCount);
+    // 傳給客人的選片訊息 as loaded (null = built-in default, stored as NULL): a PUT names pick_link_message only when it changed.
+    // A blank box or the default text itself is "no custom text" = null.
+    const pickInput = document.getElementById('set-pick-link-message');
+    const pickCount = document.getElementById('set-pick-link-count');
+    const pickPreview = document.getElementById('set-pick-link-preview');
+    const PICK_MAX = 1000;
+    const pickLen = () => [...pickInput.value].length;
+    const pickStored = v => (v.trim() === '' || v.trim() === Util.PICK_LINK_DEFAULT.trim()) ? null : v;
+    let loadedPick = null;
+    function updatePick() {
+      const n = pickLen();
+      pickCount.textContent = `${n}/${PICK_MAX}`;
+      pickCount.classList.toggle('over', n > PICK_MAX);
+      pickPreview.textContent = Util.pickLinkMessage(pickInput.value, '王小明 & 陳小美 婚紗', 'https://imhoti.tw/studio/index.html?t=範例連結');
+    }
+    pickInput.addEventListener('input', updatePick);
+    document.getElementById('set-pick-link-reset').addEventListener('click', () => { pickInput.value = Util.PICK_LINK_DEFAULT; updatePick(); });
+    updatePick();
     const saveBtn = document.getElementById('set-save-btn');
     const errEl = document.getElementById('set-err');
     const okEl = document.getElementById('set-ok');
@@ -345,6 +376,9 @@
         loadedTransfer = typeof s.transfer_info === 'string' ? s.transfer_info : '';
         transferInput.value = loadedTransfer;
         updateTransferCount();
+        loadedPick = typeof s.pick_link_message === 'string' && s.pick_link_message.trim() ? s.pick_link_message : null;
+        pickInput.value = loadedPick == null ? Util.PICK_LINK_DEFAULT : loadedPick;
+        updatePick();
         renderLogo(!!s.has_logo);
       } catch (e) {
         if (e.message !== '401') errEl.textContent = '無法連線到 Worker';
@@ -360,6 +394,7 @@
       invalid_default_extra_max: '最多可加選需為 0–500 的整數',
       extra_max_unavailable: '請先在 D1 執行 extra-max migration',
       invalid_transfer_info: '匯款資訊格式不正確（500 字以內，不可含特殊控制字元）',
+      invalid_pick_link_message: '訊息格式不正確（1000 字以內，不可含特殊控制字元）',
       orders_unavailable: '客人訂購功能尚未啟用，請先執行 migration',
     };
 
@@ -392,6 +427,9 @@
       if (transferLen() > TRANSFER_MAX) {
         errEl.textContent = `匯款資訊最多 ${TRANSFER_MAX} 字（目前 ${transferLen()} 字）`; return;
       }
+      if (pickLen() > PICK_MAX) {
+        errEl.textContent = `選片訊息最多 ${PICK_MAX} 字（目前 ${pickLen()} 字）`; return;
+      }
       const putBody = {
         studio_name: nameInput.value.trim() === '' ? '' : nameInput.value.trim(),
         booking_url: bookingUrl,
@@ -400,6 +438,8 @@
       };
       if (extra_max !== loadedExtraMax) putBody.default_extra_max = extra_max;
       if (transferInput.value !== loadedTransfer) putBody.transfer_info = transferInput.value;
+      const pickNext = pickStored(pickInput.value);
+      if (pickNext !== loadedPick) putBody.pick_link_message = pickNext;
       saveBtn.disabled = true;
       try {
         const r = await authedFetch('/api/admin/settings', {
@@ -409,11 +449,15 @@
         });
         const data = await r.json().catch(() => ({}));
         if (!r.ok) {
+          if (r.status === 500 && 'pick_link_message' in putBody) {
+            errEl.textContent = '這個設定還沒啟用，請先執行 migration（2026-10-10-pick-link-message.sql）'; return;
+          }
           errEl.textContent = ERROR_LABEL[data.code] || data.error || `儲存失敗（${r.status}）`;
           return;
         }
         if ('default_extra_max' in putBody) loadedExtraMax = extra_max;
         if ('transfer_info' in putBody) loadedTransfer = transferInput.value;
+        if ('pick_link_message' in putBody) loadedPick = pickNext;
         okEl.textContent = '已儲存';
         setTimeout(() => { okEl.textContent = ''; }, 2500);
       } catch (e) {

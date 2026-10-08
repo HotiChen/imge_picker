@@ -189,6 +189,8 @@
   .dn-box .dn-note { color: var(--ink-55); font-size: 12px; line-height: 1.6; margin: 0; }
   .dn-text { width: 100%; min-height: 190px; resize: vertical; font-family: inherit; font-size: 16px; line-height: 1.6;
     background: var(--bg); color: var(--ink-90); border: 1px solid var(--rule); border-radius: 10px; padding: 10px 12px; }
+  .dn-box .dn-set-link { color: var(--accent-ink); display: inline-block; min-height: 44px; line-height: 44px; padding: 0 4px; margin: -12px 0; }
+  .dn-actions .btn { min-height: 44px; }
   .dn-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
   .dn-status { color: var(--success); font-size: 13px; font-weight: 600; }
   /* create form: which folder a project will use (js/project-folders.js) and whether it already holds photos */
@@ -592,6 +594,7 @@
   // Only fills a field that is still empty, so it never clobbers something
   // the photographer already typed before this resolved.
   async function loadProjectDefaults() {
+    loadPickLinkTemplate();
     try {
       const r = await fetch(`${WORKER_URL}/api/admin/settings`, {
         headers: { 'Authorization': `Bearer ${getToken()}` },
@@ -2163,20 +2166,28 @@
   }
   // 複製連結 → the link is copied at once (as before) AND a dialog shows a ready-to-send message (title + link +
   // how to open it) in a read-only textarea, so it can be copied whole or selected by hand where the clipboard is blocked.
+  // The text comes from the studio's saved template (settings 「傳給客人的選片訊息」) via Util.pickLinkMessage; until the
+  // settings are loaded, or when they cannot be read, it is the built-in default. Fetched once per page (a failure is retried
+  // on the next open), never awaited before the dialog opens.
+  let pickLinkTemplate = null, pickLinkTemplateP = null;
+  function loadPickLinkTemplate() {
+    if (!pickLinkTemplateP) {
+      pickLinkTemplateP = fetch(`${WORKER_URL}/api/admin/settings`, { headers: { 'Authorization': `Bearer ${getToken()}` } })
+        .then(r => (r.ok ? r.json() : Promise.reject(new Error('settings'))))
+        .then(s => { pickLinkTemplate = typeof s.pick_link_message === 'string' ? s.pick_link_message : null; return pickLinkTemplate; })
+        .catch(() => { pickLinkTemplateP = null; return null; });
+    }
+    return pickLinkTemplateP;
+  }
   function shareLinkMessage(title, link) {
-    return [
-      `${title} 的選片連結在這裡：`,
-      link,
-      '',
-      '請用手機打開，由負責選片的人先打開（第一位打開的人會成為挑選人，其他人用同一條連結只能看）。',
-      '選好之後按「完成提交」，我就會收到了。',
-    ].join('\n');
+    return Util.pickLinkMessage(pickLinkTemplate, title, link);
   }
   let closeShareDialog = null;   // cleanup of the dialog on screen, so a second open leaves no Esc listener behind
   function showShareLinkDialog(title, token, linkCopied) {
     if (closeShareDialog) closeShareDialog();
     const link = projectLink(token);
     const text = shareLinkMessage(title || '專案', link);
+    const loadedAtOpen = !!pickLinkTemplateP && pickLinkTemplate !== null;
     const overlay = document.createElement('div');
     overlay.id = 'pd-share-link';
     overlay.className = 'picker-overlay';
@@ -2194,8 +2205,15 @@
     const ta = document.createElement('textarea');
     ta.id = 'sl-text';
     ta.className = 'dn-text';
-    ta.readOnly = true;
     ta.value = text;
+    const tweak = document.createElement('p');
+    tweak.className = 'dn-note';
+    tweak.append('預設文字可以在「');
+    const setLink = document.createElement('a');
+    setLink.href = 'settings.html';
+    setLink.className = 'dn-set-link';
+    setLink.textContent = '設定';
+    tweak.append(setLink, '」裡修改');
     const actions = document.createElement('div');
     actions.className = 'dn-actions';
     const copy = document.createElement('button');
@@ -2213,9 +2231,17 @@
     close.className = 'btn btn-ghost';
     close.textContent = '關閉';
     actions.append(copy, status, close);
-    box.append(h, note, ta, actions);
+    box.append(h, note, ta, tweak, actions);
     overlay.appendChild(box);
     document.body.appendChild(overlay);
+    // settings not read yet: show the default now, swap in the saved template when it arrives, unless the text was already edited
+    let edited = false;
+    ta.addEventListener('input', () => { edited = true; });
+    if (!loadedAtOpen) {
+      loadPickLinkTemplate().then(() => {
+        if (!edited && overlay.isConnected && pickLinkTemplate !== null) ta.value = shareLinkMessage(title || '專案', link);
+      });
+    }
     const onKey = e => { if (e.key === 'Escape') done(); };
     const done = () => { overlay.remove(); document.removeEventListener('keydown', onKey); if (closeShareDialog === done) closeShareDialog = null; };
     closeShareDialog = done;
@@ -2223,7 +2249,7 @@
     close.addEventListener('click', done);
     overlay.addEventListener('click', e => { if (e.target === overlay) done(); });
     copy.addEventListener('click', async () => {
-      const ok = await copyText(text);
+      const ok = await copyText(ta.value);
       status.textContent = ok ? '已複製' : '複製失敗，請長按文字手動複製';
     });
     copy.focus();
