@@ -62,6 +62,15 @@ CREATE TABLE photographer_sessions (
 - 忘記密碼：第一階段由 operator 在頁面上「重設為臨時密碼」，Tim 私下告知。email 開通後再做連結。
 - 停用（suspended）要立刻生效：每個請求都查 `status`，並刪除該帳號所有 session。
 
+**第 1 批實作（2026-10-08）**：migration `worker/migrations/2026-10-11-photographers.sql`（5 句，可重跑），
+多一個欄位 `studio_note`（選填，工作室名稱／網站，≤300 字，給審核判斷）與一張限速表
+`photographer_signups`（每 IP 每小時 5 次，存 IP 的 SHA-256）。註冊只有 `PHOTOGRAPHER_SIGNUP = "on"`
+且設了 Secret `TURNSTILE_SECRET` 才開，其餘一律 403 `registration_closed`。路由：
+`POST /api/photographer/register|login|logout`、`GET /api/photographer/me`；operator：
+`GET /api/operator/photographers`、`POST …/:id/approve|reject|suspend|unsuspend|reset-password`。
+`resolvePhotographer` 這批**只**給 `/me` 用：攝影師 session 打不開任何既有路由（有測試鎖住），
+`PHOTOGRAPHER_TOKEN` 對應 `default` 留到第 2 批。登入沒有限速（PBKDF2 10 萬次本身是成本），第 5 批開放前再評估。
+
 ### 2. 資料隔離（第 2 批）
 
 - 所有 `/api/admin/*`、`/api/upload`、`/api/books` 等攝影師路由：`const who = await resolvePhotographer(...)`，

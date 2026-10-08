@@ -149,6 +149,7 @@ export function fakeDB({ schema } = {}) {
 
   const sqlLog = [];
   let rowsChanged = 0;
+  let batchQueue = Promise.resolve();
 
   const normalise = v => {
     if (v === undefined) return null;
@@ -189,18 +190,24 @@ export function fakeDB({ schema } = {}) {
     // the second is a meaningful bound
     _changed: () => rowsChanged,
     // D1's batch() runs its statements as one transaction: all of them land or
-    // none does, and nothing else runs in between
-    async batch(statements) {
-      db.exec('BEGIN');
-      try {
-        const out = [];
-        for (const s of statements) out.push(await s.run());
-        db.exec('COMMIT');
-        return out;
-      } catch (e) {
-        db.exec('ROLLBACK');
-        throw e;
-      }
+    // none does, and nothing else runs in between. Batches from parallel
+    // requests queue one after another, as D1 serialises them (without the
+    // queue a second BEGIN inside the first fails, which D1 never does).
+    batch(statements) {
+      const run = batchQueue.then(async () => {
+        db.exec('BEGIN');
+        try {
+          const out = [];
+          for (const s of statements) out.push(await s.run());
+          db.exec('COMMIT');
+          return out;
+        } catch (e) {
+          db.exec('ROLLBACK');
+          throw e;
+        }
+      });
+      batchQueue = run.catch(() => {});
+      return run;
     },
     prepare(sql) {
       const stmt = db.prepare(sql); // throws on malformed SQL, exactly as D1 does

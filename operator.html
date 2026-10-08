@@ -84,7 +84,25 @@
   .month-card .k { font-size: 11px; color: var(--ink-55); }
   .month-card .v { font-size: 18px; font-family: 'IBM Plex Mono', monospace; margin-top: 2px; }
   .login-box { max-width: 380px; margin: 80px auto; }
-  @media (max-width: 640px) { main { padding: 16px; } .prod-row { flex-wrap: wrap; } }
+  /* 攝影師帳號 (docs/multi-photographer.md batch 1) */
+  .ph-badge { display: inline-block; min-width: 22px; padding: 1px 8px; border-radius: 999px; background: var(--danger); color: #fff; font-family: 'IBM Plex Sans', sans-serif; font-size: 12px; font-weight: 600; text-align: center; vertical-align: 2px; margin-left: 6px; }
+  .ph-group + .ph-group { margin-top: 18px; }
+  .ph-group h3 { font-size: 13px; color: var(--ink-70); margin-bottom: 4px; }
+  .ph-row { display: flex; gap: 12px; padding: 12px 0; border-top: 1px solid var(--rule); align-items: flex-start; }
+  .ph-main { min-width: 0; flex: 1; overflow-wrap: anywhere; }
+  .ph-name { font-size: 14px; margin-right: 6px; }
+  .ph-note { font-size: 12px; color: var(--ink-70); margin-top: 4px; white-space: pre-line; }
+  .ph-actions { display: flex; gap: 6px; flex-wrap: wrap; flex-shrink: 0; }
+  .ph-temp { border: 1px solid var(--accent); background: var(--card); border-radius: 12px; padding: 14px 16px; margin-top: 14px; }
+  .ph-temp .ph-temp-row { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+  .ph-temp input { font-family: 'IBM Plex Mono', monospace; font-size: 16px; flex: 1; min-width: 180px; }
+  @media (max-width: 640px) {
+    main { padding: 16px; } .prod-row { flex-wrap: wrap; }
+    .ph-row { flex-wrap: wrap; }
+    .ph-actions { width: 100%; }
+    .ph-actions .btn, .ph-temp .btn, .ph-temp input { min-height: 44px; }
+    .ph-actions .btn { flex: 1; }
+  }
 </style>
 </head>
 <body>
@@ -112,6 +130,23 @@
   </section>
 
   <div id="op-app" hidden>
+    <h2>攝影師帳號<span id="ph-badge" class="ph-badge" title="待審核" hidden></span></h2>
+    <div class="panel" id="ph-panel">
+      <div class="panel-body">
+        <div id="ph-list"><div class="hint">載入中…</div></div>
+        <div id="ph-temp" class="ph-temp" hidden>
+          <div><strong>臨時密碼</strong>（只顯示這一次，請私下告訴 <span id="ph-temp-who"></span>，登入後再請對方改密碼）</div>
+          <div class="ph-temp-row">
+            <input id="ph-temp-pw" class="field" type="text" readonly autocomplete="off" aria-label="臨時密碼">
+            <button id="ph-temp-copy" class="btn btn-accent" type="button">複製</button>
+            <button id="ph-temp-close" class="btn btn-outline" type="button">關閉</button>
+          </div>
+        </div>
+        <div id="ph-err" class="err"></div>
+        <div id="ph-ok" class="ok-msg"></div>
+      </div>
+    </div>
+
     <h2>平台商品</h2>
     <div class="panel">
       <div class="panel-body">
@@ -163,7 +198,7 @@
     $('op-token').value = '';
   }
   function showApp() { loginBox.hidden = true; appBox.hidden = false; logoutBtn.hidden = false; }
-  function signOut(msg) { saveToken(''); products = []; formBox.innerHTML = ''; showLogin(msg); }
+  function signOut(msg) { saveToken(''); products = []; formBox.innerHTML = ''; clearPhotographers(); showLogin(msg); }
 
   const api = O.client({
     workerUrl: WORKER_URL, getToken: () => token,
@@ -188,6 +223,7 @@
     showApp();
     renderList();
     loadStats();                                // not awaited: the list shows now, sales fill their own box
+    loadPhotographers();                        // likewise
   }
   $('op-login-btn').addEventListener('click', async () => {
     const t = $('op-token').value.trim();
@@ -584,6 +620,126 @@
         ? `<table class="tbl" id="op-stats-table"><thead><tr><th>商品</th><th>本月數量</th><th>本月毛利</th><th>近 12 個月數量</th><th>平台營收</th><th>廠商成本</th><th>毛利</th></tr></thead><tbody>${rows}</tbody></table>`
         : '<div class="hint">還沒有平台商品。</div>'}`;
   }
+
+  // ── photographer accounts (docs/multi-photographer.md, batch 1) ──────────
+  // Pending sign-ups wait here for 核准 / 拒絕 (no email yet, so the red count
+  // is the reminder). Every account string goes in with textContent. A reset
+  // password is shown once, in its own box, and never kept anywhere else.
+  const phList = $('ph-list'), phBadge = $('ph-badge'), phErr = $('ph-err'), phOk = $('ph-ok');
+  const phTemp = $('ph-temp'), phTempPw = $('ph-temp-pw'), phTempWho = $('ph-temp-who');
+  const PH_GROUPS = [
+    ['pending', '待審核', [['approve', '核准', 'btn-accent'], ['reject', '拒絕', 'btn-danger']]],
+    ['active', '使用中', [['suspend', '停用', 'btn-danger'], ['reset-password', '重設密碼', 'btn-outline']]],
+    ['suspended', '已停用', [['unsuspend', '恢復', 'btn-accent'], ['reset-password', '重設密碼', 'btn-outline']]],
+  ];
+  const PH_CONFIRM = {
+    reject: p => `拒絕並刪除「${p.display_name}」（${p.email}）的申請？`,
+    suspend: p => `停用「${p.display_name}」？對方會立刻被登出。`,
+    'reset-password': p => `把「${p.display_name}」的密碼重設為臨時密碼？對方會被登出。`,
+  };
+  const PH_DONE = { approve: '已核准', reject: '已拒絕', suspend: '已停用', unsuspend: '已恢復', 'reset-password': '已重設密碼' };
+  let photographers = [];
+
+  function hideTemp() { phTempPw.value = ''; phTempWho.textContent = ''; phTemp.hidden = true; }
+  function clearPhotographers() {
+    photographers = [];
+    hideTemp();
+    phList.textContent = '';
+    phBadge.hidden = true; phBadge.textContent = '';
+    phErr.textContent = ''; phOk.textContent = '';
+  }
+  function phSay(ok, text) {
+    phErr.textContent = ok ? '' : text;
+    phOk.textContent = ok ? text : '';
+    if (ok && text) setTimeout(() => { if (phOk.textContent === text) phOk.textContent = ''; }, 2500);
+  }
+  const day = iso => (iso ? String(iso).slice(0, 10) : '');
+  const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+
+  function phRow(p, actions) {
+    const row = el('div', 'ph-row');
+    row.dataset.photographerId = p.id;
+    row.dataset.status = p.status;
+    const main = el('div', 'ph-main');
+    main.append(el('strong', 'ph-name', p.display_name), el('span', 'hint', p.email));
+    const dates = [`申請 ${day(p.created_at)}`];
+    if (p.approved_at) dates.push(`核准 ${day(p.approved_at)}`);
+    dates.push(p.last_login_at ? `最近登入 ${day(p.last_login_at)}` : '尚未登入');
+    main.append(el('div', 'hint', dates.join(' · ')));
+    if (p.studio_note) main.append(el('div', 'ph-note', p.studio_note));
+    const box = el('div', 'ph-actions');
+    for (const [action, label, cls] of actions) {
+      const b = el('button', `btn btn-sm ${cls}`, label);
+      b.type = 'button';
+      b.dataset.action = action;
+      box.append(b);
+    }
+    row.append(main, box);
+    return row;
+  }
+  function renderPhotographers(pendingCount) {
+    phBadge.textContent = String(pendingCount);
+    phBadge.hidden = !pendingCount;
+    phList.textContent = '';
+    if (!photographers.length) { phList.append(el('div', 'hint', '還沒有攝影師申請。')); return; }
+    for (const [status, title, actions] of PH_GROUPS) {
+      const list = photographers.filter(p => p.status === status);
+      if (!list.length) continue;
+      const group = el('div', 'ph-group');
+      group.dataset.group = status;
+      group.append(el('h3', '', `${title}（${list.length}）`));
+      for (const p of list) group.append(phRow(p, actions));
+      phList.append(group);
+    }
+  }
+  async function loadPhotographers() {
+    const r = await api('/api/operator/photographers');
+    if (!r.ok) {
+      if (r.status !== 401) { phList.textContent = ''; phList.append(el('div', 'err', `讀取攝影師帳號失敗：${O.errorText(r.data, r.status)}`)); }
+      return false;
+    }
+    photographers = Array.isArray(r.data.photographers) ? r.data.photographers : [];
+    renderPhotographers(Number(r.data.pending_count) || 0);
+    return true;
+  }
+  phList.addEventListener('click', async e => {
+    const btn = e.target.closest('button[data-action]');
+    const row = btn && btn.closest('.ph-row');
+    if (!row) return;
+    const p = photographers.find(x => x.id === row.dataset.photographerId);
+    if (!p) return;
+    const action = btn.dataset.action;
+    if (PH_CONFIRM[action] && !window.confirm(PH_CONFIRM[action](p))) return;
+    phSay(true, '');
+    btn.disabled = true;
+    const r = await api(`/api/operator/photographers/${encodeURIComponent(p.id)}/${action}`, 'POST');
+    btn.disabled = false;
+    if (!r.ok) {
+      if (r.status === 401) return;
+      phSay(false, O.errorText(r.data, r.status));
+      await loadPhotographers();
+      return;
+    }
+    if (action === 'reset-password' && typeof r.data.temp_password === 'string') {
+      phTempPw.value = r.data.temp_password;
+      phTempWho.textContent = `${p.display_name}（${p.email}）`;
+      phTemp.hidden = false;
+    }
+    await loadPhotographers();
+    phSay(true, PH_DONE[action] || '已完成');
+  });
+  $('ph-temp-copy').addEventListener('click', async () => {
+    const text = phTempPw.value;
+    if (!text) return;
+    let copied = false;
+    try { await navigator.clipboard.writeText(text); copied = true; } catch (e) { /* fall back below */ }
+    if (!copied) {
+      phTempPw.focus(); phTempPw.select();
+      try { copied = document.execCommand('copy'); } catch (e) { copied = false; }
+    }
+    phSay(copied, copied ? '已複製臨時密碼' : '無法自動複製，請手動選取複製');
+  });
+  $('ph-temp-close').addEventListener('click', hideTemp);
 
   // a stored token: check it before showing anything
   if (token) enter(token); else showLogin('');

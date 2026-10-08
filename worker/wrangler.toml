@@ -33,6 +33,13 @@ CUSTOM_PRODUCTS = "off"
 # （打錯字 = 關）。個資告知審過之前保持 "off"：客人只看到「我有興趣」。
 GUEST_ORDERS = "off"
 GUEST_ORDERS_PILOT = ""
+# 攝影師自助註冊（docs/multi-photographer.md 第 1 批，POST /api/photographer/register）。
+# 只有 "on" 且已設 Secret TURNSTILE_SECRET 才開；其他值、打錯字或沒有 secret 都算關（403 registration_closed）。
+# 開之前要先跑 worker/migrations/2026-10-11-photographers.sql。第 5 批註冊頁上線前保持 "off"。
+PHOTOGRAPHER_SIGNUP = "off"
 
 # 收件人用 Secret（不進 repo，deploy 也不會被清掉）：
 # wrangler secret put PHOTOGRAPHER_EMAIL
+
+# Turnstile（攝影師註冊防機器人）的 secret key：
+# wrangler secret put TURNSTILE_SECRET
