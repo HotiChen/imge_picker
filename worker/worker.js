@@ -884,13 +884,22 @@ function cleanBookingUrl(raw) {
 // as all-null.
 async function readStudioSettings(env, photographerId) {
   // default_extra_max, transfer_info and pick_link_message arrive in hand-run
-  // migrations (in that order); until then each reads unset
+  // migrations, in any order; until a column exists it reads unset
   const read = cols => env.DB.prepare(
     `SELECT studio_name, booking_url, default_pick_limit, default_extra_price${cols}, logo IS NOT NULL AS has_logo, logo_type, logo_updated_at, updated_at FROM studio_settings WHERE photographer_id = ?`
   ).bind(photographerId).first();
-  const row = await withoutMissingColumn(() => read(', default_extra_max, transfer_info, pick_link_message'),
-    () => withoutMissingColumn(() => read(', default_extra_max, transfer_info'),
-      () => withoutMissingColumn(() => read(', default_extra_max'), () => read(''))));
+  const row = await withoutMissingColumn(() => read(', default_extra_max, transfer_info, pick_link_message'), async () => {
+    // Not every migration has run, and not necessarily in order: read the
+    // base row, then each late column on its own, so one missing column never
+    // hides another that is there.
+    const base = await read('');
+    if (!base) return base;
+    for (const col of ['default_extra_max', 'transfer_info', 'pick_link_message']) {
+      const one = await withoutMissingColumn(() => read(`, ${col}`), () => null);
+      if (one) base[col] = one[col];
+    }
+    return base;
+  });
   const hasLogo = !!row?.has_logo;
   const extraMax = row?.default_extra_max ?? null;
   return {
