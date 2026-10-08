@@ -29,7 +29,18 @@ before(() => {
     if (turnstile === '500-json') return Response.json({ success: true }, { status: 500 });
     if (turnstile === 'garbage') return new Response('not json', { status: 200 });
     if (turnstile === 'string-true') return Response.json({ success: 'true' });
-    return Response.json({ success: turnstile === 'ok', 'error-codes': turnstile === 'ok' ? [] : ['invalid-input-response'] });
+    // never answers; rejects when the Worker's signal aborts (a hung siteverify)
+    if (turnstile === 'hang') {
+      return new Promise((_, reject) => {
+        // node's AbortSignal.timeout does not hold the event loop open; this
+        // timer does, and gives up (failing the test) after 15 s
+        const keep = setTimeout(() => reject(new Error('the Worker never aborted the request')), 15000);
+        init.signal?.addEventListener('abort', () => { clearTimeout(keep); reject(init.signal.reason); });
+      });
+    }
+    if (turnstile === 'other-host') return Response.json({ success: true, hostname: 'evil.example' });
+    if (turnstile === 'no-host') return Response.json({ success: true });
+    return Response.json({ success: turnstile === 'ok', hostname: 'imhoti.tw', 'error-codes': turnstile === 'ok' ? [] : ['invalid-input-response'] });
   };
 });
 after(() => { globalThis.fetch = realFetch; });
@@ -47,6 +58,8 @@ const register = (env, body = {}, ip = IP) => call(env, '/api/photographer/regis
 });
 const login = (env, email = 'ann@example.com', password = PASSWORD) =>
   call(env, '/api/photographer/login', { method: 'POST', body: { email, password } });
+const loginFrom = (env, ip, email = 'ann@example.com', password = PASSWORD) =>
+  call(env, '/api/photographer/login', { method: 'POST', headers: ip ? { 'CF-Connecting-IP': ip } : {}, body: { email, password } });
 const me = (env, token) => call(env, '/api/photographer/me', { token });
 // token null = no Authorization header
 const op = (env, method, path, token = OP) => call(env, path, { method, token: token ?? undefined });
@@ -190,7 +203,10 @@ test('a duplicate email gets the identical response and changes nothing', async 
   assert.equal(await again.text(), await first.text());
   assert.deepEqual([...again.headers].sort(), [...first.headers].sort());
   assert.equal(rows(env, 'SELECT * FROM photographers').length, 1);
-  assert.deepEqual(account(env), before, 'the existing account is untouched');
+  const { dup_attempts, last_dup_at, ...rest } = account(env);
+  const { dup_attempts: d0, last_dup_at: l0, ...restBefore } = before;
+  assert.deepEqual(rest, restBefore, 'the existing account is untouched (but for the duplicate counter)');
+  assert.equal(dup_attempts, d0 + 1);
 });
 
 test('invalid fields are refused with 400 and nothing is written', async () => {
@@ -428,7 +444,7 @@ test('an expired session is refused', async () => {
 
 // ─── operator routes ────────────────────────────────────────────────────────
 
-test('the operator list: newest first, a pending count, never a hash or a token', async () => {
+test('the operator list: pending first then newest first, a pending count, never a hash or a token', async () => {
   const env = envOpen();
   const a = await registered(env, { email: 'a@example.com' });
   const b = await active(env, { email: 'b@example.com' });
@@ -442,10 +458,11 @@ test('the operator list: newest first, a pending count, never a hash or a token'
   assert.match(res.headers.get('Cache-Control'), /no-store/);
   const text = await res.text();
   const body = JSON.parse(text);
-  assert.deepEqual(body.photographers.map(p => p.email), ['c@example.com', 'b@example.com', 'a@example.com']);
+  // pending first (newest first among them), then the rest
+  assert.deepEqual(body.photographers.map(p => p.email), ['c@example.com', 'a@example.com', 'b@example.com']);
   assert.equal(body.pending_count, 2);
   assert.deepEqual(Object.keys(body.photographers[0]).sort(),
-    ['approved_at', 'created_at', 'display_name', 'email', 'id', 'last_login_at', 'status', 'studio_note']);
+    ['approved_at', 'created_at', 'display_name', 'dup_attempts', 'email', 'id', 'last_dup_at', 'last_login_at', 'status', 'studio_note']);
   assert.ok(!text.includes('pbkdf2$') && !text.includes('password'), 'no hash');
   assert.ok(!text.includes(token) && !text.includes(await sha256Hex(token)), 'no token');
 });
@@ -661,4 +678,200 @@ test('unknown /api/photographer/ paths and methods never fall through to the upl
     assert.equal(res.status, status, `${method} ${path}`);
   }
   assert.ok(![...env.imagepicker._store.keys()].some(k => k.startsWith('api/')));
+});
+
+// ─── security review of 1d98a1b ─────────────────────────────────────────────
+
+test('a reset-password landing between a login’s verify and its session write leaves no session', async () => {
+  const env = envOpen();
+  const row = await active(env);
+  // hold the login's session batch until the reset has committed
+  // tag each bound statement with its SQL (test-side only) so the gate can find the session write
+  const realPrepare = env.DB.prepare.bind(env.DB);
+  env.DB.prepare = sql => {
+    const stmt = realPrepare(sql);
+    return { ...stmt, bind: (...a) => ({ ...stmt.bind(...a), sql }) };
+  };
+  const realBatch = env.DB.batch.bind(env.DB);
+  let release, reached;
+  const gate = new Promise(r => { release = r; });
+  const atGate = new Promise(r => { reached = r; });
+  env.DB.batch = async statements => {
+    if (statements.some(st => /INSERT INTO photographer_sessions/.test(st.sql ?? ''))) { reached(); await gate; }
+    return realBatch(statements);
+  };
+  const pending = login(env);
+  await atGate;                                         // the old password was verified
+  const reset = await act(env, row.id, 'reset-password');
+  assert.equal(reset.status, 200);
+  release();
+  const res = await pending;
+  assert.equal(res.status, 401, 'the old password must not mint a session after the reset');
+  assert.deepEqual(await res.json(), { error: '帳號或密碼不正確，或帳號尚未開通', code: 'login_failed' });
+  assert.equal(rows(env, 'SELECT * FROM photographer_sessions').length, 0);
+});
+
+test('login throttle: 10 failures per email in 15 minutes, then 429 before any PBKDF2', async () => {
+  const env = envOpen();
+  await active(env);
+  // ten different IPs, one email
+  for (let i = 0; i < 10; i++) assert.equal((await loginFrom(env, `198.51.100.${i}`, 'ann@example.com', `wrong guess ${i}`)).status, 401);
+  const subtle = globalThis.crypto.subtle;
+  const realDerive = subtle.deriveBits;
+  let derives = 0;
+  subtle.deriveBits = function (...a) { derives++; return realDerive.apply(this, a); };
+  try {
+    const res = await loginFrom(env, '198.51.100.99');            // right password, fresh IP
+    await bad(res, 429, 'too_many_attempts');
+    assert.equal(derives, 0, 'refused before PBKDF2');
+  } finally { subtle.deriveBits = realDerive; }
+  assert.equal(rows(env, 'SELECT * FROM photographer_sessions').length, 0);
+  // another email from a fresh IP is unaffected
+  await active(env, { email: 'bob@example.com' });
+  assert.equal((await loginFrom(env, '198.51.100.98', 'bob@example.com')).status, 200);
+  // the window passes: the email logs in again
+  env.DB._db.prepare('UPDATE photographer_login_failures SET created_at = ?').run(new Date(Date.now() - 16 * 60000).toISOString());
+  assert.equal((await loginFrom(env, '198.51.100.97')).status, 200);
+});
+
+test('login throttle: 10 failures per IP (any emails), then 429; another IP is fine', async () => {
+  const env = envOpen();
+  await active(env);
+  for (let i = 0; i < 10; i++) assert.equal((await loginFrom(env, IP, `nobody${i}@example.com`)).status, 401);
+  await bad(await loginFrom(env, IP), 429, 'too_many_attempts');
+  assert.equal((await loginFrom(env, '192.0.2.1')).status, 200);
+  const raw = JSON.stringify(rows(env, 'SELECT * FROM photographer_login_failures'));
+  assert.ok(!raw.includes(IP) && !raw.includes('nobody'), 'keys are hashed');
+});
+
+test('login throttle: successes do not count and do not reset; the cap holds under parallel requests', async () => {
+  const env = envOpen();
+  await active(env);
+  for (let i = 0; i < 9; i++) assert.equal((await loginFrom(env, IP, `x${i}@example.com`)).status, 401);
+  for (let i = 0; i < 3; i++) assert.equal((await loginFrom(env, IP)).status, 200, 'successes pass and are not failures');
+  assert.equal((await loginFrom(env, IP, 'x9@example.com')).status, 401, 'the 10th failure');
+  await bad(await loginFrom(env, IP), 429, 'too_many_attempts', 'a success did not reset the IP counter');
+
+  const env2 = envOpen();
+  await active(env2);
+  const results = await Promise.all(Array.from({ length: 20 }, (_, i) => loginFrom(env2, '203.0.113.50', 'ann@example.com', `wrong ${i}`)));
+  const statuses = results.map(r => r.status).sort();
+  assert.deepEqual(statuses, [...Array(10).fill(401), ...Array(10).fill(429)]);
+});
+
+test('login throttle: old failure rows are pruned', async () => {
+  const env = envOpen();
+  await active(env);
+  env.DB._db.prepare('INSERT INTO photographer_login_failures (key_hash, attempt, created_at) VALUES (?, ?, ?)').run('old', 'a', new Date(Date.now() - 2 * 86400000).toISOString());
+  assert.equal((await loginFrom(env, IP, 'ann@example.com', 'wrong password!')).status, 401);
+  assert.equal(rows(env, "SELECT * FROM photographer_login_failures WHERE key_hash = 'old'").length, 0);
+});
+
+test('a duplicate registration bumps dup_attempts / last_dup_at only, and the answer stays identical', async () => {
+  const env = envOpen();
+  const first = await register(env);
+  const before = account(env);
+  assert.equal(before.dup_attempts, 0);
+  assert.equal(before.last_dup_at, null);
+  const again = await register(env, { password: 'victim password', display_name: 'Victim' }, '192.0.2.44');
+  assert.equal(again.status, first.status);
+  assert.equal(await again.text(), await first.text());
+  await register(env, { email: 'ANN@example.com' }, '192.0.2.45');
+  const after = account(env);
+  assert.equal(after.dup_attempts, 2);
+  assert.ok(after.last_dup_at);
+  for (const k of ['id', 'email', 'password_hash', 'display_name', 'studio_note', 'status', 'created_at']) assert.equal(after[k], before[k], k);
+  const list = await (await op(env, 'GET', '/api/operator/photographers')).json();
+  assert.equal(list.photographers[0].dup_attempts, 2);
+  assert.equal(list.photographers[0].last_dup_at, after.last_dup_at);
+});
+
+test('IPv6 signups are limited per /64; IPv4 per address', async () => {
+  const env = envOpen();
+  const v6 = ['2001:db8:1:2::1', '2001:db8:1:2:aaaa::5', '2001:0db8:0001:0002:ffff:ffff:ffff:ffff', '2001:DB8:1:2::9', '2001:db8:1:2:0:0:0:7'];
+  for (let i = 0; i < 5; i++) await registered(env, { email: `v6-${i}@example.com` }, v6[i]);
+  await bad(await register(env, { email: 'v6-x@example.com' }, '2001:db8:1:2:dead:beef::1'), 429, 'rate_limited', 'same /64');
+  await registered(env, { email: 'v6-y@example.com' }, '2001:db8:1:3::1');   // the next /64
+  await registered(env, { email: 'v6-z@example.com' }, '::1');                // a different /64 entirely
+  await registered(env, { email: 'v4@example.com' }, '192.0.2.10');
+  await registered(env, { email: 'v4b@example.com' }, '192.0.2.11');          // IPv4: each address its own
+  // '::' early in the address: the /64 is still the first four groups after expanding it
+  const short = ['2001:db8::1', '2001:db8::2:3', '2001:db8:0:0:ffff::', '2001:db8::1:0:0:1', '2001:0db8:0000:0000::9'];
+  for (let i = 0; i < 5; i++) await registered(env, { email: `short-${i}@example.com` }, short[i]);
+  await bad(await register(env, { email: 'short-x@example.com' }, '2001:db8::abcd'), 429, 'rate_limited', '2001:db8:0:0::/64');
+  await registered(env, { email: 'short-y@example.com' }, '2001:db8:0:1::1');
+});
+
+test('IPv6 logins are throttled per /64 as well', async () => {
+  const env = envOpen();
+  await active(env);
+  for (let i = 0; i < 10; i++) assert.equal((await loginFrom(env, `2001:db8:9:9::${i + 1}`, `n${i}@example.com`)).status, 401);
+  await bad(await loginFrom(env, '2001:db8:9:9:ffff::1'), 429, 'too_many_attempts');
+  assert.equal((await loginFrom(env, '2001:db8:9:a::1')).status, 200);
+});
+
+test('registration answers 429 registration_busy while 200 accounts are pending', async () => {
+  const env = envOpen();
+  const ins = env.DB._db.prepare("INSERT INTO photographers (id, email, password_hash, display_name, status, created_at) VALUES (?, ?, 'x', 'n', ?, '2026-10-01T00:00:00.000Z')");
+  for (let i = 0; i < 199; i++) ins.run(`seed${i}`, `seed${i}@example.com`, 'pending');
+  for (let i = 0; i < 50; i++) ins.run(`act${i}`, `act${i}@example.com`, 'active');
+  await registered(env, { email: 'the200th@example.com' });   // 199 pending: still room
+  verifies = [];
+  await bad(await register(env, { email: 'the201st@example.com' }), 429, 'registration_busy');
+  assert.equal(verifies.length, 0, 'refused before Turnstile');
+  assert.equal(account(env, 'the201st@example.com'), undefined);
+});
+
+test('the operator list stops at 500 rows; pending_count still counts them all', async () => {
+  const env = envOpen();
+  const ins = env.DB._db.prepare("INSERT INTO photographers (id, email, password_hash, display_name, status, created_at) VALUES (?, ?, 'x', 'n', 'pending', ?)");
+  for (let i = 0; i < 520; i++) ins.run(`p${i}`, `p${i}@example.com`, new Date(Date.UTC(2026, 0, 1) + i * 1000).toISOString());
+  const body = await (await op(env, 'GET', '/api/operator/photographers')).json();
+  assert.equal(body.photographers.length, 500);
+  assert.equal(body.photographers[0].id, 'p519', 'newest first');
+  assert.equal(body.pending_count, 520);
+});
+
+test('pending accounts always make the 500-row operator list, however many newer accounts exist', async () => {
+  const env = envOpen();
+  const ins = env.DB._db.prepare("INSERT INTO photographers (id, email, password_hash, display_name, status, created_at) VALUES (?, ?, 'x', 'n', ?, ?)");
+  ins.run('old-pending', 'old@example.com', 'pending', '2025-01-01T00:00:00.000Z');
+  for (let i = 0; i < 520; i++) ins.run(`a${i}`, `a${i}@example.com`, i % 2 ? 'active' : 'suspended', new Date(Date.UTC(2026, 0, 1) + i * 1000).toISOString());
+  const body = await (await op(env, 'GET', '/api/operator/photographers')).json();
+  assert.equal(body.photographers.length, 500);
+  assert.equal(body.photographers[0].id, 'old-pending', 'pending first');
+  assert.equal(body.photographers[1].id, 'a519', 'then newest first');
+  assert.equal(body.pending_count, 1);
+});
+
+test('Turnstile: a hung siteverify is abandoned after 5 s and fails closed', async () => {
+  const env = envOpen();
+  turnstile = 'hang';
+  const t0 = Date.now();
+  await bad(await register(env), 403, 'turnstile_failed');
+  const took = Date.now() - t0;
+  assert.ok(took >= 4500 && took < 9000, `${took} ms`);
+  assert.equal(rows(env, 'SELECT * FROM photographers').length, 0);
+});
+
+test('Turnstile: the hostname is checked only when TURNSTILE_HOSTNAME is set', async () => {
+  for (const [host, mode, status] of [
+    [undefined, 'other-host', 202], [undefined, 'no-host', 202],
+    ['imhoti.tw', 'ok', 202], ['imhoti.tw', 'other-host', 403], ['imhoti.tw', 'no-host', 403],
+  ]) {
+    const env = envOpen(host ? { TURNSTILE_HOSTNAME: host } : {});
+    turnstile = mode;
+    const res = await register(env);
+    assert.equal(res.status, status, `${host} ${mode}`);
+  }
+});
+
+test('emails are printable ASCII only: full-width look-alikes and markup are refused', async () => {
+  for (const email of ['ａnn@example.com', 'ann@exａmple.com', 'ann@例子.tw', '<img src=x onerror=alert(1)>@x.co', 'a"b@example.com', "a'b@example.com",
+    'a`b@example.com', 'a\\b@example.com', 'a<b@example.com', 'a>b@example.com', 'ann@exa_mple.com', 'ann@-.com']) {
+    const env = envOpen();
+    await bad(await register(env, { email }), 400, 'invalid_email', email);
+  }
+  const env = envOpen();
+  await registered(env, { email: 'first.last+tag@sub-domain.example.co' });
 });

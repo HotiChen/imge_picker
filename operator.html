@@ -92,6 +92,8 @@
   .ph-main { min-width: 0; flex: 1; overflow-wrap: anywhere; }
   .ph-name { font-size: 14px; margin-right: 6px; }
   .ph-note { font-size: 12px; color: var(--ink-70); margin-top: 4px; white-space: pre-line; }
+  .ph-dup { margin-top: 6px; }
+  .ph-verify { font-size: 12px; color: var(--danger); margin-bottom: 4px; }
   .ph-actions { display: flex; gap: 6px; flex-wrap: wrap; flex-shrink: 0; }
   .ph-temp { border: 1px solid var(--accent); background: var(--card); border-radius: 12px; padding: 14px 16px; margin-top: 14px; }
   .ph-temp .ph-temp-row { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
@@ -135,7 +137,7 @@
       <div class="panel-body">
         <div id="ph-list"><div class="hint">載入中…</div></div>
         <div id="ph-temp" class="ph-temp" hidden>
-          <div><strong>臨時密碼</strong>（只顯示這一次，請私下告訴 <span id="ph-temp-who"></span>，登入後再請對方改密碼）</div>
+          <div><strong>臨時密碼</strong>（只顯示這一次，請私下告訴 <span id="ph-temp-who"></span>。目前還沒有自己改密碼的功能，請對方妥善保管這組密碼）</div>
           <div class="ph-temp-row">
             <input id="ph-temp-pw" class="field" type="text" readonly autocomplete="off" aria-label="臨時密碼">
             <button id="ph-temp-copy" class="btn btn-accent" type="button">複製</button>
@@ -667,6 +669,13 @@
     dates.push(p.last_login_at ? `最近登入 ${day(p.last_login_at)}` : '尚未登入');
     main.append(el('div', 'hint', dates.join(' · ')));
     if (p.studio_note) main.append(el('div', 'ph-note', p.studio_note));
+    const dups = Number(p.dup_attempts) || 0;
+    if (dups > 0) {
+      const chip = el('div', 'ph-dup');
+      chip.append(el('span', 'chip-warn', `此 email 有重複申請 ${dups} 次`));
+      chip.dataset.dup = String(dups);
+      main.append(chip);
+    }
     const box = el('div', 'ph-actions');
     for (const [action, label, cls] of actions) {
       const b = el('button', `btn btn-sm ${cls}`, label);
@@ -688,6 +697,9 @@
       const group = el('div', 'ph-group');
       group.dataset.group = status;
       group.append(el('h3', '', `${title}（${list.length}）`));
+      // anyone can register any address (no email yet): the first sign-up
+      // owns it, so the operator confirms who it is some other way
+      if (status === 'pending') group.append(el('div', 'ph-verify', '核准前請用別的管道確認對方身分'));
       for (const p of list) group.append(phRow(p, actions));
       phList.append(group);
     }

@@ -16,10 +16,12 @@ export default async function register() {
 function photographersFake({ accounts = [], unavailable = false, operatorToken = 'op' } = {}) {
   const st = { accounts: accounts.map(clone), calls: [], inject: null, temps: [] };
   const MOVES = { approve: ['pending', 'active'], reject: ['pending', null], suspend: ['active', 'suspended'], unsuspend: ['suspended', 'active'], 'reset-password': [null, null] };
-  const pub = a => ({ id: a.id, email: a.email, display_name: a.display_name, studio_note: a.studio_note ?? null, status: a.status, created_at: a.created_at, approved_at: a.approved_at ?? null, last_login_at: a.last_login_at ?? null });
+  const pub = a => ({ id: a.id, email: a.email, display_name: a.display_name, studio_note: a.studio_note ?? null, status: a.status, created_at: a.created_at, approved_at: a.approved_at ?? null, last_login_at: a.last_login_at ?? null, dup_attempts: a.dup_attempts ?? 0, last_dup_at: a.last_dup_at ?? null });
   const list = () => {
-    const sorted = st.accounts.slice().sort((x, y) => (x.created_at < y.created_at ? 1 : x.created_at > y.created_at ? -1 : 0));
-    return { photographers: sorted.map(pub), pending_count: sorted.filter(a => a.status === 'pending').length };
+    // the Worker: pending first, then newest first; at most 500 rows, pending_count over every row
+    const sorted = st.accounts.slice().sort((x, y) => ((y.status === 'pending') - (x.status === 'pending')) ||
+      (x.created_at < y.created_at ? 1 : x.created_at > y.created_at ? -1 : 0));
+    return { photographers: sorted.slice(0, 500).map(pub), pending_count: sorted.filter(a => a.status === 'pending').length };
   };
   function handle(method, path) {
     const parts = path.split('/').filter(Boolean); // api operator photographers [id] [action]
@@ -63,7 +65,7 @@ function photographersFake({ accounts = [], unavailable = false, operatorToken =
 
 const XSS_NAME = '<img src=x onerror="window.__xss=1">小安';
 const ACCOUNTS = () => [
-  { id: 'p-pend-a', email: 'a@example.com', display_name: XSS_NAME, studio_note: '安安工作室\nhttps://ann.example', status: 'pending', created_at: '2026-10-07T01:00:00.000Z' },
+  { id: 'p-pend-a', email: 'a@example.com', display_name: XSS_NAME, studio_note: '安安工作室\nhttps://ann.example', status: 'pending', created_at: '2026-10-07T01:00:00.000Z', dup_attempts: 3, last_dup_at: '2026-10-08T01:00:00.000Z' },
   { id: 'p-pend-b', email: 'b@example.com', display_name: '小北', studio_note: null, status: 'pending', created_at: '2026-10-06T01:00:00.000Z' },
   { id: 'p-act-c', email: 'c@example.com', display_name: '小晴', studio_note: '晴天婚紗', status: 'active', created_at: '2026-10-01T01:00:00.000Z', approved_at: '2026-10-02T01:00:00.000Z', last_login_at: '2026-10-05T01:00:00.000Z' },
   { id: 'p-sus-d', email: 'd@example.com', display_name: '小冬', studio_note: '', status: 'suspended', created_at: '2026-09-20T01:00:00.000Z', approved_at: '2026-09-21T01:00:00.000Z' },
@@ -109,6 +111,11 @@ const buttons = (page, id) => page.$$eval(`${row(id)} button[data-action]`, bs =
         (await page.textContent(`${row('p-pend-a')} .ph-note`)) === '安安工作室\nhttps://ann.example' &&
         (await page.textContent(row('p-act-c'))).includes('最近登入 2026-10-05') && (await page.textContent(row('p-pend-b'))).includes('尚未登入'));
       ok('an empty studio note adds no note line', (await page.$(`${row('p-pend-b')} .ph-note`)) === null && (await page.$(`${row('p-sus-d')} .ph-note`)) === null);
+      ok('a row with duplicate sign-ups says how many: 「此 email 有重複申請 3 次」', (await page.textContent(`${row('p-pend-a')} .ph-dup`)) === '此 email 有重複申請 3 次' &&
+        (await disp(page, `${row('p-pend-a')} .ph-dup`)) !== 'none');
+      ok('rows without duplicates show no such line', (await page.$(`${row('p-pend-b')} .ph-dup`)) === null && (await page.$(`${row('p-act-c')} .ph-dup`)) === null);
+      ok('the pending group carries 「核准前請用別的管道確認對方身分」, once, and only there',
+        (await page.$$eval('#ph-list .ph-verify', es => es.map(e => [e.closest('.ph-group').dataset.group, e.textContent]))).map(x => x.join('|')).join() === 'pending|核准前請用別的管道確認對方身分');
       ok('the temp password box is hidden at first (computed display)', (await disp(page, '#ph-temp')) === 'none');
 
       // 核准
@@ -146,6 +153,8 @@ const buttons = (page, id) => page.$$eval(`${row(id)} button[data-action]`, bs =
       const temp = f.st.temps[0];
       ok('重設密碼 (confirmed) shows the temp password in the box (computed display), naming whose it is',
         (await disp(page, '#ph-temp')) !== 'none' && (await page.inputValue('#ph-temp-pw')) === temp && (await T(page, '#ph-temp-who')).includes('d@example.com'), temp);
+      ok('the box does not promise the photographer can change it themselves (no such route yet)',
+        !(await T(page, '#ph-temp')).includes('請對方改密碼') && (await T(page, '#ph-temp')).includes('還沒有自己改密碼的功能'));
       ok('the box is read-only', (await page.getAttribute('#ph-temp-pw', 'readonly')) !== null);
       ok('the temp password is nowhere but the box: not in the list, not in storage',
         !(await page.textContent('#ph-list')).includes(temp) &&

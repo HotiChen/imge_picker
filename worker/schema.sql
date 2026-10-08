@@ -569,14 +569,16 @@ CREATE TABLE IF NOT EXISTS product_interests (
 -- /api/photographer/me and /logout, no existing route.
 CREATE TABLE IF NOT EXISTS photographers (
   id            TEXT PRIMARY KEY,           -- random 16 hex; never 'default'
-  email         TEXT NOT NULL UNIQUE,       -- lowercased; unverified, login name only
+  email         TEXT NOT NULL UNIQUE,       -- lowercased printable ASCII; unverified, login name only
   password_hash TEXT NOT NULL,              -- pbkdf2$<iters>$<saltHex>$<hashHex> (PBKDF2-SHA256)
   display_name  TEXT NOT NULL,              -- ≤ 50 characters
   studio_note   TEXT,                       -- optional: studio name / website, ≤ 300 characters
   status        TEXT NOT NULL DEFAULT 'pending',  -- pending | active | suspended
   created_at    TEXT NOT NULL,
   approved_at   TEXT,
-  last_login_at TEXT
+  last_login_at TEXT,
+  dup_attempts  INTEGER NOT NULL DEFAULT 0, -- later registrations naming this email (squatting signal)
+  last_dup_at   TEXT
 );
 CREATE TABLE IF NOT EXISTS photographer_sessions (
   token_hash      TEXT PRIMARY KEY,         -- SHA-256 hex of the bearer token
@@ -586,9 +588,19 @@ CREATE TABLE IF NOT EXISTS photographer_sessions (
 );
 CREATE INDEX IF NOT EXISTS idx_photographer_sessions_owner ON photographer_sessions(photographer_id);
 -- one row per registration attempt that passed Turnstile; the per-IP limit
--- counts the last hour. ip_hash is a SHA-256, never the raw address.
+-- counts the last hour (IPv6 by /64). ip_hash is a SHA-256, never the raw address.
 CREATE TABLE IF NOT EXISTS photographer_signups (
   ip_hash    TEXT NOT NULL,
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_photographer_signups_ip ON photographer_signups(ip_hash, created_at);
+-- one row per login attempt, reserved before the password check (so parallel
+-- guesses cannot pass the cap) and deleted when that attempt succeeds: what
+-- stays are failures. Two keys per attempt, the IP (/64 for IPv6) and the
+-- email, each SHA-256; 10 per key per 15 minutes, then 429 before PBKDF2.
+CREATE TABLE IF NOT EXISTS photographer_login_failures (
+  key_hash   TEXT NOT NULL,
+  attempt    TEXT NOT NULL,     -- random per attempt, so a success removes only its own rows
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_photographer_login_failures_key ON photographer_login_failures(key_hash, created_at);

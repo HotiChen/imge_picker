@@ -127,13 +127,21 @@ const PHOTOGRAPHER_NAME_MAX = 50;
 const PHOTOGRAPHER_NOTE_MAX = 300;
 const PHOTOGRAPHER_SESSION_MS = 30 * 24 * 60 * 60 * 1000;
 const PHOTOGRAPHER_SIGNUPS_PER_HOUR = 5;
+// new sign-ups wait while this many are already pending (429 registration_busy)
+const PHOTOGRAPHER_PENDING_MAX = 200;
+// failed logins per key (the client's network, or the email) per window, then
+// 429 too_many_attempts before any PBKDF2
+const PHOTOGRAPHER_LOGIN_FAILURES_MAX = 10;
+const PHOTOGRAPHER_LOGIN_WINDOW_MS = 15 * 60 * 1000;
+const TURNSTILE_TIMEOUT_MS = 5000;
 const TURNSTILE_VERIFY_URL = 'https://challenges.cloudflare.com/turnstile/v0/siteverify';
 // Verified against when the email is unknown, so a miss costs the same
 // PBKDF2 as a hit and the time does not say whether the account exists. Its
 // password was random and thrown away.
 const PHOTOGRAPHER_DUMMY_HASH = 'pbkdf2$100000$55043f7b9f20cfbde433f9affb41d139$baf8fbec1e748c3284fc7a85d0c9929128ff25cc0fb2ced92cb4b0be67075f15';
 // what the operator may see of an account (never password_hash)
-const PHOTOGRAPHER_PUBLIC_COLUMNS = 'id, email, display_name, studio_note, status, created_at, approved_at, last_login_at';
+const PHOTOGRAPHER_PUBLIC_COLUMNS = 'id, email, display_name, studio_note, status, created_at, approved_at, last_login_at, dup_attempts, last_dup_at';
+const PHOTOGRAPHER_LIST_MAX = 500;
 // operator actions: the status each moves from and to (reset-password: any)
 const PHOTOGRAPHER_ACTIONS = Object.assign(Object.create(null), {
   approve: { from: 'pending', to: 'active' },
@@ -196,27 +204,52 @@ async function verifyPhotographerPassword(password, stored) {
   return sameSecret(derived, hashHex) && Boolean(usable);
 }
 
-// A plausible login name: one @, something on each side, a dot in the
-// domain, no spaces or control characters, ≤ 254. Lowercased; null if not.
+// A plausible login name, printable ASCII only: one @, a local part of
+// letters, digits and .!#$%&*+/=?^_{|}~- (no quotes, backquotes, backslashes
+// or angle brackets), a domain of dotted letter / digit / hyphen labels, ≤ 254.
+// Full-width look-alikes and IDN are refused, so one address has one spelling.
+// Lowercased; null if not.
+const PHOTOGRAPHER_EMAIL_RE = /^[a-z0-9.!#$%&*+/=?^_{|}~-]+@[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$/;
 function photographerEmail(value) {
   if (typeof value !== 'string') return null;
   const email = value.trim().toLowerCase();
-  if (email.length > 254 || ACCOUNT_CONTROL.test(email)) return null;
-  return /^[^\s@]+@[^\s@.]+(\.[^\s@.]+)+$/.test(email) ? email : null;
+  if (email.length > 254) return null;
+  return PHOTOGRAPHER_EMAIL_RE.test(email) ? email : null;
+}
+
+// What a per-client limit keys on: the IPv4 address, or the /64 of an IPv6
+// one (a single host is handed a whole /64, so the full address is free to
+// change). 'unknown' without CF-Connecting-IP — one shared bucket.
+function clientNetwork(request) {
+  const ip = String(request.headers.get('CF-Connecting-IP') || '').trim().toLowerCase().slice(0, 64);
+  if (!ip) return 'unknown';
+  if (!ip.includes(':')) return ip;
+  if (ip.includes('.')) return ip.slice(ip.lastIndexOf(':') + 1);   // IPv4-mapped
+  const halves = ip.split('::');
+  const head = halves[0] ? halves[0].split(':') : [];
+  const tail = halves.length > 1 && halves[1] ? halves[1].split(':') : [];
+  const groups = halves.length > 1
+    ? [...head, ...Array(Math.max(0, 8 - head.length - tail.length)).fill('0'), ...tail]
+    : head;
+  return groups.slice(0, 4).map(g => g.replace(/^0+(?=.)/, '')).join(':') + '::/64';
 }
 
 // Cloudflare Turnstile siteverify. Fails closed: anything but an explicit
-// success: true (a network error, a non-200, a body that is not JSON) is no.
+// success: true (a network error, a non-200, a body that is not JSON, no
+// answer within 5 s, a hostname other than TURNSTILE_HOSTNAME when that is
+// set) is no.
 async function turnstileVerified(token, request, env) {
   if (typeof token !== 'string' || !token || token.length > 2048) return false;
   try {
     const form = new URLSearchParams({ secret: env.TURNSTILE_SECRET, response: token });
     const ip = request.headers.get('CF-Connecting-IP');
     if (ip) form.set('remoteip', ip);
-    const res = await fetch(TURNSTILE_VERIFY_URL, { method: 'POST', body: form });
+    const res = await fetch(TURNSTILE_VERIFY_URL, { method: 'POST', body: form, signal: AbortSignal.timeout(TURNSTILE_TIMEOUT_MS) });
     if (!res.ok) return false;
     const data = await res.json();
-    return data?.success === true;
+    if (data?.success !== true) return false;
+    // only when configured: the widget must have been solved on our site
+    return !env.TURNSTILE_HOSTNAME || data.hostname === env.TURNSTILE_HOSTNAME;
   } catch {
     return false;
   }
@@ -2796,20 +2829,42 @@ export default {
         if (route === 'login') {
           const email = photographerEmail(body.email);
           const password = typeof body.password === 'string' && body.password.length <= 2 * PHOTOGRAPHER_PASSWORD_MAX ? body.password : '';
+          // The throttle: this attempt reserves one row per key (the client's
+          // network and the email) in one conditional insert, before PBKDF2,
+          // so parallel guesses cannot pass the cap; a success deletes its own
+          // rows again, so what stays are failures. A refused attempt says so
+          // (429) whoever owns the email: the attacker caused it.
+          const now = Date.now();
+          const nowIso = new Date(now).toISOString();
+          const pepper = env.TURNSTILE_SECRET || '';
+          const ipKey = await sha256Hex(`photographer-login-ip:${pepper}:${clientNetwork(request)}`);
+          const emailKey = await sha256Hex(`photographer-login-email:${pepper}:${typeof body.email === 'string' ? body.email.trim().toLowerCase().slice(0, 320) : ''}`);
+          const attempt = randomHex(16);
+          const since = new Date(now - PHOTOGRAPHER_LOGIN_WINDOW_MS).toISOString();
+          await env.DB.prepare('DELETE FROM photographer_login_failures WHERE created_at < ?').bind(new Date(now - 24 * 60 * 60 * 1000).toISOString()).run();
+          const reserved = await env.DB.prepare(
+            `INSERT INTO photographer_login_failures (key_hash, attempt, created_at)
+             SELECT k, ?, ? FROM (SELECT ? AS k UNION ALL SELECT ?)
+              WHERE (SELECT COUNT(*) FROM photographer_login_failures WHERE key_hash = ? AND created_at > ?) < ?
+                AND (SELECT COUNT(*) FROM photographer_login_failures WHERE key_hash = ? AND created_at > ?) < ?`
+          ).bind(attempt, nowIso, ipKey, emailKey, ipKey, since, PHOTOGRAPHER_LOGIN_FAILURES_MAX, emailKey, since, PHOTOGRAPHER_LOGIN_FAILURES_MAX).run();
+          if (!reserved.meta.changes) return reply({ error: '嘗試次數太多，請 15 分鐘後再試', code: 'too_many_attempts' }, 429);
           const row = email
             ? await env.DB.prepare('SELECT id, display_name, password_hash, status FROM photographers WHERE email = ?').bind(email).first()
             : null;
           const verified = await verifyPhotographerPassword(password, row ? row.password_hash : PHOTOGRAPHER_DUMMY_HASH);
           if (!row || !verified || row.status !== 'active') return reply(LOGIN_FAILED, 401);
           const token = randomHex(32);
-          const now = Date.now();
-          const nowIso = new Date(now).toISOString();
-          // the session is written only while the account is still active,
-          // so a suspend racing this login leaves nothing usable
+          const tokenHash = await sha256Hex(token);
+          // the session is written only while the account is still active
+          // AND still has the hash just verified, so a suspend or a
+          // reset-password racing this login leaves nothing usable
           const [inserted] = await env.DB.batch([
             env.DB.prepare(
-              "INSERT INTO photographer_sessions (token_hash, photographer_id, created_at, expires_at) SELECT ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM photographers WHERE id = ? AND status = 'active')"
-            ).bind(await sha256Hex(token), row.id, nowIso, new Date(now + PHOTOGRAPHER_SESSION_MS).toISOString(), row.id),
+              "INSERT INTO photographer_sessions (token_hash, photographer_id, created_at, expires_at) SELECT ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM photographers WHERE id = ? AND status = 'active' AND password_hash = ?)"
+            ).bind(tokenHash, row.id, nowIso, new Date(now + PHOTOGRAPHER_SESSION_MS).toISOString(), row.id, row.password_hash),
+            // a success is not a failure: its reserved rows go (only if the session landed)
+            env.DB.prepare('DELETE FROM photographer_login_failures WHERE attempt = ? AND EXISTS (SELECT 1 FROM photographer_sessions WHERE token_hash = ?)').bind(attempt, tokenHash),
             env.DB.prepare("UPDATE photographers SET last_login_at = ? WHERE id = ? AND status = 'active'").bind(nowIso, row.id),
             env.DB.prepare('DELETE FROM photographer_sessions WHERE photographer_id = ? AND expires_at <= ?').bind(row.id, nowIso),
           ]);
@@ -2818,9 +2873,11 @@ export default {
         }
 
         // POST /api/photographer/register — {email, password, display_name,
-        // studio_note?, turnstileToken}. Fields (400), Turnstile (403), the
-        // per-IP hour (429), then one pending row — or nothing when the email
-        // is taken, with the identical answer either way.
+        // studio_note?, turnstileToken}. Fields (400), too many pending
+        // (429 registration_busy), Turnstile (403), the per-network hour
+        // (429 rate_limited), then one pending row — or, when the email is
+        // taken, only that row's dup_attempts / last_dup_at bumped (the
+        // operator sees a squatting signal), with the identical answer.
         const email = photographerEmail(body.email);
         if (!email) return reply({ error: 'Email 格式不正確', code: 'invalid_email' }, 400);
         const password = body.password;
@@ -2836,6 +2893,10 @@ export default {
           return reply({ error: `工作室說明最多 ${PHOTOGRAPHER_NOTE_MAX} 字`, code: 'invalid_studio_note' }, 400);
         }
         const note = rawNote.trim() || null;
+        // a flood of sign-ups waits for the operator to catch up (before
+        // Turnstile, which costs a call)
+        const pending = await env.DB.prepare("SELECT COUNT(*) AS n FROM photographers WHERE status = 'pending'").first();
+        if (pending.n >= PHOTOGRAPHER_PENDING_MAX) return reply({ error: '目前申請人數較多，請稍後再試', code: 'registration_busy' }, 429);
         if (!(await turnstileVerified(body.turnstileToken, request, env))) {
           return reply({ error: '驗證失敗，請重新整理再試一次', code: 'turnstile_failed' }, 403);
         }
@@ -2843,7 +2904,7 @@ export default {
         // write are one statement, so the cap holds
         const now = Date.now();
         const nowIso = new Date(now).toISOString();
-        const ipHash = await sha256Hex(`photographer-signup:${env.TURNSTILE_SECRET}:${request.headers.get('CF-Connecting-IP') || 'unknown'}`);
+        const ipHash = await sha256Hex(`photographer-signup:${env.TURNSTILE_SECRET || ''}:${clientNetwork(request)}`);
         const counted = await env.DB.prepare(
           'INSERT INTO photographer_signups (ip_hash, created_at) SELECT ?, ? WHERE (SELECT COUNT(*) FROM photographer_signups WHERE ip_hash = ? AND created_at > ?) < ?'
         ).bind(ipHash, nowIso, ipHash, new Date(now - 60 * 60 * 1000).toISOString(), PHOTOGRAPHER_SIGNUPS_PER_HOUR).run();
@@ -2851,7 +2912,7 @@ export default {
         const passwordHash = await hashPhotographerPassword(password);
         await env.DB.batch([
           env.DB.prepare(
-            "INSERT INTO photographers (id, email, password_hash, display_name, studio_note, status, created_at) VALUES (?, ?, ?, ?, ?, 'pending', ?) ON CONFLICT(email) DO NOTHING"
+            "INSERT INTO photographers (id, email, password_hash, display_name, studio_note, status, created_at) VALUES (?, ?, ?, ?, ?, 'pending', ?) ON CONFLICT(email) DO UPDATE SET dup_attempts = dup_attempts + 1, last_dup_at = excluded.created_at"
           ).bind(randomHex(8), email, passwordHash, name, note, nowIso),
           env.DB.prepare('DELETE FROM photographer_signups WHERE created_at < ?').bind(new Date(now - 24 * 60 * 60 * 1000).toISOString()),
         ]);
@@ -3794,8 +3855,9 @@ export default {
       const now = new Date().toISOString();
       const done = (data, status = 200) => jsonOk(data, status, ADMIN_ONLY_HEADERS);
 
-      // GET /api/operator/photographers — every account, newest first, and
-      // how many wait for approval. Never a password hash or a session.
+      // GET /api/operator/photographers — pending accounts first (so the cap
+      // of 500 never hides one waiting for approval; at most 200 can wait),
+      // then the rest, newest first; and how many wait for approval. Never a password hash or a session.
       // POST /api/operator/photographers/:id/<action> — see
       // PHOTOGRAPHER_ACTIONS. Each write is conditional on the status it
       // moves from, so of two racing actions one wins and the other is 409
@@ -3804,9 +3866,10 @@ export default {
         try {
           if (route === 'photographers') {
             const { results } = await env.DB.prepare(
-              `SELECT ${PHOTOGRAPHER_PUBLIC_COLUMNS} FROM photographers ORDER BY created_at DESC, rowid DESC`
+              `SELECT ${PHOTOGRAPHER_PUBLIC_COLUMNS} FROM photographers ORDER BY status = 'pending' DESC, created_at DESC, rowid DESC LIMIT ${PHOTOGRAPHER_LIST_MAX}`
             ).all();
-            return done({ photographers: results, pending_count: results.filter(p => p.status === 'pending').length });
+            const pending = await env.DB.prepare("SELECT COUNT(*) AS n FROM photographers WHERE status = 'pending'").first();
+            return done({ photographers: results, pending_count: pending.n });
           }
           const { from, to } = PHOTOGRAPHER_ACTIONS[action];
           let tempPassword = null;

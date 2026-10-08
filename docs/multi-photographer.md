@@ -69,7 +69,22 @@ CREATE TABLE photographer_sessions (
 `POST /api/photographer/register|login|logout`、`GET /api/photographer/me`；operator：
 `GET /api/operator/photographers`、`POST …/:id/approve|reject|suspend|unsuspend|reset-password`。
 `resolvePhotographer` 這批**只**給 `/me` 用：攝影師 session 打不開任何既有路由（有測試鎖住），
-`PHOTOGRAPHER_TOKEN` 對應 `default` 留到第 2 批。登入沒有限速（PBKDF2 10 萬次本身是成本），第 5 批開放前再評估。
+`PHOTOGRAPHER_TOKEN` 對應 `default` 留到第 2 批。
+
+安全審查後補上（同一個 migration，Tim 尚未跑過，原地修改；現為 7 句）：
+- 登入限速：`photographer_login_failures`，同一 IP（IPv6 以 /64 計）或同一 email 15 分鐘內失敗 10 次就回
+  429 `too_many_attempts`（在 PBKDF2 之前）。每次嘗試先預留一列、成功時刪掉自己那列，所以並行猜測也過不了上限；
+  成功不會清掉 IP 的失敗計數。代價：別人可以故意把某個 email 鎖 15 分鐘。
+- 登入與重設密碼賽跑：session 只在帳號仍是 active **且密碼雜湊仍是剛驗證的那個**時寫入。
+- 搶註 email：重複註冊仍回同一個 202，但在原帳號記 `dup_attempts` / `last_dup_at`；operator 頁顯示
+  「此 email 有重複申請 N 次」，待審核清單提醒「核准前請用別的管道確認對方身分」。
+- Email 只收可列印 ASCII（擋全形相似字、IDN、引號、反斜線、角括號）。註冊限速 IPv6 以 /64 計；待審核超過 200 筆時
+  新註冊回 429 `registration_busy`；operator 清單最多 500 筆（`pending_count` 仍算全部）。
+- Turnstile：5 秒逾時即失敗；設了 `TURNSTILE_HOSTNAME` 才檢查 hostname（`action` 尚未檢查）。
+
+**第 2 批的前提（未做）**：目前沒有「自己改密碼」的路由，operator 重設的臨時密碼會一直有效。第 2 批讓 session
+打開任何既有路由**之前**，必須先做改密碼路由 + `must_change_password` 旗標（重設後強制先改密碼，改之前 session
+只能呼叫改密碼）。
 
 ### 2. 資料隔離（第 2 批）
 
