@@ -33,7 +33,7 @@ const PRE_MIGRATION = readFileSync(new URL('../schema.sql', import.meta.url), 'u
 const PRE_USERS = /CREATE TABLE IF NOT EXISTS users \(([\s\S]*?)\n\);/.exec(PRE_MIGRATION)[1];
 
 const setup = (opts = {}) => ({
-  imagepicker: fakeBucket(), PHOTOGRAPHER_TOKEN: SECRET, DB: fakeDB(opts),
+  imagepicker: fakeBucket(), PHOTOGRAPHER_TOKEN: SECRET, LEGACY_CLIENT_ACCOUNTS: 'on', DB: fakeDB(opts),
 });
 
 const call = (env, path, opts = {}) => worker.fetch(req(path, opts), env, ctx);

@@ -137,7 +137,7 @@
         body: JSON.stringify({ email, password })
       });
       const data = await r.json();
-      if (!r.ok) { errEl.textContent = data.error || '登入失敗'; btn.disabled = false; btn.textContent = '登入'; return; }
+      if (!r.ok) { errEl.textContent = r.status === 410 ? '此登入方式已停用，請向攝影師索取分享連結' : (data.error || '登入失敗'); btn.disabled = false; btn.textContent = '登入'; return; }
       sessionStorage.setItem('client_session', JSON.stringify(data));
       window.location.href = 'index.html';
     } catch(e) {
@@ -205,7 +205,7 @@
         body: JSON.stringify({ name, email, password, shoot_date, shoot_type })
       });
       const data = await r.json();
-      if (!r.ok) { errEl.textContent = data.error || '申請失敗'; btn.disabled = false; btn.textContent = '申請帳號'; return; }
+      if (!r.ok) { errEl.textContent = r.status === 410 ? '此申請方式已停用，請向攝影師索取分享連結' : (data.error || '申請失敗'); btn.disabled = false; btn.textContent = '申請帳號'; return; }
       errEl.style.color = '#4caf7d';
       errEl.textContent = '申請成功！請等待攝影師審核後再登入。';
       btn.textContent = '已送出';

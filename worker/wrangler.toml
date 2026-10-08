@@ -33,6 +33,9 @@ CUSTOM_PRODUCTS = "off"
 # （打錯字 = 關）。個資告知審過之前保持 "off"：客人只看到「我有興趣」。
 GUEST_ORDERS = "off"
 GUEST_ORDERS_PILOT = ""
+# 舊的客戶帳號系統（POST /api/auth/register、/login，client-login.html）。只有 "on" 才開；
+# 其他值或沒設都算關（410 client_accounts_closed）。關閉原因：登入沒有限流、密碼只做一輪 SHA-256、註冊沒有上限。
+LEGACY_CLIENT_ACCOUNTS = "off"
 # 攝影師自助註冊（docs/multi-photographer.md 第 1 批，POST /api/photographer/register）。
 # 只有 "on" 且已設 Secret TURNSTILE_SECRET 才開；其他值、打錯字或沒有 secret 都算關（403 registration_closed）。
 # 開之前要先跑 worker/migrations/2026-10-11-photographers.sql。第 5 批註冊頁上線前保持 "off"。

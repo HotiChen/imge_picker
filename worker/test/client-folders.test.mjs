@@ -37,7 +37,7 @@ const OBJECTS = {
 const sqlTime = h => new Date(Date.now() + h * 3600000).toISOString().replace('T', ' ').split('.')[0];
 
 function setup() {
-  return { imagepicker: fakeBucket(OBJECTS), DB: fakeDB(), PHOTOGRAPHER_TOKEN: SECRET };
+  return { imagepicker: fakeBucket(OBJECTS), DB: fakeDB(), PHOTOGRAPHER_TOKEN: SECRET, LEGACY_CLIENT_ACCOUNTS: 'on' };
 }
 
 const call = (env, path, opts = {}) => worker.fetch(req(path, opts), env, ctx);

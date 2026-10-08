@@ -3025,6 +3025,7 @@ export default {
 
     // POST /api/auth/register
     if (request.method === 'POST' && url.pathname === '/api/auth/register') {
+      if (env.LEGACY_CLIENT_ACCOUNTS !== 'on') return jsonErr('client_accounts_closed', 410);
       if (!env.DB) return jsonErr('DB not configured', 500);
       let body;
       try { body = await request.json(); } catch { return jsonErr('Invalid JSON'); }
@@ -3052,6 +3053,7 @@ export default {
 
     // POST /api/auth/login
     if (request.method === 'POST' && url.pathname === '/api/auth/login') {
+      if (env.LEGACY_CLIENT_ACCOUNTS !== 'on') return jsonErr('client_accounts_closed', 410);
       if (!env.DB) return jsonErr('DB not configured', 500);
       let body;
       try { body = await request.json(); } catch { return jsonErr('Invalid JSON'); }
