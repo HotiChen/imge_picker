@@ -71,6 +71,7 @@
   .badge-pay-paid { background: var(--mint); color: var(--success); }
   .badge-pay-free { background: var(--rule); color: var(--ink-55); }
   .empty { text-align: center; padding: 28px 0; color: var(--ink-55); font-size: 13px; }
+  .empty-retry { background: none; border: 1px solid var(--accent); border-radius: 999px; color: var(--ink-90); font: inherit; padding: 4px 14px; min-height: 36px; cursor: pointer; }
   .err { color: var(--danger); font-size: 12px; min-height: 16px; margin-top: 8px; }
 </style>
 </head>
@@ -163,7 +164,8 @@
     const r = await api('/api/admin/orders' + query);
     if (mine !== seq) return;
     if (!r.ok) {
-      listEl.innerHTML = '<div class="empty">讀取失敗</div>';
+      listEl.innerHTML = '<div class="empty">讀取失敗　<button type="button" class="empty-retry">重試</button></div>';
+      listEl.querySelector('.empty-retry').addEventListener('click', load);
       errEl.textContent = O.errorText(r.data, r.status);
       return;
     }

@@ -88,6 +88,7 @@
   /* phone: money cards one per row (NT$1,234,567 at 22px does not fit a third of 358px) */
   @media (max-width: 768px) { .stat-cards { gap: 10px; } .stat-cards.money { grid-template-columns: minmax(0, 1fr); } }
   .empty { text-align: center; padding: 24px 0; color: var(--ink-55); font-size: 13px; }
+  .empty-retry { background: none; border: 1px solid var(--accent); border-radius: 999px; color: var(--ink-90); font: inherit; padding: 4px 14px; min-height: 36px; cursor: pointer; }
 </style>
 </head>
 <body>
@@ -267,20 +268,31 @@
         : '<div class="empty">尚未建立過專案</div>';
     }
 
-    (async function load() {
+    // A failed read says so and offers 重試, which runs just that part again.
+    async function loadStats() {
+      const box = document.getElementById('stat-chart');
       try {
         const stats = await authedGet('/api/admin/stats');
         if (stats) renderStats(stats);
       } catch (e) {
-        document.getElementById('stat-chart').innerHTML = '<div class="empty">讀取失敗</div>';
+        box.innerHTML = '<div class="empty">讀取失敗　<button type="button" class="empty-retry">重試</button></div>';
+        box.querySelector('.empty-retry').addEventListener('click', loadStats);
       }
+    }
+
+    async function loadRecent() {
+      const box = document.getElementById('recent-projects');
       try {
         const data = await authedGet('/api/admin/projects');
         if (data) renderRecent(data.projects);
       } catch (e) {
-        document.getElementById('recent-projects').innerHTML = '<div class="empty">讀取失敗</div>';
+        box.innerHTML = '<div class="empty">讀取失敗　<button type="button" class="empty-retry">重試</button></div>';
+        box.querySelector('.empty-retry').addEventListener('click', loadRecent);
       }
-    })();
+    }
+
+    loadStats();
+    loadRecent();
   }
 })();
 </script>
