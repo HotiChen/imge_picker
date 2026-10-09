@@ -238,6 +238,29 @@ if (!ONLY || ONLY.split('|').some(t => t && U10.includes(t))) {
   console.log(out.join('\n'));
 }
 
+// U15: the cancel-order confirm is one text, shared by orders.html and admin.html (js/orders-common.js)
+{
+  const m = dashSettingsMock();
+  const o = ordersFake({ products: [], titles: { 'proj-1': '海邊系列' } });
+  o.st.addOrder({ id: 'o1', project_id: 'proj-1', status: 'requested', source: 'guest', contact_name: '小明', items: [{ name: '相本書', unit_price: 1234, qty: 1 }] });
+  await suite('訂單頁 — 取消訂單 asks the shared confirm text, and dismissing it cancels nothing',
+    `${base}/orders.html`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      let msg = null;
+      page.once('dialog', d => { msg = d.message(); d.dismiss(); });
+      await page.waitForSelector('.ord-row', { timeout: 5000 });
+      await page.locator('[data-status-to="cancelled"]').first().click();
+      await page.waitForTimeout(300);
+      const shared = await page.evaluate(() => window.Orders.CANCEL_CONFIRM);
+      ok('the confirm asked is the shared text', msg !== null && msg === shared && msg.includes('確定取消這筆訂單'), String(msg));
+      ok('dismissing it leaves the order as it was', (await page.locator('.ord-row').first().getAttribute('data-status')) === 'requested');
+      return out;
+    },
+    { before: async p => { await m.attach(p); await o.attach(p); }, initScript: SEED_TOKEN });
+}
+
 // U6: one title shape and one brand across the photographer pages ("<page> — Studio", wordmark STUDIO)
 const U6 = 'page titles and brand — the photographer pages say "<page> — Studio" and STUDIO, not five different names';
 if (!ONLY || ONLY.split('|').some(t => t && U6.includes(t))) {

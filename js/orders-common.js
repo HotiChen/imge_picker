@@ -268,10 +268,11 @@
     }
     return card;
   }
+  const CANCEL_CONFIRM = '確定取消這筆訂單？取消後就不能再修改金額或收款。';
   const ERASE_CONFIRM = '確定清除這位客人的個資？\n電話與 LINE ID 會被永久刪除（姓名與訂單內容保留），無法復原。';
 
   window.Orders = {
-    isGuest, statusLabel, movesFor, guestCard, ERASE_CONFIRM,
+    isGuest, statusLabel, movesFor, guestCard, ERASE_CONFIRM, CANCEL_CONFIRM,
     KIND_LABEL, STATUS_LABEL, METHOD_LABEL, SOURCE_LABEL, STATUS_MOVES, PAYMENT_LABEL,
     esc, money, errorText, paymentState, lineName, platformImageUrl, pageRangeText, pagePriceText, bleedText, client,
   };

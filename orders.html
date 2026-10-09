@@ -208,7 +208,7 @@
     let r;
     if (mv) {
       const to = mv.dataset.statusTo;
-      if (to === 'cancelled' && !confirm('確定取消這筆訂單？取消後就不能再修改金額或收款。')) return;
+      if (to === 'cancelled' && !confirm(O.CANCEL_CONFIRM)) return;
       r = await api(`/api/admin/orders/${encodeURIComponent(id)}/status`, 'POST', { status: to });
     } else {
       if (!confirm(O.ERASE_CONFIRM)) return;
