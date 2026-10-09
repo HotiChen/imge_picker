@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Studio Admin — 選片專案</title>
+<title>選片專案 — Studio</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@600;900&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -357,7 +357,7 @@
 <!-- LOGIN VIEW -->
 <div id="login-view">
   <div class="login-card">
-    <div class="brand">STUDIO ADMIN</div>
+    <div class="brand">STUDIO</div>
     <div class="subtitle">輸入攝影師密碼以繼續</div>
     <input id="admin-token-input" type="password" placeholder="攝影師密碼" class="field" style="margin-bottom:10px;">
     <button id="admin-login-btn" class="btn btn-accent" style="width:100%;padding:10px;">進入管理後台</button>
@@ -368,7 +368,7 @@
 <!-- ADMIN VIEW -->
 <div id="admin-view">
   <header>
-    <span class="brand">STUDIO ADMIN</span>
+    <span class="brand">STUDIO</span>
     <span class="subtitle" id="page-subtitle">選片專案</span>
     <span id="buildVersion"></span>
     <span class="spacer"></span>
@@ -584,7 +584,7 @@
       if (sec) sec.classList.toggle('active', k === currentView);
     });
     document.getElementById('page-subtitle').textContent = v.title;
-    document.title = 'Studio Admin — ' + v.title;
+    document.title = v.title + ' — Studio';
     if (typeof SideNav !== 'undefined') SideNav.render(document.getElementById('sideNav'), v.navKey, doLogout);
     updateRefreshInfo();
     if (currentView === 'clients') {
