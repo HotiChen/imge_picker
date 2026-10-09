@@ -214,6 +214,30 @@ for (const [name, url, sel, mk] of [
     { before: m.attach, initScript: () => localStorage.setItem('pick_key:TOK', 'ZOE-KEY'), contextOptions: MOBILE });
 }
 
+// U10: the muted text colour (--ink-55) keeps 4.5:1 on every surface the photographer pages put it on
+const U10 = 'muted text contrast — --ink-55 is at least 4.5:1 on the page, card and selected-chip backgrounds';
+if (!ONLY || ONLY.split('|').some(t => t && U10.includes(t))) {
+  console.log(`\n# ${U10}`);
+  const lum = hex => {
+    const [r, g, b] = [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16) / 255).map(c => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4));
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  };
+  const ratio = (a, b) => { const [x, y] = [lum(a), lum(b)].sort((p, q) => q - p); return (x + 0.05) / (y + 0.05); };
+  const out = [];
+  const ok = (n, c, d = '') => { if (!c) stats.failed++; out.push(`  ${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`); };
+  const BGS = { page: '#fff8ee', card: '#fff3df', 'selected chip': '#ffd9a8' };
+  let scanned = 0;
+  for (const file of ['admin.html', 'dashboard.html', 'home.html', 'operator.html', 'orders.html', 'settings.html', 'upload.html']) {
+    const html = await readFile(join(ROOT, file), 'utf8');
+    const tok = /--ink-55:\s*(#[0-9a-fA-F]{6})/.exec(html)?.[1];
+    ok(`${file}: --ink-55 is declared`, !!tok, String(tok));
+    if (!tok) continue;
+    for (const [name, bg] of Object.entries(BGS)) { scanned++; ok(`${file}: ${tok} on ${name} ${bg} >= 4.5`, ratio(tok, bg) >= 4.5, ratio(tok, bg).toFixed(2)); }
+  }
+  ok('a floor: 21 combinations were scanned', scanned === 21, String(scanned));
+  console.log(out.join('\n'));
+}
+
 // U6: one title shape and one brand across the photographer pages ("<page> — Studio", wordmark STUDIO)
 const U6 = 'page titles and brand — the photographer pages say "<page> — Studio" and STUDIO, not five different names';
 if (!ONLY || ONLY.split('|').some(t => t && U6.includes(t))) {
