@@ -23,9 +23,12 @@
     if (!container) return;
     container.innerHTML = `
       <div class="side-nav-brand mono">STUDIO</div>
-      <nav class="side-nav-list">
-        ${ITEMS.map(i => `<a class="side-nav-item${i.key === activeKey ? ' active' : ''}"
-            href="${escHtml(i.href)}" data-nav="${escHtml(i.key)}">${escHtml(i.label)}</a>`).join('')}
+      <nav class="side-nav-list" aria-label="主選單">
+        ${ITEMS.map(i => {
+          const cur = i.key === activeKey;
+          return `<a class="side-nav-item${cur ? ' active' : ''}"${cur ? ' aria-current="page"' : ''}
+            href="${escHtml(i.href)}" data-nav="${escHtml(i.key)}">${escHtml(i.label)}</a>`;
+        }).join('')}
         <button type="button" class="side-nav-item side-nav-logout" data-nav="logout">登出</button>
       </nav>`;
     const logoutBtn = container.querySelector('.side-nav-logout');

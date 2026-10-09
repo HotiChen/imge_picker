@@ -41,6 +41,32 @@ export default async function register() {
     { before: m.attach, initScript: ADMIN });
 }
 
+// U11: the side menu is a labelled landmark and says which page is current
+{
+  const m = adminMock({ clients: SHOOT_CLIENTS });
+  await suite('side menu — a labelled nav landmark, and aria-current on the current page only (follows the tab)',
+    `${base}/admin.html#projects`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      const st = () => page.evaluate(() => ({
+        label: document.querySelector('nav.side-nav-list')?.getAttribute('aria-label'),
+        current: [...document.querySelectorAll('.side-nav-item[aria-current]')].map(a => `${a.textContent.trim()}=${a.getAttribute('aria-current')}`),
+        active: [...document.querySelectorAll('.side-nav-item.active')].map(a => a.textContent.trim()),
+      }));
+      await page.waitForSelector('.side-nav-item.active', { timeout: 5000 });
+      let s = await st();
+      ok('the nav is labelled 主選單', s.label === '主選單', JSON.stringify(s));
+      ok('aria-current="page" is on the active item and nowhere else', JSON.stringify(s.current) === '["選片專案=page"]' && JSON.stringify(s.active) === '["選片專案"]', JSON.stringify(s));
+      await page.click('.side-nav-item[data-nav="clients"]');
+      await page.waitForFunction(() => document.querySelector('.side-nav-item.active')?.textContent.trim() === '客戶', null, { timeout: 3000 });
+      s = await st();
+      ok('switching tab moves aria-current with it', JSON.stringify(s.current) === '["客戶=page"]', JSON.stringify(s));
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN });
+}
+
 // U6: one title shape and one brand across the photographer pages ("<page> — Studio", wordmark STUDIO)
 const U6 = 'page titles and brand — the photographer pages say "<page> — Studio" and STUDIO, not five different names';
 if (!ONLY || ONLY.split('|').some(t => t && U6.includes(t))) {
