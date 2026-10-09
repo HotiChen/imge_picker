@@ -1,10 +1,11 @@
-// Browser suites: small UI fixes from the 2026-10 review (U3 failed client delete, U6 titles and brand; each fix adds its own block here). Registered by test/run.mjs in file-name
-// order; see test/README.md.
+// Browser suites: small UI fixes from the 2026-10 review (failed client delete, titles and brand, side menu aria, focus ring, phone button size).
+// Each fix adds its own block here. Registered by test/run.mjs in file-name order; see test/README.md.
 import { join } from 'node:path';
 import { readFile } from 'node:fs/promises';
 import { base, stats, suite, ONLY } from '../lib/harness.mjs';
-import { ROOT } from '../lib/env.mjs';
-import { ADMIN, adminMock, SHOOT_CLIENTS } from '../lib/auth-mocks.mjs';
+import { ROOT, MOBILE } from '../lib/env.mjs';
+import { ADMIN, ADMIN_PLAIN, adminMock, SHOOT_CLIENTS } from '../lib/auth-mocks.mjs';
+import { pickFakeWorker } from '../lib/pick-fake.mjs';
 
 export default async function register() {
 
@@ -86,6 +87,29 @@ for (const [name, url, sel, mk] of [
       return out;
     },
     mk());
+}
+
+// U9: on a phone the project detail's buttons are thumb-sized (>= 44px), not 26px chips
+{
+  const m = pickFakeWorker({ projectId: 'proj-A', title: '王小明 婚紗', phase: 'picking', projectType: '婚紗', folders: ['shoot/毛片/'] });
+  await suite('admin 專案詳情（手機）— the detail buttons are at least 44px tall',
+    `${base}/admin.html`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('[data-open-project]', { timeout: 5000 });
+      await page.click('[data-open-project]');
+      await page.waitForSelector('#pd-reset-seat-btn', { timeout: 5000 });
+      await page.waitForTimeout(300);
+      const hs = await page.$$eval('#project-detail-body .btn', els => els
+        .filter(e => e.getClientRects().length > 0 && getComputedStyle(e).display !== 'none')
+        .map(e => ({ id: e.id || e.textContent.trim().slice(0, 12), h: Math.round(e.getBoundingClientRect().height) })));
+      ok('a floor: at least 4 visible buttons were measured', hs.length >= 4, String(hs.length));
+      const small = hs.filter(b => b.h < 44);
+      ok('every one is >= 44px tall', small.length === 0, JSON.stringify(small));
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN_PLAIN, contextOptions: MOBILE });
 }
 
 // U6: one title shape and one brand across the photographer pages ("<page> — Studio", wordmark STUDIO)
