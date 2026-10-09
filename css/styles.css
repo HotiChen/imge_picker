@@ -2777,6 +2777,9 @@ html.fg-open, html.fg-open body { overflow: hidden; scrollbar-gutter: stable; }
 .fg-lb-stage.dragging .fg-lb-img { transition: opacity .25s ease; }
 .fg-lb-msg { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--ink-55); font-size: 15px; pointer-events: none; }
 .fg-lb-msg[hidden] { display: none; }
+.fg-lb-loading { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; pointer-events: none; }
+.fg-lb-stage.loading .fg-lb-loading { display: flex; }
+.fg-lb-loading .spinner { width: 40px; height: 40px; border-color: rgba(128,128,128,.35); border-top-color: currentColor; }
 .fg-lb-nav { position: absolute; top: 50%; transform: translateY(-50%); z-index: 2; width: 48px; height: 64px; padding: 0;
   display: inline-flex; align-items: center; justify-content: center; background: rgba(14,12,8,.45); border: 0; color: var(--ink);
   font-size: 32px; line-height: 1; cursor: pointer; -webkit-tap-highlight-color: transparent; }

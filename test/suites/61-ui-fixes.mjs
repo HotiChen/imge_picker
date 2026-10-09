@@ -172,6 +172,48 @@ for (const [name, url, sel, mk] of [
       }, initScript: SEED_TOKEN });
 }
 
+// Guest 成果相簿 lightbox: a loading ring while the big file is on its way, gone when it lands or fails
+{
+  const files = Array.from({ length: 6 }, (_, i) => `shoot/精修/f${String(i + 1).padStart(3, '0')}.jpg`);
+  const m = pickFakeWorker({
+    ownerName: 'Zoe', ownerKey: 'ZOE-KEY', phase: 'retouching', folders: ['shoot/毛片/'], finalFolders: ['shoot/精修/'],
+    deliveredAt: '2026-09-20T00:00:00.000Z', pickFiles: ['shoot/毛片/a.jpg', ...files], title: '婚禮精修',
+    studio: { name: '光影工作室', booking_url: null, has_logo: true },
+    imageDelay: (key, w) => (w === '400' ? 0 : 900) });
+  await suite('成果相簿燈箱（手機）— a loading ring until the big file is in; a failed file clears it and says so',
+    `${base}/index.html?t=TOK`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      const ring = () => page.evaluate(() => {
+        const r = document.getElementById('fgLbLoading');
+        return { on: !!r && getComputedStyle(r).display !== 'none' && r.getBoundingClientRect().width > 0, shown: document.getElementById('fgLbImg')?.classList.contains('on'), msg: !document.getElementById('fgLbMsg')?.hidden };
+      });
+      // f003's big file never arrives
+      await page.route(/f003\.jpg\?w=(1200|1600)/, r => r.abort());
+      await page.waitForSelector('.fg-tile', { timeout: 5000 });
+      await page.locator('.fg-tile').first().click();
+      await page.waitForSelector('#fgLightbox', { timeout: 3000 });
+      await page.waitForTimeout(200);
+      let s = await ring();
+      ok('while the big file is on its way the ring is visible and the photo is not', s.on && !s.shown && !s.msg, JSON.stringify(s));
+      await page.waitForFunction(() => document.getElementById('fgLbImg')?.classList.contains('on'), null, { timeout: 4000 });
+      s = await ring();
+      ok('once it is in the ring is gone', !s.on && s.shown, JSON.stringify(s));
+      await page.click('#fgLbNext');
+      await page.waitForTimeout(200);
+      s = await ring();
+      ok('swiping on shows the ring again at once', s.on && !s.shown, JSON.stringify(s));
+      await page.waitForFunction(() => document.getElementById('fgLbImg')?.classList.contains('on'), null, { timeout: 4000 });
+      await page.click('#fgLbNext');
+      await page.waitForFunction(() => !document.getElementById('fgLbMsg')?.hidden, null, { timeout: 5000 });
+      s = await ring();
+      ok('a file that fails clears the ring and shows the message', !s.on && s.msg && !s.shown, JSON.stringify(s));
+      return out;
+    },
+    { before: m.attach, initScript: () => localStorage.setItem('pick_key:TOK', 'ZOE-KEY'), contextOptions: MOBILE });
+}
+
 // U6: one title shape and one brand across the photographer pages ("<page> — Studio", wordmark STUDIO)
 const U6 = 'page titles and brand — the photographer pages say "<page> — Studio" and STUDIO, not five different names';
 if (!ONLY || ONLY.split('|').some(t => t && U6.includes(t))) {

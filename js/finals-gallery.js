@@ -410,7 +410,11 @@
             img.draggable = false;
             const msg = el('div', 'fg-lb-msg', '這張暫時無法顯示', 'fgLbMsg');
             msg.hidden = true;
-            stage.append(prev, img, next, msg);
+            const ring = el('div', 'fg-lb-loading', null, 'fgLbLoading');
+            ring.setAttribute('role', 'status');
+            ring.setAttribute('aria-label', '載入中');
+            ring.append(el('span', 'spinner'));
+            stage.append(prev, img, next, msg, ring);
             root.append(bar, stage);
             document.body.appendChild(root);
             lb.el = root; lb.stage = stage; lb.img = img; lb.opener = opener || null;
@@ -451,8 +455,9 @@
             const img = lb.img, msg = q('#fgLbMsg');
             img.classList.remove('on');
             msg.hidden = true;
-            img.onload = () => { if (tok === lb.tok) img.classList.add('on'); };
-            img.onerror = () => { if (tok === lb.tok) { msg.hidden = false; } };
+            lb.stage.classList.add('loading');   // the ring shows until this photo's file is in (or failed)
+            img.onload = () => { if (tok === lb.tok) { img.classList.add('on'); lb.stage.classList.remove('loading'); } };
+            img.onerror = () => { if (tok === lb.tok) { msg.hidden = false; lb.stage.classList.remove('loading'); } };
             img.src = this._lbUrl(photo);
             const ex = this._extras();
             if (ex && ex.onShow) ex.onShow(photo, lb.stage, img);
