@@ -693,7 +693,7 @@ export function pickFakeWorker(opts = {}) {
       // and only from retouching.
       if (/\/api\/admin\/projects\/[^/]+\/deliver$/.test(u.pathname) && method === 'POST') {
         if (state.project.phase !== 'retouching')
-          return json({ error: '尚未開始修圖，無法標記為已交付', code: 'not_retouching', phase: state.project.phase }, 409);
+          return json({ error: '尚未開始修圖，無法標記為已交件', code: 'not_retouching', phase: state.project.phase }, 409);
         const raw = body && typeof body === 'object' && !Array.isArray(body) ? body.final_folders : undefined;
         if (Array.isArray(raw) && raw.length > 20)
           return json({ error: '交件資料夾最多 20 個', code: 'too_many_final_folders', max: 20 }, 400);

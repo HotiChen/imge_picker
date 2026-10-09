@@ -401,7 +401,7 @@ await suite('upload — 沒有 ?project=（或空值）：返回鍵是「← 返
 
 {
   const m = pickFakeWorker({ projectId: 'proj-legacy', phase: 'retouching', deliveredAt: '2026-09-01T00:00:00.000Z' });
-  await suite('admin — 舊資料（有交付時間、沒有精修資料夾）：仍顯示已交件，並能用「更換精修資料夾」補上',
+  await suite('admin — 舊資料（有交件時間、沒有精修資料夾）：仍顯示已交件，並能用「更換精修資料夾」補上',
     `${base}/admin.html#project=proj-legacy`,
     async page => {
       const out = [];

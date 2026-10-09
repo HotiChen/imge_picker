@@ -124,7 +124,7 @@ await suite('儀表板 — 沒有 studio_token 時，還沒發出任何請求就
       await page.waitForFunction(() => document.getElementById('stat-picking').textContent !== '–', null, { timeout: 5000 });
       const nums = await page.evaluate(() => ['stat-picking', 'stat-submitted', 'stat-retouching', 'stat-delivered']
         .map(id => document.getElementById(id).textContent));
-      ok('選片中/已送出/精修中/已交付 counts', JSON.stringify(nums) === JSON.stringify(['3', '2', '1', '5']), JSON.stringify(nums));
+      ok('選片中/已送出/精修中/已交件 counts', JSON.stringify(nums) === JSON.stringify(['3', '2', '1', '5']), JSON.stringify(nums));
 
       // per_month's max value (8, September's created) must be the tallest
       // bar (100%); everything else scales relative to it — a stats-mapping
@@ -149,8 +149,8 @@ await suite('儀表板 — 沒有 studio_token 時，還沒發出任何請求就
       const recentLinks = await page.$$eval('#recent-projects a', els => els.map(e => e.getAttribute('href')));
       ok('recent projects link to admin.html#project=<id>',
         JSON.stringify(recentLinks) === JSON.stringify(['admin.html#project=p1', 'admin.html#project=p2']), JSON.stringify(recentLinks));
-      const deliveredBadges = await page.$$eval('.recent-row', rows => rows.map(r => r.textContent.includes('已交付')));
-      ok('only the delivered project shows 已交付', JSON.stringify(deliveredBadges) === JSON.stringify([false, true]), JSON.stringify(deliveredBadges));
+      const deliveredBadges = await page.$$eval('.recent-row', rows => rows.map(r => r.textContent.includes('已交件')));
+      ok('only the delivered project shows 已交件', JSON.stringify(deliveredBadges) === JSON.stringify([false, true]), JSON.stringify(deliveredBadges));
       return out;
     },
     { before: m.attach, initScript: SEED_TOKEN });

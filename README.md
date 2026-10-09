@@ -1,6 +1,6 @@
 # Image Picker Studio — 攝影師選圖工作室
 
-攝影師的選圖工作室（imhoti.tw/studio）：照片上傳後把一條連結傳給客人，客人在手機上挑片，
+攝影師的選圖工作室（imhoti.tw/studio）：照片上傳後把一條連結傳給客人，客人在手機上選片，
 攝影師收到選片結果、排相本、記錄加購訂單。目前是攝影師自用，方向是做成多攝影師的 SaaS
 （`projects.photographer_id` 已存在，目前都是 `default`）。
 
@@ -25,20 +25,20 @@
 | 檔案 | 用途 |
 |---|---|
 | `home.html` | 入口首頁（明亮版），登入後進 dashboard |
-| `dashboard.html` | 攝影師後台儀表板：專案、已交付狀態、營收、待辦（待確認訂單、未付款訂單等） |
+| `dashboard.html` | 攝影師後台儀表板：專案、已交件狀態、營收、待辦（待確認訂單、未付款訂單等） |
 | `admin.html` | 專案 / 客戶管理。專案列表有搜尋、狀態與類別篩選、「待我處理」排序（篩選記在網址 hash）；點進專案是獨立的詳情畫面（可改名、拍攝日期、類別、方案）：分享連結（複製連結會跳出可直接傳給客人的訊息）、選片狀態、交件（含「＋上傳精修」、預填上次精修資料夾）、客人的修改輪次與標示、客人興趣、訂單（含客人自助下的單）、下載選片 / 需求表 CSV。詳情的各區塊（交件、設定、目前選取、訂單、送出紀錄、挑選人與連結）可收合（展開狀態記在瀏覽器 localStorage，只是便利） |
 | `settings.html` | 工作室設定（名稱、logo、預設方案、匯款資訊）與商品目錄（從平台加入商品、定價） |
 | `orders.html` | 訂單列表與編輯 |
 | `operator.html` | 平台營運者（OPERATOR_TOKEN）管理平台商品（含相本最少 / 最多頁數、加頁價格、出血 mm） |
 | `upload.html` | 上傳照片到 R2（手機版面、失敗的檔案可重試）；從專案進來（`?project=<id>`）時返回鍵回專案 |
-| `index.html` | 選圖介面：客人用選片連結開啟（首次使用導覽、挑片、標示修改 pins、交件後的精修 gallery 與驗收頁、確認後的完成頁）；攝影師從專案的「看照片」進入是唯讀的 Review 模式（`js/project-view.js`，沒有標注工具，pins 列在右欄 / 照片下方） |
+| `index.html` | 選圖介面：客人用選片連結開啟（首次使用導覽、選片、標示修改 pins、交件後的精修 gallery 與驗收頁、確認後的完成頁）；攝影師從專案的「看照片」進入是唯讀的 Review 模式（`js/project-view.js`，沒有標注工具，pins 列在右欄 / 照片下方） |
 | `client-login.html` | 客戶登入 |
 | `tutorial.html` | 操作說明 |
 | `ping.html` | 連線診斷 |
 | `book_editor/` | 相本排版：`index.html` 編輯器（自動排版、匯出 JPG ZIP）、`view.html` 客戶預覽 / 核准 |
 | `r2_designer/` | 自由排版畫布（Fabric.js） |
 
-設計文件在 `docs/`：`backlog.md`（路線圖與待辦）、`guest-picking.md`（客人挑片與 pins）、
+設計文件在 `docs/`：`backlog.md`（路線圖與待辦）、`guest-picking.md`（客人選片與 pins）、
 `delivery.md`（交件、客戶確認、完成頁、拍攝日期 / 類別 / 改名）、`revision-pins.md`（交件後的修改標示）、
 `project-plan.md`（方案與加挑上限）、`dashboard-settings.md`、`products-orders.md`、`guest-shop.md`
 （客人商店與自助訂購）、`album-preview.md`（相本排版引擎與客人預覽）、`pick-handover.md`（協作者提案，大部分是歷史）、
@@ -70,9 +70,9 @@
 
 ## 專案流程（目前的樣子）
 
-專案狀態：挑片 → 已送出 → 精修中 → 已交件（`delivered_at`）→ 客人確認完成（`client_confirmed_at`，也可由攝影師標記）。
+專案狀態：選片 → 已送出 → 精修中 → 已交件（`delivered_at`）→ 客人確認完成（`client_confirmed_at`，也可由攝影師標記）。
 
-- **一條連結兩個畫面**：交件前客人看到挑片畫面；交件後同一條連結變成精修 gallery（只顯示精修資料夾）。
+- **一條連結兩個畫面**：交件前客人看到選片畫面；交件後同一條連結變成精修 gallery（只顯示精修資料夾）。
 - **交件狀態只看 `delivered_at`**。`projects.final_folders` 是「上次選定的精修資料夾」，
   **取消交件**和**開放修改（reopen）**都只清 `delivered_at`、保留它，下次交件時 admin 會預填
   （可修改，按「交件」才生效）。未交件時任何連結都讀不到精修資料夾。
@@ -83,7 +83,7 @@
   「把這段回憶留下來」與「我有興趣」、相本預覽）。
 - **客人自助訂購（S2）已做好但預設關閉**：由 `worker/wrangler.toml` 的 `GUEST_ORDERS` 控制（見下）。關閉時客人
   只看到「我有興趣」。設計：`docs/guest-shop.md`。
-- **標示修改（pins，挑片階段）**：客人在 ♥ 的照片上點位置放編號 pin，放下後自動跳出輸入框填文字；
+- **標示修改（pins，選片階段）**：客人在 ♥ 的照片上點位置放編號 pin，放下後自動跳出輸入框填文字；
   資料是 `selections.marks`（0–1 比例座標）。攝影師在 Review 看到，也可用「下載需求表 (CSV)」
   匯出（檔名、備註、標示；UTF-8 含 BOM）給修圖師。
 - **建專案時自動決定資料夾**（`js/project-folders.js` 是命名的唯一出處）：填「專案名稱」「拍攝日期」，
@@ -131,7 +131,7 @@ Console 一次只能跑一句，檔案內多句要一句一句貼；ALTER 不能
 
 | 檔案 | 新增 | 備註 / 順序 | 跑了嗎 |
 |---|---|---|---|
-| `2026-09-27-guest-picking.sql` | `projects` `pickers` `submissions` `selections` `project_members`、`share_tokens.project_id` | 最早，客人挑片 | 待 Tim 確認 |
+| `2026-09-27-guest-picking.sql` | `projects` `pickers` `submissions` `selections` `project_members`、`share_tokens.project_id` | 最早，客人選片 | 待 Tim 確認 |
 | `2026-09-28-project-archive.sql` | `projects.archived_at` | 在 guest-picking 之後 | 待 Tim 確認 |
 | `2026-09-28-dashboard-settings.sql` | `projects.delivered_at`、`studio_settings` | 在 archive 之後 | 待 Tim 確認 |
 | `2026-09-29-products-orders.sql` | `products`、`product_options`、訂單相關表、平台商品 | 在 dashboard-settings 之後 | backlog 記載已跑（products / orders ✅） |

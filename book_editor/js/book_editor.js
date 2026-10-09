@@ -2381,7 +2381,7 @@ class BookEditor {
         const statusMap = {
             draft:       ['草稿',  'status-draft'],
             'in-progress': ['製作中', 'status-inprogress'],
-            delivered:   ['已交付', 'status-delivered'],
+            delivered:   ['已交件', 'status-delivered'],
         };
         container.innerHTML = books.map((b, i) => {
             const date = new Date(b.updatedAt).toLocaleDateString('zh-TW');

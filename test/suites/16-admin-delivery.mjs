@@ -26,7 +26,7 @@ const pfWaitFinalsLink = page => page.waitForSelector('#pd-upload-final-btn[data
       const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
       await page.waitForSelector('#pd-delivery #pd-final-pick-btn', { timeout: 5000 });
       const txt = () => page.$eval('#pd-delivery', e => e.textContent);
-      ok('the old 標記已交付 button is gone', !(await page.textContent('#project-detail-body')).includes('標記已交付'));
+      ok('the old 標記已交件 button is gone', !(await page.textContent('#project-detail-body')).includes('標記已交件'));
       ok('the block warns that finals must be a separate folder, not inside the proof folder',
         /獨立的資料夾/.test(await txt()) && /不能放在毛片/.test(await txt()), await txt());
       // the chooser starts on the newest 精修 folder there is (精修二 here); dropping it
@@ -45,7 +45,7 @@ const pfWaitFinalsLink = page => page.waitForSelector('#pd-upload-final-btn[data
 
       await page.click('#pd-deliver-btn');
       await page.waitForSelector('[data-delivered-status]', { timeout: 3000 });
-      await page.click('#dn-close-btn');   // the 交付通知 dialog (item 2) opens after every successful 交件
+      await page.click('#dn-close-btn');   // the 交件通知 dialog (item 2) opens after every successful 交件
       ok('the deliver call carried final_folders', JSON.stringify(deliverBodies(m)) === '[{"final_folders":["shoot/精修/"]}]', JSON.stringify(deliverBodies(m)));
       ok('the block says 已交件 and lists the final folder',
         (await page.$eval('[data-delivered-status]', e => e.textContent)) === '已交件' &&

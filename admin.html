@@ -1884,7 +1884,7 @@
   // finalDraft: the folders chosen in the picker but not delivered yet.
   // finalEditing: a delivered project's 更換精修資料夾 chooser is open.
   let currentProject = null;
-  let currentTokens = [];   // the open project's pick links, newest first (for the 交付通知文案)
+  let currentTokens = [];   // the open project's pick links, newest first (for the 交件通知文案)
   let currentRevisions = [];   // the guest's 要求修改, newest first (detail.revision_requests)
   let finalDraft = [];
   let finalEditing = false;
@@ -2108,7 +2108,7 @@
           : '<span class="folder-none">（舊資料：沒有指定精修資料夾，客人仍看到選片畫面）</span>'}</div>
         ${finalEditing ? chooser : `<div class="pd-row">
           <button id="pd-replace-final-btn" class="btn btn-outline" type="button">更換精修資料夾</button>
-          <button id="pd-copy-notice-btn" class="btn btn-outline" type="button">複製交付通知文案</button>
+          <button id="pd-copy-notice-btn" class="btn btn-outline" type="button">複製交件通知文案</button>
           <span id="pd-copy-notice-status" class="dn-status" role="status"></span>
           <button id="pd-undeliver-btn" class="btn btn-ghost" type="button">取消交件</button>
         </div>`}
@@ -2343,7 +2343,7 @@
     copy.id = 'dn-copy-btn';
     copy.type = 'button';
     copy.className = 'btn btn-accent';
-    copy.textContent = '📋 複製交付通知文案';
+    copy.textContent = '📋 複製交件通知文案';
     const status = document.createElement('span');
     status.id = 'dn-status';
     status.className = 'dn-status';

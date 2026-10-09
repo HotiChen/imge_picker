@@ -14,7 +14,7 @@
 
     const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
     const CIRCLED = '①②③④⑤⑥⑦⑧⑨⑩';
-    const KIND = { pins: '標示', text: '文字', selection: '挑片' };
+    const KIND = { pins: '標示', text: '文字', selection: '選片' };
     const AUTO_NOTE = '客人未留言，請見照片標示';
     const circled = n => CIRCLED[n - 1] || `(${n})`;
     const fileName = key => String(key).slice(String(key).lastIndexOf('/') + 1);

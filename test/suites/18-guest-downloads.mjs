@@ -279,13 +279,13 @@ for (const who of [
 
 {
   const m = pickFakeWorker({ projectId: 'proj-not-ready', title: '選片中專案' });
-  await suite('admin — 選片中／已送出的專案不顯示交付按鈕；直接呼叫 API 會拿到 409 not_retouching 並顯示友善訊息',
+  await suite('admin — 選片中／已送出的專案不顯示交件按鈕；直接呼叫 API 會拿到 409 not_retouching 並顯示友善訊息',
     `${base}/admin.html#project=proj-not-ready`,
     async page => {
       const out = [];
       const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
       await page.waitForSelector('#pd-reset-seat-btn', { timeout: 5000 });
-      ok('no 標記已交付 button while still picking',
+      ok('no 標記已交件 button while still picking',
         (await page.$('#pd-deliver-btn')) === null && (await page.$('#pd-undeliver-btn')) === null);
 
       // The friendly 409 message is exercised directly against the endpoint —

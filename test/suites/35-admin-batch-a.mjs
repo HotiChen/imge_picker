@@ -1,5 +1,5 @@
 // Browser suites: photographer-side batch A — 看全部毛片 (review view, all-proofs mode), the 交件
-// notice dialog + 複製交付通知文案, status badge colours, and whole-row click on the project list.
+// notice dialog + 複製交件通知文案, status badge colours, and whole-row click on the project list.
 // Registered by test/run.mjs in file-name order; see test/README.md.
 import { base, suite } from '../lib/harness.mjs';
 import { ADMIN } from '../lib/auth-mocks.mjs';
@@ -205,7 +205,7 @@ const deliverAndWait = async page => {
           visible: r.width > 100 && r.height > 100, display: getComputedStyle(document.getElementById('pd-deliver-notice')).display };
       });
       ok('the dialog is really on screen', d.visible && d.display !== 'none', JSON.stringify(d));
-      ok('the button reads 📋 複製交付通知文案', d.copy === '📋 複製交付通知文案', d.copy);
+      ok('the button reads 📋 複製交件通知文案', d.copy === '📋 複製交件通知文案', d.copy);
       ok('the text has the project title', d.text.includes('婚禮 Amy&Ben'), d.text);
       ok('and the client link (the same shape as 複製連結: index.html?t=<token>)', /index\.html\?t=LINK-TOK-1(\s|$)/.test(d.text), d.text);
       ok('it names 確認完成 and 需要修改', d.text.includes('「確認完成」') && d.text.includes('「需要修改」'), d.text);
@@ -304,7 +304,7 @@ const deliverAndWait = async page => {
 
 {
   const m = dnWorld();
-  await suite('35 交件通知 — 已交件期間，交件區塊有小按鈕「複製交付通知文案」，複製同一段文字；尚未交件時沒有',
+  await suite('35 交件通知 — 已交件期間，交件區塊有小按鈕「複製交件通知文案」，複製同一段文字；尚未交件時沒有',
     `${base}/admin.html#project=proj-dn`,
     async page => {
       const out = [], ok = okFn(out);
@@ -315,7 +315,7 @@ const deliverAndWait = async page => {
       await page.click('#dn-close-btn');
       await page.waitForSelector('#pd-copy-notice-btn', { timeout: 3000 });
       const label = await page.$eval('#pd-copy-notice-btn', b => b.textContent);
-      ok('delivered: the button reads 複製交付通知文案', label === '複製交付通知文案', label);
+      ok('delivered: the button reads 複製交件通知文案', label === '複製交件通知文案', label);
       await page.click('#pd-copy-notice-btn');
       await page.waitForFunction(() => document.getElementById('pd-copy-notice-status').textContent === '已複製', null, { timeout: 3000 });
       const clip = await page.evaluate(() => window.__clip);

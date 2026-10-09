@@ -514,11 +514,11 @@ const histWorld = (extra = {}) => world({
       ok('the pin notes are text with dir=auto + unicode-bidi: isolate; hostile note inert', notes.length === 2 && notes[0].t === BAD && notes[0].dir === 'auto' && notes[0].ub === 'isolate' && notes[1].t === '去掉路人' && (await page.$('#revHistoryView img[onerror]')) === null);
       await page.keyboard.press('Escape');
       ok('Escape leaves the large view first, not the dialog', await until(async () => (await page.$('#revHistoryView')) === null) && (await page.$('#revHistory')) !== null);
-      ok('the earlier rounds are listed (the picking round)', (await page.$$eval('#revHistory .rh-earlier', els => els.map(e => e.textContent))).some(t => t.includes('挑片時的標示')));
+      ok('the earlier rounds are listed (the picking round)', (await page.$$eval('#revHistory .rh-earlier', els => els.map(e => e.textContent))).some(t => t.includes('選片時的標示')));
       await page.click('#revHistory .rh-earlier');
       await page.waitForSelector('#revHistoryMore', { timeout: 5000 });
-      ok('opening it: title 挑片時的標示 · 2026/9/20; pinned photo first; the rest folded under 其他已選 3 張',
-        await until(async () => (await page.textContent('#revHistoryTitle')) === '挑片時的標示 · 2026/9/20') && (await page.$$('#revHistory .rh-photo')).length === 1 && (await page.textContent('#revHistoryMore')).includes('其他已選 3 張'), `${await page.textContent('#revHistoryTitle')}|${(await page.$$('#revHistory .rh-photo')).length}`);
+      ok('opening it: title 選片時的標示 · 2026/9/20; pinned photo first; the rest folded under 其他已選 3 張',
+        await until(async () => (await page.textContent('#revHistoryTitle')) === '選片時的標示 · 2026/9/20') && (await page.$$('#revHistory .rh-photo')).length === 1 && (await page.textContent('#revHistoryMore')).includes('其他已選 3 張'), `${await page.textContent('#revHistoryTitle')}|${(await page.$$('#revHistory .rh-photo')).length}`);
       await page.click('#revHistoryMore');
       ok('expanding shows the other 3', await until(async () => (await page.$$('#revHistory .rh-photo')).length === 4));
       await page.waitForFunction(() => document.querySelectorAll('#revHistory .rh-photo img').length >= 4, null, { timeout: 6000 });
@@ -544,7 +544,7 @@ const histWorld = (extra = {}) => world({
       await page.click('#doneHistoryBtn');
       ok('the panel shows 暫時無法載入 and a retry button', await until(async () => (await page.$('#revHistoryRetry')) !== null && (await page.textContent('#revHistory')).includes('暫時無法載入')));
       await page.click('#revHistoryRetry');
-      ok('retrying loads the newest round (the picking round: title 挑片時的標示)', await until(async () => (await page.textContent('#revHistoryTitle')).startsWith('挑片時的標示')) && (await page.$('#revHistoryRetry')) === null);
+      ok('retrying loads the newest round (the picking round: title 選片時的標示)', await until(async () => (await page.textContent('#revHistoryTitle')).startsWith('選片時的標示')) && (await page.$('#revHistoryRetry')) === null);
     },
     { before: w.before, initScript: OWNER, contextOptions: ALB_DESK });
 }

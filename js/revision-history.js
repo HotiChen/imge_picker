@@ -82,7 +82,7 @@
         _title(pc, round) {
             const when = pc._fmtDate(round.created_at);
             const tail = when ? ` · ${when}` : '';
-            if (round.kind === 'selection') return `挑片時的標示${tail}`;
+            if (round.kind === 'selection') return `選片時的標示${tail}`;
             const asked = this.rounds.filter(r => r.kind !== 'selection').sort((a, b) => (a.created_at < b.created_at ? -1 : a.created_at > b.created_at ? 1 : 0));
             const k = asked.findIndex(r => r.id === round.id) + 1;
             return round.kind === 'text' ? `修改要求${tail}` : `第 ${k || 1} 輪修改${tail}`;

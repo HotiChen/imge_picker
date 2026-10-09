@@ -108,7 +108,7 @@
       <div class="stat-card"><div class="n" id="stat-picking">–</div><div class="label">選片中</div></div>
       <div class="stat-card"><div class="n" id="stat-submitted">–</div><div class="label">已送出</div></div>
       <div class="stat-card"><div class="n" id="stat-retouching">–</div><div class="label">精修中</div></div>
-      <div class="stat-card"><div class="n" id="stat-delivered">–</div><div class="label">已交付</div></div>
+      <div class="stat-card"><div class="n" id="stat-delivered">–</div><div class="label">已交件</div></div>
     </div>
 
     <div class="stat-cards money">
@@ -117,12 +117,12 @@
       <div class="stat-card"><div class="n" id="stat-outstanding">–</div><div class="label">未收款</div></div>
     </div>
 
-    <h2>每月新增 / 交付</h2>
+    <h2>每月新增 / 交件</h2>
     <div class="panel">
       <div class="panel-body">
         <div class="chart-legend">
           <span><span class="sw sw-created"></span>新增</span>
-          <span><span class="sw sw-delivered"></span>交付</span>
+          <span><span class="sw sw-delivered"></span>交件</span>
         </div>
         <div class="chart" id="stat-chart"><div class="empty">載入中…</div></div>
         <div class="chart-labels" id="stat-chart-labels"></div>
@@ -229,7 +229,7 @@
         chart.innerHTML = months.map(m => {
           const cH = Math.round((m.created || 0) / max * 100);
           const dH = Math.round((m.delivered || 0) / max * 100);
-          return `<div class="chart-col" title="${escHtml(m.month)} 新增 ${escHtml(m.created)}、交付 ${escHtml(m.delivered)}">
+          return `<div class="chart-col" title="${escHtml(m.month)} 新增 ${escHtml(m.created)}、交件 ${escHtml(m.delivered)}">
             <div class="chart-bar created" style="height:${cH}%"></div>
             <div class="chart-bar delivered" style="height:${dH}%"></div>
           </div>`;
@@ -261,7 +261,7 @@
             <a href="admin.html#project=${encodeURIComponent(p.id)}">${escHtml(p.title || '（未命名）')}</a>
             <span>
               <span class="badge badge-approved">${escHtml(PHASE_LABEL[p.phase] || p.phase || '')}</span>
-              ${p.delivered_at ? '<span class="badge badge-pending">已交付</span>' : ''}
+              ${p.delivered_at ? '<span class="badge badge-pending">已交件</span>' : ''}
             </span>
           </div>`).join('')
         : '<div class="empty">尚未建立過專案</div>';

@@ -40,7 +40,7 @@
             { id: 'submit', text: '選好了，按這裡送出。', target: () => first('#mobileActionBar:not(.pick-bar-off) #pickSubmitBtn') },
         ],
         delivered: [
-            { text: '這是攝影師交付的精修成品。', target: () => first('#fgRows .fg-tile') },
+            { text: '這是攝影師交件的精修成品。', target: () => first('#fgRows .fg-tile') },
             { text: '有要修改的地方？\n① 點照片放大，按「標示修改」\n② 點照片上要修的位置，寫下怎麼修\n③ 標完按「完成」，全部標好再按「送出修改」', target: () => first('#fgRows .fg-tile') },
             { text: '都滿意就按「確認完成」。', target: () => first('#doneConfirmBtn') },
         ],

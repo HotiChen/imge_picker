@@ -3666,7 +3666,7 @@ export default {
         return jsonOk({ ok: true, delivered_at: null }, 200, ADMIN_ONLY_HEADERS);
       }
       const notRetouching = phase =>
-        jsonOk({ error: '尚未開始修圖，無法標記為已交付', code: 'not_retouching', phase }, 409, ADMIN_ONLY_HEADERS);
+        jsonOk({ error: '尚未開始修圖，無法標記為已交件', code: 'not_retouching', phase }, 409, ADMIN_ONLY_HEADERS);
       const invalid = (code, extra = {}, error = '交件資料夾不正確') => jsonOk({ error, code, ...extra }, 400, ADMIN_ONLY_HEADERS);
       const project = await env.DB.prepare('SELECT phase, folders FROM projects WHERE id = ? AND photographer_id = ?')
         .bind(id, DEFAULT_PHOTOGRAPHER_ID).first();

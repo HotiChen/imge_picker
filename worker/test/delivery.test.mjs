@@ -632,7 +632,7 @@ test('deliver after undeliver replaces the kept finals and stamps a new delivere
   assert.equal(s.delivered_at, json.delivered_at);
 });
 
-// ─── reopen (退回挑片) keeps the finals too ───────────────────────────────────
+// ─── reopen (退回選片) keeps the finals too ───────────────────────────────────
 
 test('reopen takes the gallery down: the kept finals are never readable, picking scope as before', async () => {
   for (const on of [false, true]) {
