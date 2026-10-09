@@ -1165,9 +1165,9 @@ body {
 /* ── Modal (Photo Detail / Annotation) ──────────────── */
 .modal {
   position: fixed;
-  top: 0; left: 0;
+  top: var(--vv-top, 0); left: 0;   /* js/visual-viewport.js: the visible area, see there */
   width: 100vw;
-  height: 100dvh;
+  height: var(--vv-h, 100dvh);
   display: none;
   justify-content: center;
   align-items: center;
@@ -1193,7 +1193,7 @@ body {
   box-shadow: var(--shadow-xl);
   width: 98vw;
   max-width: 98vw;
-  height: 96vh;
+  height: 96%;   /* of .modal, which follows the visible area (js/visual-viewport.js); 96vh ignored the browser bars */
   animation: slideUp var(--transition-slow);
   overflow: hidden;
   display: flex;
@@ -2756,7 +2756,7 @@ body.fg-mode .delivery-done-actions { margin-left: auto; flex: 0 0 auto; }
 
 /* lightbox */
 html.fg-open, html.fg-open body { overflow: hidden; scrollbar-gutter: stable; }
-.fg-lightbox { position: fixed; top: 0; left: 0; right: 0; z-index: 3500; height: 100vh; height: 100dvh; display: flex; flex-direction: column;
+.fg-lightbox { position: fixed; top: var(--vv-top, 0); left: 0; right: 0; z-index: 3500; height: 100vh; height: var(--vv-h, 100dvh); display: flex; flex-direction: column;
   background: var(--bg-deep); color: var(--ink); overscroll-behavior: none; outline: none; }
 .fg-lb-bar { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; min-width: 0;
   height: calc(56px + env(safe-area-inset-top, 0px)); padding: env(safe-area-inset-top, 0px) 8px 0 16px; }
