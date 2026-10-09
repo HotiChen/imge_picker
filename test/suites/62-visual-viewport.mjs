@@ -45,6 +45,9 @@ const move = (page, patch) => page.evaluate(p => { Object.assign(window.__vv, p)
       await move(page, { offsetTop: 70, height: full - 70 - 90 });
       b = await box(page);
       ok('toolbars showing (70px top, 90px bottom): the modal starts at 70 and is 160px shorter', b.top === 70 && Math.abs(b.h - (full - 160)) <= 1, JSON.stringify([b, full]));
+      await page.waitForTimeout(150);
+      const fit = await page.evaluate(() => { const cv = document.getElementById('photoCanvas'), ct = cv.parentElement; return { canvasH: cv.height, boxH: ct.clientHeight, canvasW: cv.width, boxW: ct.clientWidth }; });
+      ok('the photo canvas was re-measured for the smaller modal (its size equals its container)', fit.canvasH === fit.boxH && fit.canvasW === fit.boxW && fit.boxH > 0, JSON.stringify(fit));
       const x = await page.evaluate(() => { const c = document.getElementById('closeModal'); const r = c && c.getBoundingClientRect(); return { exists: !!c, top: r ? Math.round(r.top) : null }; });
       ok('the ✕ (#closeModal) is therefore not above the visible area (positive: it exists)', x.exists && x.top >= 70, JSON.stringify(x));
       await move(page, { offsetTop: 0, height: full });

@@ -10,8 +10,12 @@
   const root = document.documentElement;
   function sync() {
     if (vv.scale > 1.01) return;
-    root.style.setProperty('--vv-top', `${vv.offsetTop}px`);
-    root.style.setProperty('--vv-h', `${vv.height}px`);
+    const top = `${vv.offsetTop}px`, h = `${vv.height}px`;
+    if (root.style.getPropertyValue('--vv-top') === top && root.style.getPropertyValue('--vv-h') === h) return;
+    root.style.setProperty('--vv-top', top);
+    root.style.setProperty('--vv-h', h);
+    // anything that measures the viewers (the photo canvas) must measure again now that they have their final size
+    window.dispatchEvent(new Event('vv-sync'));
   }
   vv.addEventListener('resize', sync);
   vv.addEventListener('scroll', sync);

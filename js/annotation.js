@@ -108,13 +108,15 @@ class AnnotationManager {
         touchHost.addEventListener('touchend', this.handleTouchEnd.bind(this), { passive: false });
         touchHost.addEventListener('touchcancel', this.handleTouchEnd.bind(this), { passive: false });
 
-        // 監聽視窗縮放
-        window.addEventListener('resize', () => {
+        // 監聽視窗縮放；'vv-sync' = js/visual-viewport.js 已把可見區域寫進 CSS 之後（比 resize 晚，量到的才是最終大小）
+        const refit = () => {
             if (this.imageElement) {
                 this.resizeCanvas(this.imageElement, !!this._standIn);
                 this.redraw();
             }
-        });
+        };
+        window.addEventListener('resize', refit);
+        window.addEventListener('vv-sync', refit);
     }
 
     // 載入照片到畫布
