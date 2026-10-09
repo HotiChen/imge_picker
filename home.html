@@ -300,6 +300,7 @@
 </div>
 
 <script src="js/build-version.js?v=20261012d"></script>
+<script src="js/password-toggle.js?v=20261012d"></script>
 <script>
 (function () {
   const WORKER_URL = 'https://imagepicker.hotichen.workers.dev';
@@ -313,12 +314,14 @@
 
   const overlay = document.getElementById('loginOverlay');
   const input = document.getElementById('loginTokenInput');
+  const eye = PasswordToggle.attach(input);
   const errEl = document.getElementById('loginErr');
   const submitBtn = document.getElementById('loginSubmitBtn');
 
   function openOverlay() {
     errEl.textContent = '';
     input.value = '';
+    eye.hide();   // a reopened login starts hidden
     overlay.classList.add('open');
     input.focus();
   }

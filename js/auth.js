@@ -44,6 +44,7 @@
         document.body.appendChild(overlay);
 
         const input = document.getElementById('auth-input');
+        PasswordToggle.attach(input, { color: T.sub });
         const btn = document.getElementById('auth-btn');
         const err = document.getElementById('auth-err');
 

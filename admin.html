@@ -496,6 +496,7 @@
 <script src="js/shoot-types.js?v=20261012d"></script>
 <script src="js/project-folders.js?v=20261012d"></script>
 <script src="js/build-version.js?v=20261012d"></script>
+<script src="js/password-toggle.js?v=20261012d"></script>
 <script src="js/util.js?v=20261012d"></script>
 <script src="js/side-nav.js?v=20261012d"></script>
 <script src="js/orders-common.js?v=20261012d"></script>
@@ -691,6 +692,7 @@
   document.getElementById('pd-back-btn')?.addEventListener('click', leaveProjectDetail);
 
   document.getElementById('admin-login-btn').addEventListener('click', tryAdminLogin);
+  PasswordToggle.attach(document.getElementById('admin-token-input'));
   document.getElementById('admin-token-input').addEventListener('keydown', e => { if (e.key === 'Enter') tryAdminLogin(); });
   function doLogout() {
     sessionStorage.removeItem(TOKEN_KEY);
