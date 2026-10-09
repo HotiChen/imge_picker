@@ -67,6 +67,27 @@ export default async function register() {
     { before: m.attach, initScript: ADMIN });
 }
 
+// U11: a focused text field shows a ring, not only an orange border (client-login, settings)
+for (const [name, url, sel, mk] of [
+  ['client-login', `${base}/client-login.html`, '.field', () => ({})],
+  ['settings', `${base}/settings.html`, '.field', () => { const m = adminMock(); return { before: m.attach, initScript: ADMIN }; }],
+]) {
+  await suite(`focus ring — a focused ${name} field gets a visible ring`,
+    url,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector(sel, { state: 'visible', timeout: 5000 });
+      const before = await page.$eval(sel, e => getComputedStyle(e).boxShadow);
+      await page.focus(sel);
+      const after = await page.$eval(sel, e => getComputedStyle(e).boxShadow);
+      ok('no ring before focus', before === 'none', before);
+      ok('a ring (box-shadow) once focused', after !== 'none' && /3px/.test(after), after);
+      return out;
+    },
+    mk());
+}
+
 // U6: one title shape and one brand across the photographer pages ("<page> — Studio", wordmark STUDIO)
 const U6 = 'page titles and brand — the photographer pages say "<page> — Studio" and STUDIO, not five different names';
 if (!ONLY || ONLY.split('|').some(t => t && U6.includes(t))) {

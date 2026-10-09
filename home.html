@@ -15,6 +15,7 @@
     --surface: #ffffff;
     --card: #ffffff;
     --accent: #f5a13b;
+    --accent-dim: #ffd9a8;
     --accent-shadow: #d6801f;
     --mint: #d6f0e3;
     --mint-ink: #1f6b4f;
@@ -190,7 +191,7 @@
     padding: 10px 12px; border-radius: 8px; font-size: 14px; font-family: inherit;
     outline: none; width: 100%; margin-bottom: 10px;
   }
-  .field:focus { border-color: var(--accent); }
+  .field:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-dim); }
   .err { color: var(--danger); font-size: 12px; margin-top: 8px; min-height: 16px; }
 
   @media (max-width: 780px) {

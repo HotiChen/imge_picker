@@ -13,6 +13,7 @@
     --surface: #1d1a14;
     --card: #221f18;
     --accent: #e5a448;
+    --accent-dim: #ffd9a8;
     --ink-90: #e8e3da;
     --ink-55: #8c8375;
     --rule: #2e2a22;
@@ -26,7 +27,7 @@
   .subtitle { color: var(--ink-55); font-size: 12px; text-align: center; margin-bottom: 28px; }
   .label { display: block; color: var(--ink-55); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 6px; font-family: 'IBM Plex Mono', monospace; }
   .field { background: var(--card); border: 1px solid var(--border); color: var(--ink-90); padding: 10px 12px; border-radius: 4px; font-size: 14px; font-family: inherit; outline: none; width: 100%; }
-  .field:focus { border-color: var(--accent); }
+  .field:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-dim); }
   .field-group { margin-bottom: 16px; }
   .btn-primary { width: 100%; background: var(--accent); color: var(--bg); border: none; padding: 11px; border-radius: 4px; font-size: 14px; cursor: pointer; font-weight: 600; letter-spacing: 0.05em; font-family: inherit; margin-top: 8px; }
   .btn-primary:hover { opacity: 0.9; }
