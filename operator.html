@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@600;900&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/side-nav.css?v=20261012e">
+<link rel="stylesheet" href="css/side-nav.css?v=20261012f">
 <style>
   :root {
     --bg: #fff8ee; --surface: #ffffff; --card: #fff3df; --accent: #f5a13b; --accent-dim: #ffd9a8;
@@ -98,6 +98,18 @@
   .ph-temp { border: 1px solid var(--accent); background: var(--card); border-radius: 12px; padding: 14px 16px; margin-top: 14px; }
   .ph-temp .ph-temp-row { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
   .ph-temp input { font-family: 'IBM Plex Mono', monospace; font-size: 16px; flex: 1; min-width: 180px; }
+  /* 批次編輯: the whole catalogue as one editable grid */
+  #op-bulk .bk-scroll { overflow-x: auto; }
+  .bk-prod { border: 1px solid var(--rule); border-radius: 12px; background: var(--card); padding: 12px; margin-bottom: 12px; }
+  .bk-head, .bk-opt { display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap; margin-bottom: 8px; }
+  .bk-opt { padding-left: 16px; align-items: center; }
+  .bk-cell { display: flex; flex-direction: column; gap: 2px; font-size: 11px; color: var(--ink-55); }
+  .bk-cell input { min-height: 44px; }
+  .bk-name { width: 220px; } .bk-label { width: 200px; } .bk-num { width: 100px; }
+  .bk-opt .bk-cell input { min-height: 44px; }
+  #op-bulk input[aria-invalid="true"] { border-color: var(--danger); box-shadow: 0 0 0 1px var(--danger); }
+  .bk-actions { display: flex; gap: 8px; margin-top: 4px; }
+  .bk-actions .btn { min-height: 44px; }
   @media (max-width: 640px) {
     main { padding: 16px; } .prod-row { flex-wrap: wrap; }
     .ph-row { flex-wrap: wrap; }
@@ -154,6 +166,8 @@
       <div class="panel-body">
         <div id="op-list"><div class="hint">載入中…</div></div>
         <button id="op-add-btn" class="btn btn-outline" type="button" style="margin-top:12px;">＋ 新增平台商品</button>
+        <button id="op-bulk-btn" class="btn btn-outline" type="button" style="margin-top:12px;">批次編輯</button>
+        <div id="op-bulk"></div>
         <div id="op-form-box"></div>
         <div id="op-err" class="err"></div>
         <div id="op-ok" class="ok-msg"></div>
@@ -170,10 +184,10 @@
   </div>
 </main>
 
-<script src="js/build-version.js?v=20261012e"></script>
-<script src="js/password-toggle.js?v=20261012e"></script>
-<script src="js/util.js?v=20261012e"></script>
-<script src="js/orders-common.js?v=20261012e"></script>
+<script src="js/build-version.js?v=20261012f"></script>
+<script src="js/password-toggle.js?v=20261012f"></script>
+<script src="js/util.js?v=20261012f"></script>
+<script src="js/orders-common.js?v=20261012f"></script>
 <script>
 (function () {
   const WORKER_URL = 'https://imagepicker.hotichen.workers.dev';
@@ -202,7 +216,7 @@
     $('op-token').value = '';
   }
   function showApp() { loginBox.hidden = true; appBox.hidden = false; logoutBtn.hidden = false; }
-  function signOut(msg) { saveToken(''); products = []; formBox.innerHTML = ''; clearPhotographers(); showLogin(msg); }
+  function signOut(msg) { saveToken(''); products = []; formBox.innerHTML = ''; bulkBox.innerHTML = ''; listBox.hidden = false; addBtn.hidden = false; bulkBtn.hidden = false; clearPhotographers(); showLogin(msg); }
 
   const api = O.client({
     workerUrl: WORKER_URL, getToken: () => token,
@@ -534,6 +548,140 @@
     closeForm();
     say(true, '已儲存');
   }
+
+  // ── 批次編輯: every active product and option in one grid, one save ─────────
+  // Only what changed is sent (a product whose cells all match what was loaded
+  // is never touched); an option edit sends all of that product's active options
+  // with their ids, because the Worker treats `options` as the whole set.
+  const bulkBox = $('op-bulk'), bulkBtn = $('op-bulk-btn');
+  const cell = (cls, label, v, extra) => `<label class="bk-cell">${label}<input class="field ${cls}" ${extra || 'type="text"'} value="${O.esc(v == null ? '' : v)}" data-orig="${O.esc(v == null ? '' : v)}"></label>`;
+  function bulkOptHtml(o) {
+    const warn = underCost(o) ? '<span class="chip-warn" data-warn="below-cost">平台價低於廠商成本</span>' : '';
+    return `<div class="bk-opt" data-option-id="${O.esc(o.id)}">
+      ${cell('bk-label', '規格', o.label, 'type="text" maxlength="60"')}
+      ${cell('bk-vendor bk-num', '廠商成本', o.vendor_cost, 'type="number" min="0" step="1" inputmode="numeric"')}
+      ${cell('bk-plat bk-num', '平台價', o.platform_price, 'type="number" min="0" step="1" inputmode="numeric"')}
+      <span class="bk-warn">${warn}</span>
+    </div>`;
+  }
+  function bulkProdHtml(p) {
+    const album = p.kind === 'album';
+    return `<div class="bk-prod" data-product-id="${O.esc(p.id)}">
+      <div class="bk-head">
+        ${cell('bk-name', O.KIND_LABEL[p.kind] || p.kind, p.name, 'type="text" maxlength="60"')}
+        ${album ? cell('bk-min bk-num', '最少頁', p.min_pages, 'type="number" min="1" max="200" step="1" inputmode="numeric"') : ''}
+        ${album ? cell('bk-max bk-num', '最多頁', p.max_pages, 'type="number" min="1" max="200" step="1" inputmode="numeric"') : ''}
+        ${album ? cell('bk-extra bk-num', '加頁單價', p.extra_page_price, 'type="number" min="0" step="1" inputmode="numeric"') : ''}
+        ${cell('bk-bleed bk-num', '出血 mm', p.bleed_mm, 'type="text" inputmode="decimal"')}
+      </div>
+      ${(p.options || []).filter(o => o.active).map(bulkOptHtml).join('')}
+    </div>`;
+  }
+  const isDirty = el => el.value.trim() !== el.dataset.orig.trim();
+  const bulkChanged = box => {
+    const ch = { fields: {}, optionsDirty: false };
+    for (const [cls, key] of [['.bk-name', 'name'], ['.bk-min', 'min_pages'], ['.bk-max', 'max_pages'], ['.bk-extra', 'extra_page_price'], ['.bk-bleed', 'bleed_mm']]) {
+      const el = box.querySelector(cls);
+      if (el && isDirty(el)) ch.fields[key] = el;
+    }
+    ch.optionsDirty = [...box.querySelectorAll('.bk-opt input')].some(isDirty);
+    return ch;
+  };
+  const bulkDirtyBoxes = () => [...bulkBox.querySelectorAll('.bk-prod')].filter(b => { const c = bulkChanged(b); return c.optionsDirty || Object.keys(c.fields).length; });
+  function bulkSync() {
+    const n = bulkDirtyBoxes().length;
+    const save = $('bk-save');
+    if (!save) return;
+    save.disabled = n === 0;
+    save.textContent = n ? `儲存 ${n} 項變更` : '儲存';
+  }
+  function bulkClearErrors() {
+    bulkBox.querySelectorAll('[aria-invalid]').forEach(e => e.removeAttribute('aria-invalid'));
+    $('bk-err').textContent = '';
+  }
+  // validate one changed product; returns {body} or {bad: [{el, code}]}
+  function bulkBody(box) {
+    const ch = bulkChanged(box), body = {}, bad = [];
+    const f = ch.fields;
+    if (f.name) { if (!f.name.value.trim()) bad.push({ el: f.name, code: 'invalid_name' }); else body.name = f.name.value.trim(); }
+    for (const [key, rd, code] of [['min_pages', readPageBound, 'invalid_min_pages'], ['max_pages', readPageBound, 'invalid_max_pages'], ['extra_page_price', readExtraPrice, 'invalid_extra_page_price'], ['bleed_mm', readBleed, 'invalid_bleed_mm']]) {
+      if (!f[key]) continue;
+      const r = rd(f[key].value);
+      if (r.bad) bad.push({ el: f[key], code }); else body[key] = r.value;
+    }
+    if (f.min_pages || f.max_pages) {
+      const lo = readPageBound(box.querySelector('.bk-min').value), hi = readPageBound(box.querySelector('.bk-max').value);
+      if (!lo.bad && !hi.bad && lo.value !== null && hi.value !== null && hi.value < lo.value) bad.push({ el: box.querySelector('.bk-max'), code: 'invalid_page_range' });
+    }
+    if (ch.optionsDirty) {
+      body.options = [];
+      for (const row of box.querySelectorAll('.bk-opt')) {
+        const vEl = row.querySelector('.bk-vendor'), pEl = row.querySelector('.bk-plat');
+        if (!isInt(vEl.value.trim())) bad.push({ el: vEl, code: 'invalid_vendor_cost' });
+        if (!isInt(pEl.value.trim())) bad.push({ el: pEl, code: 'invalid_platform_price' });
+        body.options.push({ id: row.dataset.optionId, label: row.querySelector('.bk-label').value.trim(), vendor_cost: Number(vEl.value.trim()), platform_price: Number(pEl.value.trim()) });
+      }
+    }
+    return bad.length ? { bad } : { body };
+  }
+  function bulkRebase(box) { box.querySelectorAll('input').forEach(i => { i.dataset.orig = i.value.trim(); }); }
+  async function bulkSave() {
+    bulkClearErrors();
+    const boxes = bulkDirtyBoxes();
+    const jobs = [], problems = [];
+    for (const box of boxes) {
+      const r = bulkBody(box), prodName = (products.find(x => x.id === box.dataset.productId) || {}).name || '';
+      if (r.bad) problems.push(...r.bad.map(b => ({ ...b, prodName }))); else jobs.push({ box, body: r.body, prodName });
+    }
+    if (problems.length) {
+      problems.forEach(p => p.el.setAttribute('aria-invalid', 'true'));
+      $('bk-err').textContent = `「${problems[0].prodName}」${O.errorText({ code: problems[0].code })}`;
+      problems[0].el.focus();
+      return;
+    }
+    const save = $('bk-save'); save.disabled = true;
+    for (const j of jobs) {
+      const id = j.box.dataset.productId;
+      const r = await api(`/api/operator/products/${encodeURIComponent(id)}`, 'PUT', j.body);
+      if (!r.ok) {
+        if (r.status !== 401) $('bk-err').textContent = `「${j.prodName}」${O.errorText(r.data, r.status)}`;
+        bulkSync();
+        return;
+      }
+      const i = products.findIndex(x => x.id === id);
+      if (i >= 0 && r.data.product) products[i] = r.data.product;
+      bulkRebase(j.box);
+      bulkSync();
+    }
+    renderList();
+    say(true, '已儲存');
+    bulkSync();
+  }
+  function bulkOpen() {
+    if (formBox.innerHTML) { say(false, '請先關閉編輯表單'); return; }
+    const live = products.filter(p => p.active);
+    bulkBox.innerHTML = `<div class="bk-scroll">${live.length ? live.map(bulkProdHtml).join('') : '<div class="hint">沒有上架中的商品。</div>'}</div>
+      <div id="bk-err" class="err"></div>
+      <div class="bk-actions"><button id="bk-save" class="btn btn-accent" type="button" disabled>儲存</button><button id="bk-cancel" class="btn btn-outline" type="button">關閉批次編輯</button></div>`;
+    listBox.hidden = true; addBtn.hidden = true; bulkBtn.hidden = true;
+    $('bk-save').addEventListener('click', bulkSave);
+    $('bk-cancel').addEventListener('click', () => bulkClose(false));
+  }
+  function bulkClose(force) {
+    if (!force && bulkDirtyBoxes().length && !confirm('還有沒儲存的修改，確定要放棄嗎？')) return;
+    bulkBox.innerHTML = '';
+    listBox.hidden = false; addBtn.hidden = false; bulkBtn.hidden = false;
+  }
+  bulkBtn.addEventListener('click', bulkOpen);
+  bulkBox.addEventListener('input', e => {
+    const row = e.target.closest('.bk-opt');
+    if (row) {
+      const v = row.querySelector('.bk-vendor').value.trim(), p = row.querySelector('.bk-plat').value.trim();
+      row.querySelector('.bk-warn').innerHTML = v !== '' && p !== '' && Number(p) < Number(v) ? '<span class="chip-warn" data-warn="below-cost">平台價低於廠商成本</span>' : '';
+    }
+    e.target.removeAttribute('aria-invalid');
+    bulkSync();
+  });
 
   // ── image upload / remove ──────────────────────────────────────────────────
   function renderPreview(p) {
