@@ -2186,6 +2186,9 @@ span.pick-heart-btn { cursor: default; }
   transition: border-color var(--transition-fast);
 }
 .pv-list-row:hover { border-color: var(--ink-35); }
+/* the photo the preview pane / enlarged view is showing (js/app.js markCurrent): a box-shadow glow, so it adds to the
+   selected / picked borders instead of replacing them */
+.photo-card.is-current, .pv-list-row.is-current { box-shadow: 0 0 0 2px var(--accent), 0 0 18px 3px rgba(229, 164, 72, .55); }
 .pv-list-thumb {
   width: 48px;
   height: 48px;
