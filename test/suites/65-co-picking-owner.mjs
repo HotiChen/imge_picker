@@ -62,6 +62,14 @@ const rows = page => page.$$eval('#coList .co-item', els => els.map(e => ({
       });
       ok('390px: no horizontal page scroll, the panel sits inside the screen, buttons are touch-sized',
         lay.w === 390 && lay.sw <= 390 && lay.left >= 0 && lay.right <= 390 && lay.btn >= 40, JSON.stringify(lay));
+      await page.click('#coPanel .co-close');
+      const fl = await page.evaluate(() => {
+        const r = id => { const e = document.getElementById(id); const b = e && e.getBoundingClientRect(); return b && { t: b.top, b: b.bottom, l: b.left, r: b.right }; };
+        return { entry: r('coPickEntry'), bar: r('mobileActionBar'), guest: r('guestBar'), header: document.querySelector('header.header').getBoundingClientRect().bottom, vw: innerWidth, vh: innerHeight };
+      });
+      ok('the entry floats inside the screen and does not cover the bottom action bar',
+        fl.entry && fl.entry.r <= fl.vw && fl.entry.l >= 0 && fl.entry.b <= fl.bar.t + 0.5, JSON.stringify(fl));
+      ok('and it does not push the grid column down (#guestBar still right under the header)', Math.abs(fl.guest.t - fl.header) <= 1.5, JSON.stringify(fl));
       // the list now counts the invite as a pending code
       ok('the pending invite is mentioned (1 個邀請碼尚未使用)', /1/.test(await page.textContent('#coInviteInfo')) , await page.textContent('#coInviteInfo'));
       return out;
