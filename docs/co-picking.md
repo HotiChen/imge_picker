@@ -21,11 +21,10 @@ Tim's decisions, all agreed on 2026-10-11:
 - 重設主人 (reset seat) ends **all** collaborators at once.
 - Not in this build: a colour per person, notifications, collaborators inviting others, per-collaborator caps.
 
-## Proposed, waiting for Tim to confirm
+## Renewal and slots — decided 2026-10-11 ("全部開始")
 
-Asked on 2026-10-11: can another person be invited when one expires, and can the expired one ask to continue. The idea of the renewal
-request is Tim's; the rules below and the renewal routes / column (`renewal_requested_at`) are a proposal and stay out of batch 1 until he
-confirms them.
+Tim asked: can another person be invited when one expires, and can the expired one ask to continue. He confirmed the proposal below and
+asked to build everything. It is part of batch 1 (the `renewal_requested_at` column, the two renewal routes, `pending_renewals`).
 
 - **An expired or removed collaborator no longer counts toward the limit of 2**, so the owner can invite someone else at once (a new code).
   One counting rule everywhere: slots in use = **active collaborators + unspent, unexpired invites**; an invite or a renewal is refused when
