@@ -496,4 +496,33 @@ const fillJoin = async (page, code, name) => {
     { before: m.attach, initScript: initKey(''), contextOptions: MOBILE });
 }
 
+{
+  const m = world({ collaborators: [BOB({ expires_at: FUTURE(-H) })], decorateState: r => { r.can_request_renewal = false; } });
+  await suite('co-picking expired — the state says no renewal is possible (none asked, no cooldown): text only, no button',
+    url,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('#coCollabBanner', { timeout: 5000 });
+      ok('banner says 協作已到期, no 我要繼續', /協作已到期/.test(await bannerText(page)) && (await page.$('#coRenewBtn')) === null);
+      return out;
+    },
+    { before: m.attach, initScript: initKey('BOB-KEY') });
+}
+
+{
+  const m = world({ collaborators: [BOB()], decorateState: r => { r.can_edit = false; } });
+  await suite('co-picking collaborator — role collaborator but can_edit false: treated as read-only (no interactive hearts)',
+    url,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('.photo-card', { timeout: 5000 });
+      await page.waitForTimeout(300);
+      ok('no interactive hearts', (await heartBtns(page)) === 0);
+      return out;
+    },
+    { before: m.attach, initScript: initKey('BOB-KEY') });
+}
+
 }
