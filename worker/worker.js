@@ -1038,15 +1038,35 @@ const BLEED_MM_MAX = 10;
 // does not bring a leftover back). Its own hand-run migration
 // (2026-10-07-product-extra-page-price.sql), riding the same machinery.
 // albumExtraPagesCost below turns it into a line's extra.
+// platform_products.category: a short label grouping the catalogue ('婚紗相本',
+// '無框畫' …), a string of at most CATEGORY_MAX characters after trim, or NULL
+// ('' and only spaces are stored as NULL). Operator only, albums and prints
+// alike (a kind change keeps it). Its own hand-run migration
+// (2026-10-14-product-category.sql, which also backfills it from the
+// description's '【…›<category>】' header), riding the same machinery.
+const CATEGORY_MAX = 20;
 // every optional platform_products column a hand-run migration adds, in the
-// order a write judges them (min, max, bleed, then extra-page price)
-const PRODUCT_LATE_COLUMNS = [...PAGE_BOUNDS, 'bleed_mm', 'extra_page_price'];
+// order a write judges them (min, max, bleed, extra-page price, then category)
+const PRODUCT_LATE_COLUMNS = [...PAGE_BOUNDS, 'bleed_mm', 'extra_page_price', 'category'];
 const PAGES_UNAVAILABLE = {
   min_pages: { error: '最少頁數功能尚未啟用', code: 'min_pages_unavailable' },
   max_pages: { error: '最多頁數功能尚未啟用', code: 'max_pages_unavailable' },
   bleed_mm: { error: '出血設定功能尚未啟用', code: 'bleed_mm_unavailable' },
   extra_page_price: { error: '加頁價格功能尚未啟用', code: 'extra_page_price_unavailable' },
+  category: { error: '商品分類功能尚未啟用', code: 'category_unavailable' },
 };
+// The category an operator write names: {set: {category}} (empty when the
+// body leaves it out: the stored value stays; trimmed, '' = NULL) or
+// {bad: 'invalid_category'}.
+function categoryWrite(body) {
+  if (!hasField(body, 'category')) return { set: {} };
+  const v = body.category;
+  if (v === null) return { set: { category: null } };
+  if (typeof v !== 'string') return { bad: 'invalid_category' };
+  const t = v.trim();
+  if (charCount(t) > CATEGORY_MAX || PICK_KEY_CONTROL.test(t)) return { bad: 'invalid_category' };
+  return { set: { category: t || null } };
+}
 // The bleed an operator write names: {set: {bleed_mm}} (empty when the body
 // leaves it out: the stored value stays) or {bad: 'invalid_bleed_mm'}.
 function bleedWrite(body) {
@@ -1073,7 +1093,7 @@ function extraPagePriceWrite(body, kind, current) {
 // a platform product's page bound as every response shows it: albums only
 const albumOnly = (kind, v) => (kind === 'album' && v != null ? v : null);
 
-// Which late columns this database has: {min_pages, max_pages, bleed_mm, extra_page_price},
+// Which late columns this database has: {min_pages, max_pages, bleed_mm, extra_page_price, category},
 // each a boolean, by a query that names the column and reads no row.
 async function pageColumns(env) {
   const has = async col => {
@@ -1091,7 +1111,7 @@ async function pageColumns(env) {
 // the late columns for a SELECT on platform products aliased `alias`, NULL
 // for one this database does not have
 const pageSelect = (cols, alias = 'pp') => PRODUCT_LATE_COLUMNS.map(c => `${cols[c] ? `${alias}.${c}` : 'NULL'} AS ${c}`).join(', ');
-const ALL_PAGE_COLUMNS = { min_pages: true, max_pages: true, bleed_mm: true, extra_page_price: true };
+const ALL_PAGE_COLUMNS = { min_pages: true, max_pages: true, bleed_mm: true, extra_page_price: true, category: true };
 // `query(cols)` as if both columns are there (one round trip on a migrated
 // database); only when that fails on a missing column, probe which are and
 // run it again. Another missing column fails the retry too: never a looser
@@ -1447,6 +1467,8 @@ async function readGuestShop(env, photographerId) {
       bleed_mm: p.bleed_mm ?? null,
       // album only: NT$ per spread above min_pages; null = not priced
       extra_page_price: albumOnly(p.kind, p.extra_page_price),
+      // the operator's short label ('婚紗相本'); null = none
+      category: p.category ?? null,
       // the public image route (relative to the Worker), versioned by when
       // the operator last changed it
       image_url: p.has_image
@@ -3996,9 +4018,10 @@ export default {
       if (!isPlainObject(body)) return jsonErr('Invalid body');
 
       // POST /api/operator/products — {kind: print|album, name,
-      // description?, photo_count?, min_pages?, max_pages?, sort?, options:
-      // [{label, vendor_cost, platform_price}]}, ≥ 1 option. photo_count and
-      // the page bounds stick to albums only; max_pages ≥ min_pages.
+      // description?, photo_count?, min_pages?, max_pages?, bleed_mm?,
+      // extra_page_price?, category?, sort?, options: [{label, vendor_cost,
+      // platform_price}]}, ≥ 1 option. photo_count and the page bounds stick
+      // to albums only; max_pages ≥ min_pages; category any kind (≤ 20, '' = null).
       if (route === 'products') {
         const fields = productFields(body, false, PLATFORM_KINDS, false);
         if (fields.bad) return orderBad(fields.bad);
@@ -4008,12 +4031,14 @@ export default {
         if (bleed.bad) return orderBad(bleed.bad);
         const extra = extraPagePriceWrite(body, fields.set.kind, null);
         if (extra.bad) return orderBad(extra.bad);
+        const category = categoryWrite(body);
+        if (category.bad) return orderBad(category.bad);
         const opts = productOptions(body.options, new Set(), PLATFORM_MONEY);
         if (opts.bad) return orderBad(opts.bad);
         // a NULL bound for a column the database does not have is dropped,
         // so a product without one is made before its migration too; the
         // columns are probed only when the body names a bound or the bleed
-        const late = { ...bounds.set, ...bleed.set, ...extra.set };
+        const late = { ...bounds.set, ...bleed.set, ...extra.set, ...category.set };
         const fit = Object.keys(late).length ? pageBoundsFit(late, await pageColumns(env)) : { set: {} };
         if (fit.unavailable) return done(fit.unavailable, 500);
         const pageCols = Object.keys(fit.set);
@@ -4056,6 +4081,8 @@ export default {
       if (bleed.bad) return orderBad(bleed.bad);
       const extra = extraPagePriceWrite(body, kind, current);
       if (extra.bad) return orderBad(extra.bad);
+      const category = categoryWrite(body);
+      if (category.bad) return orderBad(category.bad);
       let opts = null;
       if (hasField(body, 'options')) {
         const { results } = await env.DB.prepare('SELECT id FROM platform_product_options WHERE platform_product_id = ?').bind(id).all();
@@ -4065,7 +4092,7 @@ export default {
       }
       // a number for a column this database does not have yet: 500, before
       // anything is written; a NULL for one is dropped (nothing to clear)
-      const fit = pageBoundsFit({ ...bounds.set, ...bleed.set, ...extra.set }, cols);
+      const fit = pageBoundsFit({ ...bounds.set, ...bleed.set, ...extra.set, ...category.set }, cols);
       if (fit.unavailable) return done(fit.unavailable, 500);
       if (kind !== 'album') fields.set.photo_count = null;
       await env.DB.batch(catalogueWrites(env, PLATFORM_TABLES, id, { ...fields.set, ...fit.set }, opts, now));
@@ -4251,7 +4278,7 @@ export default {
         if (!current) return jsonErr('Not found', 404);
         let statements;
         if (current.platform_product_id) {
-          if (['kind', 'name', 'description', 'photo_count', 'min_pages', 'max_pages', 'bleed_mm', 'extra_page_price'].some(k => hasField(body, k))) return orderBad('platform_managed');
+          if (['kind', 'name', 'description', 'photo_count', 'min_pages', 'max_pages', 'bleed_mm', 'extra_page_price', 'category'].some(k => hasField(body, k))) return orderBad('platform_managed');
           const fields = productFields(body, true);
           if (fields.bad) return orderBad(fields.bad);
           let opts = null;

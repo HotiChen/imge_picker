@@ -955,14 +955,15 @@ test('the migration carries the platform tables and link columns, is re-runnable
     db._db.prepare(`PRAGMA table_info(${t})`).all(),
     db._db.prepare(`PRAGMA index_list(${t})`).all().map(i => i.name).sort(),
   ]);
-  // platform_products.min_pages / max_pages / bleed_mm / extra_page_price come from their own later migrations on top
+  // platform_products.min_pages / max_pages / bleed_mm / extra_page_price / category come from their own later migrations on top
   const minPages = readFileSync(new URL('../migrations/2026-10-06-product-min-pages.sql', import.meta.url), 'utf8');
   const maxPages = readFileSync(new URL('../migrations/2026-10-06-product-max-pages.sql', import.meta.url), 'utf8');
   const bleed = readFileSync(new URL('../migrations/2026-10-07-product-bleed.sql', import.meta.url), 'utf8');
   const extraPage = readFileSync(new URL('../migrations/2026-10-07-product-extra-page-price.sql', import.meta.url), 'utf8');
+  const category = readFileSync(new URL('../migrations/2026-10-14-product-category.sql', import.meta.url), 'utf8');
   // and the S2 guest-ordering columns on orders / order_items (its studio_settings column is already in `deployed`)
   const guestOrders = readFileSync(new URL('../migrations/2026-10-09-guest-orders.sql', import.meta.url), 'utf8').replace(/ALTER TABLE studio_settings[^;]*;/, '');
-  assert.deepEqual(shape(fakeDB({ schema: deployed + '\n' + migration + '\n' + minPages + '\n' + maxPages + '\n' + bleed + '\n' + extraPage + '\n' + guestOrders })), shape(fakeDB({ schema: fresh })));
+  assert.deepEqual(shape(fakeDB({ schema: deployed + '\n' + migration + '\n' + minPages + '\n' + maxPages + '\n' + bleed + '\n' + extraPage + '\n' + category + '\n' + guestOrders })), shape(fakeDB({ schema: fresh })));
   const migrated = fakeDB({ schema: deployed + '\n' + migration });
   const cols = t => migrated._db.prepare(`PRAGMA table_info(${t})`).all().map(c => c.name);
   assert.ok(cols('products').includes('platform_product_id'));

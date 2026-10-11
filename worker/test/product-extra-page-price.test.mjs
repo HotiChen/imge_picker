@@ -13,7 +13,7 @@ import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 import { fakeDB } from './fakes.mjs';
 import { SECRET, MINE, THEIRS, setup, call, pick, save, claimed, rows, one, collectingCtx } from './pick-helpers.mjs';
-import { FRESH, NO_EXTRA, NO_BLEED, NO_PAGES, BLEED_SQL, MIN_SQL, MAX_SQL, EXTRA_SQL } from './page-schemas.mjs';
+import { FRESH, NO_EXTRA, NO_BLEED, NO_PAGES, BLEED_SQL, MIN_SQL, MAX_SQL, EXTRA_SQL, CATEGORY_SQL } from './page-schemas.mjs';
 
 const OP = 'operator-secret';
 const MONEY_MAX = 10_000_000;
@@ -72,8 +72,8 @@ test('migration: one ALTER adding extra_page_price INTEGER; schema.sql notes it;
   assert.ok(!cols(NO_EXTRA).includes('extra_page_price') && cols(NO_EXTRA).includes('bleed_mm'));
   assert.ok(!cols(NO_BLEED).includes('extra_page_price'));
   assert.ok(!cols(NO_PAGES).includes('extra_page_price'));
-  assert.deepEqual(shape(fakeDB({ schema: NO_EXTRA + '\n' + EXTRA_SQL })), shape(fakeDB()));
-  assert.deepEqual(shape(fakeDB({ schema: NO_PAGES + '\n' + MIN_SQL + '\n' + MAX_SQL + '\n' + BLEED_SQL + '\n' + EXTRA_SQL })), shape(fakeDB()));
+  assert.deepEqual(shape(fakeDB({ schema: NO_EXTRA + '\n' + EXTRA_SQL + '\n' + CATEGORY_SQL })), shape(fakeDB()));
+  assert.deepEqual(shape(fakeDB({ schema: NO_PAGES + '\n' + MIN_SQL + '\n' + MAX_SQL + '\n' + BLEED_SQL + '\n' + EXTRA_SQL + '\n' + CATEGORY_SQL })), shape(fakeDB()));
   const twice = fakeDB({ schema: NO_EXTRA + '\n' + EXTRA_SQL });
   assert.throws(() => twice._db.exec(EXTRA_SQL), /duplicate column/);
 });
@@ -192,7 +192,7 @@ test("photographer views and the guest shop carry the platform's live extra_page
   assert.equal(plainShop.extra_page_price, null);
   for (const p of shop) {
     assert.deepEqual(Object.keys(p).sort(),
-      ['bleed_mm', 'description', 'extra_page_price', 'id', 'image_url', 'kind', 'max_pages', 'min_pages', 'name', 'options', 'photo_count'].sort());
+      ['bleed_mm', 'category', 'description', 'extra_page_price', 'id', 'image_url', 'kind', 'max_pages', 'min_pages', 'name', 'options', 'photo_count'].sort());
     for (const o of p.options) assert.deepEqual(Object.keys(o).sort(), ['id', 'label', 'price']);
   }
   assert.doesNotMatch(JSON.stringify(shop), /cost|platform_price|vendor/);

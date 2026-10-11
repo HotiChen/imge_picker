@@ -470,7 +470,15 @@ CREATE TABLE IF NOT EXISTS platform_products (
   -- deployed database by
   --   ALTER TABLE platform_products ADD COLUMN extra_page_price INTEGER;
   -- (worker/migrations/2026-10-07-product-extra-page-price.sql, after the three above).
-  extra_page_price INTEGER
+  extra_page_price INTEGER,
+  -- a short label grouping the catalogue ('婚紗相本', '無框畫', '桌框' …), at
+  -- most 20 characters after trim; NULL = none ('' is stored as NULL). Albums
+  -- and prints alike; operator only; shown to photographers and guests.
+  -- Added to a deployed database by
+  --   ALTER TABLE platform_products ADD COLUMN category TEXT;
+  -- plus a backfill from the description's '【…›<category>】' header
+  -- (worker/migrations/2026-10-14-product-category.sql, after the four above).
+  category         TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_platform_products_sort ON platform_products(active, sort);
 
