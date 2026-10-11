@@ -958,7 +958,13 @@
                 return;
             }
             this.renderBanner();
+            this._syncCoPicking();
             await this.loadGrid();
+        },
+
+        // The owner's co-picking panel (js/co-picking-owner.js); it decides for itself whether it may exist.
+        _syncCoPicking() {
+            if (window.CoPickingOwner) window.CoPickingOwner.sync(this);
         },
 
         _applyState(data) {
@@ -1020,6 +1026,7 @@
 
         async afterClaim() {
             this.renderBanner();
+            this._syncCoPicking();
             await this.loadGrid();
         },
 

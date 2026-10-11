@@ -212,6 +212,23 @@ export function pickFakeWorker(opts = {}) {
     state.pickers.set(id, { id, name: opts.ownerName, key: opts.ownerKey || 'OWNER-KEY' });
     state.project.owner_picker_id = id;
   }
+  // Co-picking (docs/co-picking.md, worker.js): project_collaborators rows keyed by picker id
+  // {picker_id, invited_by, joined_at, expires_at, revoked_at, last_seen_at, renewal_requested_at (raw: a 'declined:<iso>' marker included)}
+  // and pick_invites rows {id, code, window_days, invited_by, created_at, expires_at, used_at, used_by}.
+  // opts.collaborators seeds members ({name, key, expires_at, joined_at, revoked_at, renewal_requested_at, last_seen_at});
+  // opts.coPicking === false = the migration has not run (every co-picking route answers 500 co_picking_unavailable).
+  state.collaborators = new Map();
+  state.invites = [];
+  (opts.collaborators || []).forEach((c, i) => {
+    const id = c.picker_id || `collab-${i + 1}`;
+    state.pickers.set(id, { id, name: c.name, key: c.key || `COLLAB-KEY-${i + 1}` });
+    state.collaborators.set(id, {
+      picker_id: id, invited_by: c.invited_by ?? state.project.owner_picker_id,
+      joined_at: c.joined_at || new Date(Date.UTC(2026, 9, 11, 2, i)).toISOString(),
+      expires_at: c.expires_at ?? null, revoked_at: c.revoked_at ?? null, last_seen_at: c.last_seen_at ?? null,
+      renewal_requested_at: c.renewal_requested_at ?? null,
+    });
+  });
   // product_interests rows (docs/guest-shop.md, product interest): {product_id, product_name, product_kind,
   // first_at, last_at, tap_count}; opts.interests seeds them
   state.interests = (opts.interests || []).map(x => ({ ...x }));
@@ -224,6 +241,32 @@ export function pickFakeWorker(opts = {}) {
   function liveToken() {
     return state.tokens.find(t => pickTokenStatusFake(t) === 'live') || null;
   }
+  // ── co-picking mirrors of worker.js (collaboratorStatus, renewalPending, collaboratorSlotsSql) ──
+  const nowMs = () => (opts.now ? opts.now() : Date.now());
+  const RENEWAL_DECLINED_FAKE = 'declined:';
+  const renewalPendingFake = v => (typeof v === 'string' && !v.startsWith(RENEWAL_DECLINED_FAKE) ? v : null);
+  const memberStatusFake = row => {
+    if (!row) return null;
+    const owner = state.project.owner_picker_id;
+    if (row.revoked_at || !owner || row.invited_by !== owner) return 'removed';
+    if (row.expires_at != null && !(row.expires_at > new Date(nowMs()).toISOString())) return 'expired';
+    return 'active';
+  };
+  const collaboratorViewFake = row => ({
+    picker_id: row.picker_id, name: state.pickers.get(row.picker_id)?.name ?? null, joined_at: row.joined_at,
+    expires_at: row.expires_at ?? null, revoked_at: row.revoked_at ?? null, status: memberStatusFake(row),
+    last_seen_at: row.last_seen_at ?? null, renewal_requested_at: renewalPendingFake(row.renewal_requested_at),
+  });
+  // active collaborators of the current owner + that owner's unspent, unexpired invites (except: a picker id left out)
+  const slotsInUseFake = except => {
+    const iso = new Date(nowMs()).toISOString();
+    const owner = state.project.owner_picker_id;
+    return [...state.collaborators.values()].filter(c => c.invited_by === owner && !c.revoked_at &&
+        (c.expires_at == null || c.expires_at > iso) && c.picker_id !== except).length +
+      state.invites.filter(i => i.invited_by === owner && !i.used_at && i.expires_at > iso).length;
+  };
+  const windowDaysFake = b => (b && typeof b === 'object' && !Array.isArray(b) && Object.prototype.hasOwnProperty.call(b, 'window_days') &&
+    (b.window_days === null || b.window_days === 1 || b.window_days === 7) ? b.window_days : undefined);
   const openRevisions = () => state.revisions.filter(r => !r.resolved_at);
   // a confirmation resolves every open request (worker.js resolveRevisionsIfConfirmed)
   const resolveOpen = at => openRevisions().forEach(r => { r.resolved_at = at; });
@@ -245,6 +288,8 @@ export function pickFakeWorker(opts = {}) {
       if (u.pathname === '/api/pick/state' && method === 'GET') {
         const picker = pickerKey ? findByKey(pickerKey) : null;
         const isOwner = !!picker && state.project.owner_picker_id === picker.id;
+        const memberRow = picker && !isOwner ? state.collaborators.get(picker.id) || null : null;
+        const seesNotes = isOwner || (!!memberRow && memberStatusFake(memberRow) === 'active');
         const ownerPicker = state.project.owner_picker_id ? state.pickers.get(state.project.owner_picker_id) : null;
         const subs = state.submissions;
         const scope = pickScopeFake(state.project);
@@ -273,13 +318,23 @@ export function pickFakeWorker(opts = {}) {
             ? openRevisions()[openRevisions().length - 1].message : null,
           owner: ownerPicker ? ownerPicker.name : null,
           is_owner: isOwner,
+          // docs/co-picking.md: role / can_edit / my_* (worker.js); a viewer-expired person asks for renewal
+          role: isOwner ? 'owner' : memberRow && memberStatusFake(memberRow) === 'active' ? 'collaborator' : 'viewer',
+          can_edit: isOwner || (!!memberRow && memberStatusFake(memberRow) === 'active'),
+          my_expires_at: memberRow && memberStatusFake(memberRow) === 'active' ? memberRow.expires_at ?? null : null,
+          my_status: isOwner ? null : memberStatusFake(memberRow),
+          can_request_renewal: memberStatusFake(memberRow) === 'expired' && !/^declined:/.test(memberRow.renewal_requested_at || ''),
+          renewal_requested: memberStatusFake(memberRow) === 'expired' && !!renewalPendingFake(memberRow.renewal_requested_at),
+          renewal_declined_until: null,
           phase: state.project.phase,
           submitted_at: subs.length ? subs[subs.length - 1].created_at : null,
           // notes are the owner's own words to the photographer — a viewer
           // gets {photo_key, rating} only (docs/guest-picking.md)
           selections: Array.from(state.selections.entries())
-            .map(([photo_key, s]) => isOwner
-              ? { photo_key, rating: s.rating, note: s.note, marks: opts.marksUnavailable ? null : (s.marks || null) }
+            .map(([photo_key, s]) => seesNotes
+              ? { photo_key, rating: s.rating, note: s.note, marks: opts.marksUnavailable ? null : (s.marks || null),
+                  by: state.pickers.has(s.updated_by) ? { id: s.updated_by, name: state.pickers.get(s.updated_by).name,
+                    role: s.updated_by === state.project.owner_picker_id ? 'owner' : state.collaborators.has(s.updated_by) ? 'collaborator' : 'other' } : null }
               : { photo_key, rating: s.rating }),
         };
         if (isOwner) resp.modified_after_submit = state.project.modified_after_submit;
@@ -308,6 +363,121 @@ export function pickFakeWorker(opts = {}) {
         if (opts.shopUnavailable) return send({ error: '商品資訊暫時無法顯示', code: 'shop_unavailable' }, 500);
         // `ordering` (docs/guest-shop.md, S2): null = switch off / migration not run; opts.ordering is the object the Worker would send
         return send({ products: opts.shopProducts || [], ordering: opts.ordering ?? null }, 200);
+      }
+
+      // ── Co-picking routes (worker.js "Co-picking", docs/co-picking.md). Order of checks as the Worker: link (401: no
+      // token / archived) -> path (404) -> method (405 + Allow) -> migration (500 co_picking_unavailable) -> who is asking
+      // (403) -> body -> the write. Every answer Cache-Control: private, no-store.
+      const coPath = u.pathname.replace(/^\/api\/pick\//, '').split('/');
+      if (u.pathname.startsWith('/api/pick/') && (['invites', 'join', 'renewal'].includes(coPath[0]) || coPath[0] === 'collaborators')) {
+        const send = (data, status = 200, extra) => route.fulfill({ status, contentType: 'application/json',
+          headers: { 'Cache-Control': 'private, no-store', 'Vary': 'X-Share-Token', ...(extra || {}) }, body: JSON.stringify(data) });
+        if (!shareTok || state.project.archived_at) return json({ error: 'Unauthorized' }, 401);
+        const sub = coPath.slice(1);
+        let allow;
+        if (coPath[0] !== 'collaborators') allow = ['POST'];
+        else if (sub.length === 0) allow = ['GET'];
+        else if (sub.length === 1) allow = ['PATCH', 'DELETE'];
+        else if (sub.length === 2 && sub[1] === 'decision') allow = ['POST'];
+        else return send({ error: 'Not found', code: 'not_found' }, 404);
+        if (!allow.includes(method)) return send({ error: 'Method not allowed' }, 405, { Allow: allow.join(', ') });
+        if (opts.coPicking === false) return send({ error: '協作者功能尚未啟用', code: 'co_picking_unavailable' }, 500);
+        const picker = pickerKey ? findByKey(pickerKey) : null;
+        const ownerId = state.project.owner_picker_id;
+        const isOwner = !!picker && ownerId === picker.id;
+        const iso = new Date(nowMs()).toISOString();
+        const openPhase = ['picking', 'submitted'].includes(state.project.phase);
+        const retouching = () => send({ error: '攝影師已開始修圖，無法再修改或送出', code: 'retouching' }, 409);
+        const notOwner = () => send({ error: '只有挑選人可以管理協作者', code: 'not_owner' }, 403);
+        const invalidWindow = () => send({ error: '期限只能是 1 天、7 天或到專案結束', code: 'invalid_window' }, 400);
+        const limitReached = () => send({ error: '協作者最多 2 位（含尚未使用的邀請碼）', code: 'collaborator_limit', max: 2 }, 409);
+        const periodEnd = days => (days == null ? null : new Date(nowMs() + days * 86400000).toISOString());
+
+        if (coPath[0] === 'invites') {
+          if (!isOwner) return notOwner();
+          if (!openPhase) return retouching();
+          const days = windowDaysFake(body);
+          if (days === undefined) return invalidWindow();
+          if (slotsInUseFake() >= 2) return limitReached();
+          const code = String(Math.floor(Math.random() * 1e8)).padStart(8, '0');
+          const expiresAt = new Date(nowMs() + 3600000).toISOString();
+          state.invites.push({ id: 'inv-' + (state.invites.length + 1), code, window_days: days, invited_by: picker.id, created_at: iso, expires_at: expiresAt, used_at: null, used_by: null });
+          return send({ code, expires_at: expiresAt, window_days: days });
+        }
+
+        if (coPath[0] === 'join') {
+          if (!ownerId) return send({ error: '這個連結還沒有挑選人，無法加入', code: 'owner_missing' }, 409);
+          if (!openPhase) return retouching();
+          if (!body || typeof body !== 'object' || Array.isArray(body)) return send({ error: 'Invalid body', code: 'invalid_body' }, 400);
+          const name = typeof body.name === 'string' ? body.name.trim() : '';
+          if (!name || [...name].length > 50) return send({ error: '請輸入 1–50 字的名字', code: 'invalid_name' }, 400);
+          state.joinFailures = state.joinFailures || [];
+          const recent = state.joinFailures.filter(t => t > nowMs() - 900000);
+          if (recent.length >= 10) return send({ error: '嘗試次數太多，請 15 分鐘後再試', code: 'too_many_attempts' }, 429);
+          const inv = typeof body.code === 'string' && /^\d{8}$/.test(body.code)
+            ? state.invites.find(i => i.code === body.code && !i.used_at && i.expires_at > iso && i.invited_by === ownerId) : null;
+          if (!inv) { state.joinFailures.push(nowMs()); return send({ error: '邀請碼不正確或已失效', code: 'invalid_code' }, 400); }
+          const id = 'collab-' + (state.collaborators.size + 1);
+          const key = 'KEY-' + id;
+          state.pickers.set(id, { id, name, key });
+          inv.used_at = iso; inv.used_by = id;
+          const expiresAt = periodEnd(inv.window_days);
+          state.collaborators.set(id, { picker_id: id, invited_by: inv.invited_by, joined_at: iso, expires_at: expiresAt, revoked_at: null, last_seen_at: null, renewal_requested_at: null });
+          return send({ picker_key: key, picker_id: id, name, role: 'collaborator', expires_at: expiresAt });
+        }
+
+        if (coPath[0] === 'renewal') {
+          const row = picker ? state.collaborators.get(picker.id) : null;
+          const notAllowed = () => send({ error: '目前不能要求續期', code: 'renewal_not_allowed' }, 403);
+          if (!picker || memberStatusFake(row) !== 'expired') return notAllowed();
+          const cur = row.renewal_requested_at;
+          if (typeof cur === 'string' && cur.startsWith('declined:') && Date.parse(cur.slice(9)) + 86400000 > nowMs()) {
+            return send({ error: '主人剛拒絕續期，請稍後再試', code: 'renewal_declined', until: new Date(Date.parse(cur.slice(9)) + 86400000).toISOString() }, 409);
+          }
+          if (!renewalPendingFake(cur)) row.renewal_requested_at = iso;
+          return send({ ok: true, renewal_requested_at: renewalPendingFake(row.renewal_requested_at) });
+        }
+
+        // the rest: the owner's list and their changes to one person
+        if (!isOwner) return notOwner();
+        if (sub.length === 0) {
+          const people = [...state.collaborators.values()].filter(c => c.invited_by === picker.id).map(collaboratorViewFake);
+          const live = state.invites.filter(i => i.invited_by === picker.id && !i.used_at && i.expires_at > iso);
+          return send({
+            collaborators: people,
+            invites: { pending: live.length, soonest_expires_at: live.length ? live.map(i => i.expires_at).sort()[0] : null },
+            pending_renewals: people.filter(c => c.status === 'expired' && c.renewal_requested_at).length,
+            max: 2,
+          });
+        }
+        const targetId = sub[0];
+        const deciding = sub.length === 2;
+        let end = null, slots = false, apply;
+        if (method === 'DELETE') {
+          apply = r => { r.revoked_at = r.revoked_at || iso; r.renewal_requested_at = null; };
+        } else if (!deciding) {
+          const days = windowDaysFake(body);
+          if (days === undefined) return invalidWindow();
+          end = periodEnd(days); slots = true;
+          apply = r => { r.expires_at = end; r.renewal_requested_at = null; };
+        } else {
+          if (!body || typeof body !== 'object' || Array.isArray(body) || typeof body.approve !== 'boolean') return send({ error: 'Invalid body', code: 'invalid_body' }, 400);
+          if (body.approve) {
+            const days = windowDaysFake(body);
+            if (days === undefined) return invalidWindow();
+            end = periodEnd(days); slots = true;
+            apply = r => { r.expires_at = end; r.renewal_requested_at = null; };
+          } else apply = r => { r.renewal_requested_at = 'declined:' + iso; };
+        }
+        const row = state.collaborators.get(targetId);
+        const mine = row && row.invited_by === picker.id ? row : null;
+        if (!mine) return send({ error: 'Not found', code: 'not_found' }, 404);
+        if (method !== 'DELETE' && mine.revoked_at) return send({ error: '這位協作者已被移除', code: 'collaborator_removed' }, 409);
+        if (deciding && !renewalPendingFake(mine.renewal_requested_at)) return send({ error: '沒有待處理的續期要求', code: 'no_renewal_request' }, 409);
+        if (slots && slotsInUseFake(targetId) >= 2) return limitReached();
+        apply(mine);
+        const view = collaboratorViewFake(mine);
+        return send(method === 'DELETE' ? { ok: true, collaborator: view } : { collaborator: view });
       }
 
       if (u.pathname === '/api/pick/claim' && method === 'POST') {
