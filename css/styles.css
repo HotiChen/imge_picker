@@ -2843,3 +2843,30 @@ html.fg-open, html.fg-open body { overflow: hidden; scrollbar-gutter: stable; }
   html:not(.guest-mode) .phone-menu .btn { min-height: 44px; margin-top: 8px; justify-content: center; }
   html:not(.guest-mode) body:not(:has(#studio-logout)) #phoneLogoutBtn { display: none; }
 }
+
+/* Co-picking, photographer review view (js/project-view.js): who picked each photo.
+   The chip sits under the file name / in the list row / beside the modal ♥, never over the
+   photo, so it cannot cover ♥ 💬 📍. Owner = accent, collaborator = cool blue, other = muted. */
+.pv-by {
+  display: inline-flex; align-items: center; gap: 4px; max-width: 100%; min-width: 0;
+  margin-top: 4px; padding: 1px 8px 1px 2px; border-radius: 999px; font-size: 11px; line-height: 18px;
+  border: 1px solid var(--ink-35); color: var(--ink);
+}
+.pv-by-ini { flex: 0 0 18px; width: 18px; height: 18px; border-radius: 50%; text-align: center; font-weight: 600; background: var(--ink-35); color: var(--bg); }
+.pv-by-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; unicode-bidi: isolate; }
+.pv-by-owner { background: rgba(229, 164, 72, .18); border-color: var(--accent); }
+.pv-by-owner .pv-by-ini { background: var(--accent); }
+.pv-by-collaborator { background: rgba(90, 160, 230, .18); border-color: #5aa0e6; }
+.pv-by-collaborator .pv-by-ini { background: #5aa0e6; }
+.pv-by-other { background: transparent; border-style: dashed; color: var(--ink-55); }
+.pv-list-by { flex: 0 1 110px; min-width: 0; display: flex; }
+.pv-list-by .pv-by { margin-top: 0; }
+#modalPhotoRating .pv-by { margin: 0 0 0 8px; max-width: 140px; }
+.pv-collaborators { padding: 8px 16px; font-size: 12px; }
+.pv-collaborators h3 { font-size: 13px; margin: 0 0 6px; }
+.pv-collaborators ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.pv-co-row { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: baseline; }
+.pv-co-name { font-weight: 600; min-width: 0; overflow-wrap: anywhere; unicode-bidi: isolate; }
+.pv-co-status { padding: 0 6px; border: 1px solid var(--ink-35); border-radius: 4px; }
+.pv-co-active { border-color: #5aa0e6; }
+.pv-co-expired, .pv-co-removed, .pv-co-until, .pv-co-joined { color: var(--ink-55); }
