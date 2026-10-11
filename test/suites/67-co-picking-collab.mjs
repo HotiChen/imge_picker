@@ -202,8 +202,12 @@ const fillJoin = async (page, code, name) => {
       const out = [];
       const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
       await page.waitForSelector('.photo-card button.pick-heart-btn', { timeout: 5000 });
-      await page.waitForSelector('#coCollabBanner', { timeout: 3000 });
-      ok('banner: 你是協作者，到期 不限', (await bannerText(page)).trim() === '你是協作者，到期 不限', await bannerText(page));
+      // 390px: the one-line chip in the header row replaces the banner row (suite 71 covers the chip); the sentence stays in its title
+      await page.waitForSelector('#coCollabChip', { timeout: 3000 });
+      const chip = await page.evaluate(() => { const c = document.getElementById('coCollabChip'); const b = document.getElementById('coCollabBanner');
+        return { text: c.textContent.trim(), title: c.title, bannerShown: !!b && getComputedStyle(b).display !== 'none' }; });
+      ok('chip: 協作者 · 到期不限, its title keeps 你是協作者，到期 不限', chip.text === '協作者 · 到期不限' && chip.title === '你是協作者，到期 不限', JSON.stringify(chip));
+      ok('the banner row takes no space on a phone', chip.bannerShown === false, JSON.stringify(chip));
       ok('no 完成提交 button in the DOM', (await page.$('#pickSubmitBtn')) === null);
       ok('no owner panel / entry / invite UI', (await page.$('#coPickEntry')) === null && (await page.$('#coPanel')) === null && (await page.$('#coPickBar')) === null);
       ok('no "你是 Lia 嗎" reset hint, no 我有邀請碼', (await page.$('#coJoinOpen')) === null && !/你是 Lia/.test(await page.evaluate(() => document.body.innerText)));
