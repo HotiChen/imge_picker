@@ -5,6 +5,18 @@
 .co-collab-banner .co-btn { min-height: 40px; padding: 0 14px; }
 .co-collab-err { color: #ff8d8d; font-size: 12px; }
 
+/* Phone (<= 600px): the active collaborator's info is a chip in the studio-name row of the header, not its own banner row
+   (more room for the thumbnails). Desktop: no chip, the banner is as before. Expired / removed / join keep their banner. */
+.co-collab-chip { display: none; }
+@media (max-width: 600px) {
+  html body #coCollabBanner[data-mode="collab"] { display: none; }
+  .header-left .co-collab-chip {
+    display: block; flex: 0 1 auto; min-width: 0; margin-left: auto; padding: 2px 8px; border-radius: 999px;
+    font-size: 11px; line-height: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    color: #5aa0e6; background: rgba(90, 160, 230, .18); border: 1px solid #5aa0e6;
+  }
+}
+
 #coJoinSheet { position: fixed; inset: 0; z-index: 2100; display: flex; align-items: flex-end; justify-content: center; box-sizing: border-box; }
 #coJoinSheet[hidden] { display: none !important; }
 #coJoinSheet * { box-sizing: border-box; }

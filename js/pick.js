@@ -31,6 +31,15 @@
     // what the server sends is canonical already; this only keeps a bad row
     // from ever reaching the canvas
     const cleanMarks = arr => PinLayer.clean(arr, PIN_MAX);
+    // Co-picking `by` on a selection (docs/co-picking.md): {id, name, role: owner | collaborator | other} or null; only the
+    // owner and active collaborators are sent it. Anything else is dropped; a role we do not know counts as 'other', and
+    // 'other' carries no name (the page says 先前的選片人 and nothing more).
+    const cleanBy = by => {
+        if (!by || typeof by !== 'object') return null;
+        const role = by.role === 'owner' || by.role === 'collaborator' ? by.role : 'other';
+        const name = role !== 'other' && typeof by.name === 'string' && by.name.trim() ? by.name : null;
+        return { role, name };
+    };
 
     const PickController = {
         active: !!token,
@@ -620,8 +629,11 @@
                 if (prevSel && Array.isArray(prevSel.marks) && prevSel.marks.length) this._marksClear.add(photoKey);
             }
             this._pendingUpsert.set(photoKey, item);
-            this.selections.set(photoKey, { rating, note: note || '', marks: stored });
+            // this person wrote the row last: until the next state read says it (the owner's name is known, a collaborator's own is not)
+            this.selections.set(photoKey, { rating, note: note || '', marks: stored,
+                by: rating > 0 ? { role: this.isOwner ? 'owner' : 'collaborator', name: this.isOwner ? (this.ownerName || null) : null, self: true } : null });
             this.renderCounter();
+            if (this.app) this.app.syncPickedBy();
             // 'all' shows the current folder regardless of what is picked, so
             // it never needs a repaint here; 已選/未選 depend on the rating
             // that just changed, both in and out of the current folder.
@@ -1014,7 +1026,7 @@
                 if (this._pendingUpsert.has(key) || this._pendingDelete.has(key)) continue;
                 const s = server ? server.get(key) : null;
                 if (server) {
-                    if (s) this.selections.set(key, { rating: s.rating || 0, note: s.note || '', marks: (s.rating || 0) > 0 ? cleanMarks(s.marks) : [] });
+                    if (s) this.selections.set(key, { rating: s.rating || 0, note: s.note || '', marks: (s.rating || 0) > 0 ? cleanMarks(s.marks) : [], by: (s.rating || 0) > 0 ? cleanBy(s.by) : null });
                     else this.selections.delete(key);
                 } else {
                     const prev = prevSnapshot.get(key);
@@ -1061,6 +1073,7 @@
                     rating: s.rating || 0, note: s.note || '',
                     // only the seat owner and collaborators are sent pins; a viewer has none
                     marks: this.isPicker() && (s.rating || 0) > 0 ? cleanMarks(s.marks) : [],
+                    by: this.isPicker() && (s.rating || 0) > 0 ? cleanBy(s.by) : null,
                 }])
             );
             this.studio = data.studio || null;
@@ -1128,6 +1141,19 @@
             this._renderGrid();
             this.app.updateStats();
             this.renderCounter();
+            this.app.syncPickedBy();
+        },
+
+        // 「協作者 Mia 選的」 for the preview pane and the modal: who hearted this photo, or null (no heart, no `by`, not a
+        // picker, or the delivery gallery). The name is a person's input: the caller puts it in with textContent.
+        pickedBy(photoKey) {
+            if (!this.active || !this.isPicker() || this.isGallery()) return null;
+            const s = this.selections.get(photoKey);
+            if (!s || !(s.rating > 0) || !s.by) return null;
+            const { role, name } = s.by;
+            if (role === 'other') return { role, text: '先前的選片人 選的' };
+            const who = role === 'owner' ? '主人' : '協作者';
+            return { role, text: name ? `${who} ${name} 選的` : (s.by.self ? `${who}（你）選的` : `${who} 選的`) };
         },
 
         // Rebuilds the grid so every card is recreated with the current

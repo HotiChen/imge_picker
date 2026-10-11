@@ -86,14 +86,35 @@
         if (b) b.remove();
     }
 
+    // A phone's active collaborator gets a compact chip in the header row of the studio name (css hides it above 600px, and
+    // hides the full banner row below it): 協作者 · 到期 10/18. The full sentence stays in the title / aria-label.
+    // Only for the active state; every actionable state keeps its banner.
+    function syncChip(mode, st, full) {
+        let chip = document.getElementById('coCollabChip');
+        if (mode !== 'collab') { if (chip) chip.remove(); return; }
+        if (!chip) {
+            const host = document.querySelector('.header-left');
+            if (!host) return;
+            chip = el('span', 'co-collab-chip');
+            chip.id = 'coCollabChip';
+            const name = host.querySelector('.logo-name');
+            if (name) name.after(chip); else host.append(chip);
+        }
+        const day = st.expiresAt && window.Util ? Util.fmtDate(st.expiresAt, 'md') : '';
+        chip.textContent = st.expiresAt ? `協作者 · 到期 ${day}` : '協作者 · 到期不限';
+        chip.title = full;
+        chip.setAttribute('aria-label', full);
+    }
+
     function render() {
         const mode = modeOf(ctrl);
         const st = ctrl && ctrl.coState;
-        if (!mode) { removeBanner(); closeSheet(); stopPoll(); return; }
+        if (!mode) { removeBanner(); syncChip(null); closeSheet(); stopPoll(); return; }
         const b = ensureBanner();
         if (!b) return;
         b.replaceChildren();
         b.dataset.mode = mode;
+        if (mode !== 'collab') syncChip(null);
         const line = txt => b.append(el('span', 'pick-banner-line', txt));
         if (mode === 'join') {
             line('受邀一起選片？');
@@ -101,7 +122,9 @@
         } else {
             closeSheet();
             if (mode === 'collab') {
-                line(st.expiresAt ? `你是協作者，到期 ${fmt(st.expiresAt)}` : '你是協作者，到期 不限');
+                const full = st.expiresAt ? `你是協作者，到期 ${fmt(st.expiresAt)}` : '你是協作者，到期 不限';
+                line(full);
+                syncChip(mode, st, full);
             } else if (mode === 'removed') {
                 line('你已不是協作者，目前只能瀏覽');
             } else {

@@ -1118,6 +1118,8 @@ class App {
         }
         const hintEl = document.getElementById('previewStarsHint');
         if (hintEl) hintEl.hidden = projectMode;
+        this._previewPhotoId = photo.id;
+        this.syncPickedBy();
         // Delivery gallery: nothing to rate.
         const ratingSection = document.getElementById('previewRatingSection');
         if (ratingSection) ratingSection.hidden = pickMode && PickController.isGallery();
@@ -1135,6 +1137,31 @@ class App {
                 if (idx >= 0) this.openModal(idx);
             };
         }
+    }
+
+    // Guest pick page, co-picking: 「協作者 Mia 選的」 under the preview ♥ and beside the modal ♥. Shown only for a hearted
+    // photo whose `by` the server sent (owner / collaborator views; a viewer never gets one). The name is a person's
+    // input: textContent only. Called whenever the shown photo or the selections change.
+    syncPickedBy() {
+        const pc = window.PickController;
+        const line = (el, id, cls) => {
+            const info = pc && id ? pc.pickedBy(id) : null;
+            if (!el) return;
+            if (!info) { el.hidden = true; el.textContent = ''; return; }
+            el.className = `${cls} pick-by pick-by-${info.role}`;
+            el.dataset.role = info.role;
+            el.textContent = info.text;
+            el.hidden = false;
+        };
+        line(document.getElementById('previewPickedBy'), this._previewPhotoId, 'preview-picked-by');
+        const modalOpen = document.getElementById('photoModal')?.classList.contains('active');
+        const mpr = document.getElementById('modalPhotoRating');
+        let m = document.getElementById('modalPickedBy');
+        const cur = this.filteredPhotos[this.currentPhotoIndex];
+        const info = modalOpen && mpr && pc && cur ? pc.pickedBy(cur.id) : null;
+        if (!info) { m?.remove(); return; }
+        if (!m) { m = document.createElement('span'); m.id = 'modalPickedBy'; mpr.appendChild(m); }
+        line(m, cur.id, 'modal-picked-by');
     }
 
     async openModal(index) {
@@ -1180,6 +1207,7 @@ class App {
         document.querySelector('.canvas-container')?.classList.toggle(
             'pick-picked', (pickMode || projectMode) && (photo.rating || 0) > 0);
 
+        this.syncPickedBy();
         this.updateModalNavigation();
         this.schedulePreload(index);
 
