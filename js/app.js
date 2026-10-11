@@ -797,6 +797,20 @@ class App {
             frag.appendChild(this.createPhotoCard(photo, index));
         });
         grid.appendChild(frag);
+        this.markCurrent(this._currentPhotoId);
+    }
+
+    // The photo the preview pane / the enlarged view is showing glows in the grid or list behind it (.is-current), so the
+    // arrows and the hover always show where you are. `scroll` brings it into view (the viewer's own navigation); the
+    // mark is put back after every re-render of the grid or list.
+    markCurrent(photoId, scroll) {
+        this._currentPhotoId = photoId || null;
+        document.querySelectorAll('.is-current').forEach(e => e.classList.remove('is-current'));
+        if (!photoId) return;
+        const el = document.querySelector(`.photo-card[data-photo-id="${CSS.escape(photoId)}"], .pv-list-row[data-photo-id="${CSS.escape(photoId)}"]`);
+        if (!el) return;
+        el.classList.add('is-current');
+        if (scroll) el.scrollIntoView({ block: 'nearest', inline: 'nearest' });
     }
 
     createPhotoCard(photo, index) {
@@ -1029,6 +1043,7 @@ class App {
 
         empty.style.display = 'none';
         content.style.display = 'flex';
+        this.markCurrent(photo.id);
 
         const img = document.getElementById('previewImg');
         if (img) img.src = driveManager.getImageUrl(photo, driveManager.previewWidth());
@@ -1083,6 +1098,7 @@ class App {
         const photo = this.filteredPhotos[index];
 
         this.updatePreviewPane(photo);
+        this.markCurrent(photo.id, true);
 
         document.getElementById('photoModal').classList.add('active');
         const nameEl = document.getElementById('modalPhotoName');

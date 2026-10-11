@@ -419,6 +419,7 @@
             const frag = document.createDocumentFragment();
             photos.forEach((photo, index) => frag.appendChild(this._createListRow(photo, index)));
             grid.appendChild(frag);
+            this.app.markCurrent(this.app._currentPhotoId);
         },
 
         // One row: small thumbnail, filename, note, updated time. Clicking
@@ -434,6 +435,11 @@
                 <span class="pv-list-note">${escHtml(photo.note || '')}</span>
                 <span class="pv-list-time">${escHtml(this._fmtTime(photo.updatedAt))}</span>
             `;
+            // like a grid card: hovering a row shows it in the preview pane (and so makes it the current one)
+            row.addEventListener('mouseenter', () => {
+                clearTimeout(this.app._previewTimer);
+                this.app._previewTimer = setTimeout(() => this.app.updatePreviewPane(photo), 120);
+            });
             row.addEventListener('click', () => this.app.openModal(index));
             return row;
         },
