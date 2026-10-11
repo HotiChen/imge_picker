@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { webcrypto } from 'node:crypto';
-import { SECRET, call, createProject, claim, sha256Hex } from './pick-helpers.mjs';
+import { SECRET, INVITE_SECRET, call, createProject, claim, sha256Hex } from './pick-helpers.mjs';
 import {
   setup, pick, claimed, one, rows, invite, join, addCollaborator, withCollaborator, state, member,
   ago, later, HOUR, DAY, beforeMigration, raceBeforeStatement,
@@ -32,7 +32,8 @@ test('invite: the owner gets an 8-digit code valid one hour, shown once, stored 
   assert.equal(row.invited_by, p.pickerId);
   assert.equal(row.window_days, 7);
   assert.equal(row.used_at, null);
-  assert.equal(row.code_hash, await hmacHex(SECRET, `${p.project.id}:${json.code}`));
+  assert.equal(row.code_hash, await hmacHex(INVITE_SECRET, `${p.project.id}:${json.code}`));
+  assert.notEqual(row.code_hash, await hmacHex(SECRET, `${p.project.id}:${json.code}`), 'not keyed with PHOTOGRAPHER_TOKEN');
   // the code is in no column of any table
   const dump = JSON.stringify(rows(env, 'SELECT * FROM pick_invites'));
   assert.ok(!dump.includes(json.code), 'the code is never stored');
@@ -286,7 +287,7 @@ test('join: a code from project A does nothing on project B\'s link (the HMAC is
   assert.equal(r.json.code, 'invalid_code');
   assert.equal(one(env, 'SELECT used_at FROM pick_invites').used_at, null);
   // the same code value stored for B's project would hash differently
-  assert.notEqual(await hmacHex(SECRET, `${a.project.id}:${inv.json.code}`), await hmacHex(SECRET, `${b.project.id}:${inv.json.code}`));
+  assert.notEqual(await hmacHex(INVITE_SECRET, `${a.project.id}:${inv.json.code}`), await hmacHex(INVITE_SECRET, `${b.project.id}:${inv.json.code}`));
   // still good on A
   assert.equal((await join(env, a.token, inv.json.code)).res.status, 200);
 });
@@ -354,11 +355,12 @@ test('join limit: 5 failures from one network in 15 minutes → 429 too_many_att
   assert.equal((await join(env, q.token, invQ.json.code, 'X', { ip: '2001:db8:1:3::9' })).res.status, 200);
 });
 
-test('join limit: 10 failures per project in 15 minutes (distributed guessing) → 429 for every network', async () => {
+test('join limit: 30 failures per project in 15 minutes (distributed guessing) → 429 for every network', async () => {
   const env = setup();
   const p = await claimed(env);
   const inv = await invite(env, p.token, p.key);
-  for (let i = 0; i < 10; i++) assert.equal((await join(env, p.token, '00000000', 'X', { ip: `192.0.2.${i + 1}` })).res.status, 400);
+  // every one of the 30 is still looked at (400), from 30 networks
+  for (let i = 0; i < 30; i++) assert.equal((await join(env, p.token, '00000000', 'X', { ip: `192.0.2.${i + 1}` })).res.status, 400, `attempt ${i + 1}`);
   const r = await join(env, p.token, inv.json.code, 'X', { ip: '198.51.100.77' });
   assert.equal(r.res.status, 429);
   assert.equal(one(env, 'SELECT used_at FROM pick_invites').used_at, null);
@@ -429,6 +431,33 @@ test('before the migration: the state reads, the owner saves and submits as befo
   assert.equal(sub.status, 200);
   const detail = await (await call(env, `/api/admin/projects/${p.project.id}`, { token: SECRET })).json();
   assert.deepEqual(detail.collaborators, []);
+});
+
+test('PICK_INVITE_SECRET missing or under 32 characters: every co-picking route answers 500 co_picking_unavailable; the rest works', async () => {
+  for (const secret of [undefined, '', 'x'.repeat(31)]) {
+    const env = setup({ PICK_INVITE_SECRET: secret });
+    const p = await claimed(env);
+    for (const [method, route, body, key] of [
+      ['POST', 'invites', { window_days: 7 }, p.key],
+      ['POST', 'join', { code: '12345678', name: 'B' }, undefined],
+      ['GET', 'collaborators', undefined, p.key],
+      ['PATCH', 'collaborators/x', { window_days: 1 }, p.key],
+      ['DELETE', 'collaborators/x', undefined, p.key],
+      ['POST', 'collaborators/x/decision', { approve: false }, p.key],
+      ['POST', 'renewal', {}, p.key],
+    ]) {
+      const res = await pick(env, method, route, p.token, { key, body });
+      assert.equal(res.status, 500, `${JSON.stringify(secret)} ${method} ${route}`);
+      assert.equal((await res.json()).code, 'co_picking_unavailable');
+    }
+    assert.equal(one(env, 'SELECT COUNT(*) AS n FROM pick_invites').n, 0);
+    assert.equal((await pick(env, 'PUT', 'selections', p.token, { key: p.key, body: { upsert: [{ photo_key: '20260819/a.jpg', rating: 1 }] } })).status, 200);
+    assert.equal((await state(env, p.token, p.key)).role, 'owner');
+  }
+  // exactly 32 is enough; PHOTOGRAPHER_TOKEN alone is not
+  const ok = setup({ PICK_INVITE_SECRET: 'y'.repeat(32) });
+  const q = await claimed(ok);
+  assert.equal((await invite(ok, q.token, q.key)).res.status, 200);
 });
 
 test('the migration file creates the same three tables as schema.sql, and runs twice', async () => {

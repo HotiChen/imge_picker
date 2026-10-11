@@ -50,7 +50,7 @@ A membership is valid only while `invited_by = projects.owner_picker_id`: when t
 CREATE TABLE IF NOT EXISTS pick_invites (
   id         TEXT PRIMARY KEY,
   project_id TEXT NOT NULL,
-  code_hash  TEXT NOT NULL,          -- HMAC-SHA256(key = PHOTOGRAPHER_TOKEN, message = project_id + ':' + the 8 digits), hex; the code itself is never stored
+  code_hash  TEXT NOT NULL,          -- HMAC-SHA256(key = PICK_INVITE_SECRET, message = project_id + ':' + the 8 digits), hex; the code itself is never stored
   invited_by TEXT NOT NULL,          -- the owner's picker id when it was made
   window_days INTEGER,               -- the collaborator's period: 1, 7, or NULL = until the project ends
   created_at TEXT NOT NULL,
@@ -118,7 +118,7 @@ cap at submit. The caps are **per project**, shared by everyone.
   one winner), inserts the picker row and the membership with `expires_at = now + window_days` (NULL stays NULL), and answers
   `{picker_key, picker_id, name, role: 'collaborator', expires_at}` once (the key is stored only as a hash).
   Wrong / used / expired code → **400 `invalid_code`** (one answer for all three, no oracle) and a row in `pick_join_failures`.
-  More than **10 failures per project** or **5 per network** in 15 minutes → **429 `too_many_attempts`** (checked before the code is looked at).
+  More than **30 failures per project** or **5 per network** in 15 minutes → **429 `too_many_attempts`** (checked before the code is looked at).
   Refused **409 `owner_missing`** when the project has no owner (nobody to invite), **409 `retouching`** when the phase is not open (`pickRetouching`), and **401 `Unauthorized`** when the project is archived (the link is dead), the same answers the other pick routes give.
 - `GET /api/pick/collaborators` — **owner only**. `[{picker_id, name, joined_at, expires_at, revoked_at, status: 'active'|'expired'|'removed', last_seen_at}]`
   plus the unspent invites' count and soonest expiry (no codes).
@@ -146,9 +146,13 @@ and no names**, exactly the `{photo_key, rating}` list a viewer gets today.
 ## Security rules (an opus reviewer attacks all of these)
 
 - Keys are stored as SHA-256 (they are 256-bit random). A code has only 10^8 values, so a plain or salted hash would fall to an
-  offline guess in seconds if the table leaked: it is an **HMAC with a server secret** (`PHOTOGRAPHER_TOKEN`, already a secret in the
-  Worker's environment), bound to the project id. A leaked table alone reveals no live code. The cost: rotating that token invalidates
-  codes still within their hour, which is fine. The code is also single-use and expires in an hour.
+  offline guess in seconds if the table leaked: it is an **HMAC with a server secret** (`PICK_INVITE_SECRET`, its own wrangler
+  secret, not `PHOTOGRAPHER_TOKEN`, so the admin password is never an HMAC key and rotating one leaves the other alone), bound to
+  the project id. A leaked table alone reveals no live code. The cost: rotating that secret invalidates codes still within their
+  hour, which is fine. The code is also single-use and expires in an hour.
+- **Setup (Tim, before the merge that needs it):** `wrangler secret put PICK_INVITE_SECRET` with 32 or more random characters
+  (e.g. `openssl rand -hex 32`). Missing or shorter than 32 characters: every co-picking route answers 500
+  `co_picking_unavailable` (fails closed); everything else keeps working.
 - Spending an invite is one atomic conditional write; two people entering the same code: one wins, the other gets `invalid_code`.
 - Guess limits as above; the lock is by project (distributed guessing) and by network; a lock never reveals whether a code exists.
 - Every gate statement re-checks "owner or active collaborator" **inside the write** (like the seat check today): phase, archive,
