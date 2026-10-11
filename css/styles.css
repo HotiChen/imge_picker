@@ -845,7 +845,7 @@ body {
 /* ── Photo Grid ─────────────────────────────────────── */
 .photo-grid {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 12px;
 }
 
@@ -1866,7 +1866,7 @@ body {
 
   .sidebar-backdrop.active { display: block; }
 
-  .photo-grid { grid-template-columns: repeat(3, 1fr); }
+  .photo-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 
   .bulk-action-bar { min-width: unset; padding: 12px 20px; gap: 16px; }
 
@@ -1904,7 +1904,7 @@ body {
   .header { grid-template-columns: 1fr auto; }
   .header-center { display: none; }
 
-  .photo-grid { grid-template-columns: repeat(2, 1fr); gap: 6px; }
+  .photo-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
 
   .content { padding: 12px; }
   .content-header { flex-direction: column; align-items: stretch; }
