@@ -8,7 +8,8 @@
 /* The entry floats (fixed, bottom-right above the phone's action bar): an in-flow bar would push the sticky #guestBar and
    the grid down on every pick page. The desktop pick pill is bottom-LEFT, so bottom-right is free there. Modals (2000) cover it. */
 .co-bar { position: fixed; right: 12px; bottom: calc(80px + env(safe-area-inset-bottom, 0px)); z-index: 900; }
-@media (min-width: 1025px) { .co-bar { bottom: 16px; } }
+/* desktop: the ？ replay button (css/guest-tour.css) is bottom-right too (16px + 44px wide), so the entry sits left of it */
+@media (min-width: 1025px) { .co-bar { bottom: 16px; right: 72px; } }
 .co-bar .co-btn { box-shadow: 0 4px 14px rgba(0, 0, 0, .45); border-radius: 999px; min-height: 44px; padding: 0 16px; background: var(--card-hi); }
 .co-btn {
   display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 40px; padding: 0 14px;
