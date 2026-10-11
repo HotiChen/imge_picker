@@ -835,7 +835,7 @@ class App {
         const next = i < 0 ? 0 : Math.min(photos.length - 1, Math.max(0, i + step));
         if (next !== i) {
             this.updatePreviewPane(photos[next]);
-            this.markCurrent(photos[next].id, true);
+            this.markCurrent(photos[next].id, true, true);
         }
         return true;
     }
@@ -843,7 +843,7 @@ class App {
     // The photo the preview pane / the enlarged view is showing glows in the grid or list behind it (.is-current), so the
     // arrows and the hover always show where you are. `scroll` brings it into view (the viewer's own navigation); the
     // mark is put back after every re-render of the grid or list.
-    markCurrent(photoId, scroll) {
+    markCurrent(photoId, scroll, focus) {
         this._currentPhotoId = photoId || null;
         document.querySelectorAll('.is-current').forEach(e => e.classList.remove('is-current'));
         if (!photoId) return;
@@ -851,6 +851,11 @@ class App {
         if (!el) return;
         el.classList.add('is-current');
         if (scroll) el.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+        // keyboard focus goes with the glow (the arrows and Enter then work from this card)
+        if (focus) {
+            el.tabIndex = -1;
+            el.focus({ preventScroll: true });
+        }
     }
 
     createPhotoCard(photo, index) {
@@ -1136,6 +1141,9 @@ class App {
         if (index < 0 || index >= this.filteredPhotos.length) return;
         this.currentPhotoIndex = index;
         const photo = this.filteredPhotos[index];
+        // the card the mouse just entered still has its 120ms preview timer queued; left alone it fires after a quick flip
+        // in the viewer and puts the glow back on the card under the mouse
+        clearTimeout(this._previewTimer);
 
         this.updatePreviewPane(photo);
         this.markCurrent(photo.id, true);
@@ -1216,6 +1224,7 @@ class App {
         if (window.PickController && PickController.active) PickController._exitPinMode(true);
         this.saveCurrentNote();
         document.getElementById('photoModal').classList.remove('active');
+        this.markCurrent(this._currentPhotoId, true, true);
     }
 
     saveCurrentNote() {

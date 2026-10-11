@@ -181,4 +181,45 @@ const glow = (page, sel) => page.evaluate(s => { const e = document.querySelecto
     },
     { before: m.attach, initScript: ADMIN, contextOptions: { viewport: { width: 1500, height: 950 } } });
 }
+
+// Closing the viewer puts the focus back on the card of the photo you were looking at, and the arrows go on from there.
+{
+  const m = pickFakeWorker({ ownerName: 'Sara', projectId: 'proj-focus', photos: PHOTOS(24) });
+  for (let i = 0; i < 24; i++) m.state.selections.set(`20260819/p${i}.jpg`, { rating: 3, note: '', updated_by: 'picker-0', updated_at: '2026-09-27T14:52:00.000Z' });
+  await suite('current photo — closing the viewer: the focus is on that photo\'s card (also when closed by Esc or the ✕), the arrows continue from it',
+    `${base}/index.html?project=proj-focus`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('.photo-card', { timeout: 5000 });
+      await page.waitForTimeout(300);
+      const ids = await page.$$eval('.photo-card', els => els.map(e => e.dataset.photoId));
+      const focused = () => page.evaluate(() => { const a = document.activeElement; return a && a.dataset ? a.dataset.photoId || null : null; });
+      const cols = await page.evaluate(() => { const c = [...document.querySelectorAll('.photo-card')]; return c.findIndex(e => e.offsetTop !== c[0].offsetTop); });
+      await page.mouse.move(5, 5);
+      await page.locator('.photo-card').nth(2).click();
+      await page.waitForSelector('#photoModal.active', { timeout: 3000 });
+      await page.keyboard.press('ArrowRight'); await page.keyboard.press('ArrowRight');
+      await page.waitForTimeout(200);
+      await page.keyboard.press('Escape');
+      await page.waitForFunction(() => !document.getElementById('photoModal').classList.contains('active'), null, { timeout: 3000 });
+      ok('closed with Esc after two → : the focus is on photo #5\'s card', (await focused()) === ids[4], JSON.stringify([await focused(), ids[4]]));
+      ok('and that card is the glowing one', (await cur(page, '.photo-card'))[0] === ids[4]);
+      await page.keyboard.press('ArrowRight');
+      ok('the focus moves with the glow: the focused card is the glowing one (no stale focus left on the old card)', (await focused()) === ids[5], JSON.stringify([await focused(), ids[5]]));
+      ok('the arrows go on from it: → is photo #6', (await cur(page, '.photo-card'))[0] === ids[5], JSON.stringify(await cur(page, '.photo-card')));
+      await page.keyboard.press('ArrowDown');
+      ok('↑↓ with the viewer closed still move the glow (a row down)', (await cur(page, '.photo-card'))[0] === ids[5 + cols], JSON.stringify([await cur(page, '.photo-card'), 5 + cols]));
+      // open from the keyboard, flip, close with the ✕
+      await page.keyboard.press('Enter');
+      await page.waitForSelector('#photoModal.active', { timeout: 3000 });
+      await page.keyboard.press('ArrowLeft');
+      await page.waitForTimeout(200);
+      await page.click('#closeModal');
+      await page.waitForFunction(() => !document.getElementById('photoModal').classList.contains('active'), null, { timeout: 3000 });
+      ok('closed with the ✕: the focus is on the card of the photo that was showing', (await focused()) === ids[5 + cols - 1], JSON.stringify([await focused(), ids[5 + cols - 1]]));
+      return out;
+    },
+    { before: m.attach, initScript: ADMIN, contextOptions: { viewport: { width: 1500, height: 950 } } });
+}
 }
