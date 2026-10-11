@@ -21,6 +21,20 @@ Tim's decisions, all agreed on 2026-10-11:
 - 重設主人 (reset seat) ends **all** collaborators at once.
 - Not in this build: a colour per person, notifications, collaborators inviting others, per-collaborator caps.
 
+## Proposed, waiting for Tim to confirm
+
+Asked on 2026-10-11: can another person be invited when one expires, and can the expired one ask to continue. The idea of the renewal
+request is Tim's; the rules below and the renewal routes / column (`renewal_requested_at`) are a proposal and stay out of batch 1 until he
+confirms them.
+
+- **An expired or removed collaborator no longer counts toward the limit of 2**, so the owner can invite someone else at once (a new code).
+  One counting rule everywhere: slots in use = **active collaborators + unspent, unexpired invites**; an invite or a renewal is refused when
+  that already comes to 2.
+- **Renewal:** a collaborator whose period has **expired** (not one the owner removed) sees 「期限已到，要繼續嗎？」 with a button 「我要繼續」.
+  It sends the owner a request; the owner sees it as a badge and a banner in the page (「Bob 要求續期」) and picks 「同意：今天 / 一週 / 到專案結束」 or
+  「不同意」. Approving sets the new period from that moment. One pending request per person. A removed collaborator cannot ask.
+- The owner's page checks for new requests while it is open and visible (every 30 seconds) and shows a toast; no email or push in this build.
+
 ## Why a collaborator is "a picker row"
 
 `pickers` already is "a person with a key" (`key_hash` = SHA-256 of the bearer key, per project) and
@@ -54,7 +68,8 @@ CREATE TABLE IF NOT EXISTS project_collaborators (
   joined_at  TEXT NOT NULL,
   expires_at TEXT,                   -- NULL = until the project ends
   revoked_at TEXT,
-  last_seen_at TEXT
+  last_seen_at TEXT,
+  renewal_requested_at TEXT          -- set by the person after expiry; cleared when the owner approves or declines
 );
 CREATE INDEX IF NOT EXISTS idx_project_collaborators_project ON project_collaborators(project_id, joined_at);
 
@@ -109,6 +124,13 @@ cap at submit. The caps are **per project**, shared by everyone.
 - `GET /api/pick/collaborators` — **owner only**. `[{picker_id, name, joined_at, expires_at, revoked_at, status: 'active'|'expired'|'removed', last_seen_at}]`
   plus the unspent invites' count and soonest expiry (no codes).
 - `PATCH /api/pick/collaborators/:picker_id` — **owner only**. Body `{window_days: 1 | 7 | null}`; sets `expires_at` from **now**.
+- `POST /api/pick/renewal` — the person's own key (an **expired** membership of the current owner, not removed). Sets `renewal_requested_at`
+  (once; a second request is a no-op 200). Anyone else (active, removed, viewer, no key) gets 403. State shows an expired person
+  `role: 'viewer'`, `my_status: 'expired'`, `can_request_renewal: true`, `renewal_requested: <bool>`.
+- `POST /api/pick/collaborators/:picker_id/decision` — **owner only**. `{approve: true, window_days: 1 | 7 | null}` → new period from now
+  (409 `collaborator_limit` when the OTHER active people plus the unspent, unexpired invites already come to 2), clears the request;
+  `{approve: false}` → clears the request, stays expired.
+- `GET /api/pick/collaborators` also returns `renewal_requested_at` per person and a `pending_renewals` count (the owner's badge and toast read it).
 - `DELETE /api/pick/collaborators/:picker_id` — **owner only**. Sets `revoked_at`; the very next request from that key is a viewer's.
 - `GET /api/pick/state` (existing) adds `role: 'owner' | 'collaborator' | 'viewer'`, `is_owner` (true for the owner **only**, so every
   existing owner-only check in the page keeps meaning "may submit / invite"), `can_edit` (owner or active collaborator), and `my_expires_at`
