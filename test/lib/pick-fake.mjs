@@ -245,6 +245,13 @@ export function pickFakeWorker(opts = {}) {
   const nowMs = () => (opts.now ? opts.now() : Date.now());
   const RENEWAL_DECLINED_FAKE = 'declined:';
   const renewalPendingFake = v => (typeof v === 'string' && !v.startsWith(RENEWAL_DECLINED_FAKE) ? v : null);
+  // worker.js renewalDeclinedUntil: the end of the 24 h cooldown after the owner declined, else null
+  const renewalDeclinedUntilFake = value => {
+    if (typeof value !== 'string' || !value.startsWith(RENEWAL_DECLINED_FAKE)) return null;
+    const at = Date.parse(value.slice(RENEWAL_DECLINED_FAKE.length));
+    if (!Number.isFinite(at)) return null;
+    return at + 86400000 > nowMs() ? new Date(at + 86400000).toISOString() : null;
+  };
   const memberStatusFake = row => {
     if (!row) return null;
     const owner = state.project.owner_picker_id;
@@ -323,9 +330,9 @@ export function pickFakeWorker(opts = {}) {
           can_edit: isOwner || (!!memberRow && memberStatusFake(memberRow) === 'active'),
           my_expires_at: memberRow && memberStatusFake(memberRow) === 'active' ? memberRow.expires_at ?? null : null,
           my_status: isOwner ? null : memberStatusFake(memberRow),
-          can_request_renewal: memberStatusFake(memberRow) === 'expired' && !/^declined:/.test(memberRow.renewal_requested_at || ''),
+          can_request_renewal: memberStatusFake(memberRow) === 'expired' && !renewalDeclinedUntilFake(memberRow.renewal_requested_at),
           renewal_requested: memberStatusFake(memberRow) === 'expired' && !!renewalPendingFake(memberRow.renewal_requested_at),
-          renewal_declined_until: null,
+          renewal_declined_until: memberStatusFake(memberRow) === 'expired' ? renewalDeclinedUntilFake(memberRow.renewal_requested_at) : null,
           phase: state.project.phase,
           submitted_at: subs.length ? subs[subs.length - 1].created_at : null,
           // notes are the owner's own words to the photographer — a viewer
@@ -413,7 +420,7 @@ export function pickFakeWorker(opts = {}) {
           if (!name || [...name].length > 50) return send({ error: '請輸入 1–50 字的名字', code: 'invalid_name' }, 400);
           state.joinFailures = state.joinFailures || [];
           const recent = state.joinFailures.filter(t => t > nowMs() - 900000);
-          if (recent.length >= 10) return send({ error: '嘗試次數太多，請 15 分鐘後再試', code: 'too_many_attempts' }, 429);
+          if (recent.length >= 5) return send({ error: '嘗試次數太多，請 15 分鐘後再試', code: 'too_many_attempts' }, 429);
           const inv = typeof body.code === 'string' && /^\d{8}$/.test(body.code)
             ? state.invites.find(i => i.code === body.code && !i.used_at && i.expires_at > iso && i.invited_by === ownerId) : null;
           if (!inv) { state.joinFailures.push(nowMs()); return send({ error: '邀請碼不正確或已失效', code: 'invalid_code' }, 400); }
@@ -431,9 +438,8 @@ export function pickFakeWorker(opts = {}) {
           const notAllowed = () => send({ error: '目前不能要求續期', code: 'renewal_not_allowed' }, 403);
           if (!picker || memberStatusFake(row) !== 'expired') return notAllowed();
           const cur = row.renewal_requested_at;
-          if (typeof cur === 'string' && cur.startsWith('declined:') && Date.parse(cur.slice(9)) + 86400000 > nowMs()) {
-            return send({ error: '主人剛拒絕續期，請稍後再試', code: 'renewal_declined', until: new Date(Date.parse(cur.slice(9)) + 86400000).toISOString() }, 409);
-          }
+          const declinedUntil = renewalDeclinedUntilFake(cur);
+          if (declinedUntil) return send({ error: '主人剛拒絕續期，請稍後再試', code: 'renewal_declined', until: declinedUntil }, 409);
           if (!renewalPendingFake(cur)) row.renewal_requested_at = iso;
           return send({ ok: true, renewal_requested_at: renewalPendingFake(row.renewal_requested_at) });
         }
@@ -495,11 +501,19 @@ export function pickFakeWorker(opts = {}) {
       }
 
       if (u.pathname === '/api/pick/selections' && method === 'PUT') {
-        if (!['picking', 'submitted'].includes(state.project.phase))
-          return json({ error: '攝影師已開始修圖，無法再修改或送出', code: 'retouching' }, 409);
+        // worker.js: who first (403, with the collaborator's reason), then the phase (409)
         const picker = pickerKey ? findByKey(pickerKey) : null;
         const isOwner = !!picker && state.project.owner_picker_id === picker.id;
-        if (!isOwner) return json({ error: '只有挑選人可以修改' }, 403);
+        const memberRow = picker && !isOwner ? state.collaborators.get(picker.id) || null : null;
+        const memberStatus = memberStatusFake(memberRow);
+        const isCollaborator = memberStatus === 'active';
+        if (!isOwner && !isCollaborator) {
+          if (memberStatus === 'expired') return json({ error: '協作期限已到', code: 'collaborator_expired' }, 403);
+          if (memberStatus === 'removed') return json({ error: '你已不是協作者', code: 'collaborator_removed' }, 403);
+          return json({ error: '只有挑選人可以修改' }, 403);
+        }
+        if (!['picking', 'submitted'].includes(state.project.phase))
+          return json({ error: '攝影師已開始修圖，無法再修改或送出', code: 'retouching' }, 409);
         const upsert = body?.upsert || [];
         // a copy: the fake adds the empty-zero keys below, and the recorded body must stay as it was sent
         const del = [...(body?.delete || [])];
@@ -542,6 +556,24 @@ export function pickFakeWorker(opts = {}) {
         const byKey = new Map(upsert.map(it => [it.photo_key, it])); // last mention wins
         // mirrors worker.js: an item with rating 0 and an empty note is a delete, not an empty row
         for (const [k, it] of byKey) if (!(it.rating >= 1) && (it.note === undefined || it.note === '')) { del.push(k); byKey.delete(k); }
+        // worker.js: a collaborator's item on a row someone else last wrote is refused (not_yours) when it would change
+        // the rating, the note or the pins (a delete always would), dropped silently when identical; the rest goes on.
+        // The answer of a collaborator always carries `rejected` (maybe []); the owner's never does.
+        const rejectedKeys = isCollaborator ? new Set() : null;
+        if (rejectedKeys) {
+          const theirs = k => { const r = state.selections.get(k); return r && r.updated_by !== picker.id ? r : null; };
+          for (const [k, it] of [...byKey]) {
+            const row = theirs(k);
+            if (!row) continue;
+            const same = (row.rating || 0) === (it.rating || 0) && (row.note || '') === (it.note || '') &&
+              (it.marks === undefined || JSON.stringify(pickMarksCanonFake(it.marks) || []) === JSON.stringify(row.marks || []));
+            if (!same) rejectedKeys.add(k);
+            byKey.delete(k);
+          }
+          for (let i = del.length - 1; i >= 0; i--) if (theirs(del[i])) { rejectedKeys.add(del[i]); del.splice(i, 1); }
+        }
+        const answer = () => json(rejectedKeys ? { ok: true, rejected: [...rejectedKeys].map(k => ({ photo_key: k, code: 'not_yours' })) } : { ok: true });
+        if (!byKey.size && !del.length) return answer();   // worker.js: nothing left to write
         const removed = new Set(del);
         const resultKeys = new Set([...state.selections.keys(), ...byKey.keys()]);
         for (const k of removed) resultKeys.delete(k);
@@ -585,7 +617,7 @@ export function pickFakeWorker(opts = {}) {
             { rating: item.rating, note: item.note || '', marks: newMarks.get(k) || null, updated_by: picker.id, updated_at: now });
         }
         del.forEach(k => state.selections.delete(k));
-        return json({ ok: true });
+        return answer();
       }
 
       if (u.pathname === '/api/pick/submit' && method === 'POST') {

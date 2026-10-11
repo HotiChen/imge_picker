@@ -1,0 +1,25 @@
+/* Co-picking, the JOIN / COLLABORATOR side of the guest pick page (js/co-picking-collab.js, docs/co-picking.md).
+   Dark guest styling: only variables from css/styles.css :root are read. Reuses .co-btn / .co-backdrop from
+   css/co-picking-owner.css. `.co-btn` sets display, so [hidden] is restored for the sheet explicitly. */
+.co-collab-banner { gap: 6px 12px; }
+.co-collab-banner .co-btn { min-height: 40px; padding: 0 14px; }
+.co-collab-err { color: #ff8d8d; font-size: 12px; }
+
+#coJoinSheet { position: fixed; inset: 0; z-index: 2100; display: flex; align-items: flex-end; justify-content: center; box-sizing: border-box; }
+#coJoinSheet[hidden] { display: none !important; }
+#coJoinSheet * { box-sizing: border-box; }
+#coJoinSheet .co-join-card {
+  position: relative; width: 100%; max-width: 440px; max-height: 92vh; overflow-y: auto;
+  background: var(--card); color: var(--ink); border: 1px solid var(--border); border-radius: 18px 18px 0 0;
+  padding: 8px 16px calc(16px + env(safe-area-inset-bottom, 0px)); display: flex; flex-direction: column; gap: 8px;
+}
+@media (min-width: 700px) { #coJoinSheet { align-items: center; } #coJoinSheet .co-join-card { border-radius: 18px; } }
+#coJoinSheet .co-join-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+#coJoinSheet .co-join-title { margin: 0; font-size: 17px; font-weight: 600; }
+#coJoinSheet .co-close { width: 44px; height: 44px; border: 0; border-radius: 50%; background: transparent; color: var(--ink); font-size: 26px; line-height: 1; cursor: pointer; }
+#coJoinSheet .co-join-hint { margin: 0; font-size: 13px; color: var(--ink-55); }
+#coJoinSheet .co-join-label { font-size: 13px; margin-top: 4px; }
+#coJoinSheet .input { width: 100%; min-height: 44px; font-size: 16px; }
+#coJoinCode { letter-spacing: .15em; }
+#coJoinSheet .co-join-err { margin: 0; min-height: 18px; font-size: 13px; color: #ff8d8d; }
+#coJoinGo { width: 100%; min-height: 44px; }

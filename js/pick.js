@@ -39,6 +39,8 @@
         projectId: '',
         projectTitle: '',
         isOwner: false,
+        isCollab: false,          // an active collaborator (docs/co-picking.md): picks like the owner, never submits
+        coState: null,            // role / my_status / my_expires_at / renewal fields of the last state read (js/co-picking-collab.js)
         ownerName: null,          // the seat holder's name, whoever that is
         phase: 'picking',
         pickLimit: null,
@@ -209,9 +211,13 @@
         // False for every viewer (no seat, or someone else's), and false for
         // the owner too once the photographer has started retouching.
         canEdit() {
-            return this.active && this.isOwner && this.mode === 'picking' &&
+            return this.active && this.isPicker() && this.mode === 'picking' &&
                 (this.phase === 'picking' || this.phase === 'submitted');
         },
+
+        // The seat owner or an active collaborator: who picks, notes and pins. Submitting, inviting and delivery
+        // stay with isOwner alone.
+        isPicker() { return this.isOwner || this.isCollab; },
 
         // ── delivery (docs/delivery.md) ─────────────────────────────────
         // The delivery gallery / proof-download list: no picking UI at all.
@@ -774,6 +780,10 @@
             if (ok) {
                 this._retryCount = 0;
                 clearTimeout(this._retryTimer);
+                // the owner's answer has no `rejected`; a collaborator's lists the rows that were not theirs to change
+                const rejected = (data && Array.isArray(data.rejected) ? data.rejected : [])
+                    .filter(x => x && typeof x.photo_key === 'string').map(x => x.photo_key);
+                if (rejected.length) await this._putBackRejected(rejected, prevSnapshot);
                 this._setSaveStatus(this.hasPending() ? 'saving' : 'saved');
                 // mirrors the gate UPDATE in worker.js: a save while already
                 // 'submitted' raises modified_after_submit, so the banner has
@@ -797,6 +807,16 @@
                 this.renderBanner();
                 this.rerenderGrid();
                 this.syncPinUI();
+                return;
+            }
+            if (status === 403 && data && (data.code === 'collaborator_expired' || data.code === 'collaborator_removed')) {
+                // the period ran out / the owner ended it: nothing was written, nothing more will be. Drop the queue,
+                // take the server's word for who this is now (read-only, with the banner that says why)
+                this._pendingUpsert.clear();
+                this._pendingDelete.clear();
+                this._pendingPrev = new Map();
+                const st = await this.reloadState();
+                if (!st.ok) this._revertBatch(prevSnapshot);
                 return;
             }
             if (status === 409 && data && data.code === 'marks_cap') {
@@ -965,6 +985,45 @@
         // The owner's co-picking panel (js/co-picking-owner.js); it decides for itself whether it may exist.
         _syncCoPicking() {
             if (window.CoPickingOwner) window.CoPickingOwner.sync(this);
+            if (window.CoPickingCollab) window.CoPickingCollab.sync(this);   // join / collaborator / expired banner
+        },
+
+        // Re-read the state and bring the page up to date with it: a join, an approval or an expiry changes who this
+        // browser is. Selections are the server's; the grid is rebuilt so every card gets the new canEdit().
+        async reloadState() {
+            const r = await this.fetchState();
+            if (!r.ok) return r;
+            const before = this.view;
+            this._applyState(r.data);
+            if (this.view !== before) this._applyView();
+            this.renderBanner();
+            this.applyServerSelections();
+            this.syncPinUI();
+            this._syncCoPicking();
+            return r;
+        },
+
+        // A collaborator's save answered `rejected: [{photo_key, code: 'not_yours'}]`: those photos are the owner's (or
+        // another collaborator's). Put each back as the server holds it (a fresh read; the pre-save value if the read
+        // fails), skip a key already edited again since, and say it ONCE for the whole save.
+        async _putBackRejected(keys, prevSnapshot) {
+            const r = await this.fetchState();
+            const server = r.ok && Array.isArray(r.data.selections)
+                ? new Map(r.data.selections.map(s => [s.photo_key, s])) : null;
+            for (const key of keys) {
+                if (this._pendingUpsert.has(key) || this._pendingDelete.has(key)) continue;
+                const s = server ? server.get(key) : null;
+                if (server) {
+                    if (s) this.selections.set(key, { rating: s.rating || 0, note: s.note || '', marks: (s.rating || 0) > 0 ? cleanMarks(s.marks) : [] });
+                    else this.selections.delete(key);
+                } else {
+                    const prev = prevSnapshot.get(key);
+                    if (prev) this.selections.set(key, prev); else this.selections.delete(key);
+                }
+            }
+            this.applyServerSelections();
+            this.syncPinUI();
+            if (typeof toast !== 'undefined') toast.warning('這張是別人選的，只有主人可以改');
         },
 
         _applyState(data) {
@@ -976,6 +1035,15 @@
             this.maxPicks = project.max_picks ?? null;
             this.extraPrice = project.extra_price ?? null;
             this.isOwner = !!data.is_owner;
+            this.isCollab = !this.isOwner && data.role === 'collaborator' && data.can_edit === true;
+            this.coState = {
+                role: data.role || 'viewer',
+                myStatus: data.my_status || null,
+                expiresAt: typeof data.my_expires_at === 'string' ? data.my_expires_at : null,
+                canRenew: data.can_request_renewal === true,
+                renewalRequested: data.renewal_requested === true,
+                declinedUntil: typeof data.renewal_declined_until === 'string' ? data.renewal_declined_until : null,
+            };
             this.ownerName = data.owner === undefined ? null : data.owner;
             this.phase = data.phase || 'picking';
             this.modifiedAfterSubmit = !!data.modified_after_submit;
@@ -991,8 +1059,8 @@
             this.selections = new Map(
                 (data.selections || []).map(s => [s.photo_key, {
                     rating: s.rating || 0, note: s.note || '',
-                    // only the seat owner is sent pins; a viewer has none
-                    marks: this.isOwner && (s.rating || 0) > 0 ? cleanMarks(s.marks) : [],
+                    // only the seat owner and collaborators are sent pins; a viewer has none
+                    marks: this.isPicker() && (s.rating || 0) > 0 ? cleanMarks(s.marks) : [],
                 }])
             );
             this.studio = data.studio || null;
@@ -1033,7 +1101,7 @@
         async loadGrid() {
             const emptyH2 = document.querySelector('#emptyState h2');
             const emptyP = document.querySelector('#emptyState p');
-            if (emptyH2) emptyH2.textContent = this.isOwner ? '正在準備您的照片' : '正在載入相簿';
+            if (emptyH2) emptyH2.textContent = this.isPicker() ? '正在準備您的照片' : '正在載入相簿';
             if (emptyP) emptyP.textContent = '請稍候…';
             const folder = this.viewFolders()[0] || '';
             await this.app.handleLoadPhotos(folder);
@@ -1251,7 +1319,7 @@
         _ensureToolsRow() {
             const cc = document.querySelector('.canvas-container');
             if (!cc) return null;
-            const wanted = this.isOwner && !this.isGallery();
+            const wanted = this.isPicker() && !this.isGallery();
             let row = document.getElementById('pickModalTools');
             if (!wanted) { row?.remove(); this._exitPinMode(true); return null; }
             if (row) return row;
@@ -1365,7 +1433,7 @@
         _renderPinList(visible, editable, marks) {
             const group = document.getElementById('noteInputGroup');
             let sec = document.getElementById('pickPinsSection');
-            if (!visible || !group || !this.isOwner) { sec?.remove(); return; }
+            if (!visible || !group || !this.isPicker()) { sec?.remove(); return; }
             if (!sec) {
                 sec = document.createElement('div');
                 sec.id = 'pickPinsSection';
@@ -1672,14 +1740,14 @@
             if (this.mode === 'delivered') { el.hidden = true; return; }
 
             const lines = [];
-            if (!this.isOwner && this.ownerName) lines.push(`此相簿由 ${this.ownerName} 選片中`);
+            if (!this.isOwner && !this.isCollab && this.ownerName) lines.push(`此相簿由 ${this.ownerName} 選片中`);
             if (this.phase === 'retouching') {
                 lines.push('攝影師已安排精修，如需修改請透過 LINE 聯絡攝影師');
             } else if (this.isOwner && this.phase === 'submitted') {
                 lines.push('已送出');
                 if (this.modifiedAfterSubmit) lines.push('已修改，請重新送出');
             }
-            const showHint = !this.isOwner && !!this.ownerName && this.phase !== 'retouching';
+            const showHint = !this.isOwner && !this.isCollab && !!this.ownerName && this.phase !== 'retouching';
 
             linesEl.textContent = '';
             lines.forEach(text => {
@@ -1708,8 +1776,10 @@
             if (!bar || !status || this.isGallery()) return;
             document.body.classList.add('pick-active');
             // a viewer (no seat) picks nothing: no counter, no submit
-            bar.classList.toggle('pick-bar-off', !this.isOwner);
-            if (!this.isOwner) return;
+            bar.classList.toggle('pick-bar-off', !this.isPicker());
+            if (!this.isPicker()) return;
+            // a collaborator never submits: the button is removed (not hidden: .btn's display beats [hidden])
+            if (this.isCollab) document.getElementById('pickSubmitBtn')?.remove();
 
             let el = document.getElementById('pickCounter');
             if (!el) {
