@@ -10,7 +10,7 @@
 --
 -- Safe to re-run (IF NOT EXISTS).
 
--- pick_invites: one row per 8-digit invite code. code_hash = HMAC-SHA256 (key = PHOTOGRAPHER_TOKEN, message = project_id + ':' + code), hex; the code itself is never stored. Valid 1 hour, spent once (used_at / used_by set atomically by the join). window_days = the collaborator's period: 1, 7 or NULL (until the project ends)
+-- pick_invites: one row per 8-digit invite code. code_hash = HMAC-SHA256 (key = the PICK_INVITE_SECRET wrangler secret, message = project_id + ':' + code), hex; the code itself is never stored. Valid 1 hour, spent once (used_at / used_by set atomically by the join). window_days = the collaborator's period: 1, 7 or NULL (until the project ends)
 CREATE TABLE IF NOT EXISTS pick_invites (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, code_hash TEXT NOT NULL, invited_by TEXT NOT NULL, window_days INTEGER, created_at TEXT NOT NULL, expires_at TEXT NOT NULL, used_at TEXT, used_by TEXT);
 
 CREATE INDEX IF NOT EXISTS idx_pick_invites_project ON pick_invites(project_id, created_at);
@@ -20,7 +20,7 @@ CREATE TABLE IF NOT EXISTS project_collaborators (picker_id TEXT PRIMARY KEY, pr
 
 CREATE INDEX IF NOT EXISTS idx_project_collaborators_project ON project_collaborators(project_id, joined_at);
 
--- pick_join_failures: one row per failed join (wrong / used / expired code), bucket 'p' (the whole project) or 'n:<network>' (IPv4 or IPv6 /64); 10 per project and 5 per network in 15 minutes, then 429
+-- pick_join_failures: one row per failed join (wrong / used / expired code), bucket 'p' (the whole project) or 'n:<network>' (IPv4 or IPv6 /64); 30 per project and 5 per network in 15 minutes, then 429
 CREATE TABLE IF NOT EXISTS pick_join_failures (project_id TEXT NOT NULL, bucket TEXT NOT NULL, created_at TEXT NOT NULL);
 
 CREATE INDEX IF NOT EXISTS idx_pick_join_failures ON pick_join_failures(project_id, bucket, created_at);

@@ -2593,9 +2593,15 @@ const PICK_MAX_COLLABORATORS = 2;
 const PICK_INVITE_MS = 60 * 60 * 1000;
 const PICK_DAY_MS = 24 * 60 * 60 * 1000;
 const PICK_JOIN_WINDOW_MS = 15 * 60 * 1000;
-const PICK_JOIN_FAILURES_PROJECT = 10;
+const PICK_JOIN_FAILURES_PROJECT = 30;
 const PICK_JOIN_FAILURES_NETWORK = 5;
 const CO_PICKING_UNAVAILABLE = { error: '協作者功能尚未啟用', code: 'co_picking_unavailable' };
+// The invite-code HMAC key: its own wrangler secret, at least this long.
+// Without it every co-picking route is unavailable (fails closed).
+const PICK_INVITE_SECRET_MIN = 32;
+function pickInviteSecretOk(env) {
+  return typeof env.PICK_INVITE_SECRET === 'string' && env.PICK_INVITE_SECRET.length >= PICK_INVITE_SECRET_MIN;
+}
 // After the owner declines a renewal, the person may not ask again for this
 // long. Kept without a new column: renewal_requested_at holds
 // 'declined:<iso>' then, which every reader treats as no pending request.
@@ -2671,12 +2677,12 @@ function pickInviteCode() {
   return String(buf[0] % 100000000).padStart(8, '0');
 }
 
-// What is stored for a code: HMAC-SHA256 keyed with PHOTOGRAPHER_TOKEN over
+// What is stored for a code: HMAC-SHA256 keyed with PICK_INVITE_SECRET over
 // project_id + ':' + code, hex. A leaked table alone reveals no live code,
 // and a code is bound to its project.
 async function pickInviteHash(env, projectId, code) {
   const enc = new TextEncoder();
-  const key = await crypto.subtle.importKey('raw', enc.encode(env.PHOTOGRAPHER_TOKEN), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const key = await crypto.subtle.importKey('raw', enc.encode(env.PICK_INVITE_SECRET), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
   const sig = await crypto.subtle.sign('HMAC', key, enc.encode(`${projectId}:${code}`));
   return Array.from(new Uint8Array(sig)).map(b => b.toString(16).padStart(2, '0')).join('');
 }
@@ -5212,7 +5218,7 @@ export default {
         else if (sub.length === 2 && sub[1] === 'decision') allow = ['POST'];
         else return notFound();
         if (!allow.includes(request.method)) return jsonOk({ error: 'Method not allowed' }, 405, { ...SHARED_LINK_HEADERS, Allow: allow.join(', ') });
-        if (!env.PHOTOGRAPHER_TOKEN || !await coPickingReady(env)) return out(CO_PICKING_UNAVAILABLE, 500);
+        if (!pickInviteSecretOk(env) || !await coPickingReady(env)) return out(CO_PICKING_UNAVAILABLE, 500);
         const nowMs = Date.now();
         const nowIso = new Date(nowMs).toISOString();
         const notOwner = () => out({ error: '只有挑選人可以管理協作者', code: 'not_owner' }, 403);

@@ -9,6 +9,8 @@ import worker from '../worker.js';
 import { fakeBucket, fakeDB, ctx, req } from './fakes.mjs';
 
 export const SECRET = 'photographer-secret';
+// the co-picking invite-code HMAC key (docs/co-picking.md): its own secret, 32+ characters
+export const INVITE_SECRET = 'invite-secret-0123456789abcdefghijklmnop';
 export const MINE = '20260819/';
 export const THEIRS = '20260901/';
 
@@ -30,7 +32,7 @@ export const days = n => new Date(Date.now() + n * 86400000).toISOString();
 export const CUSTOM_ON = { CUSTOM_PRODUCTS: 'on' };
 
 export function setup(extra = {}) {
-  return { imagepicker: fakeBucket(OBJECTS), DB: fakeDB(), PHOTOGRAPHER_TOKEN: SECRET, ...extra };
+  return { imagepicker: fakeBucket(OBJECTS), DB: fakeDB(), PHOTOGRAPHER_TOKEN: SECRET, PICK_INVITE_SECRET: INVITE_SECRET, ...extra };
 }
 
 // ctx.waitUntil that remembers what it was handed, so a test can wait for the

@@ -611,7 +611,7 @@ CREATE INDEX IF NOT EXISTS idx_photographer_login_failures_key ON photographer_l
 CREATE TABLE IF NOT EXISTS pick_invites (
   id          TEXT PRIMARY KEY,
   project_id  TEXT NOT NULL,
-  code_hash   TEXT NOT NULL,          -- HMAC-SHA256(PHOTOGRAPHER_TOKEN, project_id + ':' + code), hex; never the code
+  code_hash   TEXT NOT NULL,          -- HMAC-SHA256(PICK_INVITE_SECRET, project_id + ':' + code), hex; never the code
   invited_by  TEXT NOT NULL,
   window_days INTEGER,                -- 1, 7, NULL = until the project ends
   created_at  TEXT NOT NULL,
