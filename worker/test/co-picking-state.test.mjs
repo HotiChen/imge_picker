@@ -128,7 +128,7 @@ test('state: a key of project A\'s collaborator is nobody on project B', async (
   assert.equal((await put(env, b.token, ca.key, { upsert: [{ photo_key: A, rating: 1 }] })).status, 403);
 });
 
-test('state by.role: a previous owner\'s rows read as other after a reset; a removed collaborator is still collaborator', async () => {
+test('state by.role: a previous owner\'s rows read as other (no name) after a reset; a removed collaborator is still collaborator', async () => {
   const env = setup();
   const { p, c } = await withCollaborator(env);
   await put(env, p.token, p.key, { upsert: [{ photo_key: A, rating: 1 }] });
@@ -139,7 +139,7 @@ test('state by.role: a previous owner\'s rows read as other after a reset; a rem
   const o2 = await claim(env, p.token, '新主人');
   const s = await state(env, p.token, o2.key);
   const by = Object.fromEntries(s.selections.map(x => [x.photo_key, x.by]));
-  assert.deepEqual(by[A], { id: p.pickerId, name: '王小明', role: 'other' });
+  assert.deepEqual(by[A], { id: p.pickerId, name: null, role: 'other' }, 'no previous owner\'s name on the page');
   assert.deepEqual(by[B], { id: c.pickerId, name: 'Bob', role: 'collaborator' });
   assert.equal(by[C], null);
 });

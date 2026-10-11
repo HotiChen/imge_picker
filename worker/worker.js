@@ -2596,6 +2596,28 @@ const PICK_JOIN_WINDOW_MS = 15 * 60 * 1000;
 const PICK_JOIN_FAILURES_PROJECT = 10;
 const PICK_JOIN_FAILURES_NETWORK = 5;
 const CO_PICKING_UNAVAILABLE = { error: '協作者功能尚未啟用', code: 'co_picking_unavailable' };
+// After the owner declines a renewal, the person may not ask again for this
+// long. Kept without a new column: renewal_requested_at holds
+// 'declined:<iso>' then, which every reader treats as no pending request.
+const PICK_RENEWAL_COOLDOWN_MS = 24 * 60 * 60 * 1000;
+const RENEWAL_DECLINED = 'declined:';
+// in SQL: the column holds a pending request (not NULL, not the marker)
+const RENEWAL_PENDING_SQL = `(renewal_requested_at IS NOT NULL AND renewal_requested_at NOT LIKE '${RENEWAL_DECLINED}%')`;
+
+// renewal_requested_at as a pending request's time, or null (none, or the
+// declined marker)
+function renewalPending(value) {
+  return typeof value === 'string' && !value.startsWith(RENEWAL_DECLINED) ? value : null;
+}
+
+// Until when a declined person may not ask again (ISO), or null.
+function renewalDeclinedUntil(value, nowMs = Date.now()) {
+  if (typeof value !== 'string' || !value.startsWith(RENEWAL_DECLINED)) return null;
+  const at = Date.parse(value.slice(RENEWAL_DECLINED.length));
+  if (!Number.isFinite(at)) return null;
+  const until = at + PICK_RENEWAL_COOLDOWN_MS;
+  return until > nowMs ? new Date(until).toISOString() : null;
+}
 
 // What a membership row is now: 'active', 'expired' (its period ran out),
 // 'removed' (revoked by the owner, or invited by someone who no longer holds
@@ -2691,7 +2713,7 @@ function collaboratorView(r, ownerId, nowIso) {
   return {
     picker_id: r.picker_id, name: r.name ?? null, joined_at: r.joined_at, expires_at: r.expires_at ?? null,
     revoked_at: r.revoked_at ?? null, status: collaboratorStatus(r, ownerId, nowIso), last_seen_at: r.last_seen_at ?? null,
-    renewal_requested_at: r.renewal_requested_at ?? null,
+    renewal_requested_at: renewalPending(r.renewal_requested_at),
   };
 }
 
@@ -2701,7 +2723,9 @@ function collaboratorView(r, ownerId, nowIso) {
 // or expired too) or 'other' (a picker of this project who is neither, such
 // as the seat holder before a reset) — or null for an id that is no picker
 // of this project.
-async function pickAuthors(env, project) {
+// guest: a page reader (owner or collaborator), who gets no name for 'other'
+// — a previous seat holder is not theirs to know; the photographer does.
+async function pickAuthors(env, project, guest = false) {
   const { results: people } = await env.DB.prepare('SELECT id, name FROM pickers WHERE project_id = ?').bind(project.id).all();
   let members = [];
   try {
@@ -2714,7 +2738,7 @@ async function pickAuthors(env, project) {
   return id => {
     if (id == null || !names.has(id)) return null;
     const role = id === project.owner_picker_id ? 'owner' : collaborators.has(id) ? 'collaborator' : 'other';
-    return { id, name: names.get(id), role };
+    return { id, name: guest && role === 'other' ? null : names.get(id), role };
   };
 }
 
@@ -3754,14 +3778,19 @@ export default {
       const gate = 'EXISTS (SELECT 1 FROM projects WHERE id = ?1 AND photographer_id = ?2) AND NOT EXISTS (SELECT 1 FROM submissions WHERE project_id = ?1) ' +
         'AND NOT EXISTS (SELECT 1 FROM orders WHERE project_id = ?1)';
       const del = sql => env.DB.prepare(`${sql} AND ${gate}`).bind(id, DEFAULT_PHOTOGRAPHER_ID);
+      // the co-picking rows too, once that migration has run
+      const coPicking = await coPickingReady(env)
+        ? ['project_collaborators', 'pick_invites', 'pick_join_failures'].map(t => del(`DELETE FROM ${t} WHERE project_id = ?1`))
+        : [];
       const results = await env.DB.batch([
         del('DELETE FROM selections WHERE project_id = ?1'),
         del('DELETE FROM pickers WHERE project_id = ?1'),
         del('DELETE FROM project_members WHERE project_id = ?1'),
         del("DELETE FROM share_tokens WHERE kind = 'pick' AND project_id = ?1"),
+        ...coPicking,
         del('DELETE FROM projects WHERE id = ?1'),
       ]);
-      if (!results[4].meta?.changes) {
+      if (!results[results.length - 1].meta?.changes) {
         const still = await env.DB.prepare(
           'SELECT EXISTS (SELECT 1 FROM submissions WHERE project_id = ?1) AS submitted FROM projects WHERE id = ?1 AND photographer_id = ?2'
         ).bind(id, DEFAULT_PHOTOGRAPHER_ID).first();
@@ -5238,8 +5267,9 @@ export default {
           // cap; a join that lands deletes them again in its own batch. What
           // stays are failures. A refusal never says whether a code exists.
           const network = `n:${clientNetwork(request)}`;
-          await env.DB.prepare('DELETE FROM pick_join_failures WHERE project_id = ? AND created_at < ?')
-            .bind(project.id, new Date(nowMs - PICK_DAY_MS).toISOString()).run();
+          // failures older than a day, every project's (deleted projects too)
+          await env.DB.prepare('DELETE FROM pick_join_failures WHERE created_at < ?')
+            .bind(new Date(nowMs - PICK_DAY_MS).toISOString()).run();
           const reserved = await env.DB.prepare(
             "INSERT INTO pick_join_failures (project_id, bucket, created_at) SELECT ?1, b, ?2 FROM (SELECT 'p' AS b UNION ALL SELECT ?3) " +
             "WHERE (SELECT COUNT(*) FROM pick_join_failures WHERE project_id = ?1 AND bucket = 'p' AND created_at > ?4) < ?5 " +
@@ -5298,17 +5328,29 @@ export default {
         if (route === 'renewal') {
           const notAllowed = () => out({ error: '目前不能要求續期', code: 'renewal_not_allowed' }, 403);
           if (!picker || memberStatus !== 'expired') return notAllowed();
+          // a pending request stays as it is; a decline older than the
+          // cooldown is replaced; one inside it refuses (inside the write)
+          const declined = `renewal_requested_at LIKE '${RENEWAL_DECLINED}%'`;
+          const declinedAt = `substr(renewal_requested_at, ${RENEWAL_DECLINED.length + 1})`;
           const asked = await env.DB.prepare(
-            'UPDATE project_collaborators SET renewal_requested_at = COALESCE(renewal_requested_at, ?1) ' +
+            `UPDATE project_collaborators SET renewal_requested_at = CASE WHEN renewal_requested_at IS NULL OR ${declined} THEN ?1 ELSE renewal_requested_at END ` +
             'WHERE picker_id = ?2 AND project_id = ?3 AND revoked_at IS NULL AND expires_at IS NOT NULL AND expires_at <= ?1 ' +
+            `AND NOT COALESCE(${declined} AND ${declinedAt} > ?4, 0) ` +
             'AND invited_by = (SELECT owner_picker_id FROM projects WHERE id = ?3 AND archived_at IS NULL)'
-          ).bind(nowIso, picker.id, project.id).run();
+          ).bind(nowIso, picker.id, project.id, new Date(nowMs - PICK_RENEWAL_COOLDOWN_MS).toISOString()).run();
+          const row = await env.DB.prepare('SELECT * FROM project_collaborators WHERE picker_id = ? AND project_id = ?').bind(picker.id, project.id).first();
           if (!asked.meta?.changes) {
             const now = await projectNow();
-            return !now || now.archived_at ? dead() : notAllowed();
+            if (!now || now.archived_at) return dead();
+            // the cooldown only for someone still expired (not removed, the
+            // seat not reset) as the rows stand now
+            const until = renewalDeclinedUntil(row?.renewal_requested_at, nowMs);
+            if (until && collaboratorStatus(row, now.owner_picker_id, nowIso) === 'expired') {
+              return out({ error: '主人剛拒絕續期，請稍後再試', code: 'renewal_declined', until }, 409);
+            }
+            return notAllowed();
           }
-          const row = await env.DB.prepare('SELECT renewal_requested_at FROM project_collaborators WHERE picker_id = ?').bind(picker.id).first();
-          return out({ ok: true, renewal_requested_at: row?.renewal_requested_at ?? null });
+          return out({ ok: true, renewal_requested_at: renewalPending(row?.renewal_requested_at) });
         }
 
         // the rest: the owner's list and their changes to one person
@@ -5355,7 +5397,7 @@ export default {
         } else {
           if (!isPlainObject(body) || typeof body.approve !== 'boolean') return out({ error: 'Invalid body', code: 'invalid_body' }, 400);
           noRequest = true;
-          where += ' AND renewal_requested_at IS NOT NULL';
+          where += ` AND ${RENEWAL_PENDING_SQL}`;
           if (body.approve) {
             const windowDays = pickWindowDays(body);
             if (windowDays === undefined) return invalidWindow();
@@ -5363,7 +5405,8 @@ export default {
             set = 'expires_at = ?5, renewal_requested_at = NULL';
             slots = true;
           } else {
-            set = 'renewal_requested_at = NULL';
+            // the marker starts the cooldown (POST /renewal)
+            set = `renewal_requested_at = '${RENEWAL_DECLINED}' || ?4`;
           }
         }
         // a statement binds exactly the parameters it names (D1 refuses extra ones)
@@ -5384,7 +5427,7 @@ export default {
           const row = await current();
           if (!row) return notFound();
           if (row.revoked_at) return out({ error: '這位協作者已被移除', code: 'collaborator_removed' }, 409);
-          if (noRequest && !row.renewal_requested_at) return out({ error: '沒有待處理的續期要求', code: 'no_renewal_request' }, 409);
+          if (noRequest && !renewalPending(row.renewal_requested_at)) return out({ error: '沒有待處理的續期要求', code: 'no_renewal_request' }, 409);
           return limitReached();
         }
         const row = await current();
@@ -5412,7 +5455,7 @@ export default {
           ? await withoutMissingColumn(() => selected(', note, updated_by, marks'), () => selected(', note, updated_by'))
           : await selected('');
         if (seesNotes) {
-          const author = await pickAuthors(env, project);
+          const author = await pickAuthors(env, project, true);
           for (const r of selections) {
             r.marks = parseMarks(r.marks);
             r.by = author(r.updated_by);
@@ -5502,8 +5545,9 @@ export default {
           can_edit: canEdit,
           my_expires_at: isCollaborator ? membership.expires_at ?? null : null,
           my_status: memberStatus,
-          can_request_renewal: memberStatus === 'expired',
-          renewal_requested: memberStatus === 'expired' && !!membership.renewal_requested_at,
+          can_request_renewal: memberStatus === 'expired' && !renewalDeclinedUntil(membership.renewal_requested_at),
+          renewal_requested: memberStatus === 'expired' && !!renewalPending(membership.renewal_requested_at),
+          renewal_declined_until: memberStatus === 'expired' ? renewalDeclinedUntil(membership.renewal_requested_at) : null,
           phase: project.phase,
           ...(isOwner ? { modified_after_submit: project.modified_after_submit } : {}),
           submitted_at: last ? last.created_at : null,
@@ -5544,7 +5588,12 @@ export default {
       if (request.method === 'PUT' && route === 'selections') {
         // the owner, or an active collaborator (docs/co-picking.md), who
         // changes only new rows and rows they last wrote
-        if (!canEdit) return jsonErr('只有挑選人可以修改', 403);
+        if (!canEdit) {
+          // a collaborator learns why: the period ran out, or the owner ended it
+          if (memberStatus === 'expired') return jsonOk({ error: '協作期限已到', code: 'collaborator_expired' }, 403);
+          if (memberStatus === 'removed') return jsonOk({ error: '你已不是協作者', code: 'collaborator_removed' }, 403);
+          return jsonErr('只有挑選人可以修改', 403);
+        }
         if (!PICK_OPEN_PHASES.includes(project.phase)) return pickRetouching();
         const read = await readJsonCapped(request, PICK_BODY_MAX);
         if (read.refused) return read.refused;

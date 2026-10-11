@@ -479,7 +479,8 @@ test('the delete lands in one batch', async () => {
   const seen = [];
   env.DB.batch = stmts => { seen.push(stmts.length); return batch(stmts); };
   await remove(env, p.project.id);
-  assert.deepEqual(seen, [5]);
+  // 5, plus the three co-picking tables (docs/co-picking.md) once migrated
+  assert.deepEqual(seen, [8]);
 });
 
 // ─── the hand-run migration ──────────────────────────────────────────────────

@@ -239,7 +239,7 @@ test('renewal race: removed between the check and the write — nothing is asked
   const env = setup();
   const { p, c } = await withCollaborator(env);
   expire(env, c.pickerId);
-  raceBeforeStatement(env, /^UPDATE project_collaborators SET renewal_requested_at = COALESCE/, () =>
+  raceBeforeStatement(env, /^UPDATE project_collaborators SET renewal_requested_at = CASE/, () =>
     env.DB._db.prepare('UPDATE project_collaborators SET revoked_at = ? WHERE picker_id = ?').run(ago(1), c.pickerId));
   const r = await renewal(env, p.token, c.key);
   assert.equal(r.status, 403);
@@ -250,7 +250,7 @@ test('renewal race: the seat is reset between the check and the write — nothin
   const env = setup();
   const { p, c } = await withCollaborator(env);
   expire(env, c.pickerId);
-  raceBeforeStatement(env, /^UPDATE project_collaborators SET renewal_requested_at = COALESCE/, () =>
+  raceBeforeStatement(env, /^UPDATE project_collaborators SET renewal_requested_at = CASE/, () =>
     env.DB._db.prepare('UPDATE projects SET owner_picker_id = NULL').run());
   assert.equal((await renewal(env, p.token, c.key)).status, 403);
   assert.equal(member(env, c.pickerId).renewal_requested_at, null);
@@ -291,7 +291,7 @@ test('decision approve: a new period from now, the request cleared, the person a
   assert.equal(member(env, c.pickerId).expires_at, null);
 });
 
-test('decision decline: the request cleared, still expired, and they may ask again', async () => {
+test('decision decline: the request cleared (the declined marker), still expired, no new request for now', async () => {
   const env = setup();
   const { p, c } = await withCollaborator(env);
   expire(env, c.pickerId);
@@ -300,10 +300,10 @@ test('decision decline: the request cleared, still expired, and they may ask aga
   const r = await decide(env, p.token, p.key, c.pickerId, { approve: false });
   assert.equal(r.status, 200);
   assert.equal((await r.json()).collaborator.status, 'expired');
-  assert.equal(member(env, c.pickerId).renewal_requested_at, null);
+  assert.match(member(env, c.pickerId).renewal_requested_at, /^declined:/);
   assert.equal(member(env, c.pickerId).expires_at, expiresBefore);
   assert.equal((await state(env, p.token, c.key)).renewal_requested, false);
-  assert.equal((await renewal(env, p.token, c.key)).status, 200);
+  assert.equal((await renewal(env, p.token, c.key)).status, 409, 'cooldown (co-picking-review.test.mjs)');
 });
 
 test('decision: approve refused 409 collaborator_limit when the OTHER active people + unspent invites come to 2', async () => {
