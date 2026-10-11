@@ -537,7 +537,8 @@ for (const [label, fails] of [['network error twice', ['net', 'net']], ['503 the
       await pickHeart(page, 0); // un-heart p0 while p0+p1 are on the wire (it then fails)
       await page.waitForFunction(() => document.getElementById('pickSaveStatus').textContent === '已自動儲存', null, { timeout: 8000 });
       const sel = Array.from(m.state.selections.entries()).map(([k, v]) => `${k}:${v.rating}`).sort();
-      ok('final server state: p0 rating 0 (newer wins), p1 rating 1, no duplicates', JSON.stringify(sel) === JSON.stringify(['20260819/p0.jpg:0', '20260819/p1.jpg:1']), JSON.stringify(sel));
+      // p0 was un-hearted last (newer wins) and has no note, so it is deleted rather than kept as an empty row
+      ok('final server state: p0 un-hearted (newer wins, no row left), p1 rating 1, no duplicates', JSON.stringify(sel) === JSON.stringify(['20260819/p1.jpg:1']), JSON.stringify(sel));
       ok('screen agrees', !(await heartOn(page, 0)) && (await heartOn(page, 1)));
       // requests: first (failed) had both; later ones must never resurrect p0=1 after the un-heart
       const last = puts(m).slice(1).flatMap(r => r.body.upsert).filter(u => u.photo_key.endsWith('p0.jpg')).map(u => u.rating);
