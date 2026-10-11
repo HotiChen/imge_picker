@@ -21,7 +21,7 @@ export function ordersFake(opts = {}) {
     platform: opts.platform || [],   // platform catalogue: {id, kind, name, …, min_pages?, max_pages?, options: [{id, label, vendor_cost, platform_price, active, sort}]}
     // which page-bound columns the fake database has (worker.js pageColumns): a
     // missing one reads null and refuses a number (500 <col>_unavailable)
-    pageColumns: { min_pages: true, max_pages: true, bleed_mm: true, extra_page_price: true, ...(opts.pageColumns || {}) },
+    pageColumns: { min_pages: true, max_pages: true, bleed_mm: true, extra_page_price: true, category: true, ...(opts.pageColumns || {}) },
     imageSeq: 0,
     operatorToken: opts.operatorToken || 'op',
     orders: opts.orders || [],
@@ -109,9 +109,9 @@ export function ordersFake(opts = {}) {
   const viewProduct = p => {
     const pp = p.platform_product_id ? platformOf(p.platform_product_id) : null;
     const adopted = !!p.platform_product_id;
-    const v = { ...p, platform_active: adopted ? (pp ? pp.active : 0) : null, min_pages: null, max_pages: null, bleed_mm: null, extra_page_price: null };
+    const v = { ...p, platform_active: adopted ? (pp ? pp.active : 0) : null, min_pages: null, max_pages: null, bleed_mm: null, extra_page_price: null, category: null };
     if (pp) Object.assign(v, { kind: pp.kind, name: pp.name, description: pp.description, photo_count: pp.photo_count,
-      min_pages: pageRead(pp, 'min_pages'), max_pages: pageRead(pp, 'max_pages'), bleed_mm: bleedRead(pp), extra_page_price: extraRead(pp),
+      min_pages: pageRead(pp, 'min_pages'), max_pages: pageRead(pp, 'max_pages'), bleed_mm: bleedRead(pp), extra_page_price: extraRead(pp), category: categoryRead(pp),
       has_image: pp.has_image, image_type: pp.image_type, image_updated_at: pp.image_updated_at });
     v.options = p.options.map(o => {
       if (!o.platform_option_id) return { ...o };
@@ -123,7 +123,7 @@ export function ordersFake(opts = {}) {
     return v;
   };
   const platView = pp => ({ id: pp.id, kind: pp.kind, name: pp.name, description: pp.description, photo_count: pp.photo_count,
-    min_pages: pageRead(pp, 'min_pages'), max_pages: pageRead(pp, 'max_pages'), bleed_mm: bleedRead(pp), extra_page_price: extraRead(pp),
+    min_pages: pageRead(pp, 'min_pages'), max_pages: pageRead(pp, 'max_pages'), bleed_mm: bleedRead(pp), extra_page_price: extraRead(pp), category: categoryRead(pp),
     active: pp.active, sort: pp.sort, has_image: pp.has_image, image_type: pp.image_type, image_updated_at: pp.image_updated_at,
     created_at: NOW, updated_at: NOW, options: pp.options.map(o => ({ ...o })) });
   // the photographer's option, as an order line reads it
@@ -173,6 +173,20 @@ export function ordersFake(opts = {}) {
     if (v !== null && !(Number.isSafeInteger(v) && v >= 0 && v <= 1_000_000)) return { bad: 'invalid_extra_page_price' };
     if (v !== null && !st.pageColumns.extra_page_price) return { unavailable: { error: '加頁價格功能尚未啟用', code: 'extra_page_price_unavailable' } };
     return { set: { extra_page_price: v } };
+  }
+  // platform_products.category (worker categoryWrite): a string of at most 20 characters after trim ('' = null), no
+  // control characters, or null; absent from a body keeps it; a non-null value for a missing column is
+  // 500 category_unavailable (null is dropped); a missing column reads null
+  const categoryRead = pp => (st.pageColumns.category ? (pp.category ?? null) : null);
+  function categoryWrite(body) {
+    if (!('category' in body)) return { set: {} };
+    const v = body.category;
+    if (v === null) return st.pageColumns.category ? { set: { category: null } } : { set: {} };
+    if (typeof v !== 'string') return { bad: 'invalid_category' };
+    const t = v.trim();
+    if ([...t].length > 20 || /[\u0000-\u001f\u007f]/.test(t)) return { bad: 'invalid_category' };
+    if (t && !st.pageColumns.category) return { unavailable: { error: '商品分類功能尚未啟用', code: 'category_unavailable' } };
+    return { set: st.pageColumns.category ? { category: t || null } : {} };
   }
   // returns {set} (the bounds to store) | {bad} | {unavailable}
   function pageBoundsWrite(body, kind, current) {
@@ -288,12 +302,15 @@ export function ordersFake(opts = {}) {
       if (bleed.bad) return bad(bleed.bad);
       const extra = extraWrite(body, f.set.kind, null);
       if (extra.bad) return bad(extra.bad);
+      const cat = categoryWrite(body);
+      if (cat.bad) return bad(cat.bad);
       const opts = checkOptions(body.options, new Set(), PLATFORM_MONEY);
       if (opts.bad) return bad(opts.bad);
       if (bounds.unavailable) return { status: 500, body: bounds.unavailable };
       if (bleed.unavailable) return { status: 500, body: bleed.unavailable };
       if (extra.unavailable) return { status: 500, body: extra.unavailable };
-      const pp = { id: id('plat'), description: '', photo_count: null, sort: 0, ...f.set, ...bounds.set, ...bleed.set, ...extra.set, active: 1, has_image: false, image_type: null, image_updated_at: null,
+      if (cat.unavailable) return { status: 500, body: cat.unavailable };
+      const pp = { id: id('plat'), description: '', photo_count: null, sort: 0, ...f.set, ...bounds.set, ...bleed.set, ...extra.set, ...cat.set, active: 1, has_image: false, image_type: null, image_updated_at: null,
         options: opts.options.map(o => ({ id: id('popt'), label: o.label, vendor_cost: o.vendor_cost, platform_price: o.platform_price, active: 1, sort: o.sort })) };
       if (pp.kind !== 'album') pp.photo_count = null;
       st.platform.push(pp);
@@ -310,6 +327,8 @@ export function ordersFake(opts = {}) {
       if (bleed.bad) return bad(bleed.bad);
       const extra = extraWrite(body, f.set.kind ?? pp.kind, pp);
       if (extra.bad) return bad(extra.bad);
+      const cat = categoryWrite(body);
+      if (cat.bad) return bad(cat.bad);
       let opts = null;
       if ('options' in body) {
         const c = checkOptions(body.options, new Set(pp.options.map(o => o.id)), PLATFORM_MONEY);
@@ -319,7 +338,8 @@ export function ordersFake(opts = {}) {
       if (bounds.unavailable) return { status: 500, body: bounds.unavailable };
       if (bleed.unavailable) return { status: 500, body: bleed.unavailable };
       if (extra.unavailable) return { status: 500, body: extra.unavailable };
-      Object.assign(pp, f.set, bounds.set, bleed.set, extra.set);
+      if (cat.unavailable) return { status: 500, body: cat.unavailable };
+      Object.assign(pp, f.set, bounds.set, bleed.set, extra.set, cat.set);
       if (pp.kind !== 'album') pp.photo_count = null;
       if (opts) {
         const keep = new Set(opts.filter(o => o.id).map(o => o.id));
@@ -355,7 +375,7 @@ export function ordersFake(opts = {}) {
       const products = st.platform.filter(pp => pp.active).map(pp => {
         const mine = st.products.find(p => p.platform_product_id === pp.id);
         return { id: pp.id, kind: pp.kind, name: pp.name, description: pp.description, photo_count: pp.photo_count, sort: pp.sort,
-          min_pages: pageRead(pp, 'min_pages'), max_pages: pageRead(pp, 'max_pages'), extra_page_price: extraRead(pp),
+          min_pages: pageRead(pp, 'min_pages'), max_pages: pageRead(pp, 'max_pages'), extra_page_price: extraRead(pp), category: categoryRead(pp),
           has_image: pp.has_image, image_updated_at: pp.image_updated_at, adopted_product_id: mine ? mine.id : null,
           options: pp.options.filter(o => o.active).map(o => ({ id: o.id, label: o.label, platform_price: o.platform_price, sort: o.sort })) };
       }).filter(p => p.options.length);
@@ -399,7 +419,7 @@ export function ordersFake(opts = {}) {
       const p = st.products.find(x => x.id === m[1]);
       if (!p) return { status: 404, body: { error: 'Not found' } };
       if (p.platform_product_id) {
-        if (['kind', 'name', 'description', 'photo_count', 'min_pages', 'max_pages', 'bleed_mm', 'extra_page_price'].some(k => k in body)) return bad('platform_managed');
+        if (['kind', 'name', 'description', 'photo_count', 'min_pages', 'max_pages', 'bleed_mm', 'extra_page_price', 'category'].some(k => k in body)) return bad('platform_managed');
         const f = checkFields(body, true, []);
         if (f.bad) return bad(f.bad);
         let opts = null;

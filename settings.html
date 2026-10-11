@@ -72,6 +72,8 @@
   .pill-off { background: var(--rule); color: var(--ink-55); }
   .prod-row { display: flex; justify-content: space-between; gap: 12px; padding: 12px 0; border-top: 1px solid var(--rule); }
   .prod-row:first-child { border-top: none; }
+  .cat-head { margin: 16px 0 2px; font-size: 14px; overflow-wrap: anywhere; }
+  .cat-group:first-child .cat-head { margin-top: 4px; }
   .prod-row.retired { opacity: .55; }
   .prod-main { min-width: 0; }
   .prod-name { font-size: 14px; margin-right: 6px; }
@@ -554,6 +556,7 @@
           <strong class="prod-name">${O.esc(p.name)}</strong>
           <span class="pill" data-kind="${O.esc(p.kind)}">${O.esc(O.KIND_LABEL[p.kind] || p.kind)}</span>
           ${adopted ? '<span class="pill pill-plat">平台商品</span>' : ''}
+          ${p.category ? `<span class="pill" data-category>${O.esc(p.category)}</span>` : ''}
           ${retired ? '<span class="pill pill-off">已下架</span>' : ''}
           ${gone ? '<span class="pill pill-off">平台已下架</span>' : ''}
           ${p.kind === 'album' && p.photo_count ? `<span class="hint">指定 ${O.esc(p.photo_count)} 張</span>` : ''}
@@ -572,9 +575,16 @@
       </div>`;
     }
 
+    // grouped by the platform's 分類 (Util.groupByCategory); headings only when there is more than one group
+    function groupedHtml(list, cardHtml) {
+      const groups = Util.groupByCategory(list);
+      if (groups.length < 2) return list.map(cardHtml).join('');
+      return groups.map(g => `<section class="cat-group" data-category-group="${O.esc(g.name === null ? '' : g.name)}"><h3 class="cat-head">${O.esc(g.name === null ? '未分類' : g.name)}</h3>${g.items.map(cardHtml).join('')}</section>`).join('');
+    }
+
     function renderProducts() {
       prodList.innerHTML = products.length
-        ? products.map(productRowHtml).join('')
+        ? groupedHtml(products, productRowHtml)
         : customEnabled
           ? '<div class="hint">還沒有商品。相本、無框畫請按「從平台加入」；加修、急件等服務請按「新增服務」。</div>'
           : '<div class="hint">還沒有商品。請按「從平台加入」挑選要賣的商品。</div>';
@@ -676,7 +686,7 @@
       platBox.innerHTML = `<div class="prod-form" id="plat-form">
         <h3>從平台加入</h3>
         <div class="hint" style="margin-bottom:10px;">勾選要賣的規格並填售價；售價不能低於平台價（平台價就是你的成本）。名稱、說明與圖片由平台提供。</div>
-        ${catalogue.length ? catalogue.map(platCardHtml).join('') : '<div class="hint">平台目前沒有可加入的商品。</div>'}
+        ${catalogue.length ? groupedHtml(catalogue, platCardHtml) : '<div class="hint">平台目前沒有可加入的商品。</div>'}
         <div class="form-actions"><button type="button" id="plat-close" class="btn btn-outline">關閉</button></div>
       </div>`;
       platBox.querySelectorAll('.plat-card[data-adopted="0"]').forEach(wirePicker);

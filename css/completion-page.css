@@ -115,6 +115,8 @@ html.cp-on footer.app-footer { display: none !important; }
 .cp-interest-msg { margin: 8px 0 0; font-size: 14px; color: var(--cp-ink-70); }
 .cp-interest-msg:empty { display: none; }
 .cp-products { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr)); gap: 18px; align-items: start; }
+.cp-cat-group + .cp-cat-group { margin-top: 26px; }
+.cp-cat-head { margin: 0 0 12px; font-family: var(--cp-serif); font-weight: 600; font-size: 17px; line-height: 1.4; color: var(--cp-ink-70); overflow-wrap: anywhere; }
 .cp-product { display: flex; flex-direction: column; min-width: 0; overflow: hidden; background: var(--cp-surface); border: 1px solid var(--cp-rule); border-radius: 14px; }
 .cp-product-img { aspect-ratio: 4 / 3; background: var(--cp-rule); }
 .cp-product-img img { display: block; width: 100%; height: 100%; object-fit: cover; }

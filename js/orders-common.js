@@ -70,6 +70,8 @@
     min_pages_unavailable: '最少頁數還不能存：D1 migration（2026-10-06-product-min-pages.sql）尚未執行',
     invalid_bleed_mm: '出血需為 0–10 mm 的數字（或留空）',
     bleed_mm_unavailable: '出血尚未啟用，請先執行 migration（2026-10-07-product-bleed.sql）',
+    invalid_category: '分類太長了（20 字以內，不可含特殊控制字元）',
+    category_unavailable: '商品分類功能尚未啟用（資料庫還沒更新），請先不要填分類',
     invalid_extra_page_price: '加頁價格需為 0–1,000,000 的整數（或留空）',
     extra_page_price_unavailable: '加頁價格尚未啟用，請先執行 migration（2026-10-07-product-extra-page-price.sql）',
     max_pages_unavailable: '最多頁數還不能存：D1 migration（2026-10-06-product-max-pages.sql）尚未執行',

@@ -10,6 +10,10 @@
 //                                    'iso'  2026-09-21    (en-CA)
 //   Util.todayTaipei()       today's Taipei date, YYYY-MM-DD
 //   Util.PICK_LINK_DEFAULT / Util.pickLinkMessage(template, title, link)   the pick-link message text
+//   Util.groupByCategory(products)  [{name: string|null, items}]: the catalogue grouped by product.category
+//                            (data, shown with textContent / escHtml only); groups ordered by the smallest `sort`
+//                            of their members (a list with no sort: by first appearance), 未分類 (name null) last,
+//                            every group's items in the order they came
 //   Util.formatPrice(n)      NT$5,000 (integer, thousands separators, no space; non-finite → NT$0)
 (function () {
   const MAP = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;', '`': '&#96;' };
@@ -60,6 +64,24 @@
     return t.includes('{連結}') ? out : out + '\n' + String(link == null ? '' : link);
   }
 
+  // product.category: a trimmed non-empty string, else null (= 未分類)
+  const catOf = p => (p && typeof p.category === 'string' && p.category.trim() ? p.category.trim() : null);
+  function groupByCategory(products) {
+    const list = Array.isArray(products) ? products : [];
+    const groups = new Map();   // name|null -> {name, items, rank}
+    list.forEach((p, i) => {
+      const name = catOf(p);
+      const rank = p && Number.isFinite(p.sort) ? p.sort : i;
+      let g = groups.get(name);
+      if (!g) { g = { name, items: [], rank }; groups.set(name, g); }
+      if (rank < g.rank) g.rank = rank;
+      g.items.push(p);
+    });
+    const named = [...groups.values()].filter(g => g.name !== null).sort((a, b) => a.rank - b.rank);   // stable: ties keep first appearance
+    const rest = groups.get(null);
+    return (rest ? [...named, rest] : named).map(g => ({ name: g.name, items: g.items }));
+  }
+
   window.escHtml = escHtml;
-  window.Util = { escHtml, fmtDate, todayTaipei, formatPrice, PICK_LINK_DEFAULT, pickLinkMessage };
+  window.Util = { groupByCategory, escHtml, fmtDate, todayTaipei, formatPrice, PICK_LINK_DEFAULT, pickLinkMessage };
 })();

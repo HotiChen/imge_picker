@@ -94,7 +94,8 @@
             const album = p.kind === 'album';
             out.push({
                 id: typeof p.id === 'string' && p.id.length >= 1 && p.id.length <= 200 ? p.id : null,
-                kind: p.kind, name: p.name, description: typeof p.description === 'string' ? p.description : '',
+                kind: p.kind, name: p.name, category: typeof p.category === 'string' && p.category.trim() && p.category.length <= 60 ? p.category.trim() : null,
+                description: typeof p.description === 'string' ? p.description : '',
                 min: album ? bound(p.min_pages) : null, max: album ? bound(p.max_pages) : null,
                 extraPagePrice: album ? extraPrice(p.extra_page_price) : null,
                 image: productImageUrl(workerUrl, p.image_url), options,
@@ -352,12 +353,11 @@
         _buildShop(products) {
             const sec = el('section', 'cp-sec cp-shop', null, 'cpShop');
             sec.append(el('h2', 'cp-h2', '把這段回憶留下來'), el('p', 'cp-sub', '有些照片，值得變成真正的作品。'));
-            const list = el('ul', 'cp-products');
             const owner = !!(this.ctx && this.ctx.isOwner && this.ctx.onInterest);
             // 訂購 (js/guest-order.js) replaces 「我有興趣」 only when the Worker offers ordering AND this is the seat owner of a
             // confirmed project; otherwise (ordering null, a viewer, ordering switched off meanwhile) the page is what it always was
             const ordering = this._orderingOn();
-            for (const p of products) {
+            const buildCard = p => {
                 const li = el('li', `cp-product cp-product--${p.kind}`);
                 if (p.image) {
                     const frame = el('div', 'cp-product-img');
@@ -399,9 +399,26 @@
                     body.append(this._buildInterest(p));
                 }
                 li.append(body);
-                list.append(li);
+                return li;
+            };
+            // grouped by the operator's 分類 (Util.groupByCategory); headings only when there is more than one group,
+            // so a single group (or no category at all) is the one plain list it always was
+            const groups = window.Util.groupByCategory(products);
+            if (groups.length < 2) {
+                const list = el('ul', 'cp-products');
+                products.forEach(p => list.append(buildCard(p)));
+                sec.append(list);
+            } else {
+                for (const g of groups) {
+                    const grp = el('div', 'cp-cat-group');
+                    grp.dataset.category = g.name === null ? '' : g.name;
+                    grp.append(el('h3', 'cp-cat-head', g.name === null ? '未分類' : g.name));
+                    const list = el('ul', 'cp-products');
+                    g.items.forEach(p => list.append(buildCard(p)));
+                    grp.append(list);
+                    sec.append(grp);
+                }
             }
-            sec.append(list);
             if (ordering) sec.append(GuestOrder.buildBar());
             // one call to action, information only: a link to the studio, or a plain line
             const cta = el('div', 'cp-cta', null, 'cpShopCta');

@@ -45,6 +45,9 @@
   .btn-outline:hover { border-color: var(--accent); color: var(--accent); }
   .btn-sm { padding: 5px 12px; font-size: 12px; }
   .pill { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 11px; background: var(--mint); color: var(--success); font-family: 'IBM Plex Mono', monospace; }
+  .pill[data-category] { background: var(--rule); color: var(--ink-70, var(--ink-55)); overflow-wrap: anywhere; }
+  .cat-head { margin: 18px 0 2px; font-size: 14px; overflow-wrap: anywhere; }
+  .cat-group:first-child .cat-head { margin-top: 4px; }
   .pill-off { background: var(--rule); color: var(--ink-55); }
   .chip-warn { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 11px; background: #fde4e0; color: var(--danger); font-weight: 600; }
   .prod-row { display: flex; gap: 12px; padding: 12px 0; border-top: 1px solid var(--rule); align-items: flex-start; }
@@ -261,6 +264,7 @@
         ${O.pageRangeText(p) ? `<span class="hint" data-page-range>${O.esc(O.pageRangeText(p))}</span>` : ''}
         ${O.pagePriceText(p) ? `<span class="hint" data-page-price>${O.esc(O.pagePriceText(p))}</span>` : ''}
         ${O.bleedText(p) ? `<span class="hint" data-bleed>${O.esc(O.bleedText(p))}</span>` : ''}
+        ${p.category ? `<span class="pill" data-category>${O.esc(p.category)}</span>` : ''}
         ${p.description ? `<div class="hint">${O.esc(p.description)}</div>` : ''}
         <ul class="prod-opts">${opts}</ul>
       </div>
@@ -277,7 +281,12 @@
   // cannot reorder them wrongly), retired ones greyed at the bottom
   function renderList() {
     const sorted = products.slice().sort((a, b) => (b.active ? 1 : 0) - (a.active ? 1 : 0));
-    listBox.innerHTML = sorted.length ? sorted.map(rowHtml).join('') : '<div class="hint">還沒有平台商品。按「新增平台商品」開始。</div>';
+    if (!sorted.length) { listBox.innerHTML = '<div class="hint">還沒有平台商品。按「新增平台商品」開始。</div>'; return; }
+    // grouped by 分類 (Util.groupByCategory: smallest sort first, 未分類 last); headings only when there is more than one group
+    const groups = Util.groupByCategory(sorted);
+    listBox.innerHTML = groups.length > 1
+      ? groups.map(g => `<section class="cat-group" data-category-group="${O.esc(g.name === null ? '' : g.name)}"><h3 class="cat-head">${O.esc(g.name === null ? '未分類' : g.name)}<span class="hint"> ${g.items.length}</span></h3>${g.items.map(rowHtml).join('')}</section>`).join('')
+      : sorted.map(rowHtml).join('');
   }
 
   async function loadProducts() {
@@ -339,6 +348,11 @@
           <label for="opf-name">名稱</label>
           <input id="opf-name" class="field" type="text" maxlength="60" placeholder="例如：相本書" value="${O.esc(p.name)}">
         </div>
+      </div>
+      <div class="field-group">
+        <label for="opf-category">分類（選填，20 字以內；同分類的商品會排在一起）</label>
+        <input id="opf-category" class="field" type="text" maxlength="20" list="opf-category-list" autocomplete="off" placeholder="例如：婚紗相本" value="${O.esc(p.category || '')}">
+        <datalist id="opf-category-list">${[...new Set(products.map(x => x.category).filter(Boolean))].map(c => `<option value="${O.esc(c)}"></option>`).join('')}</datalist>
       </div>
       <div class="field-group">
         <label for="opf-desc">說明（選填，攝影師會看到）</label>
@@ -510,6 +524,7 @@
     if (!options.length) { formErr.textContent = O.errorText({ code: 'invalid_options' }); return; }
     const body = {
       kind, name, description: $('opf-desc').value.trim(),
+      category: $('opf-category').value.trim() || null,
       photo_count: kind === 'album' && countRaw !== '' ? Number(countRaw) : null,
       // a print does not send the page bounds at all (the Worker clears both
       // when a product leaves album); an album sends null to clear one
