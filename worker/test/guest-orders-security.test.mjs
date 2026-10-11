@@ -389,7 +389,7 @@ test('#18 a viewer\'s /api/pick/state and /shop say nothing of orders or contact
       const res = await pick(env, 'GET', route, p.token, { key });
       assert.equal(res.status, 200);
       const text = await res.text();
-      for (const s of ['0912999888', 'wangline', 'orders"', 'contact', 'requested']) assert.ok(!text.includes(s), `${route} ${key}: ${s}`);
+      for (const s of ['0912999888', 'wangline', 'orders"', 'contact', '"requested"']) assert.ok(!text.includes(s), `${route} ${key}: ${s}`);
     }
   }
 });

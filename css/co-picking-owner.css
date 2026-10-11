@@ -1,0 +1,76 @@
+/* Co-picking, the OWNER's panel on the guest pick page (js/co-picking-owner.js, docs/co-picking.md).
+   Dark guest styling: only variables from css/styles.css :root are read, nothing there is changed.
+   Every rule is under a #co* id or a .co-* class. `.co-*` buttons set display, so [hidden] is restored explicitly. */
+#coPickBar, #coPanel, #coRenewalBanner { box-sizing: border-box; }
+#coPickBar *, #coPanel *, #coRenewalBanner * { box-sizing: border-box; }
+#coPickBar [hidden], #coPanel[hidden], #coPanel [hidden], #coRenewalBanner[hidden] { display: none !important; }
+
+/* The entry floats (fixed, bottom-right above the phone's action bar): an in-flow bar would push the sticky #guestBar and
+   the grid down on every pick page. The desktop pick pill is bottom-LEFT, so bottom-right is free there. Modals (2000) cover it. */
+.co-bar { position: fixed; right: 12px; bottom: calc(80px + env(safe-area-inset-bottom, 0px)); z-index: 900; }
+@media (min-width: 1025px) { .co-bar { bottom: 16px; } }
+.co-bar .co-btn { box-shadow: 0 4px 14px rgba(0, 0, 0, .45); border-radius: 999px; min-height: 44px; padding: 0 16px; background: var(--card-hi); }
+.co-btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 40px; padding: 0 14px;
+  border: 1px solid var(--border); border-radius: 10px; background: var(--card); color: var(--ink);
+  font: inherit; font-size: 14px; cursor: pointer; -webkit-tap-highlight-color: transparent;
+}
+.co-btn:hover { background: var(--card-hi); }
+.co-btn:disabled { opacity: .5; cursor: default; }
+.co-btn--primary { background: var(--accent); border-color: var(--accent); color: #1a1408; font-weight: 600; }
+.co-btn--primary:hover { background: var(--accent); filter: brightness(1.08); }
+.co-btn--danger { color: #ff8d8d; border-color: rgba(255, 141, 141, .45); }
+.co-btn--sm { min-height: 36px; padding: 0 12px; font-size: 13px; }
+#coPickBadge {
+  display: inline-block; min-width: 20px; height: 20px; padding: 0 6px; border-radius: 10px; background: #ff4757; color: #fff;
+  font-size: 12px; font-weight: 700; line-height: 20px; text-align: center;
+}
+
+#coRenewalBanner { padding: 10px 16px; background: var(--accent-dim); border-bottom: 1px solid var(--border); color: var(--ink); font-size: 14px; }
+.co-renewal-item { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; padding: 4px 0; }
+.co-renewal-item + .co-renewal-item { border-top: 1px solid var(--border); margin-top: 6px; padding-top: 10px; }
+.co-renewal-text { flex: 1 1 140px; min-width: 0; font-weight: 600; overflow-wrap: anywhere; }
+.co-renewal-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.co-err { margin: 6px 0 0; color: #ff8d8d; font-size: 13px; line-height: 1.5; }
+.co-err:empty { display: none; }
+
+#coPanel { position: fixed; inset: 0; z-index: 1200; display: flex; align-items: flex-end; justify-content: center; }
+.co-backdrop { position: absolute; inset: 0; background: rgba(0, 0, 0, .6); }
+.co-sheet {
+  position: relative; display: flex; flex-direction: column; width: 100%; max-width: 520px; max-height: 92vh; max-height: 92dvh;
+  background: var(--surface); color: var(--ink); border-radius: 18px 18px 0 0; border: 1px solid var(--border); border-bottom: 0; overflow: hidden;
+}
+@media (min-width: 700px) { #coPanel { align-items: center; } .co-sheet { border-radius: 18px; border-bottom: 1px solid var(--border); } }
+.co-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 8px 8px 16px; border-bottom: 1px solid var(--border); }
+.co-title { margin: 0; font-size: 17px; font-weight: 600; }
+.co-close { width: 44px; height: 44px; border: 0; border-radius: 50%; background: transparent; color: var(--ink); font-size: 26px; line-height: 1; cursor: pointer; }
+.co-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 14px 16px calc(16px + env(safe-area-inset-bottom, 0px)); }
+.co-sec { margin-bottom: 18px; }
+.co-h3 { margin: 0 0 8px; font-size: 14px; font-weight: 600; color: var(--ink-70); }
+.co-hint { margin: 0 0 10px; font-size: 13px; color: var(--ink-55); line-height: 1.55; }
+
+.co-days { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 10px; }
+.co-days .co-btn { padding: 0 6px; }
+.co-days .co-btn[aria-pressed="true"] { background: var(--accent-dim); border-color: var(--accent); color: var(--accent); font-weight: 600; }
+#coInviteBtn { width: 100%; min-height: 44px; }
+.co-code-box { margin-top: 12px; padding: 14px; border: 1px dashed var(--accent); border-radius: 12px; text-align: center; background: var(--bg-soft); }
+#coCode { font-size: 34px; font-weight: 700; letter-spacing: .08em; font-variant-numeric: tabular-nums; color: var(--accent); user-select: all; }
+#coCountdown { margin: 6px 0 10px; font-size: 13px; color: var(--ink-70); }
+#coCopyBtn { min-width: 120px; }
+#coInviteInfo { margin: 8px 0 0; font-size: 12px; color: var(--ink-55); }
+
+.co-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.co-empty { margin: 0; font-size: 13px; color: var(--ink-55); }
+.co-item { padding: 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--card); }
+.co-item[data-status="removed"], .co-item[data-status="expired"] { opacity: .8; }
+.co-item-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.co-name { min-width: 0; font-size: 15px; font-weight: 600; overflow-wrap: anywhere; }
+.co-status { flex: 0 0 auto; padding: 2px 8px; border-radius: 999px; background: var(--ink-15); color: var(--ink-70); font-size: 12px; }
+.co-item[data-status="active"] .co-status { background: rgba(46, 213, 115, .16); color: #5fe29a; }
+.co-item[data-status="expired"] .co-status { background: var(--accent-dim); color: var(--accent); }
+.co-meta { margin: 6px 0 0; font-size: 12.5px; color: var(--ink-55); line-height: 1.6; }
+.co-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 10px; }
+.co-period-sel { min-height: 36px; padding: 0 8px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg-soft); color: var(--ink); font: inherit; font-size: 13px; }
+.co-confirm { margin-top: 10px; padding: 10px; border-radius: 10px; background: rgba(255, 141, 141, .1); border: 1px solid rgba(255, 141, 141, .35); font-size: 13px; line-height: 1.5; }
+.co-confirm-text { margin: 0 0 8px; overflow-wrap: anywhere; }
+.co-confirm .co-actions { margin-top: 0; }

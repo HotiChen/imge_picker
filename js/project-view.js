@@ -34,6 +34,7 @@
         _selByKey: new Map(),   // photo_key -> the client's selection row
         ownerName: null,
         tokens: [],
+        collaborators: [],
 
         async start(app) {
             this.app = app;
@@ -78,6 +79,7 @@
             const data = await res.json().catch(() => ({}));
             this._applyState(data);
             this.renderBanner();
+            this.renderCollaborators();
             this.renderRevisions(data.revision_requests);
             if (this.mode === 'all') { await this._ensureAllLoaded(); this.renderBanner(); }
             this.loadGrid();
@@ -177,6 +179,7 @@
                         updatedAt: sel ? sel.updatedAt : null,
                         hasAnnotations: false,
                         marks: sel ? sel.marks : [],
+                        by: sel ? sel.by : null,
                     });
                 });
                 if (depth < 3) await Promise.all((r.folders || []).map(f => walk(f, depth + 1)));
@@ -198,6 +201,7 @@
             this._selByKey = new Map((data.selections || []).map(s => [s.photo_key, {
                 rating: s.rating, note: s.note || '', updatedAt: s.updated_at || null,
                 marks: window.cleanPinMarks(s.marks),
+                by: this._cleanBy(s.by),
             }]));
             this.photos = (data.selections || [])
                 .filter(s => s.rating > 0)
@@ -213,7 +217,84 @@
                     // the guest's retouch pins (docs/guest-picking.md); null
                     // before the D1 migration ran = none
                     marks: window.cleanPinMarks(s.marks),
+                    // who last wrote this pick (co-picking): {id, name, role} or null
+                    by: this._cleanBy(s.by),
                 }));
+            this.collaborators = Array.isArray(data.collaborators)
+                ? data.collaborators.filter(c => c && typeof c === 'object') : [];
+        },
+
+        // ── 誰選的 (docs/co-picking.md, photographer view) ─────────────────────
+        // `by` = {id, name, role: owner | collaborator | other} or null (no picker of
+        // this project). Names are guest input: every node below is built with
+        // textContent, never innerHTML.
+        _cleanBy(by) {
+            if (!by || typeof by !== 'object') return null;
+            const role = by.role === 'owner' || by.role === 'collaborator' ? by.role : 'other';
+            return { id: by.id, name: typeof by.name === 'string' ? by.name : '', role };
+        },
+
+        _byChip(by) {
+            if (!by) return null;
+            const chip = document.createElement('span');
+            chip.className = `pv-by pv-by-${by.role}`;
+            chip.dataset.role = by.role;
+            const label = { owner: '選片人', collaborator: '協作者', other: '前任選片人' }[by.role];
+            chip.title = `${label}${by.name ? ' · ' + by.name : ''}`;
+            const ini = document.createElement('span');
+            ini.className = 'pv-by-ini';
+            ini.textContent = [...(by.name || '?')][0];
+            const name = document.createElement('span');
+            name.className = 'pv-by-name';
+            name.textContent = by.name || '（未具名）';
+            chip.append(ini, name);
+            return chip;
+        },
+
+        // ── 協作者 (read-only): the photographer sees them, changes nothing here ──
+        renderCollaborators() {
+            document.getElementById('pvCollaborators')?.remove();
+            const list = this.collaborators;
+            const banner = document.getElementById('projectViewBanner');
+            if (!list.length || !banner) return;
+            const section = document.createElement('section');
+            section.id = 'pvCollaborators';
+            section.className = 'pv-collaborators';
+            const head = document.createElement('h3');
+            head.textContent = `協作者 · ${list.length} 位`;
+            const ul = document.createElement('ul');
+            const STATUS = { active: '使用中', expired: '已到期', removed: '已移除' };
+            list.forEach(c => {
+                const li = document.createElement('li');
+                li.className = 'pv-co-row';
+                li.dataset.status = c.status;
+                const cell = (cls, text) => { const e = document.createElement('span'); e.className = cls; e.textContent = text; return e; };
+                const until = c.expires_at ? this._fmtDay(c.expires_at) : '';
+                li.append(
+                    cell('pv-co-name', c.name || '（未具名）'),
+                    cell(`pv-co-status pv-co-${c.status}`, STATUS[c.status] || String(c.status || '')),
+                    cell('pv-co-until', until ? `有效至 ${until}` : '未設期限'),
+                    cell('pv-co-joined', `加入 ${this._fmtTime(c.joined_at)}`),
+                );
+                ul.appendChild(li);
+            });
+            section.append(head, ul);
+            banner.after(section);
+        },
+
+        _fmtDay(iso) {
+            return Util.fmtDate(iso, 'ymd');
+        },
+
+        // Grid cards are built by app.js; the chip is added under the file name
+        // (not over the photo, where ♥ / 💬 / 📍 live).
+        _decorateCards() {
+            const byId = new Map((this.app.filteredPhotos || []).map(p => [p.id, p]));
+            document.querySelectorAll('#photoGrid .photo-card').forEach(card => {
+                const photo = byId.get(card.dataset.photoId);
+                const chip = photo && this._byChip(photo.by);
+                if (chip) card.querySelector('.photo-info-section')?.appendChild(chip);
+            });
         },
 
         // Preview: the guest's pins are drawn over the photo by
@@ -232,6 +313,10 @@
             const sidebar = document.getElementById('modalSidebar');
             if (!sidebar) return;
             document.getElementById('pvPinSection')?.remove();
+            // the author of this pick beside the read-only ♥ (openModal emptied the box first)
+            const chip = this._byChip(photo && photo.by);
+            const mpr = document.getElementById('modalPhotoRating');
+            if (mpr) { mpr.querySelector('.pv-by')?.remove(); if (chip) mpr.appendChild(chip); }
             const marks = photo && Array.isArray(photo.marks) ? photo.marks : [];
             const hasNote = !!(photo && photo.note);
             // the read-only note of this photo (js/app.js openModal fills it)
@@ -379,7 +464,7 @@
                 const grid = document.getElementById('photoGrid');
                 if (grid) grid.classList.toggle('pv-list', this.viewMode === 'list');
                 if (this.viewMode === 'list') this._renderListView();
-                else origRender();
+                else { origRender(); this._decorateCards(); }
             };
         },
 
@@ -432,9 +517,13 @@
             row.innerHTML = `
                 <img src="${escHtml(thumbUrl)}" class="pv-list-thumb" loading="lazy" decoding="async" alt="">
                 <span class="pv-list-name">${escHtml(photo.name)}</span>
+                <span class="pv-list-by"></span>
                 <span class="pv-list-note">${escHtml(photo.note || '')}</span>
                 <span class="pv-list-time">${escHtml(this._fmtTime(photo.updatedAt))}</span>
             `;
+            const chip = this._byChip(photo.by);
+            const slot = row.querySelector('.pv-list-by');
+            if (chip) slot.appendChild(chip); else slot.remove();
             // like a grid card: hovering a row shows it in the preview pane (and so makes it the current one)
             row.addEventListener('mouseenter', () => {
                 clearTimeout(this.app._previewTimer);

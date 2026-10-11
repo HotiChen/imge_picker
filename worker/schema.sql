@@ -613,3 +613,35 @@ CREATE TABLE IF NOT EXISTS photographer_login_failures (
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_photographer_login_failures_key ON photographer_login_failures(key_hash, created_at);
+
+-- ─── Co-picking (docs/co-picking.md, batch 1) ───────────────────────────────
+-- New tables, from the hand-run worker/migrations/2026-10-13-co-picking.sql (the column comments are there).
+CREATE TABLE IF NOT EXISTS pick_invites (
+  id          TEXT PRIMARY KEY,
+  project_id  TEXT NOT NULL,
+  code_hash   TEXT NOT NULL,          -- HMAC-SHA256(PICK_INVITE_SECRET, project_id + ':' + code), hex; never the code
+  invited_by  TEXT NOT NULL,
+  window_days INTEGER,                -- 1, 7, NULL = until the project ends
+  created_at  TEXT NOT NULL,
+  expires_at  TEXT NOT NULL,          -- created_at + 1 hour
+  used_at     TEXT,
+  used_by     TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_pick_invites_project ON pick_invites(project_id, created_at);
+CREATE TABLE IF NOT EXISTS project_collaborators (
+  picker_id  TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  invited_by TEXT NOT NULL,           -- valid only while this is projects.owner_picker_id
+  joined_at  TEXT NOT NULL,
+  expires_at TEXT,                    -- NULL = until the project ends
+  revoked_at TEXT,
+  last_seen_at TEXT,
+  renewal_requested_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_project_collaborators_project ON project_collaborators(project_id, joined_at);
+CREATE TABLE IF NOT EXISTS pick_join_failures (
+  project_id TEXT NOT NULL,
+  bucket     TEXT NOT NULL,           -- 'p' or 'n:<network>'
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_pick_join_failures ON pick_join_failures(project_id, bucket, created_at);
