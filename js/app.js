@@ -476,8 +476,8 @@ class App {
                     annotationManager.deleteSelected();
                 }
 
-                if (e.key === 'ArrowLeft') this.navigatePhoto(-1);
-                if (e.key === 'ArrowRight') this.navigatePhoto(1);
+                if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') this.navigatePhoto(-1);
+                if (e.key === 'ArrowRight' || e.key === 'ArrowDown') this.navigatePhoto(1);
                 if (e.key === 'Escape') this.closeModal();
                 if (e.key >= '0' && e.key <= '5') {
                     const rating = parseInt(e.key);
@@ -487,6 +487,8 @@ class App {
                         if (starsContainer) ratingManager.setRating(starsContainer, rating, photo.id);
                     }
                 }
+            } else if (this._gridKeyNav(e)) {
+                e.preventDefault();
             } else if (this.selectedPhotoIds.size > 0) {
                 // 如果 Modal 沒開但有選取照片，執行批量操作
                 if (e.key >= '0' && e.key <= '5') {
@@ -798,6 +800,44 @@ class App {
         });
         grid.appendChild(frag);
         this.markCurrent(this._currentPhotoId);
+    }
+
+    // 照片區的方向鍵（viewer 關著、焦點不在輸入框 / select / 對話框）：←→ 一張、↑↓ 一排，
+    // 目前那張發光、預覽區跟著換、捲進畫面；Enter 開啟。是這個鍵就回傳 true。
+    _gridKeyNav(e) {
+        if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return false;
+        const grid = document.getElementById('photoGrid');
+        const photos = this.filteredPhotos;
+        if (!grid || !grid.children.length || !photos.length) return false;
+        // select / 可編輯框 / 對話框有自己的方向鍵；按鈕和連結（含 ♥）的 Enter 也是它們自己的
+        const t = e.target;
+        if (t.tagName === 'SELECT' || t.isContentEditable || t.closest('[role="dialog"]')) return false;
+        if (document.querySelector('.picker-overlay')) return false;
+        const i = photos.findIndex(p => p.id === this._currentPhotoId);
+        if (e.key === 'Enter') {
+            if (i < 0 || t.closest('button, a, [role="button"]')) return false;
+            this.openModal(i);
+            return true;
+        }
+        const cards = [...grid.querySelectorAll('.photo-card, .pv-list-row')];
+        if (!cards.length) return false;
+        // （格狀與列表都依序畫出全部 filteredPhotos，所以卡片順序 = 照片順序）
+        // 欄數 = 第一張卡片到第一張比它低的卡片之前（列表視為一欄）
+        const firstLower = cards.findIndex(c => c.offsetTop !== cards[0].offsetTop);
+        const cols = cards[0].classList.contains('pv-list-row') ? 1 : (firstLower < 0 ? cards.length : firstLower);
+        let step;
+        if (e.key === 'ArrowLeft') step = -1;
+        else if (e.key === 'ArrowRight') step = 1;
+        else if (e.key === 'ArrowUp') step = -cols;
+        else if (e.key === 'ArrowDown') step = cols;
+        else return false;
+        // 還沒有目前這張：第一下方向鍵落在第一張
+        const next = i < 0 ? 0 : Math.min(photos.length - 1, Math.max(0, i + step));
+        if (next !== i) {
+            this.updatePreviewPane(photos[next]);
+            this.markCurrent(photos[next].id, true);
+        }
+        return true;
     }
 
     // The photo the preview pane / the enlarged view is showing glows in the grid or list behind it (.is-current), so the
