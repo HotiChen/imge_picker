@@ -486,11 +486,11 @@ test('with no email ever sent, every submission is unnotified', async () => {
 test('state gives notes to the owner only; viewers see picks and ratings', async () => {
   const env = setup();
   const p = await claimed(env);
-  await save(env, p.token, p.key, { upsert: [{ photo_key: A, rating: 5, note: '放大這張' }, { photo_key: B, rating: 0 }] });
+  await save(env, p.token, p.key, { upsert: [{ photo_key: A, rating: 5, note: '放大這張' }, { photo_key: B, rating: 0, note: '之後再看' }] });
   const st = async key => (await (await pick(env, 'GET', 'state', p.token, { key })).json()).selections;
   assert.deepEqual(await st(p.key), [
     { photo_key: A, rating: 5, note: '放大這張', marks: null },
-    { photo_key: B, rating: 0, note: '', marks: null },
+    { photo_key: B, rating: 0, note: '之後再看', marks: null },
   ]);
   for (const key of [null, 'wrong']) {
     assert.deepEqual(await st(key), [{ photo_key: A, rating: 5 }, { photo_key: B, rating: 0 }], String(key));

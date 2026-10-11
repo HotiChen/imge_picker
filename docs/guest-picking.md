@@ -93,9 +93,12 @@ browser. This replaces the fake `submitJob()` in `js/app.js`.
 - **Selection caps** (constants in `worker.js`, change them there only):
   `PICK_MAX_SELECTIONS = 500` starred rows (rating ≥ 1, what submit counts;
   un-starring = upsert rating 0 frees a slot) and `PICK_MAX_ROWS = 1000` rows
-  of any rating per project. Checked inside every statement of the save batch
-  against the state the save would leave (existing rows overwritten by the
-  upserts, minus the deletes), so concurrent saves cannot pass it. A save that
+  of any rating per project. An item with rating 0 **and an empty note** is a
+  delete, not a row (un-hearted photos used to fill the 1000 rows while few
+  were picked); rating 0 with a note keeps its row. Checked inside every
+  statement of the save batch against the state the save would leave (existing
+  rows overwritten by the upserts, minus the deletes), so concurrent saves
+  cannot pass it. A save that
   would exceed either → **409** `{code: 'selection_cap', max: 500}` or
   `{code: 'row_cap', max: 1000}`, nothing written. A project already over a cap
   (constant lowered) can still re-rate, un-star and delete — just not grow.

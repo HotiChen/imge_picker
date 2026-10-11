@@ -331,7 +331,8 @@ export function pickFakeWorker(opts = {}) {
         const isOwner = !!picker && state.project.owner_picker_id === picker.id;
         if (!isOwner) return json({ error: '只有挑選人可以修改' }, 403);
         const upsert = body?.upsert || [];
-        const del = body?.delete || [];
+        // a copy: the fake adds the empty-zero keys below, and the recorded body must stay as it was sent
+        const del = [...(body?.delete || [])];
         // the real limits: a save body over 2,000,000 bytes is 413 too_large
         // (opts.failNextSave injects any other answer, once, for the paths a
         // browser cannot reach — e.g. a real 2 MB body)
@@ -369,6 +370,8 @@ export function pickFakeWorker(opts = {}) {
         // worker.js's MAX(?, current) so a project already over a lowered cap
         // can still re-rate/un-star/delete
         const byKey = new Map(upsert.map(it => [it.photo_key, it])); // last mention wins
+        // mirrors worker.js: an item with rating 0 and an empty note is a delete, not an empty row
+        for (const [k, it] of byKey) if (!(it.rating >= 1) && (it.note === undefined || it.note === '')) { del.push(k); byKey.delete(k); }
         const removed = new Set(del);
         const resultKeys = new Set([...state.selections.keys(), ...byKey.keys()]);
         for (const k of removed) resultKeys.delete(k);

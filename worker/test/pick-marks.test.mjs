@@ -242,9 +242,10 @@ test('unrating clears the pins, whether or not the item names marks (pins sent w
   const p = await claimed(env);
   await save(env, p.token, p.key, { upsert: [{ photo_key: A, rating: 1, marks: [P1] }, { photo_key: B, rating: 1, marks: [P2] }, { photo_key: C, rating: 1, marks: [P3] }] });
   // A: an old pick.js un-hearting (no marks); B: rating 0 with pins → ignored;
-  // C: rating omitted, which is 0
+  // C: rating omitted, which is 0. Each keeps a note, so its row stays and shows the pins are gone (a rating-0 item with
+  // no note is deleted outright: worker/test/pick-empty-rows.test.mjs)
   const res = await save(env, p.token, p.key, {
-    upsert: [{ photo_key: A, rating: 0 }, { photo_key: B, rating: 0, marks: [P2] }, { photo_key: C, marks: [P3] }],
+    upsert: [{ photo_key: A, rating: 0, note: 'a' }, { photo_key: B, rating: 0, note: 'b', marks: [P2] }, { photo_key: C, note: 'c', marks: [P3] }],
   });
   assert.equal(res.status, 200);
   for (const k of [A, B, C]) {
@@ -253,7 +254,7 @@ test('unrating clears the pins, whether or not the item names marks (pins sent w
   }
   // a brand-new rating-0 row with pins stores none either
   const D = '20260819/sub/d.jpg';
-  assert.equal((await save(env, p.token, p.key, { upsert: [{ photo_key: D, rating: 0, marks: [P1] }] })).status, 200);
+  assert.equal((await save(env, p.token, p.key, { upsert: [{ photo_key: D, rating: 0, note: 'd', marks: [P1] }] })).status, 200);
   assert.equal(marksOf(env, D), null);
   assert.equal(one(env, 'SELECT COUNT(*) AS n FROM selections WHERE photo_key = ?', D).n, 1);
   // ignored, but still validated
@@ -270,15 +271,15 @@ test('one save mixing keep, set, clear and unrate applies each to its own photo'
       { photo_key: A, rating: 2 },                 // keep
       { photo_key: B, rating: 2, marks: [P2, P3] }, // set
       { photo_key: C, rating: 2, marks: [] },       // clear
-      { photo_key: D, rating: 0 },                 // unrate
+      { photo_key: D, rating: 0 },                 // unrate: no note, so the row goes (pins with it)
     ],
   });
   assert.equal(res.status, 200);
   assert.deepEqual(parsedMarks(env, A), [P1]);
   assert.deepEqual(parsedMarks(env, B), [P2, P3]);
   assert.equal(marksOf(env, C), null);
-  assert.equal(marksOf(env, D), null);
-  assert.deepEqual(rows(env, 'SELECT rating FROM selections ORDER BY photo_key').map(r => r.rating), [2, 2, 2, 0]);
+  assert.equal(one(env, 'SELECT COUNT(*) AS n FROM selections WHERE photo_key = ?', D).n, 0);
+  assert.deepEqual(rows(env, 'SELECT rating FROM selections ORDER BY photo_key').map(r => r.rating), [2, 2, 2]);
 });
 
 test('a key named twice is written as its last mention, marks included', async () => {
@@ -577,15 +578,15 @@ test('before the migration: saves without pins (unrate included), state, submit 
   assert.equal((await save(env, p.token, p.key, { upsert: [{ photo_key: A, rating: 1, note: 'n' }, { photo_key: B, rating: 1 }] })).status, 200);
   // an unrate is the one save without marks that would clear them
   assert.equal((await save(env, p.token, p.key, { upsert: [{ photo_key: B, rating: 0 }], delete: [C] })).status, 200);
+  // (B was un-hearted with no note: its row is gone, which is the unrate working without the marks column)
   assert.deepEqual(rows(env, 'SELECT photo_key, rating, note FROM selections ORDER BY photo_key').map(r => ({ ...r })),
-    [{ photo_key: A, rating: 1, note: 'n' }, { photo_key: B, rating: 0, note: '' }]);
+    [{ photo_key: A, rating: 1, note: 'n' }]);
   const owner = await state(env, p, p.key);
   assert.deepEqual(owner.selections, [
     { photo_key: A, rating: 1, note: 'n', marks: null },
-    { photo_key: B, rating: 0, note: '', marks: null },
   ]);
   const viewer = await state(env, p);
-  assert.deepEqual(viewer.selections, [{ photo_key: A, rating: 1 }, { photo_key: B, rating: 0 }]);
+  assert.deepEqual(viewer.selections, [{ photo_key: A, rating: 1 }]);
   const first = await submit(env, p);
   assert.equal(first.res.status, 200);
   assert.equal(submissionRows(env).length, 1);
@@ -599,7 +600,7 @@ test('before the migration: saves without pins (unrate included), state, submit 
   await submit(env, p);
   assert.equal(submissionRows(env).length, 2);
   const d = await detail(env, p.project.id);
-  assert.deepEqual(d.selections.map(s => s.marks), [null, null, null]);
+  assert.deepEqual(d.selections.map(s => s.marks), [null, null]);   // A and C (B was un-hearted and deleted)
   assert.deepEqual(d.submissions.map(s => s.marks), [null, null]);
   assert.deepEqual(d.submissions.map(s => s.photo_keys), [[A, C], [A]]);
 });

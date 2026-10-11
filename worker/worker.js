@@ -5162,7 +5162,14 @@ export default {
           byKey.set(item.photo_key, entry);
           if (marks) carriesMarks = true;
         }
-        const items = [...byKey.values()];
+        // Rating 0 with an empty note is a delete, not a row: kept, it
+        // would only use up one of PICK_MAX_ROWS. Judged on a key's last
+        // mention; with a note the row stays (the note is the guest's).
+        const items = [];
+        for (const entry of byKey.values()) {
+          if (entry.r === 0 && entry.n === '') remove.push(entry.k);
+          else items.push(entry);
+        }
         for (const k of remove) {
           if (typeof k !== 'string') return jsonErr('Invalid item');
           if (!pickKeyValid(k)) return pickKeyInvalid();
