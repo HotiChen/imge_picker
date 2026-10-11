@@ -2565,7 +2565,157 @@ async function resolvePick(share, request, env) {
   // a key from before a seat reset still finds its picker row; it is the seat
   // that says whether that picker is the owner
   const isOwner = !!picker && project.owner_picker_id === picker.id;
-  return { project, picker, isOwner };
+  // co-picking (docs/co-picking.md): any other key may be a collaborator's.
+  // Read on every request, so a removal, an expiry or a seat reset holds
+  // from the very next one. No table yet (the migration has not run): nobody
+  // is a collaborator.
+  let membership = null;
+  if (picker && !isOwner) {
+    try {
+      membership = await env.DB.prepare('SELECT * FROM project_collaborators WHERE picker_id = ? AND project_id = ?')
+        .bind(picker.id, project.id).first();
+    } catch (e) {
+      if (!isMissingSchema(e)) throw e;
+    }
+  }
+  const memberStatus = collaboratorStatus(membership, project.owner_picker_id, new Date().toISOString());
+  const isCollaborator = memberStatus === 'active';
+  const role = isOwner ? 'owner' : isCollaborator ? 'collaborator' : 'viewer';
+  return { project, picker, isOwner, isCollaborator, canEdit: isOwner || isCollaborator, role, membership, memberStatus };
+}
+
+// ─── Co-picking (docs/co-picking.md) ────────────────────────────────────────
+// The seat holder invites up to PICK_MAX_COLLABORATORS people with one-use
+// 8-digit codes. A collaborator is a pickers row plus a project_collaborators
+// row, valid only while invited_by is still the project's owner, not revoked
+// and not expired. Change the limits here only.
+const PICK_MAX_COLLABORATORS = 2;
+const PICK_INVITE_MS = 60 * 60 * 1000;
+const PICK_DAY_MS = 24 * 60 * 60 * 1000;
+const PICK_JOIN_WINDOW_MS = 15 * 60 * 1000;
+const PICK_JOIN_FAILURES_PROJECT = 10;
+const PICK_JOIN_FAILURES_NETWORK = 5;
+const CO_PICKING_UNAVAILABLE = { error: '協作者功能尚未啟用', code: 'co_picking_unavailable' };
+
+// What a membership row is now: 'active', 'expired' (its period ran out),
+// 'removed' (revoked by the owner, or invited by someone who no longer holds
+// the seat), or null for no row. `nowIso` is an ISO timestamp, compared as a
+// string the way the statements compare it.
+function collaboratorStatus(row, ownerId, nowIso) {
+  if (!row) return null;
+  if (row.revoked_at || !ownerId || row.invited_by !== ownerId) return 'removed';
+  if (row.expires_at != null && !(row.expires_at > nowIso)) return 'expired';
+  return 'active';
+}
+
+// "Picker `who` is an active collaborator of the project row `p`", for use
+// inside a statement: the same rule as collaboratorStatus. `now` is a bound
+// timestamp parameter.
+function activeCollaboratorSql(who, p, now) {
+  return `EXISTS (SELECT 1 FROM project_collaborators c WHERE c.picker_id = ${who} AND c.project_id = ${p}.id ` +
+    `AND c.invited_by = ${p}.owner_picker_id AND c.revoked_at IS NULL AND (c.expires_at IS NULL OR c.expires_at > ${now}))`;
+}
+
+// The slots in use on project row `p`: active collaborators of its current
+// owner plus that owner's unspent, unexpired invites. `except`: a picker id
+// parameter left out of the count (the person being renewed or re-timed).
+function collaboratorSlotsSql(p, now, except = null) {
+  return `((SELECT COUNT(*) FROM project_collaborators c WHERE c.project_id = ${p}.id AND c.invited_by = ${p}.owner_picker_id ` +
+    `AND c.revoked_at IS NULL AND (c.expires_at IS NULL OR c.expires_at > ${now})${except ? ` AND c.picker_id <> ${except}` : ''}) + ` +
+    `(SELECT COUNT(*) FROM pick_invites i WHERE i.project_id = ${p}.id AND i.invited_by = ${p}.owner_picker_id ` +
+    `AND i.used_at IS NULL AND i.expires_at > ${now}))`;
+}
+
+// Whether the co-picking migration has run (all three tables, the last
+// column included).
+async function coPickingReady(env) {
+  try {
+    await env.DB.prepare(
+      'SELECT i.id, c.renewal_requested_at, f.bucket FROM pick_invites i, project_collaborators c, pick_join_failures f WHERE 0'
+    ).first();
+    return true;
+  } catch (e) {
+    if (isMissingSchema(e)) return false;
+    throw e;
+  }
+}
+
+// A uniformly random 8-digit code, zero-padded (rejection sampling, so no
+// value is likelier than another).
+function pickInviteCode() {
+  const buf = new Uint32Array(1);
+  const limit = 4294967296 - (4294967296 % 100000000);
+  do crypto.getRandomValues(buf); while (buf[0] >= limit);
+  return String(buf[0] % 100000000).padStart(8, '0');
+}
+
+// What is stored for a code: HMAC-SHA256 keyed with PHOTOGRAPHER_TOKEN over
+// project_id + ':' + code, hex. A leaked table alone reveals no live code,
+// and a code is bound to its project.
+async function pickInviteHash(env, projectId, code) {
+  const enc = new TextEncoder();
+  const key = await crypto.subtle.importKey('raw', enc.encode(env.PHOTOGRAPHER_TOKEN), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const sig = await crypto.subtle.sign('HMAC', key, enc.encode(`${projectId}:${code}`));
+  return Array.from(new Uint8Array(sig)).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+// A body's window_days: 1, 7 or null (until the project ends); undefined for
+// anything else, a missing key included.
+function pickWindowDays(body) {
+  if (!isPlainObject(body) || !Object.prototype.hasOwnProperty.call(body, 'window_days')) return undefined;
+  const v = body.window_days;
+  return v === null || v === 1 || v === 7 ? v : undefined;
+}
+
+// A project's collaborators as the owner and the photographer see them,
+// joined order. ownerOnly: only those the current owner invited (the owner's
+// list); otherwise all of them (the admin's), an earlier owner's reading as
+// 'removed'. null when the migration has not run.
+async function collaboratorsFor(env, project, ownerOnly) {
+  const nowIso = new Date().toISOString();
+  let results;
+  try {
+    ({ results } = await env.DB.prepare(
+      'SELECT c.picker_id, pk.name, c.invited_by, c.joined_at, c.expires_at, c.revoked_at, c.last_seen_at, c.renewal_requested_at ' +
+      'FROM project_collaborators c LEFT JOIN pickers pk ON pk.id = c.picker_id AND pk.project_id = c.project_id ' +
+      `WHERE c.project_id = ?1${ownerOnly ? ' AND c.invited_by = ?2' : ''} ORDER BY c.joined_at, c.rowid`
+    ).bind(...(ownerOnly ? [project.id, project.owner_picker_id] : [project.id])).all());
+  } catch (e) {
+    if (isMissingSchema(e)) return null;
+    throw e;
+  }
+  return results.map(r => collaboratorView(r, project.owner_picker_id, nowIso));
+}
+
+function collaboratorView(r, ownerId, nowIso) {
+  return {
+    picker_id: r.picker_id, name: r.name ?? null, joined_at: r.joined_at, expires_at: r.expires_at ?? null,
+    revoked_at: r.revoked_at ?? null, status: collaboratorStatus(r, ownerId, nowIso), last_seen_at: r.last_seen_at ?? null,
+    renewal_requested_at: r.renewal_requested_at ?? null,
+  };
+}
+
+// Who last wrote a selection row, for the owner, collaborators and the
+// photographer: a function from updated_by to {id, name, role} — role
+// 'owner' (the current seat), 'collaborator' (any membership here, removed
+// or expired too) or 'other' (a picker of this project who is neither, such
+// as the seat holder before a reset) — or null for an id that is no picker
+// of this project.
+async function pickAuthors(env, project) {
+  const { results: people } = await env.DB.prepare('SELECT id, name FROM pickers WHERE project_id = ?').bind(project.id).all();
+  let members = [];
+  try {
+    ({ results: members } = await env.DB.prepare('SELECT picker_id FROM project_collaborators WHERE project_id = ?').bind(project.id).all());
+  } catch (e) {
+    if (!isMissingSchema(e)) throw e;
+  }
+  const names = new Map(people.map(p => [p.id, p.name]));
+  const collaborators = new Set(members.map(m => m.picker_id));
+  return id => {
+    if (id == null || !names.has(id)) return null;
+    const role = id === project.owner_picker_id ? 'owner' : collaborators.has(id) ? 'collaborator' : 'other';
+    return { id, name: names.get(id), role };
+  };
 }
 
 // 409 for a project the photographer has started retouching.
@@ -2592,11 +2742,17 @@ function pickCapRefused(count, limit, extraMax) {
 // `cap`: {pickerId, refused()} — when the seat and phase still hold, the
 // write's own cap is what refused it, and refused() builds that 409.
 // An archive that landed in between answers like the dead link it now is.
+// `cap.collaborator`: the caller saved as a collaborator, so a membership
+// still active now (not the seat) is what makes it the cap.
 async function pickRefused(env, projectId, notOwner, cap = null) {
   const now = await env.DB.prepare('SELECT phase, owner_picker_id, archived_at FROM projects WHERE id = ?').bind(projectId).first();
   if (now?.archived_at) return jsonErr('Unauthorized', 401);
   if (now && !PICK_OPEN_PHASES.includes(now.phase)) return pickRetouching();
   if (now && cap && now.owner_picker_id === cap.pickerId) return cap.refused();
+  if (now && cap?.collaborator) {
+    const row = await env.DB.prepare('SELECT * FROM project_collaborators WHERE picker_id = ? AND project_id = ?').bind(cap.pickerId, projectId).first();
+    if (collaboratorStatus(row, now.owner_picker_id, new Date().toISOString()) === 'active') return cap.refused();
+  }
   return jsonErr(notOwner, 403);
 }
 
@@ -3428,7 +3584,12 @@ export default {
         `SELECT photo_key, rating, note, updated_by, updated_at${cols} FROM selections WHERE project_id = ? ORDER BY photo_key`
       ).bind(project.id).all();
       const { results: selectionsRaw } = await withoutMissingColumn(() => selectionRows(', marks'), () => selectionRows(''));
-      const selections = selectionsRaw.map(r => ({ ...r, marks: parseMarks(r.marks) }));
+      // `by`: who last wrote the row (docs/co-picking.md), owner or collaborator
+      const author = await pickAuthors(env, project);
+      const selections = selectionsRaw.map(r => ({ ...r, marks: parseMarks(r.marks), by: author(r.updated_by) }));
+      // every collaborator the project had, an earlier owner's as 'removed';
+      // [] before the co-picking migration. Admin only, never a code
+      const collaborators = (await collaboratorsFor(env, project, false)) || [];
       // every pick link the project ever had, live or not, so the page can
       // offer revoke on the live ones
       const { results: tokenRows } = await env.DB.prepare(
@@ -3452,7 +3613,7 @@ export default {
           open_revision_count: revisions.open,
         },
         owner: pickers.find(p => p.id === project.owner_picker_id) || null,
-        pickers, selections, tokens, submissions, unnotified_submissions: unnotified,
+        pickers, selections, collaborators, tokens, submissions, unnotified_submissions: unnotified,
         revision_requests: revisions.rows,
         interests,
       }, 200, ADMIN_ONLY_HEADERS);
@@ -4743,7 +4904,7 @@ export default {
       const s = await share();
       const ctxPick = await resolvePick(s, request, env);
       if (!ctxPick) return jsonErr('Unauthorized', 401);
-      const { project, picker, isOwner } = ctxPick;
+      const { project, picker, isOwner, isCollaborator, canEdit, role, membership, memberStatus } = ctxPick;
       const route = pathParts.slice(2).join('/');
 
       // GET /api/pick/shop — 購買資訊 (docs/guest-shop.md, S1 trimmed): what
@@ -5002,6 +5163,236 @@ export default {
         return out({ order }, 201);
       }
 
+      // ─── Co-picking (docs/co-picking.md) ───────────────────────────────
+      // POST /invites (owner), POST /join (anyone with the link and a code),
+      // GET /collaborators (owner), PATCH | DELETE /collaborators/:id
+      // (owner), POST /collaborators/:id/decision (owner), POST /renewal (an
+      // expired collaborator). Checks, in order: the link (401, above), the
+      // path (404), the method (405), the migration (500
+      // co_picking_unavailable), who is asking (403), then the body. Every
+      // write is one conditional statement (or one batch) that re-checks the
+      // seat, the archive and the slot count itself. Every answer no-store.
+      if (route === 'invites' || route === 'join' || route === 'renewal' || pathParts[2] === 'collaborators') {
+        const out = (data, status = 200) => jsonOk(data, status, SHARED_LINK_HEADERS);
+        const sub = pathParts.slice(3);
+        const notFound = () => out({ error: 'Not found', code: 'not_found' }, 404);
+        let allow;
+        if (pathParts[2] !== 'collaborators') allow = ['POST'];
+        else if (sub.length === 0) allow = ['GET'];
+        else if (sub.length === 1) allow = ['PATCH', 'DELETE'];
+        else if (sub.length === 2 && sub[1] === 'decision') allow = ['POST'];
+        else return notFound();
+        if (!allow.includes(request.method)) return jsonOk({ error: 'Method not allowed' }, 405, { ...SHARED_LINK_HEADERS, Allow: allow.join(', ') });
+        if (!env.PHOTOGRAPHER_TOKEN || !await coPickingReady(env)) return out(CO_PICKING_UNAVAILABLE, 500);
+        const nowMs = Date.now();
+        const nowIso = new Date(nowMs).toISOString();
+        const notOwner = () => out({ error: '只有挑選人可以管理協作者', code: 'not_owner' }, 403);
+        const invalidWindow = () => out({ error: '期限只能是 1 天、7 天或到專案結束', code: 'invalid_window' }, 400);
+        const limitReached = () => out({ error: `協作者最多 ${PICK_MAX_COLLABORATORS} 位（含尚未使用的邀請碼）`, code: 'collaborator_limit', max: PICK_MAX_COLLABORATORS }, 409);
+        const periodEnd = days => (days == null ? null : new Date(nowMs + days * PICK_DAY_MS).toISOString());
+        const projectNow = () => env.DB.prepare('SELECT phase, owner_picker_id, archived_at FROM projects WHERE id = ?').bind(project.id).first();
+        const dead = () => jsonOk({ error: 'Unauthorized' }, 401, SHARED_LINK_HEADERS);
+
+        // POST /api/pick/invites {window_days: 1 | 7 | null} → {code, expires_at, window_days}
+        if (route === 'invites') {
+          if (!isOwner) return notOwner();
+          if (!PICK_OPEN_PHASES.includes(project.phase)) return pickRetouching();
+          const read = await readJsonCapped(request, PICK_SUBMIT_BODY_MAX);
+          if (read.refused) return read.refused;
+          const windowDays = pickWindowDays(read.body);
+          if (windowDays === undefined) return invalidWindow();
+          const code = pickInviteCode();
+          const expiresAt = new Date(nowMs + PICK_INVITE_MS).toISOString();
+          // the seat, the phase, the archive and the slots, inside the write:
+          // of parallel invites only as many as there are slots land
+          const made = await env.DB.prepare(
+            'INSERT INTO pick_invites (id, project_id, code_hash, invited_by, window_days, created_at, expires_at) ' +
+            'SELECT ?1, p.id, ?2, ?3, ?4, ?5, ?6 FROM projects p ' +
+            `WHERE p.id = ?7 AND p.owner_picker_id = ?3 AND p.archived_at IS NULL AND p.phase IN ${PICK_OPEN_SQL} ` +
+            `AND ${collaboratorSlotsSql('p', '?5')} < ${PICK_MAX_COLLABORATORS}`
+          ).bind(crypto.randomUUID(), await pickInviteHash(env, project.id, code), picker.id, windowDays, nowIso, expiresAt, project.id).run();
+          if (!made.meta?.changes) {
+            const now = await projectNow();
+            if (!now || now.archived_at) return dead();
+            if (now.owner_picker_id !== picker.id) return notOwner();
+            if (!PICK_OPEN_PHASES.includes(now.phase)) return pickRetouching();
+            return limitReached();
+          }
+          // the only time the code ever leaves the Worker
+          return out({ code, expires_at: expiresAt, window_days: windowDays });
+        }
+
+        // POST /api/pick/join {code, name} → {picker_key, picker_id, name, role, expires_at}
+        if (route === 'join') {
+          if (!project.owner_picker_id) return out({ error: '這個連結還沒有挑選人，無法加入', code: 'owner_missing' }, 409);
+          if (!PICK_OPEN_PHASES.includes(project.phase)) return pickRetouching();
+          const read = await readJsonCapped(request, PICK_SUBMIT_BODY_MAX);
+          if (read.refused) return read.refused;
+          const { body } = read;
+          if (!isPlainObject(body)) return out({ error: 'Invalid body', code: 'invalid_body' }, 400);
+          const name = typeof body.name === 'string' ? body.name.trim() : '';
+          if (!name || overChars(name, PICK_NAME_MAX)) return out({ error: `請輸入 1–${PICK_NAME_MAX} 字的名字`, code: 'invalid_name' }, 400);
+          // The guess limit, before the code is looked at: this attempt
+          // reserves one failure row for the project and one for the network
+          // in one conditional insert, so parallel guesses cannot pass the
+          // cap; a join that lands deletes them again in its own batch. What
+          // stays are failures. A refusal never says whether a code exists.
+          const network = `n:${clientNetwork(request)}`;
+          await env.DB.prepare('DELETE FROM pick_join_failures WHERE project_id = ? AND created_at < ?')
+            .bind(project.id, new Date(nowMs - PICK_DAY_MS).toISOString()).run();
+          const reserved = await env.DB.prepare(
+            "INSERT INTO pick_join_failures (project_id, bucket, created_at) SELECT ?1, b, ?2 FROM (SELECT 'p' AS b UNION ALL SELECT ?3) " +
+            "WHERE (SELECT COUNT(*) FROM pick_join_failures WHERE project_id = ?1 AND bucket = 'p' AND created_at > ?4) < ?5 " +
+            'AND (SELECT COUNT(*) FROM pick_join_failures WHERE project_id = ?1 AND bucket = ?3 AND created_at > ?4) < ?6'
+          ).bind(project.id, nowIso, network, new Date(nowMs - PICK_JOIN_WINDOW_MS).toISOString(), PICK_JOIN_FAILURES_PROJECT, PICK_JOIN_FAILURES_NETWORK).run();
+          if (!reserved.meta?.changes) return out({ error: '嘗試次數太多，請 15 分鐘後再試', code: 'too_many_attempts' }, 429);
+          // wrong, used and expired codes: one answer
+          const invalid = () => out({ error: '邀請碼不正確或已失效', code: 'invalid_code' }, 400);
+          if (typeof body.code !== 'string' || !/^\d{8}$/.test(body.code)) return invalid();
+          const found = await env.DB.prepare(
+            'SELECT i.id, i.window_days FROM pick_invites i JOIN projects p ON p.id = i.project_id ' +
+            'WHERE i.project_id = ? AND i.code_hash = ? AND i.used_at IS NULL AND i.expires_at > ? AND i.invited_by = p.owner_picker_id ' +
+            'ORDER BY i.created_at LIMIT 1'
+          ).bind(project.id, await pickInviteHash(env, project.id, body.code), nowIso).first();
+          if (!found) return invalid();
+          const pickerId = crypto.randomUUID();
+          // returned once and never stored: the row keeps its hash
+          const key = newShareToken();
+          const expiresAt = periodEnd(found.window_days);
+          // One batch. The first statement spends the invite — unspent,
+          // unexpired, made by the project's owner now, the project open and
+          // not archived — and only its winner's picker row, membership and
+          // the release of its reserved failure rows land after it.
+          const spentBy = 'EXISTS (SELECT 1 FROM pick_invites WHERE id = ?1 AND used_by = ?2)';
+          const [spent] = await env.DB.batch([
+            env.DB.prepare(
+              'UPDATE pick_invites SET used_at = ?3, used_by = ?2 WHERE id = ?1 AND project_id = ?4 AND used_at IS NULL AND expires_at > ?3 ' +
+              `AND invited_by = (SELECT owner_picker_id FROM projects WHERE id = ?4 AND archived_at IS NULL AND phase IN ${PICK_OPEN_SQL})`
+            ).bind(found.id, pickerId, nowIso, project.id),
+            env.DB.prepare(
+              `INSERT INTO pickers (id, project_id, key_hash, name, created_at) SELECT ?2, ?3, ?4, ?5, ?6 WHERE ${spentBy}`
+            ).bind(found.id, pickerId, project.id, await sha256Hex(key), name, nowIso),
+            env.DB.prepare(
+              'INSERT INTO project_collaborators (picker_id, project_id, invited_by, joined_at, expires_at) ' +
+              'SELECT ?2, i.project_id, i.invited_by, ?3, ?4 FROM pick_invites i WHERE i.id = ?1 AND i.used_by = ?2'
+            ).bind(found.id, pickerId, nowIso, expiresAt),
+            // this attempt's two reserved rows (rows of one bucket and time
+            // are identical, so any one of them is this attempt's)
+            env.DB.prepare(
+              'DELETE FROM pick_join_failures WHERE rowid IN (SELECT MIN(rowid) FROM pick_join_failures ' +
+              "WHERE project_id = ?3 AND created_at = ?4 AND bucket IN ('p', ?5) GROUP BY bucket) AND " + spentBy
+            ).bind(found.id, pickerId, project.id, nowIso, network),
+          ]);
+          if (!spent.meta?.changes) {
+            const now = await projectNow();
+            if (!now || now.archived_at) return dead();
+            if (!PICK_OPEN_PHASES.includes(now.phase)) return pickRetouching();
+            // spent by someone faster, expired, or the seat moved
+            return invalid();
+          }
+          return out({ picker_key: key, picker_id: pickerId, name, role: 'collaborator', expires_at: expiresAt });
+        }
+
+        // POST /api/pick/renewal — an expired collaborator asks the owner to
+        // continue. Once: a repeat keeps the first time and answers 200.
+        if (route === 'renewal') {
+          const notAllowed = () => out({ error: '目前不能要求續期', code: 'renewal_not_allowed' }, 403);
+          if (!picker || memberStatus !== 'expired') return notAllowed();
+          const asked = await env.DB.prepare(
+            'UPDATE project_collaborators SET renewal_requested_at = COALESCE(renewal_requested_at, ?1) ' +
+            'WHERE picker_id = ?2 AND project_id = ?3 AND revoked_at IS NULL AND expires_at IS NOT NULL AND expires_at <= ?1 ' +
+            'AND invited_by = (SELECT owner_picker_id FROM projects WHERE id = ?3 AND archived_at IS NULL)'
+          ).bind(nowIso, picker.id, project.id).run();
+          if (!asked.meta?.changes) {
+            const now = await projectNow();
+            return !now || now.archived_at ? dead() : notAllowed();
+          }
+          const row = await env.DB.prepare('SELECT renewal_requested_at FROM project_collaborators WHERE picker_id = ?').bind(picker.id).first();
+          return out({ ok: true, renewal_requested_at: row?.renewal_requested_at ?? null });
+        }
+
+        // the rest: the owner's list and their changes to one person
+        if (!isOwner) return notOwner();
+
+        // GET /api/pick/collaborators
+        if (sub.length === 0) {
+          const people = (await collaboratorsFor(env, project, true)) || [];
+          const inv = await env.DB.prepare(
+            'SELECT COUNT(*) AS pending, MIN(expires_at) AS soonest FROM pick_invites WHERE project_id = ? AND invited_by = ? AND used_at IS NULL AND expires_at > ?'
+          ).bind(project.id, picker.id, nowIso).first();
+          return out({
+            collaborators: people,
+            invites: { pending: inv?.pending ?? 0, soonest_expires_at: inv?.soonest ?? null },
+            pending_renewals: people.filter(c => c.status === 'expired' && c.renewal_requested_at).length,
+            max: PICK_MAX_COLLABORATORS,
+          });
+        }
+
+        const targetId = sub[0];
+        const deciding = sub.length === 2;
+        let body = null;
+        if (request.method !== 'DELETE') {
+          const read = await readJsonCapped(request, PICK_SUBMIT_BODY_MAX);
+          if (read.refused) return read.refused;
+          body = read.body;
+        }
+        // which change, as SQL over ?1 target, ?2 project, ?3 owner, ?4 now
+        // (?5 the new end when there is one)
+        let set;
+        let where = 'revoked_at IS NULL';
+        let slots = false;
+        let end = null;
+        let noRequest = false;
+        if (request.method === 'DELETE') {
+          set = 'revoked_at = COALESCE(revoked_at, ?4), renewal_requested_at = NULL';
+          where = '1';
+        } else if (!deciding) {
+          const windowDays = pickWindowDays(body);
+          if (windowDays === undefined) return invalidWindow();
+          end = periodEnd(windowDays);
+          set = 'expires_at = ?5, renewal_requested_at = NULL';
+          slots = true;
+        } else {
+          if (!isPlainObject(body) || typeof body.approve !== 'boolean') return out({ error: 'Invalid body', code: 'invalid_body' }, 400);
+          noRequest = true;
+          where += ' AND renewal_requested_at IS NOT NULL';
+          if (body.approve) {
+            const windowDays = pickWindowDays(body);
+            if (windowDays === undefined) return invalidWindow();
+            end = periodEnd(windowDays);
+            set = 'expires_at = ?5, renewal_requested_at = NULL';
+            slots = true;
+          } else {
+            set = 'renewal_requested_at = NULL';
+          }
+        }
+        // a statement binds exactly the parameters it names (D1 refuses extra ones)
+        const usesNow = /\?4/.test(set) || slots;
+        const args = [targetId, project.id, picker.id, ...(usesNow ? [nowIso] : []), ...(slots ? [end] : [])];
+        const changed = await env.DB.prepare(
+          `UPDATE project_collaborators SET ${set} WHERE picker_id = ?1 AND project_id = ?2 AND invited_by = ?3 AND ${where} ` +
+          'AND EXISTS (SELECT 1 FROM projects p WHERE p.id = ?2 AND p.owner_picker_id = ?3 AND p.archived_at IS NULL' +
+          `${slots ? ` AND ${collaboratorSlotsSql('p', '?4', '?1')} < ${PICK_MAX_COLLABORATORS}` : ''})`
+        ).bind(...args).run();
+        const current = () => env.DB.prepare('SELECT * FROM project_collaborators WHERE picker_id = ? AND project_id = ? AND invited_by = ?')
+          .bind(targetId, project.id, picker.id).first();
+        if (!changed.meta?.changes) {
+          // re-read to say why, in the order the statement checks
+          const now = await projectNow();
+          if (!now || now.archived_at) return dead();
+          if (now.owner_picker_id !== picker.id) return notOwner();
+          const row = await current();
+          if (!row) return notFound();
+          if (row.revoked_at) return out({ error: '這位協作者已被移除', code: 'collaborator_removed' }, 409);
+          if (noRequest && !row.renewal_requested_at) return out({ error: '沒有待處理的續期要求', code: 'no_renewal_request' }, 409);
+          return limitReached();
+        }
+        const row = await current();
+        const name = (await env.DB.prepare('SELECT name FROM pickers WHERE id = ?').bind(targetId).first())?.name;
+        const collaborator = collaboratorView({ ...row, name }, picker.id, new Date().toISOString());
+        return out(request.method === 'DELETE' ? { ok: true, collaborator } : { collaborator });
+      }
+
       // GET /api/pick/state — what anyone holding the link may see
       if (request.method === 'GET' && route === 'state') {
         await touchShareToken(s, request, env);
@@ -5009,13 +5400,32 @@ export default {
         // photographer: a viewer sees what was picked and how it was rated,
         // never the note or the pins. The owner's `marks` is the parsed array
         // or null (also on a database without the column yet).
+        // An active collaborator picks with the owner, so reads the same
+        // (docs/co-picking.md): notes, pins and who last wrote each row
+        // (`by`); a viewer — an expired or removed collaborator included —
+        // gets no note, no pin and no name.
+        const seesNotes = isOwner || isCollaborator;
         const selected = cols => env.DB.prepare(
           `SELECT photo_key, rating${cols} FROM selections WHERE project_id = ? ORDER BY photo_key`
         ).bind(project.id).all();
-        const { results: selections } = isOwner
-          ? await withoutMissingColumn(() => selected(', note, marks'), () => selected(', note'))
+        const { results: selections } = seesNotes
+          ? await withoutMissingColumn(() => selected(', note, updated_by, marks'), () => selected(', note, updated_by'))
           : await selected('');
-        if (isOwner) for (const r of selections) r.marks = parseMarks(r.marks);
+        if (seesNotes) {
+          const author = await pickAuthors(env, project);
+          for (const r of selections) {
+            r.marks = parseMarks(r.marks);
+            r.by = author(r.updated_by);
+            delete r.updated_by;
+          }
+        }
+        if (isCollaborator) {
+          // what the owner's list shows as last seen (at most once a minute)
+          const at = new Date();
+          await env.DB.prepare(
+            'UPDATE project_collaborators SET last_seen_at = ? WHERE picker_id = ? AND project_id = ? AND (last_seen_at IS NULL OR last_seen_at < ?)'
+          ).bind(at.toISOString(), picker.id, project.id, new Date(at.getTime() - 60000).toISOString()).run();
+        }
         // the owner learns when the project was last submitted and whether they
         // changed anything since; a viewer only which phase it is in
         const last = isOwner ? await env.DB.prepare(
@@ -5083,7 +5493,17 @@ export default {
           revision_message: revision && isOwner && revision.message_auto !== 1 ? revision.message : null,
           ...pinsState,
           owner: await pickOwnerName(env, project.id),
+          // is_owner stays "the seat": may submit, invite, confirm, order.
+          // can_edit: may heart / note / pin (the owner or an active
+          // collaborator). my_status: this key's membership ('active' |
+          // 'expired' | 'removed'), null for the owner and plain viewers.
           is_owner: isOwner,
+          role,
+          can_edit: canEdit,
+          my_expires_at: isCollaborator ? membership.expires_at ?? null : null,
+          my_status: memberStatus,
+          can_request_renewal: memberStatus === 'expired',
+          renewal_requested: memberStatus === 'expired' && !!membership.renewal_requested_at,
           phase: project.phase,
           ...(isOwner ? { modified_after_submit: project.modified_after_submit } : {}),
           submitted_at: last ? last.created_at : null,
@@ -5122,7 +5542,9 @@ export default {
 
       // PUT /api/pick/selections {upsert: [{photo_key, rating, note}], delete: [photo_key]}
       if (request.method === 'PUT' && route === 'selections') {
-        if (!isOwner) return jsonErr('只有挑選人可以修改', 403);
+        // the owner, or an active collaborator (docs/co-picking.md), who
+        // changes only new rows and rows they last wrote
+        if (!canEdit) return jsonErr('只有挑選人可以修改', 403);
         if (!PICK_OPEN_PHASES.includes(project.phase)) return pickRetouching();
         const read = await readJsonCapped(request, PICK_BODY_MAX);
         if (read.refused) return read.refused;
@@ -5175,7 +5597,40 @@ export default {
           if (!pickKeyValid(k)) return pickKeyInvalid();
           if (!pickKeyAllowed(s, k)) return jsonErr('照片不在開放資料夾內', 403);
         }
-        if (!items.length && !remove.length) return jsonOk({ ok: true });
+        // A collaborator's item on a row someone else last wrote: refused
+        // for that item (`not_yours`) when it would change the rating, the
+        // note or the pins — a delete always would — and dropped silently
+        // when it would not (re-sending what is there is a no-op, and must
+        // not make the row theirs). The rest of the batch goes on. This read
+        // only decides what to send and what to report: every statement
+        // below re-checks the author itself, so a write by the owner landing
+        // in between is never overwritten (and is reported after).
+        const rejected = isCollaborator ? new Set() : null;
+        if (rejected) {
+          const keys = [...new Set([...items.map(i => i.k), ...remove])];
+          const read = cols => env.DB.prepare(
+            `SELECT photo_key, rating, note, updated_by${cols} FROM selections WHERE project_id = ? AND photo_key IN (SELECT value FROM json_each(?))`
+          ).bind(project.id, JSON.stringify(keys)).all();
+          const { results: current } = await withoutMissingColumn(() => read(', marks'), () => read(''));
+          const theirs = new Map(current.filter(r => r.updated_by !== picker.id).map(r => [r.photo_key, r]));
+          const kept = items.filter(i => {
+            const row = theirs.get(i.k);
+            if (!row) return true;
+            const pins = parseMarks(row.marks);
+            const same = row.rating === i.r && row.note === i.n && (i.s !== 1 || (pins ? JSON.stringify(pins) : null) === i.m);
+            if (!same) rejected.add(i.k);
+            return false;
+          });
+          items.splice(0, items.length, ...kept);
+          const keptRemove = remove.filter(k => {
+            if (!theirs.has(k)) return true;
+            rejected.add(k);
+            return false;
+          });
+          remove.splice(0, remove.length, ...keptRemove);
+        }
+        const answer = () => jsonOk(rejected ? { ok: true, rejected: [...rejected].map(k => ({ photo_key: k, code: 'not_yours' })) } : { ok: true });
+        if (!items.length && !remove.length) return answer();
         // One statement per direction however many photos, because D1 caps the
         // queries one invocation may run. They go as one batch, which D1 runs
         // as a transaction, and every statement re-checks the seat and the
@@ -5195,17 +5650,25 @@ export default {
         // Upserts go before deletes: a key in both ends up deleted either way.
         const upsertKeys = JSON.stringify(items.map(i => i.k));
         const removeKeys = JSON.stringify(remove);
-        const notRemoved = 'NOT IN (SELECT value FROM json_each(?4))';
+        // A collaborator's items count only on rows that are new or theirs
+        // (written last by ?2) as the statement sees them: an item on a row
+        // the owner took in between is skipped by the writes below, so the
+        // caps count that row as it stands instead. The owner's, every item.
+        const mineOrNew = k => `NOT EXISTS (SELECT 1 FROM selections mine WHERE mine.project_id = ?1 AND mine.photo_key = ${k} AND mine.updated_by IS NOT ?2)`;
+        const itemsIn = isCollaborator ? `(SELECT value FROM json_each(?6) WHERE ${mineOrNew("json_extract(value, '$.k')")})` : 'json_each(?6)';
+        const upsertsIn = isCollaborator ? `(SELECT value FROM json_each(?3) WHERE ${mineOrNew('value')})` : 'json_each(?3)';
+        const removesIn = isCollaborator ? `(SELECT value FROM json_each(?4) WHERE ${mineOrNew('value')})` : 'json_each(?4)';
+        const notRemoved = `NOT IN (SELECT value FROM ${removesIn})`;
         // the ♥ photos (rating ≥ 1) this save leaves, and those there now
         const starsAfter =
-          `((SELECT COUNT(*) FROM json_each(?6) WHERE json_extract(value, '$.r') > 0 AND json_extract(value, '$.k') ${notRemoved}) + ` +
-          `(SELECT COUNT(*) FROM selections WHERE project_id = ?1 AND rating > 0 AND photo_key NOT IN (SELECT value FROM json_each(?3)) AND photo_key ${notRemoved}))`;
+          `((SELECT COUNT(*) FROM ${itemsIn} WHERE json_extract(value, '$.r') > 0 AND json_extract(value, '$.k') ${notRemoved}) + ` +
+          `(SELECT COUNT(*) FROM selections WHERE project_id = ?1 AND rating > 0 AND photo_key NOT IN (SELECT value FROM ${upsertsIn}) AND photo_key ${notRemoved}))`;
         const starsNow = '(SELECT COUNT(*) FROM selections WHERE project_id = ?1 AND rating > 0)';
         const starsFit = `${starsAfter} <= MAX(?5, ${starsNow})`;
         // (The plan's cap, pick_limit + extra_max, is not a save cap: guests
         // heart freely and narrow down, and it is checked at submit.)
         const rowsFit =
-          '(SELECT COUNT(*) FROM (SELECT photo_key FROM selections WHERE project_id = ?1 UNION SELECT value FROM json_each(?3)) ' +
+          `(SELECT COUNT(*) FROM (SELECT photo_key FROM selections WHERE project_id = ?1 UNION SELECT value FROM ${upsertsIn}) ` +
           `WHERE photo_key ${notRemoved}) ` +
           '<= MAX(?7, (SELECT COUNT(*) FROM selections WHERE project_id = ?1))';
         // The pins cap the same way: the pins this save leaves — its own
@@ -5214,12 +5677,17 @@ export default {
         // more than there are now. Only in a batch that writes pins (a save
         // that writes none cannot add any, and the column may not exist yet).
         const pinsOf = "CASE WHEN json_valid(marks) THEN json_array_length(marks) ELSE 0 END";
-        const setsPins = "SELECT json_extract(value, '$.k') FROM json_each(?6) WHERE json_extract(value, '$.s') = 1";
+        const setsPins = `SELECT json_extract(value, '$.k') FROM ${itemsIn} WHERE json_extract(value, '$.s') = 1`;
         const marksFit =
-          `((SELECT COALESCE(SUM(json_extract(value, '$.c')), 0) FROM json_each(?6) WHERE json_extract(value, '$.s') = 1 AND json_extract(value, '$.k') ${notRemoved}) + ` +
+          `((SELECT COALESCE(SUM(json_extract(value, '$.c')), 0) FROM ${itemsIn} WHERE json_extract(value, '$.s') = 1 AND json_extract(value, '$.k') ${notRemoved}) + ` +
           `(SELECT COALESCE(SUM(${pinsOf}), 0) FROM selections WHERE project_id = ?1 AND marks IS NOT NULL AND photo_key NOT IN (${setsPins}) AND photo_key ${notRemoved})) ` +
           `<= MAX(${PICK_MARKS_TOTAL_MAX}, (SELECT COALESCE(SUM(${pinsOf}), 0) FROM selections WHERE project_id = ?1 AND marks IS NOT NULL))`;
-        const openFor = withMarks => `id = ?1 AND owner_picker_id = ?2 AND phase IN ${PICK_OPEN_SQL} AND archived_at IS NULL AND ${starsFit} AND ${rowsFit}` +
+        // Who may write, inside every statement: the seat (?2 is the owner),
+        // or for a collaborator's save the owner OR an active collaborator of
+        // the owner now — not revoked, not expired at ?8 (this save's time),
+        // invited by the one who holds the seat — the rule resolvePick read.
+        const who = isCollaborator ? `(owner_picker_id = ?2 OR ${activeCollaboratorSql('?2', 'projects', '?8')})` : 'owner_picker_id = ?2';
+        const openFor = withMarks => `id = ?1 AND ${who} AND phase IN ${PICK_OPEN_SQL} AND archived_at IS NULL AND ${starsFit} AND ${rowsFit}` +
           (withMarks ? ` AND ${marksFit}` : '');
         const itemsJson = JSON.stringify(items);
         // the one big bound value: D1 fails a value over 2 MB as an error, so
@@ -5230,6 +5698,13 @@ export default {
         const gateArgs = [project.id, picker.id, upsertKeys, removeKeys, PICK_MAX_SELECTIONS, itemsJson, PICK_MAX_ROWS];
         let usedMarks = false;
         const updatedAt = new Date().toISOString();
+        // a collaborator's gate names ?8 too (a statement binds exactly what
+        // it names); the INSERT always does, for updated_at
+        const writeArgs = isCollaborator ? [...gateArgs, updatedAt] : gateArgs;
+        // and a collaborator writes only a row that is new or theirs: an
+        // update or delete of a row the owner (or another collaborator) last
+        // wrote is skipped inside the statement, whatever the read above saw
+        const onlyMine = isCollaborator ? ' AND updated_by = ?2' : '';
         // withMarks: whether the batch writes selections.marks at all. The
         // INSERT never names the column (a new row starts with none, an
         // existing one keeps its own); the pins are a second write over the
@@ -5244,13 +5719,14 @@ export default {
           const writes = [env.DB.prepare(
             "UPDATE projects SET modified_after_submit = CASE WHEN phase = 'submitted' THEN 1 ELSE modified_after_submit END " +
             `WHERE ${open}`
-          ).bind(...gateArgs)];
+          ).bind(...writeArgs)];
           if (items.length) {
             writes.push(env.DB.prepare(
               'INSERT INTO selections (project_id, photo_key, rating, note, updated_by, updated_at) ' +
               "SELECT ?1, json_extract(value, '$.k'), json_extract(value, '$.r'), json_extract(value, '$.n'), ?2, ?8 " +
               `FROM json_each(?6) WHERE ${gate} ` +
-              'ON CONFLICT(project_id, photo_key) DO UPDATE SET rating = excluded.rating, note = excluded.note, updated_by = excluded.updated_by, updated_at = excluded.updated_at'
+              'ON CONFLICT(project_id, photo_key) DO UPDATE SET rating = excluded.rating, note = excluded.note, updated_by = excluded.updated_by, updated_at = excluded.updated_at' +
+              (isCollaborator ? ' WHERE selections.updated_by = ?2' : '')
             ).bind(...gateArgs, updatedAt));
           }
           if (withMarks) {
@@ -5258,13 +5734,13 @@ export default {
             writes.push(env.DB.prepare(
               "UPDATE selections SET marks = (SELECT json_extract(value, '$.m') FROM json_each(?6) " +
               "WHERE json_extract(value, '$.k') = selections.photo_key AND json_extract(value, '$.s') = 1) " +
-              `WHERE project_id = ?1 AND photo_key IN (SELECT json_extract(value, '$.k') FROM (${marked})) AND ${gate}`
-            ).bind(...gateArgs));
+              `WHERE project_id = ?1 AND photo_key IN (SELECT json_extract(value, '$.k') FROM (${marked}))${onlyMine} AND ${gate}`
+            ).bind(...writeArgs));
           }
           if (remove.length) {
             writes.push(env.DB.prepare(
-              `DELETE FROM selections WHERE project_id = ?1 AND photo_key IN (SELECT value FROM json_each(?4)) AND ${gate}`
-            ).bind(...gateArgs));
+              `DELETE FROM selections WHERE project_id = ?1 AND photo_key IN (SELECT value FROM json_each(?4))${onlyMine} AND ${gate}`
+            ).bind(...writeArgs));
           }
           return env.DB.batch(writes);
         };
@@ -5284,6 +5760,7 @@ export default {
         if (!allowed.meta?.changes) {
           return pickRefused(env, project.id, '只有挑選人可以修改', {
             pickerId: picker.id,
+            collaborator: isCollaborator,
             // only which message to show; the writes above already decided
             // Which cap, in this order: row_cap; then marks_cap (when the
             // stars fit); then selection_cap. None failing now (the rows moved
@@ -5300,12 +5777,22 @@ export default {
             },
           });
         }
-        return jsonOk({ ok: true });
+        if (rejected) {
+          // what the statements skipped: a row someone else wrote between
+          // the read above and the batch is still theirs, or still there
+          const tried = [...new Set([...items.map(i => i.k), ...remove])];
+          const { results: after } = await env.DB.prepare(
+            'SELECT photo_key, updated_by FROM selections WHERE project_id = ? AND photo_key IN (SELECT value FROM json_each(?))'
+          ).bind(project.id, JSON.stringify(tried)).all();
+          for (const r of after) if (r.updated_by !== picker.id) rejected.add(r.photo_key);
+        }
+        return answer();
       }
 
-      // POST /api/pick/submit {relationship, email?}
+      // POST /api/pick/submit {relationship, email?} — the seat holder only,
+      // never a collaborator (docs/co-picking.md: the owner has the last word)
       if (request.method === 'POST' && route === 'submit') {
-        if (!isOwner) return jsonErr('只有挑選人可以送出', 403);
+        if (!isOwner) return jsonOk({ error: '只有挑選人可以送出', code: 'not_owner' }, 403);
         if (!PICK_OPEN_PHASES.includes(project.phase)) return pickRetouching();
         const read = await readJsonCapped(request, PICK_SUBMIT_BODY_MAX);
         if (read.refused) return read.refused;

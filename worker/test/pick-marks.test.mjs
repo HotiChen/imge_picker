@@ -421,8 +421,8 @@ test('state: the seat holder gets each selection\'s marks; a viewer never does',
   const owner = await state(env, p, p.key);
   assert.equal(owner.is_owner, true);
   assert.deepEqual(owner.selections, [
-    { photo_key: A, rating: 1, note: 'n', marks: [P1, P2] },
-    { photo_key: B, rating: 2, note: '', marks: null },
+    { photo_key: A, rating: 1, note: 'n', marks: [P1, P2], by: { id: p.pickerId, name: '王小明', role: 'owner' } },
+    { photo_key: B, rating: 2, note: '', marks: null, by: { id: p.pickerId, name: '王小明', role: 'owner' } },
   ]);
   for (const key of [undefined, 'wrong']) {
     const viewer = await state(env, p, key);
@@ -583,7 +583,7 @@ test('before the migration: saves without pins (unrate included), state, submit 
     [{ photo_key: A, rating: 1, note: 'n' }]);
   const owner = await state(env, p, p.key);
   assert.deepEqual(owner.selections, [
-    { photo_key: A, rating: 1, note: 'n', marks: null },
+    { photo_key: A, rating: 1, note: 'n', marks: null, by: { id: p.pickerId, name: '王小明', role: 'owner' } },
   ]);
   const viewer = await state(env, p);
   assert.deepEqual(viewer.selections, [{ photo_key: A, rating: 1 }]);
