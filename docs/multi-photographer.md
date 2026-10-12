@@ -154,6 +154,7 @@ CREATE TABLE photographer_sessions (
   （別人的專案讀起來像沒有送出，所以 start-retouch 的語句序列和不存在的 id 一樣）。
 - 仍是 default 專用（batch 3，碰 R2 資料夾）：`POST /api/admin/projects`（建立）、`deliver`、`undeliver`。
   **所以非 default 攝影師目前無法建立專案**，只能管理「被指派」給他的專案（現在沒有路由會指派，測試直接改 D1）。
+  （第 3 批已改成 scoped，見 §3 的 3 notes。）
 - 通知信：`mailsDefaultInbox(project)`，五個寄信函式第一行都問它；`project.photographer_id !== 'default'` 就不寄、不警告
   （選片送出、要求修改、修改輪次、客人確認、我有興趣、客人訂單）。選片送出因此留在該攝影師的未通知數字裡。
 - 測試：`worker/test/project-scope.test.mjs`（每條 scoped 路由 × 兩個方向 × 各自正向控制、競態、通知、客人端不讀請求裡的攝影師 id）。
@@ -173,6 +174,7 @@ CREATE TABLE photographer_sessions (
   與 DELETE / UPDATE / INSERT（改訂單，`same` 閘多帶 `photographer_id`）。
 - 仍是 default 專用（batch 3，`photo_keys` 是 R2 鍵）：`POST /api/admin/projects/:id/orders`（整條），以及 `PUT /api/admin/orders/:id`
   body 帶 `lines` 或 `photo_keys` 時。所以非 default 攝影師目前**不能新增訂單或改品項**，只能看、改備註／折扣、收款、改狀態、清聯絡資料。
+  （之後另一個 commit 把所有訂單路由對非 default 暫停成 404；第 3 批拿掉 `photo_keys` 閘，暫停仍在。）
 - `guestOrdersEnabled(env, project)`：專案不是 default 的一律 off（不論 `GUEST_ORDERS` on / pilot）：`/api/pick/shop` 的 `ordering`
   為 null、`POST /api/pick/orders` 403 `ordering_disabled`。客人看自己的訂單、取消 `requested` 的訂單不受開關影響（設計如此）。
 - 客人商店與「我有興趣」只讀連結專案攝影師的商品（原本就是 `project.photographer_id`，這批加測試）。
@@ -194,7 +196,7 @@ CREATE TABLE photographer_sessions (
   任何有效連結都可（挑選人、協作者、檢視者，和 `/state` 的 studio 區塊一致）；連結無效／撤銷／專案封存 → 401（同 pick 區塊）；非 GET → 405；
   該攝影師沒有 logo → 404，和 default 專案沒設 logo 時完全相同（不會退回 default 的 logo）。`Cache-Control: private, max-age=300`（URL 帶連結，不給共用快取）。
   客人頁（`js/pick.js` 三處）要改打這條（前端，尚未改）。
-- 舊的公開 `GET /api/studio/logo` 保留，**只給 default**（`DEFAULT_PHOTOGRAPHER_ID` 在 `routeRequest` 剩 9 處：batch 3 的建立專案／交件／取消交件，和這條）。
+- 舊的公開 `GET /api/studio/logo` 保留，**只給 default**（`DEFAULT_PHOTOGRAPHER_ID` 在 `routeRequest` 剩 9 處：batch 3 的建立專案／交件／取消交件，和這條；第 3 批後只剩這條）。
   B 的 logo 永遠不會從這裡出去。前端全部改走上面兩條後可以移除。
 - 測試：`worker/test/settings-scope.test.mjs`（兩個方向的讀寫、body 帶 id、壞 body 不寫、logo 上傳／刪除互不影響、兩條 logo 讀取路由、
   `/api/studio/logo` 仍只給 default、stats 各算各的、migration 前、開關關時 401）；`photographer-routes` 路由表這 6 條改 `scoped`
@@ -221,6 +223,47 @@ CREATE TABLE photographer_sessions (
   `isInternalKey` 檢查在邏輯鍵上做、在加前綴**之前**，攝影師送來的鍵不可能自己寫出 `_t/…`。
 - 縮圖、`_books/`、`_assets/` 同樣走 `r2Key`。分享連結／選片紀錄存的是邏輯鍵，所以現有資料不受影響。
 - 列表（`list`）用 `prefix` 加上前綴再去掉，確保一位攝影師永遠列不到另一位的鍵。
+
+**第 3 批實作（2026-10-12，只有 Worker）— 3 notes**：migration `worker/migrations/2026-10-17-share-token-owner.sql`
+（1 句 `ALTER TABLE share_tokens ADD COLUMN photographer_id TEXT`，**合併前**由 Tim 在 D1 Console 手跑；重跑出現
+「duplicate column name」代表已經跑過）。`PHOTOGRAPHER_ROUTES` 仍是 `"off"`。
+- **單一入口 `bucketFor(env, photographerId)`**（回 `{get, head, put, list}`）：`default` 鍵不變，其他人加 `_t/<id>/`。
+  `env.imagepicker` 只准出現在它裡面（`r2-isolation.test.mjs` 掃描）。id 必須符合 `^[0-9a-z][0-9a-z_-]{0,63}$`
+  （實際的 id 是 16 個小寫 hex），否則在任何讀寫之前丟錯（Worker 500），不會拼出路徑。
+  - **`_t/` 對所有人保留**，在邏輯鍵上、加前綴之前、在 helper 裡檢查（`isTenantKey`：`_t` 或 `_t/…`）：get / head 當作不存在
+    （null → 404，和沒有這個物件完全相同）、list 回空、put 丟錯（上傳路由先回 400 `invalid_key`）。default 也一樣：
+    default 的鍵沒有前綴，若讓 default 寫 `_t/B/x` 就等於寫 B 的物件。`%5Ft/`、`%2F`、`..`、反斜線（URL 先正規化成 `/`）
+    都試過；`../`、`//` 開頭這類只是 R2 的字面鍵，落在寫入者自己的前綴裡，碰不到別人。
+  - list 回來的鍵去掉前綴、只留呼叫者自己的；default 的 list 也濾掉 `_t/`（原本 `_` 開頭的資料夾就不顯示，這是第二道）。
+    分頁（cursor）照舊跟到底。
+- **誰的檔案**：攝影師路由 → `who.id`；選片連結（`?list=`、物件、縮圖、下載、`/api/pick/rounds/:id/photo`、列印訂單的 `head`）
+  → 連結專案的 `project.photographer_id`；studio token → 該列的 `share_tokens.photographer_id`（NULL = default）。
+  都在 `shareOwner(share)`，**從不讀 request**。相本連結、舊客人 session token 沒有其他擁有者，算 default。
+- **改成 `requirePhotographer` + `who.id`**（標 `// scoped to the caller (who.id)`）：`POST /api/auth/studio-token`、
+  `POST /api/admin/projects`（建立；`studioDefaultExtraMax` 也讀呼叫者自己的）、`deliver` / `undeliver`、`GET /api/shares/minted`、
+  `POST /api/shares/minted/revoke-all`、`POST /api/shares/:token/revoke`、上傳 `PUT`、`?list=`、物件 GET（含 `?w=`、`?download=1`）。
+  訂單的兩個 `photo_keys` 閘（`default-only until batch 3 (photo_keys)`）拿掉了：photo_keys 是呼叫者自己專案資料夾裡的邏輯鍵
+  （`orderLines` 對專案檢查，不讀 R2）。**訂單路由本身對非 default 仍全部暫停 404**（`ORDER_ROUTES_PAUSED`，沒動）。
+- **studio token 一人一列**：「同時只留一列」變成每位攝影師一列；發／撤 X 的不會碰到 Y 的列。`minted` 只列自己的
+  （default 另外看得到舊客人 session token），`revoke-all` 只撤自己的。`revoke` 單一 token：有專案的連結看專案擁有者
+  （不管該列自己的欄位寫什麼），沒專案的看 `photographer_id`（NULL = default），條件寫在 UPDATE 裡（專案中途換手也不會撤到）；
+  別人的 = 不存在的 token（同樣 404、同樣 body、同樣的 SQL 語句）。
+- **migration 前**：default 一切照舊（舊語句）；非 default 的 `studio-token` / `minted` / `revoke-all` 回 500
+  `share_owner_unavailable`、什麼都不寫；`revoke` 照專案判斷，沒專案的 token 只有 default 能撤。
+- **仍是 default 專用**：`/api/books/*` 與相本的 `_books/` 物件（標 `// default-only until books`，走 `bookBucket(env)` = default 的
+  bucket）：相本與相本連結還沒有擁有者，要另一個 migration；非 default 一律 404。舊客人帳號路由（`default-only until retired`）。
+  `routeRequest` 裡的 `DEFAULT_PHOTOGRAPHER_ID` 只剩公開的 `/api/studio/logo`。
+- **default 行為的唯二差別**：default 上傳 `_t…` 鍵改回 400、讀 `_t/…` 回 404（以前這個命名空間不存在）。其餘逐條相同（舊測試全過）。
+- 測試：`worker/test/r2-isolation.test.mjs`（A = default、B、C 兩位非 default，每條 R2 路徑：上傳落點、保留鍵與各種編碼、list 去前綴
+  與分頁、物件／縮圖退回自己的原檔／下載／Range／304、studio token、B 專案的選片連結即使同一邏輯鍵也只讀 B 的、交件閘、
+  輪次縮圖、建立專案、不安全的 id、原始碼掃描）；`worker/test/r2-studio-token.test.mjs`（migration、一人一列、minted / revoke-all /
+  revoke 擁有權含語句序列與競態、migration 前）；`product-order-scope.test.mjs` 補 2b-2 審查的三個缺口（付款／清聯絡資料／狀態的
+  語句內擁有者競態、商品換手後商品列本身不變、B 對 C 跑每條商品／訂單路由）。
+- **Tim 要確認**：(1) 合併前在 D1 Console 跑 `2026-10-17-share-token-owner.sql`，再用
+  `SELECT photographer_id FROM share_tokens LIMIT 1` 確認欄位在；(2) 合併後用自己的帳號在 admin / 選片頁看照片、縮圖、下載、上傳、
+  相本編輯器都正常（default 路徑不變）；(3) `PHOTOGRAPHER_ROUTES` 仍 `"off"`，開之前要安全審查這批。
+- 已知限制（之後處理）：停用攝影師只刪 session，他已發出的 studio token 最多還能讀**他自己的**檔案 12 小時；
+  R2 180 天 lifecycle 仍是整桶規則；相本擁有權要另一批。
 
 ### 4. 每人設定與通知（第 4 批）
 
