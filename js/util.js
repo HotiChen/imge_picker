@@ -10,6 +10,7 @@
 //                                    'iso'  2026-09-21    (en-CA)
 //   Util.todayTaipei()       today's Taipei date, YYYY-MM-DD
 //   Util.PICK_LINK_DEFAULT / Util.pickLinkMessage(template, title, link)   the pick-link message text
+//   Util.LINK_MESSAGE_DEFAULTS / Util.linkMessage(stage, settings, title, link)   the same per project stage
 //   Util.groupByCategory(products)  [{name: string|null, items}]: the catalogue grouped by product.category
 //                            (data, shown with textContent / escHtml only); groups ordered by the smallest `sort`
 //                            of their members (a list with no sort: by first appearance), 未分類 (name null) last,
@@ -58,10 +59,26 @@
   // One pass over the template (split on the two placeholders, never String.replace with a replacement string, so a `$&` in
   // a title stays literal, and a placeholder typed inside a title is not substituted again). A template without {連結} gets the
   // link on a new last line; an empty / whitespace template (or a non-string) means the default.
-  function pickLinkMessage(template, title, link) {
-    const t = typeof template === 'string' && template.trim() ? template : PICK_LINK_DEFAULT;
+  function fillLinkMessage(t, title, link) {
     const out = t.split(/(\{專案名稱\}|\{連結\})/).map(part => part === '{專案名稱}' ? String(title == null ? '' : title) : part === '{連結}' ? String(link == null ? '' : link) : part).join('');
     return t.includes('{連結}') ? out : out + '\n' + String(link == null ? '' : link);
+  }
+  function pickLinkMessage(template, title, link) {
+    return fillLinkMessage(typeof template === 'string' && template.trim() ? template : PICK_LINK_DEFAULT, title, link);
+  }
+  // The message per project stage (複製連結 in admin.html, four blocks in settings.html): pick = 選片中, submitted = 已送出 /
+  // 精修中, delivered = 已交件 (not yet confirmed), done = 已完成. Same placeholders and rules as pickLinkMessage.
+  const LINK_MESSAGE_DEFAULTS = {
+    pick: PICK_LINK_DEFAULT,
+    submitted: '{專案名稱} 的選片我收到囉 😊\n我會開始精修，完成後會再通知你。\n\n你也可以從這個連結看目前的狀態：\n{連結}',
+    delivered: '{專案名稱} 的精修照片完成囉 ✨\n{連結}\n\n請點開連結看看，有想調整的地方可以在照片上標記並送出修改；都沒問題的話，請按「確認完成」。',
+    done: '謝謝你的信任 🙏\n這是 {專案名稱} 的完成頁，可以回顧精修照片，也能看相簿和商品資訊：\n{連結}',
+  };
+  const LINK_MESSAGE_FIELDS = { pick: 'pick_link_message', submitted: 'link_message_submitted', delivered: 'link_message_delivered', done: 'link_message_done' };
+  function linkMessage(stage, settings, title, link) {
+    const def = LINK_MESSAGE_DEFAULTS[stage] || PICK_LINK_DEFAULT;
+    const v = settings && LINK_MESSAGE_FIELDS[stage] ? settings[LINK_MESSAGE_FIELDS[stage]] : null;
+    return fillLinkMessage(typeof v === 'string' && v.trim() ? v : def, title, link);
   }
 
   // product.category: a trimmed non-empty string, else null (= 未分類)
@@ -83,5 +100,5 @@
   }
 
   window.escHtml = escHtml;
-  window.Util = { groupByCategory, escHtml, fmtDate, todayTaipei, formatPrice, PICK_LINK_DEFAULT, pickLinkMessage };
+  window.Util = { groupByCategory, escHtml, fmtDate, todayTaipei, formatPrice, PICK_LINK_DEFAULT, pickLinkMessage, LINK_MESSAGE_DEFAULTS, linkMessage };
 })();

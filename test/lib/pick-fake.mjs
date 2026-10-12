@@ -137,7 +137,8 @@ export const isProjectTypeInputFake = v => v === null || v === '' || (typeof v =
 export function settingsShapeFake(st) {
   const x = st.default_extra_max ?? null;
   return { studio_name: null, booking_url: null, default_pick_limit: null, default_extra_price: null,
-    has_logo: false, pick_link_message: null, ...st, default_extra_max: x,
+    has_logo: false, pick_link_message: null,
+    link_message_submitted: null, link_message_delivered: null, link_message_done: null, ...st, default_extra_max: x,
     effective_default_extra_max: isExtraMaxFake(x) ? x : EXTRA_MAX_DEFAULT_FAKE };
 }
 // Mirrors worker.js revisionMessage (docs/delivery.md, client confirmation):
