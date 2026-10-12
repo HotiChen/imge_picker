@@ -11,6 +11,67 @@ const corsHeaders = {
 const THUMB_PREFIX = '_thumbs/';
 const THUMB_BUCKETS = [400, 1200, 1600];
 
+// ─── What the upload PUT may store, and how objects go out ──────────────────
+// (security review of multi-photographer batch 3, finding 2.) The object route
+// serves an object with its stored type, on the Worker's origin, so an upload
+// that stored text/html or an SVG would be a page running script there.
+//
+// The types the object route serves inline (as the task and the rounds
+// thumbnail route already do). Anything else stored — a legacy text/html or
+// SVG upload, a HEIC / TIFF / GIF / BMP original — goes out as
+// application/octet-stream, as an attachment. Uploads keep the photos the
+// picker shows on this list: the listing (`?list=`) only ever shows
+// .jpg/.jpeg/.png/.webp/.avif keys, and a key with one of those extensions
+// may only be stored as one of these four types (below), so nothing the
+// grid, a thumbnail fallback or the lightbox can ask for turns into a
+// download. The other formats upload.html takes are never listed: they are
+// kept as files, served as downloads.
+const INLINE_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/avif'];
+const OCTET_STREAM = 'application/octet-stream';
+// What upload.html takes (its IMAGE_EXTS) and the album editor's backgrounds
+// are: the key's extension, lowercased → the types it may be sent as, the
+// first being what is stored when no Content-Type comes. A listed extension
+// takes any of the four inline types (a PNG named .jpg is still a photo);
+// HEIC / HEIF / TIFF / BMP also application/octet-stream, which upload.html
+// sends when the browser knows no type for them. Never HTML, SVG, XML or
+// script.
+const UPLOAD_TYPES = Object.assign(Object.create(null), {
+  jpg: ['image/jpeg', ...INLINE_IMAGE_TYPES],
+  jpeg: ['image/jpeg', ...INLINE_IMAGE_TYPES],
+  png: ['image/png', ...INLINE_IMAGE_TYPES],
+  webp: ['image/webp', ...INLINE_IMAGE_TYPES],
+  avif: ['image/avif', ...INLINE_IMAGE_TYPES],
+  gif: ['image/gif'],
+  heic: ['image/heic', 'image/heic-sequence', OCTET_STREAM],
+  heif: ['image/heif', 'image/heif-sequence', OCTET_STREAM],
+  tif: ['image/tiff', OCTET_STREAM],
+  tiff: ['image/tiff', OCTET_STREAM],
+  bmp: ['image/bmp', 'image/x-ms-bmp', OCTET_STREAM],
+});
+const THUMB_KEY = /^_thumbs\/\d+\/(.+)\.thumb$/;
+// A type as sent: lowercased, parameters off. '' when there is none.
+const bareType = value => String(value ?? '').split(';')[0].trim().toLowerCase();
+// The extension of a key's file name ('' for none, or a name that is only one).
+function keyExtension(key) {
+  const name = key.slice(key.lastIndexOf('/') + 1);
+  const dot = name.lastIndexOf('.');
+  return dot > 0 ? name.slice(dot + 1).toLowerCase() : '';
+}
+// The Content-Type to store for an upload of `key` sent as `sent` (the
+// request's Content-Type header, null when there is none), or null to refuse
+// it (415). A photo key: its extension's types (none sent: the first). A
+// thumbnail `_thumbs/<w>/<photo key>.thumb`: one of the inline types (none
+// sent: jpeg, as the route always defaulted to).
+function uploadContentType(key, sent) {
+  const thumb = THUMB_KEY.exec(key);
+  const types = UPLOAD_TYPES[keyExtension(thumb ? thumb[1] : key)];
+  if (!types) return null;
+  const allowed = thumb ? INLINE_IMAGE_TYPES : types;
+  if (sent === null) return allowed[0];
+  const type = bareType(sent);
+  return allowed.includes(type) ? type : null;
+}
+
 // Every bucket at least as large as the requested width, smallest first, then
 // the original last. Falling straight back to the original would mean that
 // introducing a new bucket makes every already-uploaded photo load at full
@@ -7344,7 +7405,11 @@ async function routeRequest(request, env, ctx) {
       if (key.split('/').find(Boolean) === 'api') return jsonErr('Not found', 404);
       // nothing but slashes names no file either
       if (!key.replace(/\//g, '') || isTenantKey(key)) return invalidKey();
-      const contentType = request.headers.get('Content-Type') || 'image/jpeg';
+      // a photo the app uploads, by extension and type, or 415 (uploadContentType)
+      const contentType = uploadContentType(key, request.headers.get('Content-Type'));
+      if (!contentType) {
+        return jsonOk({ error: '只能上傳照片檔（JPG、PNG、WEBP、AVIF、HEIC、TIFF、GIF、BMP）', code: 'unsupported_type' }, 415);
+      }
       await photos.put(key, request.body, { httpMetadata: { contentType } });
       return jsonOk({ ok: true, key });
     }
@@ -7465,6 +7530,17 @@ async function routeRequest(request, env, ctx) {
 
         const headers = new Headers();
         object.writeHttpMetadata(headers);
+        // Never a page (security review of batch 3): no sniffing, a CSP that
+        // runs nothing if opened directly, and anything not stored as an
+        // inline image type (a legacy text/html or SVG upload, a HEIC or
+        // TIFF original) as an opaque download. On every response below:
+        // 200, 206 and 304, original, thumbnail and ?download=1.
+        if (!INLINE_IMAGE_TYPES.includes(bareType(headers.get('Content-Type')))) {
+          headers.set('Content-Type', OCTET_STREAM);
+          headers.set('Content-Disposition', attachmentDisposition(key));
+        }
+        headers.set('X-Content-Type-Options', 'nosniff');
+        headers.set('Content-Security-Policy', "default-src 'none'; sandbox");
         headers.set('etag', object.httpEtag);
         headers.set('Access-Control-Allow-Origin', '*');
         headers.set('Accept-Ranges', 'bytes');

@@ -282,6 +282,17 @@ CREATE TABLE photographer_sessions (
 - **上傳 PUT 是最後的 fall-through，只收得到照片鍵**：`PUT /`、`/_assets/`、只有斜線的鍵 → 400 `invalid_key`；鍵（去掉 `_assets/` 之後）
   第一段是 `api`（含 `%61pi`、`//api/…`）→ 404；不是合法 percent-encoding → 400（原本 500）。都不寫。先驗身分，匿名仍是 401。
   `2026/api/x.jpg`、`apiary/…` 這類照常。測試：`worker/test/upload-paths.test.mjs`。
+- **上傳只收照片、物件一律不能當網頁**：上傳 PUT 看鍵的副檔名**和** Content-Type（`uploadContentType`）。副檔名只收 upload.html 的
+  `IMAGE_EXTS`（jpg/jpeg/png/webp/avif/gif/heic/heif/tif/tiff/bmp，大小寫不拘），型別看副檔名（參數、大小寫去掉後存）：
+  選片格線會列出的 .jpg/.jpeg/.png/.webp/.avif 只收 jpeg/png/webp/avif 四種（所以格線、縮圖退回原檔、燈箱拿到的永遠是行內圖片，不會變下載）；
+  .gif 只收 image/gif；HEIC/HEIF/TIFF/BMP 收自己的型別或 `application/octet-stream`（瀏覽器常不知道它們的型別，upload.html 就送這個）。
+  這些格式 `?list=` 本來就不列，只當檔案保存、以下載送出。沒帶型別時存副檔名的型別。
+  縮圖 `_thumbs/<數字>/<照片鍵>.thumb` 只收 jpeg/png/webp/avif（沒帶 = jpeg，和以前一樣）。其餘（text/html、SVG、XML、JS、text/plain、
+  沒有副檔名、`.thumb` 不在 `_thumbs/` 下）一律 415 `unsupported_type`、不寫。物件路由的**每個**回應（200、Range 206、304、`?w=` 縮圖、
+  `?download=1`，攝影師或任何連結）都帶 `X-Content-Type-Options: nosniff` 與 `Content-Security-Policy: default-src 'none'; sandbox`；
+  存的型別不是 jpeg/png/webp/avif 的（舊的上傳、HEIC/TIFF/GIF/BMP 原檔）改成 `application/octet-stream` + attachment。
+  前端沒改：upload.html 遇到 415 會顯示「HTTP 415」。舊測試用字串 body（`Request` 自動標 `text/plain`）上傳的幾條改成帶照片型別。
+  測試：`worker/test/upload-types.test.mjs`。
 - 測試：`worker/test/photographer-suspend-links.test.mjs`。三個舊測試把專案直接改成 `'other'`（沒有帳號）來證明「看專案擁有者」，
   現在要先建一個 active 的 `'other'` 帳號；`guest-shop-read` 的「專案沒有攝影師」從空商店改成 401（連結根本不解析，更嚴）。
 

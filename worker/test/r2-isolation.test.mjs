@@ -112,12 +112,12 @@ test('upload: each photographer\'s PUT lands under its own prefix (the default\'
 test('upload: thumbnails and `_assets/` follow the same prefix (the upload page writes `_thumbs/<w>/<key>.thumb`)', async () => {
   const w = await world();
   const B = w.B;
-  assert.equal((await call(w.env, '/shoot/new/n.jpg', { method: 'PUT', token: B.token, body: 'B-NEW' })).status, 200);
-  assert.equal((await call(w.env, '/_thumbs/400/shoot/new/n.jpg.thumb', { method: 'PUT', token: B.token, body: 'B-NEW-T400' })).status, 200);
+  assert.equal((await call(w.env, '/shoot/new/n.jpg', { method: 'PUT', token: B.token, body: 'B-NEW', headers: { 'Content-Type': 'image/jpeg' } })).status, 200);
+  assert.equal((await call(w.env, '/_thumbs/400/shoot/new/n.jpg.thumb', { method: 'PUT', token: B.token, body: 'B-NEW-T400', headers: { 'Content-Type': 'image/webp' } })).status, 200);
   assert.equal(stored(w.env, `_t/${B.id}/_thumbs/400/shoot/new/n.jpg.thumb`), 'B-NEW-T400');
   assert.equal(stored(w.env, '_thumbs/400/shoot/new/n.jpg.thumb'), undefined, 'not in the default\'s thumbnails');
   assert.equal((await read(w.env, '/shoot/new/n.jpg?w=400', B.token)).text, 'B-NEW-T400');
-  const res = await call(w.env, '/_assets/logo.png', { method: 'PUT', token: B.token, body: 'LOGO' });
+  const res = await call(w.env, '/_assets/logo.png', { method: 'PUT', token: B.token, body: 'LOGO', headers: { 'Content-Type': 'image/png' } });
   assert.deepEqual(await res.json(), { ok: true, key: 'logo.png' });
   assert.equal(stored(w.env, `_t/${B.id}/logo.png`), 'LOGO');
   assert.equal(stored(w.env, 'logo.png'), undefined);
@@ -156,7 +156,7 @@ test('upload: keys that only look like escaping stay literal, inside the writer\
   const had = stored(w.env, victim);
   for (const path of [`/..%2F_t%2F${C.id}%2F${encodeURIComponent(PA)}`, `/..%2F${C.id}%2F${encodeURIComponent(PA)}`, `//_t/${C.id}/${PA}`]) {
     const before = new Set(keysOf(w.env));
-    const res = await call(w.env, path, { method: 'PUT', token: B.token, body: 'B-EVIL' });
+    const res = await call(w.env, path, { method: 'PUT', token: B.token, body: 'B-EVIL', headers: { 'Content-Type': 'image/jpeg' } });
     assert.equal(res.status, 200, path);
     const added = keysOf(w.env).filter(k => !before.has(k));
     assert.equal(added.length, 1, path);
@@ -164,7 +164,7 @@ test('upload: keys that only look like escaping stay literal, inside the writer\
   }
   assert.equal(stored(w.env, victim), had, 'C\'s object was overwritten');
   // the default's literal `/_t/...` (a leading slash) is not the reserved namespace and not C's key
-  const res = await call(w.env, `//_t/${C.id}/${PA}`, { method: 'PUT', token: SECRET, body: 'A-SLASH' });
+  const res = await call(w.env, `//_t/${C.id}/${PA}`, { method: 'PUT', token: SECRET, body: 'A-SLASH', headers: { 'Content-Type': 'image/jpeg' } });
   assert.equal(res.status, 200);
   assert.equal(stored(w.env, `/_t/${C.id}/${PA}`), 'A-SLASH');
   assert.equal(stored(w.env, victim), had);
