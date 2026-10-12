@@ -1023,7 +1023,9 @@ async function imageUpload(request, what) {
 // hand-edited row cannot turn it into something a browser would run), never
 // sniffed by the browser, under a CSP that lets it run nothing even if opened
 // directly, with `stamp` (its updated_at) as the ETag. 404 when there is none.
-function imageResponse(request, blob, stamp) {
+// `extra` overrides the headers (a private Cache-Control for a logo read
+// through a link or the photographer's own credential).
+function imageResponse(request, blob, stamp, extra = {}) {
   // D1 hands a BLOB back as an array of byte values
   const bytes = blob ? new Uint8Array(blob) : null;
   const type = bytes && sniffImageType(bytes);
@@ -1034,6 +1036,7 @@ function imageResponse(request, blob, stamp) {
     'X-Content-Type-Options': 'nosniff',
     'Content-Security-Policy': "default-src 'none'",
     'Cache-Control': 'public, max-age=300',
+    ...extra,
   };
   const tag = String(stamp || '');
   if (/^[0-9A-Za-z:.+-]+$/.test(tag)) {
@@ -1110,6 +1113,18 @@ async function pickStudio(env, photographerId) {
   } catch {
     return { name: null, booking_url: null, has_logo: false };
   }
+}
+
+// `photographerId`'s logo row {logo, logo_updated_at}, or null: none set, or
+// a database the settings migration has not reached. Every logo read goes
+// through here, each with the photographer it is for (the caller's who.id, a
+// link's project.photographer_id, or the default for /api/studio/logo).
+async function readLogo(env, photographerId) {
+  try {
+    return await env.DB.prepare(
+      'SELECT logo, logo_updated_at FROM studio_settings WHERE photographer_id = ? AND logo IS NOT NULL'
+    ).bind(photographerId).first();
+  } catch { return null; }
 }
 
 // The extra_max a new project starts with: the studio's default when it is a
@@ -5076,8 +5091,9 @@ async function routeRequest(request, env, ctx) {
     // One pass over projects for the counts, one for the months (Taipei
     // month boundaries: the stored timestamps are UTC ISO strings).
     if (url.pathname === '/api/admin/stats') {
-      const auth = await requireDefault(request, env); // default-only until 2b-3
+      const auth = await requirePhotographer(request, env); // scoped to the caller (who.id)
       if (auth.refused) return auth.refused;
+      const { who } = auth;
       if (request.method !== 'GET') return jsonErr('Method not allowed', 405);
       if (!env.DB) return jsonErr('DB not configured', 500);
       const c = await env.DB.prepare(
@@ -5090,7 +5106,7 @@ async function routeRequest(request, env, ctx) {
            COALESCE(SUM(p.archived_at IS NULL AND p.modified_after_submit = 1), 0) AS modified,
            COALESCE(SUM(p.archived_at IS NULL AND ${PICK_UNNOTIFIED_SQL} > 0), 0) AS unnotified
            FROM projects p WHERE p.photographer_id = ?`
-      ).bind(DEFAULT_PHOTOGRAPHER_ID).first();
+      ).bind(who.id).first();
       const { months, since } = statsMonths(Date.now());
       const { results: monthly } = await env.DB.prepare(
         `SELECT month, SUM(c) AS created, SUM(d) AS delivered FROM (
@@ -5100,7 +5116,7 @@ async function routeRequest(request, env, ctx) {
            SELECT strftime('%Y-%m', delivered_at, '+8 hours'), 0, 1
              FROM projects WHERE photographer_id = ?1 AND delivered_at >= ?2
          ) GROUP BY month`
-      ).bind(DEFAULT_PHOTOGRAPHER_ID, since).all();
+      ).bind(who.id, since).all();
       const byMonth = new Map(monthly.map(r => [r.month, r]));
       // Revenue is counted when paid, and an order's cost with it
       // (docs/products-orders.md): by paid_at, in the same Taipei months.
@@ -5109,7 +5125,7 @@ async function routeRequest(request, env, ctx) {
         `SELECT strftime('%Y-%m', o.paid_at, '+8 hours') AS month, SUM(o.paid_amount) AS paid, SUM(${ORDER_COST_SQL}) AS cost
            ${ORDER_SCOPE_SQL} AND o.status != 'cancelled' AND o.paid_amount > 0 AND o.paid_at >= ?
           GROUP BY month`
-      ).bind(DEFAULT_PHOTOGRAPHER_ID, since).all();
+      ).bind(who.id, since).all();
       const paidByMonth = new Map(paidMonthly.map(r => [r.month, r]));
       // requested: guest orders waiting for the photographer's confirmation
       // (archived projects included: the order still waits)
@@ -5117,7 +5133,7 @@ async function routeRequest(request, env, ctx) {
         `SELECT COALESCE(SUM(${ORDER_OUTSTANDING_SQL}), 0) AS outstanding, COALESCE(SUM(${ORDER_OUTSTANDING_SQL} > 0), 0) AS unpaid,
                 COALESCE(SUM(o.source = 'guest' AND o.status = 'requested'), 0) AS requested
            ${ORDER_SCOPE_SQL}`
-      ).bind(DEFAULT_PHOTOGRAPHER_ID).first();
+      ).bind(who.id).first();
       return jsonOk({
         by_phase: { picking: c.picking, submitted: c.submitted, retouching: c.retouching },
         delivered: c.delivered,
@@ -5147,8 +5163,9 @@ async function routeRequest(request, env, ctx) {
     // default plan. PUT changes only the fields it names (null clears one);
     // anything else in the body is ignored, photographer_id above all.
     if (url.pathname === '/api/admin/settings') {
-      const auth = await requireDefault(request, env); // default-only until 2b-3
+      const auth = await requirePhotographer(request, env); // scoped to the caller (who.id)
       if (auth.refused) return auth.refused;
+      const { who } = auth;
       if (request.method !== 'GET' && request.method !== 'PUT') return jsonErr('Method not allowed', 405);
       if (!env.DB) return jsonErr('DB not configured', 500);
       if (request.method === 'PUT') {
@@ -5208,7 +5225,7 @@ async function routeRequest(request, env, ctx) {
           await env.DB.prepare(
             `INSERT INTO studio_settings (${all.join(', ')}) VALUES (${all.map(() => '?').join(', ')}) ` +
             `ON CONFLICT(photographer_id) DO UPDATE SET ${cols.map(k => `${k} = excluded.${k}`).join(', ')}`
-          ).bind(DEFAULT_PHOTOGRAPHER_ID, ...Object.values(set), new Date().toISOString()).run();
+          ).bind(who.id, ...Object.values(set), new Date().toISOString()).run();
         } catch (e) {
           // default_extra_max / transfer_info / pick_link_message before its
           // migration: one statement, so nothing landed; the error names the column
@@ -5222,23 +5239,32 @@ async function routeRequest(request, env, ctx) {
           throw e;
         }
       }
-      return jsonOk(await readStudioSettings(env, DEFAULT_PHOTOGRAPHER_ID), 200, ADMIN_ONLY_HEADERS);
+      return jsonOk(await readStudioSettings(env, who.id), 200, ADMIN_ONLY_HEADERS);
     }
 
     // PUT /api/admin/settings/logo — raw bytes, ≤ LOGO_MAX_BYTES, PNG / JPEG
     // / WebP by magic bytes (415 otherwise). Kept in D1, not R2: the bucket's
     // lifecycle rule deletes everything after 180 days.
     // DELETE /api/admin/settings/logo — remove it; the rest stays.
+    // GET /api/admin/settings/logo — the caller's own logo (the settings
+    // page's preview; fetched with the Authorization header, never cached).
+    // Each photographer's logo is his own studio_settings row (keyed by
+    // photographer_id): no R2 key at all.
     if (url.pathname === '/api/admin/settings/logo') {
-      const auth = await requireDefault(request, env); // default-only until 2b-3
+      const auth = await requirePhotographer(request, env); // scoped to the caller (who.id)
       if (auth.refused) return auth.refused;
-      if (request.method !== 'PUT' && request.method !== 'DELETE') return jsonErr('Method not allowed', 405);
+      const { who } = auth;
+      if (request.method !== 'GET' && request.method !== 'PUT' && request.method !== 'DELETE') return jsonErr('Method not allowed', 405);
       if (!env.DB) return jsonErr('DB not configured', 500);
+      if (request.method === 'GET') {
+        const row = await readLogo(env, who.id);
+        return imageResponse(request, row ? row.logo : null, row ? row.logo_updated_at : null, ADMIN_ONLY_HEADERS);
+      }
       const now = new Date().toISOString();
       if (request.method === 'DELETE') {
         await env.DB.prepare(
           'UPDATE studio_settings SET logo = NULL, logo_type = NULL, logo_updated_at = NULL, updated_at = ? WHERE photographer_id = ?'
-        ).bind(now, DEFAULT_PHOTOGRAPHER_ID).run();
+        ).bind(now, who.id).run();
         return jsonOk({ ok: true, has_logo: false }, 200, ADMIN_ONLY_HEADERS);
       }
       const upload = await imageUpload(request, 'Logo ');
@@ -5248,23 +5274,20 @@ async function routeRequest(request, env, ctx) {
         'INSERT INTO studio_settings (photographer_id, logo, logo_type, logo_updated_at, updated_at) VALUES (?, ?, ?, ?, ?) ' +
         'ON CONFLICT(photographer_id) DO UPDATE SET logo = excluded.logo, logo_type = excluded.logo_type, ' +
         'logo_updated_at = excluded.logo_updated_at, updated_at = excluded.updated_at'
-      ).bind(DEFAULT_PHOTOGRAPHER_ID, bytes.buffer, type, now, now).run();
+      ).bind(who.id, bytes.buffer, type, now, now).run();
       return jsonOk({ ok: true, has_logo: true, logo_type: type, logo_updated_at: now, size: bytes.byteLength }, 200, ADMIN_ONLY_HEADERS);
     }
 
-    // GET /api/studio/logo — public: the guest page shows it. Served as the
-    // type its bytes are (re-sniffed, so a hand-edited row cannot turn it into
-    // something a browser would run), never sniffed by the browser, and under
-    // a CSP that lets it run nothing even if opened directly.
+    // GET /api/studio/logo — public, the default photographer's logo only
+    // (kept for pages already out there; a guest page reads its link's
+    // photographer's through GET /api/pick/logo). Served as the type its bytes
+    // are (re-sniffed, so a hand-edited row cannot turn it into something a
+    // browser would run), never sniffed by the browser, and under a CSP that
+    // lets it run nothing even if opened directly.
     if (url.pathname === '/api/studio/logo') {
       if (request.method !== 'GET') return jsonErr('Method not allowed', 405);
       if (!env.DB) return jsonErr('Not found', 404);
-      let row = null;
-      try {
-        row = await env.DB.prepare(
-          'SELECT logo, logo_updated_at FROM studio_settings WHERE photographer_id = ? AND logo IS NOT NULL'
-        ).bind(DEFAULT_PHOTOGRAPHER_ID).first();
-      } catch { row = null; }
+      const row = await readLogo(env, DEFAULT_PHOTOGRAPHER_ID);
       return imageResponse(request, row ? row.logo : null, row ? row.logo_updated_at : null);
     }
 
@@ -5327,6 +5350,19 @@ async function routeRequest(request, env, ctx) {
       if (!ctxPick) return jsonErr('Unauthorized', 401);
       const { project, picker, isOwner, isCollaborator, canEdit, role, membership, memberStatus } = ctxPick;
       const route = pathParts.slice(2).join('/');
+
+      // GET /api/pick/logo?t=<link> — the studio logo the guest page shows:
+      // the link's project's photographer's (multi-photographer 2b-3), never
+      // the request's and never anyone else's; none of his = 404, the same as
+      // nobody's. Any live link (owner, collaborator or viewer), like the
+      // studio block in /state. Reads only; private, since the URL carries the link.
+      if (route === 'logo') {
+        if (request.method !== 'GET') return jsonOk({ error: 'Method not allowed' }, 405, { ...SHARED_LINK_HEADERS, Allow: 'GET' });
+        const owner = project.photographer_id;
+        const row = typeof owner === 'string' && owner ? await readLogo(env, owner) : null;
+        return imageResponse(request, row ? row.logo : null, row ? row.logo_updated_at : null,
+          { 'Cache-Control': 'private, max-age=300', Vary: 'X-Share-Token' });
+      }
 
       // GET /api/pick/shop — 購買資訊 (docs/guest-shop.md, S1 trimmed): what
       // this link's guest may buy, owner and viewers alike (information

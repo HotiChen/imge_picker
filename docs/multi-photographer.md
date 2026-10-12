@@ -157,7 +157,7 @@ CREATE TABLE photographer_sessions (
 - 通知信：`mailsDefaultInbox(project)`，五個寄信函式第一行都問它；`project.photographer_id !== 'default'` 就不寄、不警告
   （選片送出、要求修改、修改輪次、客人確認、我有興趣、客人訂單）。選片送出因此留在該攝影師的未通知數字裡。
 - 測試：`worker/test/project-scope.test.mjs`（每條 scoped 路由 × 兩個方向 × 各自正向控制、競態、通知、客人端不讀請求裡的攝影師 id）。
-- 未處理（之後的批次）：公開 logo、設定／儀表板仍是 default 專用（2b-3）。（`guestOrdersEnabled` 與商品／訂單見 2b-2。）
+- 未處理（之後的批次）：公開 logo、設定／儀表板（2b-3 已處理，見下）。（`guestOrdersEnabled` 與商品／訂單見 2b-2。）
 
 **第 2b-2 批（商品／訂單按攝影師隔離，只有 Worker，無 migration）**：
 - 改成 `requirePhotographer` + `who.id`（整個區塊一個呼叫點，標 `// scoped to the caller (who.id): products and orders`）：
@@ -179,6 +179,27 @@ CREATE TABLE photographer_sessions (
 - 2b-1 安全審查補上：`POST /api/shares/:token/revoke` 只撤「沒有專案的連結」或「呼叫者自己專案的連結」，別人的 = 不存在的 token（404）；
   這條仍是 default 專用（batch 3）。另補兩條行為測試：客人確認時解決該專案（非 default）的修改要求、B 改名自己的專案會改到 B 的連結名稱。
 - 測試：`worker/test/product-order-scope.test.mjs`。
+
+**第 2b-3 批（設定／logo／儀表板按攝影師隔離，只有 Worker，無 migration）** — 2b-3 notes：
+- 改成 `requirePhotographer` + `who.id`（標 `// scoped to the caller (who.id)`）：`GET /api/admin/stats`、`GET / PUT /api/admin/settings`、
+  `PUT / DELETE /api/admin/settings/logo`。每句 SELECT / INSERT / UPDATE 都綁 `who.id`；default token 一樣只讀寫 `'default'` 那列。
+  B 第一次 PUT 設定時建立自己的 `studio_settings` 列（主鍵本來就是 `photographer_id`，**不需要 migration**）；body 裡的 `photographer_id` 照舊忽略。
+  B 沒有設定列時 GET 讀到全 null、`has_logo:false`；儀表板只算自己的專案與訂單（`ORDER_SCOPE_SQL` 本來就以擁有者 join），沒有就全是 0。
+  晚到的欄位（`default_extra_max` / `transfer_info` / `pick_link_message`）在 migration 前照舊：讀為 null、寫入回 500 `*_unavailable` 且什麼都不寫，對每位攝影師都一樣。
+- **logo 存在 D1（`studio_settings.logo` BLOB），不在 R2**：沒有任何 R2 鍵，所以沒有 default 前綴碰撞的問題（第 3 批不用管 logo）。
+  所有 logo 讀取走 `readLogo(env, photographerId)`，呼叫端各自給擁有者。
+- 新增 `GET /api/admin/settings/logo`：呼叫者自己的 logo（設定頁預覽用），`private, no-store`、`Vary: Authorization`；沒有 = 404，和誰都沒有時完全相同。
+  要帶 Authorization，所以 `<img src>` 不能直接用：settings.html 要改成 fetch → blob（前端，尚未改）。
+- 新增 `GET /api/pick/logo?t=<選片連結>`（或 `X-Share-Token`）：連結所屬專案的 `project.photographer_id` 的 logo，絕不讀 request 裡的 id。
+  任何有效連結都可（挑選人、協作者、檢視者，和 `/state` 的 studio 區塊一致）；連結無效／撤銷／專案封存 → 401（同 pick 區塊）；非 GET → 405；
+  該攝影師沒有 logo → 404，和 default 專案沒設 logo 時完全相同（不會退回 default 的 logo）。`Cache-Control: private, max-age=300`（URL 帶連結，不給共用快取）。
+  客人頁（`js/pick.js` 三處）要改打這條（前端，尚未改）。
+- 舊的公開 `GET /api/studio/logo` 保留，**只給 default**（`DEFAULT_PHOTOGRAPHER_ID` 在 `routeRequest` 剩 9 處：batch 3 的建立專案／交件／取消交件，和這條）。
+  B 的 logo 永遠不會從這裡出去。前端全部改走上面兩條後可以移除。
+- 測試：`worker/test/settings-scope.test.mjs`（兩個方向的讀寫、body 帶 id、壞 body 不寫、logo 上傳／刪除互不影響、兩條 logo 讀取路由、
+  `/api/studio/logo` 仍只給 default、stats 各算各的、migration 前、開關關時 401）；`photographer-routes` 路由表這 6 條改 `scoped`
+  （多了 `GET …/settings/logo`），`photographer-route-gate` 爬蟲允許 B 在這三條路徑拿到 200 / 405 / 415，但只能寫自己那列 `studio_settings`。
+- 不在這批：`notify_email`（第 4 批）；前端改打新 logo 路由。
 
 - 所有 `/api/admin/*`、`/api/upload`、`/api/books` 等攝影師路由：`const who = await resolvePhotographer(...)`，
   所有查詢與寫入的 `WHERE` 都帶 `photographer_id = who.id`。別人的資源回 **404**（不是 403，不洩漏存在）。

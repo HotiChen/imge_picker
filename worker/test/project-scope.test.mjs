@@ -389,7 +389,7 @@ test('guest side: no /api/pick route reads a photographer id from the request; e
 test('source: no `default-only until 2b-1` mark is left, and every project route asks requirePhotographer', () => {
   assert.equal((SRC.match(/default-only until 2b-1\b/g) || []).length, 0);
   const scoped = SRC.match(/requirePhotographer\(request, env\); \/\/ scoped to the caller/g) || [];
-  assert.equal(scoped.length, 9 + 1, 'list, detail, reset-seat, start-retouch/reopen, archive/unarchive, delete, links, confirm, patch; and (2b-2) the products / orders block');
+  assert.equal(scoped.length, 9 + 1 + 3, 'list, detail, reset-seat, start-retouch/reopen, archive/unarchive, delete, links, confirm, patch; (2b-2) the products / orders block; (2b-3) stats, settings, settings/logo');
   const open405 = SRC.match(/requirePhotographer\(request, env\); \/\/ open to every photographer: a 405/g) || [];
   assert.equal(open405.length, 1);
 });

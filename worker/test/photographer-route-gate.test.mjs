@@ -172,6 +172,12 @@ test('crawl: every non-public /api path refuses a caller without a photographer 
             if (method === 'POST' && path === '/api/admin/products') allowed.push(403);
             if (method === 'POST' && path === '/api/admin/products/from-platform') allowed.push(400);
           }
+          // scoped since 2b-3: B's own settings (200), counts (200) and logo
+          // (none: GET 404; a body that is no image: 415; delete: 200), and
+          // the 405 for a method the path does not take (no id: no data).
+          // B's own studio_settings row is the one thing it may write.
+          const own = who === 'B' && flags.PHOTOGRAPHER_ROUTES && /^\/api\/admin\/(settings|settings\/logo|stats)$/.test(path);
+          if (own) allowed.push(200, 405, 415);
           const text = await res.clone().text();
           if (who === 'B' && flags.PHOTOGRAPHER_ROUTES && block && res.status === 405) {
             const nobody = await hit(mod, env, method, path.replaceAll(project.project.id, NOBODY_ID), token, method === 'GET' ? undefined : {});
@@ -195,6 +201,25 @@ test('crawl: every non-public /api path refuses a caller without a photographer 
           assert.ok(allowed.includes(res.status), `${flags.PHOTOGRAPHER_ROUTES ?? 'off'} ${who} ${method} ${path} → ${res.status} ${text.slice(0, 120)}`);
           assert.ok(!text.includes(project.project.id) && !text.includes('王先生'), `${who} ${method} ${path} leaked: ${text.slice(0, 200)}`);
           if (ownList) assert.deepEqual(JSON.parse(text), { projects: [] });
+          if (own && res.status === 200 && path !== '/api/admin/stats') {
+            const s = JSON.parse(text);
+            assert.equal(s.has_logo, false, `B ${method} ${path}: not A's logo`);
+          }
+          if (own) {
+            // B's row may have been written (PUT settings) or touched (DELETE
+            // logo): set aside, nothing else may differ
+            const mine = env.DB._db.prepare('SELECT * FROM studio_settings WHERE photographer_id = ?').get(B.id);
+            env.DB._db.prepare('DELETE FROM studio_settings WHERE photographer_id = ?').run(B.id);
+            const after = snapshot(env);
+            if (mine) {
+              const cols = Object.keys(mine);
+              env.DB._db.prepare(`INSERT INTO studio_settings (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(', ')})`).run(...Object.values(mine));
+            }
+            const beforeWithout = JSON.parse(before);
+            beforeWithout.data.studio_settings = beforeWithout.data.studio_settings.filter(r => r.photographer_id !== B.id);
+            assert.equal(after, JSON.stringify(beforeWithout), `${who} ${method} ${path} wrote outside B's own settings row`);
+            continue;
+          }
           assert.equal(snapshot(env), before, `${who} ${method} ${path} wrote`);
         }
       }
