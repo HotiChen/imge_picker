@@ -61,6 +61,8 @@ CREATE TABLE photographer_sessions (
   因為沒有 email，**新申請靠 operator 頁的紅點數字提醒**，不寄信。
 - 忘記密碼：第一階段由 operator 在頁面上「重設為臨時密碼」，Tim 私下告知。email 開通後再做連結。
 - 停用（suspended）要立刻生效：每個請求都查 `status`，並刪除該帳號所有 session。
+  （第 3 批安全審查後才真的成立，見 §3 的「停用／重設／刪除」：同一個 batch 撤掉他的 studio token，
+  他專案的選片連結在解析時查擁有者狀態，停用期間失效、恢復後回來。）
 
 **第 1 批實作（2026-10-08）**：migration `worker/migrations/2026-10-11-photographers.sql`（5 句，可重跑），
 多一個欄位 `studio_note`（選填，工作室名稱／網站，≤300 字，給審核判斷）與一張限速表
@@ -262,8 +264,23 @@ CREATE TABLE photographer_sessions (
 - **Tim 要確認**：(1) 合併前在 D1 Console 跑 `2026-10-17-share-token-owner.sql`，再用
   `SELECT photographer_id FROM share_tokens LIMIT 1` 確認欄位在；(2) 合併後用自己的帳號在 admin / 選片頁看照片、縮圖、下載、上傳、
   相本編輯器都正常（default 路徑不變）；(3) `PHOTOGRAPHER_ROUTES` 仍 `"off"`，開之前要安全審查這批。
-- 已知限制（之後處理）：停用攝影師只刪 session，他已發出的 studio token 最多還能讀**他自己的**檔案 12 小時；
-  R2 180 天 lifecycle 仍是整桶規則；相本擁有權要另一批。
+- 已知限制（之後處理）：R2 180 天 lifecycle 仍是整桶規則；相本擁有權要另一批。
+  （原本的「停用只刪 session，studio token 還能讀 12 小時」已在下面的安全審查修掉。）
+
+**第 3 批安全審查後補上（`claude/r2-hardening`，只有 Worker，無 migration）**：
+- **停用／重設密碼／刪除**：operator 的 `suspend`、`reset-password`、`reject`（唯一的刪除）在刪 session 的**同一個 batch**
+  撤掉該帳號所有還活著的 studio token（`kind = 'studio' AND photographer_id = <id>`）。撤銷條件是帳號那句跑完後的**最終狀態**
+  （停用：已是 suspended；重設：帳號仍存在；reject：帳號已不存在），不是「這次有沒有改到」：所以 pending 帳號被按停用、active 帳號被按 reject（409）
+  都不撤；但對已停用的帳號再按停用（409）、reject 不存在的 id（404）也會跑撤銷，無害（這些帳號本來就不可能有能用的 token）。
+  default 沒有帳號列，永遠不碰（NULL 或字面 `'default'` 的列都不會）。
+  恢復（unsuspend）**不會**把 studio token 還回來（12 小時的憑證，重新登入再發一個就好）。share-token-owner migration 前沒有欄位、
+  也不可能有非 default 的 studio token，batch 就不帶這句。
+- **選片連結（Tim 的決定：可逆）**：`resolveShareToken` 在**本來就要跑的那句 SELECT** 裡帶一個子查詢，看連結擁有者（選片連結 = 專案的
+  `photographer_id`；其他連結 = 該列的 `photographer_id`）是否為 `active` 帳號（熱路徑不多一次 D1 來回）。default（NULL 或 `'default'`）永遠算有效，
+  不看帳號表。停用、待審核、帳號被刪掉的擁有者 → 連結解析為 null，回應和不存在的連結**完全相同**；連結列本身沒被撤，所以 unsuspend 後立刻恢復。
+  封存／專案不存在的行為不變。帳號表或擁有者欄位不存在時（migration 前）退回舊語句：default 照常，其他擁有者一律失效。
+- 測試：`worker/test/photographer-suspend-links.test.mjs`。三個舊測試把專案直接改成 `'other'`（沒有帳號）來證明「看專案擁有者」，
+  現在要先建一個 active 的 `'other'` 帳號；`guest-shop-read` 的「專案沒有攝影師」從空商店改成 401（連結根本不解析，更嚴）。
 
 ### 4. 每人設定與通知（第 4 批）
 

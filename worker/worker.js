@@ -825,15 +825,50 @@ function shareCeiling(row) {
   return created + SHARE_MAX_LIFE_MS;
 }
 
+// Whether a link's owner may still hand out its files (security review of
+// batch 3): the default photographer always (it has no photographers row, and
+// a row that names it changes nothing); anyone else only while their account
+// is active — suspended (until un-suspended), pending or deleted is dark.
+// `col` is the column holding the owner, NULL meaning the default. An SQL
+// expression, so the check rides in the statement that already loads the row
+// (no extra round trip on a hot read). It is selected AS OWNER_LIVE_COLUMN and
+// taken off again before the row goes anywhere.
+const OWNER_LIVE_COLUMN = 'owner_live__';
+// The default photographer as a link owner: NULL (every row from before the
+// owner column, album links, client sessions) or its id written out.
+function isDefaultOwner(owner) {
+  return owner === null || owner === undefined || owner === DEFAULT_PHOTOGRAPHER_ID;
+}
+// 1 when `col` names an active account; the default (no row) is let through
+// by splitOwnerLive, in JS
+const ownerLiveSql = col =>
+  `EXISTS (SELECT 1 FROM photographers WHERE id = ${col} AND status = 'active') AS ${OWNER_LIVE_COLUMN}`;
+// A row read with ownerLiveSql (or by the fallback without it): the row
+// without the helper column, and whether its owner is live. The fallback
+// runs on a database without the photographers table or the share-token owner
+// column, where only the default can own anything: there the default is live
+// and any other owner fails closed.
+function splitOwnerLive(row, owner) {
+  if (!row) return { row: null, live: false };
+  const { [OWNER_LIVE_COLUMN]: flag, ...rest } = row;
+  return { row: rest, live: isDefaultOwner(owner) || flag === 1 };
+}
+
 // Returns the token row (folders already parsed) or null. Revoked, expired,
-// unknown and "no D1 bound at all" are all deliberately the same answer.
+// unknown, an owner that is not live (ownerLiveSql) and "no D1 bound at all"
+// are all deliberately the same answer.
 async function resolveShareToken(request, url, env) {
   if (!env.DB) return null;
   const value = url.searchParams.get('t') || request.headers.get('X-Share-Token') || '';
   if (!value) return null;
   let row;
+  let ownerLive;
   try {
-    row = await env.DB.prepare('SELECT * FROM share_tokens WHERE token = ?').bind(value).first();
+    const read = await withoutMissingSchema(
+      () => env.DB.prepare(`SELECT s.*, ${ownerLiveSql('s.photographer_id')} FROM share_tokens s WHERE s.token = ?`).bind(value).first(),
+      () => env.DB.prepare('SELECT * FROM share_tokens WHERE token = ?').bind(value).first(),
+    );
+    ({ row, live: ownerLive } = splitOwnerLive(read, read?.photographer_id));
   } catch { return null; }
   if (!row || row.revoked_at) return null;
   const expiry = Date.parse(row.expires_at);
@@ -851,14 +886,25 @@ async function resolveShareToken(request, url, env) {
   // is named in the WHERE so a database the archive migration has not reached
   // refuses pick links (the query throws) instead of ignoring the archive;
   // album links never get here. The row is kept for resolvePick.
+  // Its owner is the project's photographer (shareOwner), checked in the
+  // same statement: a suspended / deleted photographer's links are dark, and
+  // come back on un-suspend (the link rows are untouched).
   if (isPickShare(row) && row.project_id) {
     let project;
     try {
-      project = await env.DB.prepare('SELECT * FROM projects WHERE id = ? AND archived_at IS NULL').bind(row.project_id).first();
+      const read = await withoutMissingSchema(
+        () => env.DB.prepare(`SELECT p.*, ${ownerLiveSql('p.photographer_id')} FROM projects p WHERE p.id = ? AND p.archived_at IS NULL`).bind(row.project_id).first(),
+        () => env.DB.prepare('SELECT * FROM projects WHERE id = ? AND archived_at IS NULL').bind(row.project_id).first(),
+      );
+      const checked = splitOwnerLive(read, read?.photographer_id);
+      if (!checked.live) return null;
+      project = checked.row;
     } catch { return null; }
     if (!project) return null;
     return { ...row, folders, project };
   }
+  // any other link reads its own row's owner's files (shareOwner)
+  if (!ownerLive) return null;
   return { ...row, folders };
 }
 
@@ -4579,20 +4625,45 @@ async function routeRequest(request, env, ctx) {
           let tempPassword = null;
           let statements;
           let resetResult = null;
+          // Suspend, reset-password and reject (the delete) also revoke the
+          // account's live studio tokens (a 12-hour read credential for its
+          // own files), in the same batch, after the account write. The
+          // condition is the account's state once that write has run, not
+          // whether this write changed it: suspended, still there, or gone,
+          // respectively. So an account that is not active (a pending one
+          // asked to suspend, an active one asked to reject: 409) keeps its
+          // tokens, while suspending an already suspended account (409) or
+          // rejecting an id that is not there (404) also runs the revoke —
+          // harmless, neither can hold a usable token. (`changes()` inside
+          // the batch would be the session DELETE's, so it cannot tell.)
+          // The default photographer's tokens (NULL,
+          // or a literal 'default') are never touched: it has no row to act on.
+          // Before the share-token owner migration there is no column and no
+          // owned studio row can exist yet, so the batch runs without it.
+          // Pick links are not revoked: resolveShareToken checks the owner's
+          // status, so they go dark while suspended and come back after.
+          const revokeTokens = landed => (isDefaultOwner(id) ? [] : [env.DB.prepare(
+            `UPDATE share_tokens SET revoked_at = ? WHERE kind = 'studio' AND photographer_id = ? AND revoked_at IS NULL AND ${landed}`
+          ).bind(now, id, id)]);
+          const withTokens = (writes, landed) => withoutMissingColumn(
+            () => env.DB.batch([...writes, ...revokeTokens(landed)]),
+            () => env.DB.batch(writes),
+          );
           if (action === 'reject') {
             statements = [env.DB.prepare("DELETE FROM photographers WHERE id = ? AND status = 'pending'").bind(id)];
           } else if (action === 'reset-password') {
             tempPassword = tempPhotographerPassword();
             const tempHash = await hashPhotographerPassword(tempPassword);
             // the new hash and must_change_password = 1 in one statement, every
-            // session gone in the same batch. Before the 2026-10-15 migration
-            // the flag cannot be written, and a temporary password nobody has
-            // to change is worse than none: 500, and the batch (one
-            // transaction) wrote nothing — no new hash, no session ended.
-            resetResult = await withoutMissingColumn(() => env.DB.batch([
+            // session and studio token gone in the same batch. Before the
+            // 2026-10-15 migration the flag cannot be written, and a temporary
+            // password nobody has to change is worse than none: 500, and the
+            // batch (one transaction) wrote nothing — no new hash, no session
+            // ended.
+            resetResult = await withoutMissingColumn(() => withTokens([
               env.DB.prepare('UPDATE photographers SET password_hash = ?, must_change_password = 1 WHERE id = ?').bind(tempHash, id),
               env.DB.prepare('DELETE FROM photographer_sessions WHERE photographer_id = ?').bind(id),
-            ]), () => null);
+            ], 'EXISTS (SELECT 1 FROM photographers WHERE id = ?)'), () => null);
             if (!resetResult) return done({ error: '請先執行 must_change_password migration 再重設密碼', code: 'must_change_unavailable' }, 500);
           } else {
             statements = [env.DB.prepare(
@@ -4601,7 +4672,11 @@ async function routeRequest(request, env, ctx) {
             // suspend ends every session in the same batch
             if (action === 'suspend') statements.push(env.DB.prepare('DELETE FROM photographer_sessions WHERE photographer_id = ?').bind(id));
           }
-          const [first] = resetResult ?? await env.DB.batch(statements);
+          const landedIf = {
+            reject: 'NOT EXISTS (SELECT 1 FROM photographers WHERE id = ?)',
+            suspend: "EXISTS (SELECT 1 FROM photographers WHERE id = ? AND status = 'suspended')",
+          }[action];
+          const [first] = resetResult ?? await (landedIf ? withTokens(statements, landedIf) : env.DB.batch(statements));
           if (!first.meta.changes) {
             const current = await env.DB.prepare('SELECT status FROM photographers WHERE id = ?').bind(id).first();
             if (!current) return jsonErr('Not found', 404);

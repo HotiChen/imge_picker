@@ -290,12 +290,19 @@ test("another photographer's products never show; the project decides the photog
     assert.deepEqual(await res.json(), mine, extra);
   }
   // a project of the other photographer sees theirs, and not ours
+  // 'other' is a real, active account: a link of a project whose owner has
+  // no active account is dark (security review of batch 3)
+  env.DB._db.prepare("INSERT INTO photographers (id, email, password_hash, display_name, status, created_at) VALUES ('other', 'other@example.com', 'x', '乙', 'active', ?)").run(new Date().toISOString());
   env.DB._db.prepare("UPDATE projects SET photographer_id = 'other' WHERE id = ?").run(p.project.id);
   const theirs = await okShop(env, p.token);
   assert.deepEqual(theirs.products.map(x => [x.id, x.options.map(o => [o.id, o.price])]), [['theirs', [['theirs-o', 99999]]]]);
-  // and a project with no photographer sees nothing
+  // and a project with no photographer sees nothing — since the security
+  // review of batch 3 its link does not even resolve (no active owner), so
+  // it is a 401 rather than an empty shop; never the default's products
   env.DB._db.prepare("UPDATE projects SET photographer_id = '' WHERE id = ?").run(p.project.id);
-  assert.deepEqual(await okShop(env, p.token), { products: [], ordering: null });
+  const none = await call(env, `/api/pick/shop?t=${encodeURIComponent(p.token)}`);
+  assert.equal(none.status, 401);
+  assert.doesNotMatch(await none.text(), /theirs|99999|products/);
 });
 
 // ─── when it answers ────────────────────────────────────────────────────────

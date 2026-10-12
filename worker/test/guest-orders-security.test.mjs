@@ -98,6 +98,9 @@ test('#3 options not in the guest shop: hidden, retired, platform-retired, under
   // guest order at all (another photographer's project is always off,
   // docs/multi-photographer.md §4), so the order is refused before the shop
   // is asked (product-order-scope.test.mjs has the switch × owner matrix)
+  // 'other' is a real, active account: a link of a project whose owner has
+  // no active account is dark (security review of batch 3)
+  env.DB._db.prepare("INSERT INTO photographers (id, email, password_hash, display_name, status, created_at) VALUES ('other', 'other@example.com', 'x', '乙', 'active', ?)").run(new Date().toISOString());
   env.DB._db.prepare("UPDATE projects SET photographer_id = 'other' WHERE id = ?").run(p.id);
   const shop = await (await pick(env, 'GET', 'shop', p.token)).json();
   assert.deepEqual(shop.products.map(x => x.id), ['theirs']);

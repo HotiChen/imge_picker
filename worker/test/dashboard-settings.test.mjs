@@ -396,6 +396,9 @@ test('pick state reads the brand of the project\'s own photographer', async () =
   const env = setup();
   const p = await claimed(env);
   await putSettings(env, { studio_name: 'Default studio' });
+  // 'other' is a real, active account: a link of a project whose owner has
+  // no active account is dark (security review of batch 3)
+  env.DB._db.prepare("INSERT INTO photographers (id, email, password_hash, display_name, status, created_at) VALUES ('other', 'other@example.com', 'x', '乙', 'active', ?)").run(new Date().toISOString());
   env.DB._db.prepare("UPDATE projects SET photographer_id = 'other'").run();
   const state = await (await pick(env, 'GET', 'state', p.token)).json();
   assert.equal(state.studio.name, null);

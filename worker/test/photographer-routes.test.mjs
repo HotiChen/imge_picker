@@ -468,6 +468,7 @@ const DEFAULT_ID_USES = {
   tenantPrefix: 1,           // the default photographer has no R2 prefix: asked for one, it refuses (batch 3)
   bucketFor: 1,              // the default photographer's keys are unprefixed (batch 3)
   bookBucket: 1,             // books have no owner yet: the default's objects (default-only until books)
+  isDefaultOwner: 1,         // a link owned by the default (NULL or its id) is never dark; never suspended (security review of batch 3)
   routeRequest: 1,           // the public /api/studio/logo (the default's, 2b-3)
 };
 test('DEFAULT_PHOTOGRAPHER_ID appears only in the allow-listed functions, with exact counts', () => {

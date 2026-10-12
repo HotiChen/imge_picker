@@ -591,7 +591,9 @@ CREATE TABLE IF NOT EXISTS product_interests (
 -- New tables, from the hand-run worker/migrations/2026-10-11-photographers.sql.
 -- Not the old client-account users / permissions / sessions above. Register
 -- (pending) → operator approves (active) / rejects (row deleted) / suspends
--- (suspended, every session deleted in the same batch). 'default' has no row:
+-- (suspended, every session deleted and every live studio token revoked in
+-- the same batch; their projects' pick links resolve only while the account
+-- is active, so they come back on un-suspend). 'default' has no row:
 -- it stays PHOTOGRAPHER_TOKEN. In batches 1 / 2a a session opens only
 -- /api/photographer/me, /logout and /change-password, no existing route.
 CREATE TABLE IF NOT EXISTS photographers (
