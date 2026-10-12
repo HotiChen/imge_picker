@@ -1,0 +1,22 @@
+-- Forced password change, batch 2a of docs/multi-photographer.md.
+-- Paste into the D1 Console for imagepicker-db before merging the Worker that
+-- reads it. One statement. Needs 2026-10-11-photographers.sql first.
+--
+-- After an operator 重設密碼 (reset-password) the account is flagged, and a
+-- session opens only POST /api/photographer/change-password, GET /me and
+-- POST /logout until the photographer has chosen a new password.
+--
+-- Until it has run: login and /me work and say must_change_password: null;
+-- POST /api/photographer/change-password answers 500
+-- password_change_unavailable and writes nothing; operator reset-password
+-- still replaces the password and ends every session, but cannot force the
+-- change, and its answer says must_change_password: false, warning:
+-- must_change_unavailable. Any account reset in that window keeps a temporary
+-- password that never has to be changed: after running this, reset that
+-- account again from operator.html.
+--
+-- Not safe to re-run: a second run fails with "duplicate column name:
+-- must_change_password", which means it already ran and can be ignored.
+
+-- 1 = must change the password before anything else; existing rows get 0.
+ALTER TABLE photographers ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0;

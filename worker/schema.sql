@@ -574,8 +574,8 @@ CREATE TABLE IF NOT EXISTS product_interests (
 -- Not the old client-account users / permissions / sessions above. Register
 -- (pending) → operator approves (active) / rejects (row deleted) / suspends
 -- (suspended, every session deleted in the same batch). 'default' has no row:
--- it stays PHOTOGRAPHER_TOKEN. In batch 1 a session opens only
--- /api/photographer/me and /logout, no existing route.
+-- it stays PHOTOGRAPHER_TOKEN. In batches 1 / 2a a session opens only
+-- /api/photographer/me, /logout and /change-password, no existing route.
 CREATE TABLE IF NOT EXISTS photographers (
   id            TEXT PRIMARY KEY,           -- random 16 hex; never 'default'
   email         TEXT NOT NULL UNIQUE,       -- lowercased printable ASCII; unverified, login name only
@@ -587,7 +587,13 @@ CREATE TABLE IF NOT EXISTS photographers (
   approved_at   TEXT,
   last_login_at TEXT,
   dup_attempts  INTEGER NOT NULL DEFAULT 0, -- later registrations naming this email (squatting signal)
-  last_dup_at   TEXT
+  last_dup_at   TEXT,
+  -- 1 after an operator reset-password: until the photographer changes it
+  -- (POST /api/photographer/change-password) a session opens only
+  -- change-password, me and logout. Added to a deployed database by
+  --   ALTER TABLE photographers ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0;
+  -- (worker/migrations/2026-10-15-photographer-must-change-password.sql, batch 2a).
+  must_change_password INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS photographer_sessions (
   token_hash      TEXT PRIMARY KEY,         -- SHA-256 hex of the bearer token

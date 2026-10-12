@@ -112,8 +112,10 @@ function isOperatorToken(request, env) {
 // ─── Photographer accounts (docs/multi-photographer.md, batch 1) ────────────
 // Register (pending) → the operator approves → email + password login gives a
 // bearer session token, stored only as its SHA-256. Batch 1 rule: a session
-// opens /api/photographer/me and /logout and nothing else — isAdminToken above
-// still checks PHOTOGRAPHER_TOKEN only. Registration is closed unless
+// opens /api/photographer/me, /logout and (batch 2a) /change-password and
+// nothing else — isAdminToken above still checks PHOTOGRAPHER_TOKEN only.
+// After an operator reset-password the account must change its password
+// first (must_change_password, enforced in resolvePhotographer). Registration is closed unless
 // PHOTOGRAPHER_SIGNUP is exactly 'on' AND TURNSTILE_SECRET is set.
 const PHOTOGRAPHERS_UNAVAILABLE = { error: '攝影師帳號功能尚未啟用', code: 'photographers_unavailable' };
 const PHOTOGRAPHER_NO_STORE = { 'Cache-Control': 'private, no-store', 'Vary': 'Authorization' };
@@ -258,26 +260,97 @@ async function turnstileVerified(token, request, env) {
 // The session's photographer, or null: the bearer token's SHA-256, a live
 // session, an ACTIVE account — suspended is null at once. Throws when the
 // tables are missing (the routes answer photographers_unavailable).
+// must_change_password: true / false, or null before its column exists
+// (2026-10-15 migration), which the guard treats as unknown.
+// Reached only through resolvePhotographer (the guard): a test pins that.
 async function lookupPhotographerSession(request, env) {
   const token = bearerToken(request);
   if (!/^[0-9a-f]{64}$/.test(token)) return null;
-  const row = await env.DB.prepare(
-    "SELECT p.id, p.display_name, p.email FROM photographer_sessions s JOIN photographers p ON p.id = s.photographer_id WHERE s.token_hash = ? AND s.expires_at > ? AND p.status = 'active'"
-  ).bind(await sha256Hex(token), new Date().toISOString()).first();
-  return row ? { id: row.id, display_name: row.display_name, email: row.email } : null;
+  const tokenHash = await sha256Hex(token);
+  const now = new Date().toISOString();
+  const sql = flag => `SELECT p.id, p.display_name, p.email, ${flag} AS must_change_password FROM photographer_sessions s JOIN photographers p ON p.id = s.photographer_id WHERE s.token_hash = ? AND s.expires_at > ? AND p.status = 'active'`;
+  const row = await withoutMissingColumn(
+    () => env.DB.prepare(sql('p.must_change_password')).bind(tokenHash, now).first(),
+    () => env.DB.prepare(sql('NULL')).bind(tokenHash, now).first(),
+  );
+  return row ? { id: row.id, display_name: row.display_name, email: row.email, must_change_password: mustChangeFlag(row.must_change_password) } : null;
 }
 
-// {id, display_name, email} | null. Batch 1: used by GET /api/photographer/me
-// only; no existing route reads it. Before the migration: null.
-async function resolvePhotographer(request, env) {
-  if (!env.DB) return null;
-  try {
-    return await lookupPhotographerSession(request, env);
-  } catch (e) {
-    if (isMissingSchema(e)) return null;
-    throw e;
-  }
+// The stored flag as the API says it: null (no column yet) stays null, 0 is
+// false, anything else true — an odd value fails closed.
+function mustChangeFlag(value) {
+  return value === null || value === undefined ? null : value !== 0;
 }
+
+// <photographer-route-guard>
+// What a photographer session may open while must_change_password is set (an
+// operator reset): change its password, ask who it is, log out. Route ids are
+// 'area/name'; every resolvePhotographer call names one. Batch 2b's routes get
+// the refusal by going through resolvePhotographer.
+const PHOTOGRAPHER_MUST_CHANGE_ROUTES = Object.freeze(['photographer/me', 'photographer/logout', 'photographer/change-password']);
+const PHOTOGRAPHER_UNAUTHORIZED = { error: 'Unauthorized', code: 'unauthorized' };
+const MUST_CHANGE_PASSWORD = { error: '請先修改密碼', code: 'must_change_password' };
+const PASSWORD_CHANGE_UNAVAILABLE = { error: '修改密碼功能尚未啟用', code: 'password_change_unavailable' };
+// {status, body} to answer instead of the route, or null to let it run. Only
+// must_change_password === false opens every route; true is 403, unknown
+// (null: the column is missing) 500 — both only outside the three above.
+function photographerRouteRefusal(who, route) {
+  if (!who) return { status: 401, body: PHOTOGRAPHER_UNAUTHORIZED };
+  if (who.must_change_password === false) return null;
+  if (PHOTOGRAPHER_MUST_CHANGE_ROUTES.includes(route)) return null;
+  if (who.must_change_password === true) return { status: 403, body: MUST_CHANGE_PASSWORD };
+  return { status: 500, body: PASSWORD_CHANGE_UNAVAILABLE };
+}
+// </photographer-route-guard>
+
+// The one way a route learns which photographer a session is:
+// {who: {id, display_name, email, must_change_password}} or {refused: Response}
+// (401 no live session — before the migration too; 403 / 500 the guard above).
+// `route` is the caller's route id ('photographer/me').
+async function resolvePhotographer(request, env, route) {
+  let who = null;
+  if (env.DB) {
+    try {
+      who = await lookupPhotographerSession(request, env);
+    } catch (e) {
+      if (!isMissingSchema(e)) throw e;
+    }
+  }
+  const refusal = photographerRouteRefusal(who, route);
+  if (refusal) return { refused: jsonOk(refusal.body, refusal.status, PHOTOGRAPHER_NO_STORE) };
+  return { who };
+}
+
+// A new password: a string of 10–200 characters (register and change-password)
+function photographerPasswordOk(password) {
+  return typeof password === 'string' && !overChars(password, PHOTOGRAPHER_PASSWORD_MAX) && charCount(password) >= PHOTOGRAPHER_PASSWORD_MIN;
+}
+const INVALID_PHOTOGRAPHER_PASSWORD = { error: `密碼需 ${PHOTOGRAPHER_PASSWORD_MIN}–${PHOTOGRAPHER_PASSWORD_MAX} 個字元`, code: 'invalid_password' };
+
+// The password throttle, shared by login and change-password: this attempt
+// reserves one row per key (the client's network and the email) in one
+// conditional insert, before any PBKDF2, so parallel guesses cannot pass the
+// cap; a success deletes its own rows again, so what stays are failures.
+// Same keys for both routes, so a stolen session gets no extra guesses at the
+// password. `emailText` is the email as typed (login) or stored (change).
+// Returns the attempt id, or null when either key is at its cap (429).
+async function reservePasswordAttempt(request, env, emailText) {
+  const now = Date.now();
+  const pepper = env.TURNSTILE_SECRET || '';
+  const ipKey = await sha256Hex(`photographer-login-ip:${pepper}:${clientNetwork(request)}`);
+  const emailKey = await sha256Hex(`photographer-login-email:${pepper}:${String(emailText).trim().toLowerCase().slice(0, 320)}`);
+  const attempt = randomHex(16);
+  const since = new Date(now - PHOTOGRAPHER_LOGIN_WINDOW_MS).toISOString();
+  await env.DB.prepare('DELETE FROM photographer_login_failures WHERE created_at < ?').bind(new Date(now - 24 * 60 * 60 * 1000).toISOString()).run();
+  const reserved = await env.DB.prepare(
+    `INSERT INTO photographer_login_failures (key_hash, attempt, created_at)
+     SELECT k, ?, ? FROM (SELECT ? AS k UNION ALL SELECT ?)
+      WHERE (SELECT COUNT(*) FROM photographer_login_failures WHERE key_hash = ? AND created_at > ?) < ?
+        AND (SELECT COUNT(*) FROM photographer_login_failures WHERE key_hash = ? AND created_at > ?) < ?`
+  ).bind(attempt, new Date(now).toISOString(), ipKey, emailKey, ipKey, since, PHOTOGRAPHER_LOGIN_FAILURES_MAX, emailKey, since, PHOTOGRAPHER_LOGIN_FAILURES_MAX).run();
+  return reserved.meta.changes ? attempt : null;
+}
+const TOO_MANY_ATTEMPTS = { error: '嘗試次數太多，請 15 分鐘後再試', code: 'too_many_attempts' };
 
 // ─── Client share tokens ─────────────────────────────────────────────────────
 // Clients get an album link over LINE. Two things follow. LINE's crawler
@@ -3000,23 +3073,25 @@ export default {
     let sharePromise;
     const share = () => (sharePromise ??= resolveShareToken(request, url, env));
 
-    // ─── Photographer accounts: /api/photographer/* (batch 1) ─────────────
-    // register / login / logout (POST), me (GET). API only, no page links
-    // here yet. Anything else under /api/photographer is 404/405 here, so
-    // nothing falls through to the upload route.
+    // ─── Photographer accounts: /api/photographer/* (batches 1, 2a) ───────
+    // register / login / logout / change-password (POST), me (GET). API only,
+    // no page links here yet. Anything else under /api/photographer is
+    // 404/405 here, so nothing falls through to the upload route.
     if (pathParts[0] === 'api' && pathParts[1] === 'photographer') {
       const route = pathParts.length === 3 ? pathParts[2] : null;
-      const method = { register: 'POST', login: 'POST', logout: 'POST', me: 'GET' }[route];
+      const method = Object.assign(Object.create(null), { register: 'POST', login: 'POST', logout: 'POST', 'change-password': 'POST', me: 'GET' })[route];
       if (!method) return jsonErr('Not found', 404);
       if (request.method !== method) return jsonErr('Method not allowed', 405);
       const reply = (data, status = 200) => jsonOk(data, status, PHOTOGRAPHER_NO_STORE);
 
-      // GET /api/photographer/me — who this session is (401 otherwise,
-      // before the migration too: no session can exist then)
+      // GET /api/photographer/me — who this session is, and whether it must
+      // change its password first (null before that migration). 401
+      // otherwise, before the migration too: no session can exist then.
       if (route === 'me') {
-        const who = await resolvePhotographer(request, env);
-        if (!who) return reply({ error: 'Unauthorized', code: 'unauthorized' }, 401);
-        return reply({ photographer: who });
+        const session = await resolvePhotographer(request, env, 'photographer/me');
+        if (session.refused) return session.refused;
+        const { id, display_name, email, must_change_password } = session.who;
+        return reply({ photographer: { id, display_name, email }, must_change_password });
       }
 
       // closed before anything is read: a typo in the switch, or no secret
@@ -3046,28 +3121,19 @@ export default {
         if (route === 'login') {
           const email = photographerEmail(body.email);
           const password = typeof body.password === 'string' && body.password.length <= 2 * PHOTOGRAPHER_PASSWORD_MAX ? body.password : '';
-          // The throttle: this attempt reserves one row per key (the client's
-          // network and the email) in one conditional insert, before PBKDF2,
-          // so parallel guesses cannot pass the cap; a success deletes its own
-          // rows again, so what stays are failures. A refused attempt says so
+          // the throttle (reservePasswordAttempt). A refused attempt says so
           // (429) whoever owns the email: the attacker caused it.
           const now = Date.now();
           const nowIso = new Date(now).toISOString();
-          const pepper = env.TURNSTILE_SECRET || '';
-          const ipKey = await sha256Hex(`photographer-login-ip:${pepper}:${clientNetwork(request)}`);
-          const emailKey = await sha256Hex(`photographer-login-email:${pepper}:${typeof body.email === 'string' ? body.email.trim().toLowerCase().slice(0, 320) : ''}`);
-          const attempt = randomHex(16);
-          const since = new Date(now - PHOTOGRAPHER_LOGIN_WINDOW_MS).toISOString();
-          await env.DB.prepare('DELETE FROM photographer_login_failures WHERE created_at < ?').bind(new Date(now - 24 * 60 * 60 * 1000).toISOString()).run();
-          const reserved = await env.DB.prepare(
-            `INSERT INTO photographer_login_failures (key_hash, attempt, created_at)
-             SELECT k, ?, ? FROM (SELECT ? AS k UNION ALL SELECT ?)
-              WHERE (SELECT COUNT(*) FROM photographer_login_failures WHERE key_hash = ? AND created_at > ?) < ?
-                AND (SELECT COUNT(*) FROM photographer_login_failures WHERE key_hash = ? AND created_at > ?) < ?`
-          ).bind(attempt, nowIso, ipKey, emailKey, ipKey, since, PHOTOGRAPHER_LOGIN_FAILURES_MAX, emailKey, since, PHOTOGRAPHER_LOGIN_FAILURES_MAX).run();
-          if (!reserved.meta.changes) return reply({ error: '嘗試次數太多，請 15 分鐘後再試', code: 'too_many_attempts' }, 429);
+          const attempt = await reservePasswordAttempt(request, env, typeof body.email === 'string' ? body.email : '');
+          if (!attempt) return reply(TOO_MANY_ATTEMPTS, 429);
+          // must_change_password: null before its migration
+          const accountSql = flag => `SELECT id, display_name, password_hash, status, ${flag} AS must_change_password FROM photographers WHERE email = ?`;
           const row = email
-            ? await env.DB.prepare('SELECT id, display_name, password_hash, status FROM photographers WHERE email = ?').bind(email).first()
+            ? await withoutMissingColumn(
+              () => env.DB.prepare(accountSql('must_change_password')).bind(email).first(),
+              () => env.DB.prepare(accountSql('NULL')).bind(email).first(),
+            )
             : null;
           const verified = await verifyPhotographerPassword(password, row ? row.password_hash : PHOTOGRAPHER_DUMMY_HASH);
           if (!row || !verified || row.status !== 'active') return reply(LOGIN_FAILED, 401);
@@ -3086,7 +3152,53 @@ export default {
             env.DB.prepare('DELETE FROM photographer_sessions WHERE photographer_id = ? AND expires_at <= ?').bind(row.id, nowIso),
           ]);
           if (!inserted.meta.changes) return reply(LOGIN_FAILED, 401);
-          return reply({ token, photographer: { id: row.id, display_name: row.display_name } });
+          return reply({ token, photographer: { id: row.id, display_name: row.display_name }, must_change_password: mustChangeFlag(row.must_change_password) });
+        }
+
+        // POST /api/photographer/change-password — {current_password,
+        // new_password}, from a live session (a flagged one too: this is how
+        // it clears the flag). Input 400 (no PBKDF2), the login throttle 429
+        // (shared keys), a wrong current password 403 wrong_password (counted
+        // as a failure). Then the new hash, the flag cleared and every OTHER
+        // session of this photographer deleted, in one batch that lands only
+        // while this session is live, the account active and its hash still
+        // the one just verified — a reset, a suspend, a logout or another
+        // change in between is 409 password_change_conflict, nothing written.
+        if (route === 'change-password') {
+          const session = await resolvePhotographer(request, env, 'photographer/change-password');
+          if (session.refused) return session.refused;
+          const who = session.who;
+          if (who.must_change_password === null) return reply(PASSWORD_CHANGE_UNAVAILABLE, 500);
+          const current = body.current_password;
+          const next = body.new_password;
+          if (typeof current !== 'string' || !current || current.length > 2 * PHOTOGRAPHER_PASSWORD_MAX) {
+            return reply({ error: '請輸入目前的密碼', code: 'invalid_current_password' }, 400);
+          }
+          if (!photographerPasswordOk(next)) return reply(INVALID_PHOTOGRAPHER_PASSWORD, 400);
+          if (next === current) return reply({ error: '新密碼不能和目前的密碼相同', code: 'same_password' }, 400);
+          const attempt = await reservePasswordAttempt(request, env, who.email);
+          if (!attempt) return reply(TOO_MANY_ATTEMPTS, 429);
+          const row = await env.DB.prepare("SELECT password_hash FROM photographers WHERE id = ? AND status = 'active'").bind(who.id).first();
+          // both PBKDF2 runs whatever the answer, so right and wrong take as long
+          const [verified, newHash] = await Promise.all([
+            verifyPhotographerPassword(current, row ? row.password_hash : PHOTOGRAPHER_DUMMY_HASH),
+            hashPhotographerPassword(next),
+          ]);
+          if (!row || !verified) return reply({ error: '目前的密碼不正確', code: 'wrong_password' }, 403);
+          const tokenHash = await sha256Hex(bearerToken(request));
+          const nowIso = new Date().toISOString();
+          const [updated] = await env.DB.batch([
+            env.DB.prepare(
+              "UPDATE photographers SET password_hash = ?, must_change_password = 0 WHERE id = ? AND status = 'active' AND password_hash = ? AND EXISTS (SELECT 1 FROM photographer_sessions WHERE token_hash = ? AND photographer_id = ? AND expires_at > ?)"
+            ).bind(newHash, who.id, row.password_hash, tokenHash, who.id, nowIso),
+            // only if the new hash landed (its salt is fresh, so it is this write's)
+            env.DB.prepare('DELETE FROM photographer_sessions WHERE photographer_id = ? AND token_hash != ? AND EXISTS (SELECT 1 FROM photographers WHERE id = ? AND password_hash = ?)')
+              .bind(who.id, tokenHash, who.id, newHash),
+            // the current password was right: not a failure
+            env.DB.prepare('DELETE FROM photographer_login_failures WHERE attempt = ?').bind(attempt),
+          ]);
+          if (!updated.meta.changes) return reply({ error: '密碼或登入狀態已改變，請重新登入再試', code: 'password_change_conflict' }, 409);
+          return reply({ ok: true });
         }
 
         // POST /api/photographer/register — {email, password, display_name,
@@ -3098,9 +3210,7 @@ export default {
         const email = photographerEmail(body.email);
         if (!email) return reply({ error: 'Email 格式不正確', code: 'invalid_email' }, 400);
         const password = body.password;
-        if (typeof password !== 'string' || overChars(password, PHOTOGRAPHER_PASSWORD_MAX) || charCount(password) < PHOTOGRAPHER_PASSWORD_MIN) {
-          return reply({ error: `密碼需 ${PHOTOGRAPHER_PASSWORD_MIN}–${PHOTOGRAPHER_PASSWORD_MAX} 個字元`, code: 'invalid_password' }, 400);
-        }
+        if (!photographerPasswordOk(password)) return reply(INVALID_PHOTOGRAPHER_PASSWORD, 400);
         const name = typeof body.display_name === 'string' ? body.display_name.trim() : '';
         if (!name || overChars(name, PHOTOGRAPHER_NAME_MAX) || ACCOUNT_CONTROL.test(name)) {
           return reply({ error: `顯示名稱需 1–${PHOTOGRAPHER_NAME_MAX} 個字`, code: 'invalid_display_name' }, 400);
@@ -4103,14 +4213,22 @@ export default {
           const { from, to } = PHOTOGRAPHER_ACTIONS[action];
           let tempPassword = null;
           let statements;
+          let resetResult = null;
+          let mustChange = null;
           if (action === 'reject') {
             statements = [env.DB.prepare("DELETE FROM photographers WHERE id = ? AND status = 'pending'").bind(id)];
           } else if (action === 'reset-password') {
             tempPassword = tempPhotographerPassword();
-            statements = [
-              env.DB.prepare('UPDATE photographers SET password_hash = ? WHERE id = ?').bind(await hashPhotographerPassword(tempPassword), id),
+            const tempHash = await hashPhotographerPassword(tempPassword);
+            // the new hash and must_change_password = 1 in one statement, every
+            // session gone in the same batch. Before the 2026-10-15 migration
+            // the flag cannot be written: the reset still lands and says so.
+            const reset = flag => env.DB.batch([
+              env.DB.prepare(`UPDATE photographers SET password_hash = ?${flag} WHERE id = ?`).bind(tempHash, id),
               env.DB.prepare('DELETE FROM photographer_sessions WHERE photographer_id = ?').bind(id),
-            ];
+            ]);
+            mustChange = await withoutMissingColumn(async () => { resetResult = await reset(', must_change_password = 1'); return true; },
+              async () => { resetResult = await reset(''); return false; });
           } else {
             statements = [env.DB.prepare(
               `UPDATE photographers SET status = ?${action === 'approve' ? ', approved_at = ?' : ''} WHERE id = ? AND status = ?`
@@ -4118,7 +4236,7 @@ export default {
             // suspend ends every session in the same batch
             if (action === 'suspend') statements.push(env.DB.prepare('DELETE FROM photographer_sessions WHERE photographer_id = ?').bind(id));
           }
-          const [first] = await env.DB.batch(statements);
+          const [first] = resetResult ?? await env.DB.batch(statements);
           if (!first.meta.changes) {
             const current = await env.DB.prepare('SELECT status FROM photographers WHERE id = ?').bind(id).first();
             if (!current) return jsonErr('Not found', 404);
@@ -4126,7 +4244,10 @@ export default {
           }
           if (action === 'reject') return done({ ok: true, deleted: true });
           const photographer = await env.DB.prepare(`SELECT ${PHOTOGRAPHER_PUBLIC_COLUMNS} FROM photographers WHERE id = ?`).bind(id).first();
-          return done(tempPassword ? { ok: true, photographer, temp_password: tempPassword } : { ok: true, photographer });
+          if (!tempPassword) return done({ ok: true, photographer });
+          return done(mustChange
+            ? { ok: true, photographer, temp_password: tempPassword, must_change_password: true }
+            : { ok: true, photographer, temp_password: tempPassword, must_change_password: false, warning: 'must_change_unavailable' });
         } catch (e) {
           if (isMissingSchema(e)) return done(PHOTOGRAPHERS_UNAVAILABLE, 500);
           throw e;

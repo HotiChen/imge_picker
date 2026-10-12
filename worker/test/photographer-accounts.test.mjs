@@ -335,7 +335,7 @@ test('a suspend landing between the password check and the session write leaves 
   const realPrepare = env.DB.prepare.bind(env.DB);
   env.DB.prepare = sql => {
     const stmt = realPrepare(sql);
-    if (!/^SELECT id, display_name, password_hash, status FROM photographers/.test(sql)) return stmt;
+    if (!/^SELECT id, display_name, password_hash, status, \S+ AS must_change_password FROM photographers/.test(sql)) return stmt;
     return { bind: (...a) => { const b = stmt.bind(...a); return { first: async () => {
       const got = await b.first();
       env.DB._db.prepare("UPDATE photographers SET status = 'suspended' WHERE id = ?").run(row.id);
@@ -370,7 +370,8 @@ test('a successful login stores only the SHA-256 of a 32-byte token for 30 days'
   assert.equal(res.status, 200);
   assert.match(res.headers.get('Cache-Control'), /no-store/);
   const body = await res.json();
-  assert.deepEqual(Object.keys(body).sort(), ['photographer', 'token']);
+  assert.deepEqual(Object.keys(body).sort(), ['must_change_password', 'photographer', 'token']);
+  assert.equal(body.must_change_password, false);
   assert.deepEqual(body.photographer, { id: row.id, display_name: '安攝影' });
   assert.match(body.token, /^[0-9a-f]{64}$/);
   const sessions = rows(env, 'SELECT * FROM photographer_sessions');
@@ -396,7 +397,7 @@ test('/me answers the session owner; logout deletes that session only', async ()
   const res = await me(env, token);
   assert.equal(res.status, 200);
   assert.match(res.headers.get('Cache-Control'), /no-store/);
-  assert.deepEqual(await res.json(), { photographer: { id: row.id, display_name: '安攝影', email: 'ann@example.com' } });
+  assert.deepEqual(await res.json(), { photographer: { id: row.id, display_name: '安攝影', email: 'ann@example.com' }, must_change_password: false });
   const out = await call(env, '/api/photographer/logout', { method: 'POST', token });
   assert.equal(out.status, 200);
   assert.equal((await me(env, token)).status, 401);
@@ -635,8 +636,9 @@ test('isAdminToken still checks PHOTOGRAPHER_TOKEN only; resolvePhotographer is 
   const fn = src.slice(src.indexOf('function isAdminToken('), src.indexOf('\n}\n', src.indexOf('function isAdminToken(')));
   assert.ok(fn.includes('env.PHOTOGRAPHER_TOKEN'));
   assert.ok(!/photographer_sessions|resolvePhotographer/.test(fn));
+  // batch 2a: one definition, GET /api/photographer/me and POST …/change-password
   const uses = src.split('resolvePhotographer(').length - 1;
-  assert.equal(uses, 2, 'one definition, one call (GET /api/photographer/me)');
+  assert.equal(uses, 3, 'one definition, two calls (me, change-password)');
 });
 
 // ─── before the migration has run ───────────────────────────────────────────
