@@ -466,6 +466,7 @@ const DEFAULT_ID_USES = {
   guestOrdersEnabled: 1,     // guest ordering: the default photographer's projects only (doc §4)
   shareOwner: 1,             // a project-less share row with no owner (NULL) is the default's (batch 3)
   shareOwnerColumn: 1,       // the default photographer is NULL in share_tokens.photographer_id (batch 3)
+  shareOwnedBy: 1,           // ...and owns NULL and literal 'default' rows alike when listing / revoking (security review of batch 3)
   tenantPrefix: 1,           // the default photographer has no R2 prefix: asked for one, it refuses (batch 3)
   bucketFor: 1,              // the default photographer's keys are unprefixed (batch 3)
   bookBucket: 1,             // books have no owner yet: the default's objects (default-only until books)

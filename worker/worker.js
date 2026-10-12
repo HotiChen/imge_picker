@@ -606,9 +606,17 @@ function shareOwner(share) {
 
 // The value share_tokens.photographer_id holds for a photographer: NULL for
 // the default one (as on every row from before the column), the id otherwise.
-// Compared with `photographer_id IS ?`, which matches NULL to NULL.
+// What it writes; reads compare with shareOwnedBy (NULL and 'default' alike).
 function shareOwnerColumn(photographerId) {
   return photographerId === DEFAULT_PHOTOGRAPHER_ID ? null : photographerId;
+}
+// The rows of `col` that `photographerId` owns, as an SQL condition and its
+// two bound values: NULL and the literal 'default' alike for the default
+// photographer (shareOwner reads both as the default's, so it must be able to
+// list and revoke both — security review of batch 3); only its own id for
+// anyone else, never NULL or 'default'.
+function shareOwnedBy(col, photographerId) {
+  return { sql: `COALESCE(${col}, ?) = ?`, args: [DEFAULT_PHOTOGRAPHER_ID, photographerId] };
 }
 const SHARE_OWNER_UNAVAILABLE = { error: '多攝影師連結功能尚未啟用', code: 'share_owner_unavailable' };
 
@@ -3681,6 +3689,7 @@ async function routeRequest(request, env, ctx) {
       // exactly as before (every studio row is its own) and anyone else is
       // refused, nothing written.
       const owner = shareOwnerColumn(auth.who.id);
+      const mine = shareOwnedBy('photographer_id', auth.who.id);
       const now = Date.now();
       const reuseAfter = new Date(now + STUDIO_REUSE_MIN_MS).toISOString();
       // both sides are ISO-8601 UTC so this compares as text; a hand-edited
@@ -3689,8 +3698,8 @@ async function routeRequest(request, env, ctx) {
       let owned = true;
       try {
         live = await env.DB.prepare(
-          "SELECT token, expires_at FROM share_tokens WHERE kind = 'studio' AND photographer_id IS ? AND revoked_at IS NULL AND expires_at > ? ORDER BY expires_at DESC LIMIT 1"
-        ).bind(owner, reuseAfter).first();
+          `SELECT token, expires_at FROM share_tokens WHERE kind = 'studio' AND ${mine.sql} AND revoked_at IS NULL AND expires_at > ? ORDER BY expires_at DESC LIMIT 1`
+        ).bind(...mine.args, reuseAfter).first();
       } catch (e) {
         if (!isMissingColumn(e)) throw e;
         if (owner !== null) return jsonOk(SHARE_OWNER_UNAVAILABLE, 500);
@@ -3725,8 +3734,8 @@ async function routeRequest(request, env, ctx) {
       // control for that, and it does not wait on a page load.
       await (owned
         ? env.DB.prepare(
-          "UPDATE share_tokens SET revoked_at = ? WHERE kind = 'studio' AND photographer_id IS ? AND revoked_at IS NULL AND token != ?"
-        ).bind(new Date(now).toISOString(), owner, token)
+          `UPDATE share_tokens SET revoked_at = ? WHERE kind = 'studio' AND ${mine.sql} AND revoked_at IS NULL AND token != ?`
+        ).bind(new Date(now).toISOString(), ...mine.args, token)
         : env.DB.prepare(
           "UPDATE share_tokens SET revoked_at = ? WHERE kind = 'studio' AND revoked_at IS NULL AND token != ?"
         ).bind(new Date(now).toISOString(), token)).run();
@@ -5590,13 +5599,14 @@ async function routeRequest(request, env, ctx) {
       if (auth.refused) return auth.refused;
       if (!env.DB) return jsonErr('DB not configured', 500);
       const owner = shareOwnerColumn(auth.who.id);
+      const mine = shareOwnedBy('photographer_id', auth.who.id);
       const cols = 'SELECT token, kind, user_id, folders, created_at, expires_at FROM share_tokens';
       const now = new Date().toISOString();
       // before the owner column: the default's as before, anyone else refused
       const listed = await withoutMissingColumn(
         () => env.DB.prepare(
-          `${cols} WHERE kind IN ('studio', 'session') AND photographer_id IS ? AND revoked_at IS NULL AND expires_at > ? ORDER BY created_at DESC`
-        ).bind(owner, now).all(),
+          `${cols} WHERE kind IN ('studio', 'session') AND ${mine.sql} AND revoked_at IS NULL AND expires_at > ? ORDER BY created_at DESC`
+        ).bind(...mine.args, now).all(),
         () => (owner !== null ? null : env.DB.prepare(
           `${cols} WHERE kind IN ('studio', 'session') AND revoked_at IS NULL AND expires_at > ? ORDER BY created_at DESC`
         ).bind(now).all()),
@@ -5617,11 +5627,12 @@ async function routeRequest(request, env, ctx) {
       if (auth.refused) return auth.refused;
       if (!env.DB) return jsonErr('DB not configured', 500);
       const owner = shareOwnerColumn(auth.who.id);
+      const mine = shareOwnedBy('photographer_id', auth.who.id);
       const now = new Date().toISOString();
       const result = await withoutMissingColumn(
         () => env.DB.prepare(
-          "UPDATE share_tokens SET revoked_at = ? WHERE kind IN ('studio', 'session') AND photographer_id IS ? AND revoked_at IS NULL"
-        ).bind(now, owner).run(),
+          `UPDATE share_tokens SET revoked_at = ? WHERE kind IN ('studio', 'session') AND ${mine.sql} AND revoked_at IS NULL`
+        ).bind(now, ...mine.args).run(),
         () => (owner !== null ? null : env.DB.prepare(
           "UPDATE share_tokens SET revoked_at = ? WHERE kind IN ('studio', 'session') AND revoked_at IS NULL"
         ).bind(now).run()),
@@ -5634,7 +5645,8 @@ async function routeRequest(request, env, ctx) {
     // Only a token that is the caller's (batch 3): a link of a project goes by
     // that project's photographer, whatever its own row says; any other token
     // (a studio one, an album link, a client session) by its photographer_id,
-    // NULL being the default photographer's. Checked inside the UPDATE itself,
+    // NULL or 'default' being the default photographer's (shareOwnedBy).
+    // Checked inside the UPDATE itself,
     // so a project handed over mid-request is not revoked either. Anyone
     // else's is a token that does not exist: the same 404, the same statement.
     // Before the owner column: a project's link as above, and a project-less
@@ -5649,9 +5661,12 @@ async function routeRequest(request, env, ctx) {
       const theirProject = 'EXISTS (SELECT 1 FROM projects WHERE id = share_tokens.project_id AND photographer_id = ?)';
       const revokeIf = ownerless => env.DB.prepare(
         'UPDATE share_tokens SET revoked_at = ? WHERE token = ? AND revoked_at IS NULL ' +
-        `AND (CASE WHEN project_id IS NULL THEN ${ownerless} ELSE ${theirProject} END)`
-      ).bind(now, pathParts[2], owner, who.id).run();
-      const result = await withoutMissingColumn(() => revokeIf('share_tokens.photographer_id IS ?'), () => revokeIf('? IS NULL'));
+        `AND (CASE WHEN project_id IS NULL THEN ${ownerless.sql} ELSE ${theirProject} END)`
+      ).bind(now, pathParts[2], ...ownerless.args, who.id).run();
+      const result = await withoutMissingColumn(
+        () => revokeIf(shareOwnedBy('share_tokens.photographer_id', who.id)),
+        () => revokeIf({ sql: '? IS NULL', args: [owner] }),
+      );
       if (!result.meta?.changes) return jsonErr('Not found', 404);
       return jsonOk({ ok: true });
     }

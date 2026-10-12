@@ -293,6 +293,10 @@ CREATE TABLE photographer_sessions (
   存的型別不是 jpeg/png/webp/avif 的（舊的上傳、HEIC/TIFF/GIF/BMP 原檔）改成 `application/octet-stream` + attachment。
   前端沒改：upload.html 遇到 415 會顯示「HTTP 415」。舊測試用字串 body（`Request` 自動標 `text/plain`）上傳的幾條改成帶照片型別。
   測試：`worker/test/upload-types.test.mjs`。
+- **default 擁有的連結列 = NULL 或字面 `'default'`**：`shareOwner` 本來就把 `'default'` 讀成 default 的檔案，但 `minted` / `revoke-all` /
+  `revoke` 和 studio token 的重用／只留一列只認 `IS NULL`，字面 `'default'` 的列 default 看不到也撤不掉。現在這幾句都走
+  `shareOwnedBy(col, who.id)`（`COALESCE(col, 'default') = who.id`）：default 認 NULL 和 `'default'`，其他攝影師只認自己的 id。
+  Worker 自己寫入仍是 NULL。migration 前的退路不變。測試：`worker/test/share-owner-default.test.mjs`。
 - 測試：`worker/test/photographer-suspend-links.test.mjs`。三個舊測試把專案直接改成 `'other'`（沒有帳號）來證明「看專案擁有者」，
   現在要先建一個 active 的 `'other'` 帳號；`guest-shop-read` 的「專案沒有攝影師」從空商店改成 401（連結根本不解析，更嚴）。
 
