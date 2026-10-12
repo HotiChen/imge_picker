@@ -413,6 +413,11 @@ function defaultOnly(who) {
   return who && who.id === DEFAULT_PHOTOGRAPHER_ID ? null : jsonErr('Not found', 404);
 }
 
+// Routes of the products-and-orders block that read, place, change or pay an
+// order (the two GET routes included).
+// Paused for every photographer but the default one (see the block below).
+const ORDER_ROUTES_PAUSED = new Set(['orders', 'project-orders', 'order', 'order-payment', 'order-status', 'order-erase-contact']);
+
 // requirePhotographer, then default only: a route that still reads or writes
 // the default photographer's data (DEFAULT_PHOTOGRAPHER_ID), or R2 keys and
 // folders (unprefixed until batch 3). Each call is marked
@@ -4661,8 +4666,9 @@ async function routeRequest(request, env, ctx) {
     // ─── Products and orders (docs/products-orders.md) ─────────────────────
     // /api/admin/products[/:id[/retire|/restore]], /api/admin/orders[/:id
     // [/payment|/status]] and /api/admin/projects/:id/orders. The
-    // photographer first (401), then the method (405), then the id, scoped to
-    // the caller (who.id): another photographer's product, order or project
+    // photographer first (401); the order routes are then 404 for anyone but
+    // the default photographer (paused), whatever the method; then the method
+    // (405), then the id, scoped to the caller (who.id): another photographer's product, order or project
     // is 404, exactly as one that does not exist. The platform catalogue is
     // shared and read only; adopting makes a product of the caller's own. Every 400 is {error, code} and decided before
     // anything is written; writes that touch more than one row are one batch.
@@ -4684,6 +4690,14 @@ async function routeRequest(request, env, ctx) {
       } else if (area === 'platform-products') route = !id ? 'platform-products' : null;
       else if (area === 'projects') route = 'project-orders';
       else route = !id ? 'orders' : !action ? 'order' : ['payment', 'status', 'erase-contact'].includes(action) ? `order-${action}` : null;
+      // Ordering is paused for every photographer but the default one: all
+      // order routes are 404 for the others, as for a path that does not
+      // exist, before the method is looked at and before anything is read
+      // or written. Products stay scoped to the caller.
+      if (ORDER_ROUTES_PAUSED.has(route)) {
+        const paused = defaultOnly(who);
+        if (paused) return paused;
+      }
       const methods = {
         products: ['GET', 'POST'], product: ['PUT'], 'product-active': ['POST'], 'project-orders': ['GET', 'POST'],
         adopt: ['POST'], 'platform-products': ['GET'],

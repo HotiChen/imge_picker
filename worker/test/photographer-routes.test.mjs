@@ -273,7 +273,6 @@ test('PHOTOGRAPHER_ROUTES=on: a non-default session is 404 on every default-only
       'POST /api/admin/products': [403],
       'GET /api/admin/platform-products': [200, { products: [] }],
       'POST /api/admin/products/from-platform': [400],
-      'GET /api/admin/orders': [200, { orders: [] }],
       // 2b-3: B's own settings (none: all null), B's own counts (all zero),
       // B's own logo (a body that is no image: 415; delete: B has none)
       'GET /api/admin/stats': [200], 'GET /api/admin/settings': [200], 'PUT /api/admin/settings': [200],
@@ -298,7 +297,7 @@ test('PHOTOGRAPHER_ROUTES=on: a non-default session is 404 on every default-only
     assert.equal(res.status, 404, `${label(r)}: ${res.status} ${text.slice(0, 200)}`);
     refused++;
   }
-  assert.equal(refused, ROUTES.length - 14);
+  assert.equal(refused, ROUTES.length - 13);
 });
 
 test('marks: scoped (2b-1 onwards) is requirePhotographer; a leftover 2b-1..3 default-only mark is unknown now', () => {

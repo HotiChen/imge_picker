@@ -103,7 +103,8 @@ function ownedRows(env, id) {
 
 // ─── the scoped routes that take an id ────────────────────────────────────
 // path(set, w) and body(set, w): the request on that photographer set.
-// ok: the owner's answer, {A, B} when it differs (photo_keys: default only).
+// ok: the owner's answer, {A, B} when it differs (every order route: ordering is
+// paused for every photographer but the default one, so B is 404 on its own too).
 const PR = id => `/api/admin/products/${id}`;
 const OR = id => `/api/admin/orders/${id}`;
 const PJ = id => `/api/admin/projects/${id}/orders`;
@@ -117,20 +118,20 @@ const TARGETED = [
   { name: 'retire (adopted)', method: 'POST', path: s => `${PR(s.adopted.id)}/retire`, ok: 200 },
   { name: 'restore (adopted)', method: 'POST', path: s => `${PR(s.adopted.id)}/restore`, ok: 200 },
   { name: 'restore (custom, custom products off: 403)', method: 'POST', path: s => `${PR(s.service.id)}/restore`, ok: 403, extra: { CUSTOM_PRODUCTS: 'off' } },
-  { name: 'GET project orders', method: 'GET', path: s => PJ(s.project.id), ok: 200 },
+  { name: 'GET project orders', method: 'GET', path: s => PJ(s.project.id), ok: { A: 200, B: 404 } },
   { name: 'POST project orders (photo_keys route: default only until batch 3)', method: 'POST', path: s => PJ(s.project.id),
     body: s => ({ lines: [{ option_id: s.adopted.options[0].id, qty: 2 }] }), ok: { A: 201, B: 404 } },
-  { name: 'PUT order (note)', method: 'PUT', path: s => OR(s.adminOrder.id), body: () => ({ note: '新備註' }), ok: 200 },
-  { name: 'PUT order (discount)', method: 'PUT', path: s => OR(s.adminOrder.id), body: () => ({ discount: 100 }), ok: 200 },
+  { name: 'PUT order (note)', method: 'PUT', path: s => OR(s.adminOrder.id), body: () => ({ note: '新備註' }), ok: { A: 200, B: 404 } },
+  { name: 'PUT order (discount)', method: 'PUT', path: s => OR(s.adminOrder.id), body: () => ({ discount: 100 }), ok: { A: 200, B: 404 } },
   { name: 'PUT order (lines: default only until batch 3)', method: 'PUT', path: s => OR(s.adminOrder.id),
     body: s => ({ lines: [{ id: s.adminOrder.items[0].id, qty: 3 }] }), ok: { A: 200, B: 404 } },
   { name: 'PUT order (photo_keys: default only until batch 3)', method: 'PUT', path: s => OR(s.adminOrder.id),
     body: () => ({ note: 'x', photo_keys: [] }), ok: { A: 200, B: 404 } },
-  { name: 'erase-contact', method: 'POST', path: s => `${OR(s.guestOrder.id)}/erase-contact`, ok: 200 },
-  { name: 'payment', method: 'POST', path: s => `${OR(s.adminOrder.id)}/payment`, body: () => ({ paid_amount: 1000, paid_method: 'cash' }), ok: 200 },
-  { name: 'status (requested → confirmed)', method: 'POST', path: s => `${OR(s.guestOrder.id)}/status`, body: () => ({ status: 'confirmed' }), ok: 200 },
-  { name: 'status (bad arrow: 409)', method: 'POST', path: s => `${OR(s.adminOrder.id)}/status`, body: () => ({ status: 'requested' }), ok: 409 },
-  { name: 'status (confirmed → fulfilled)', method: 'POST', path: s => `${OR(s.adminOrder.id)}/status`, body: () => ({ status: 'fulfilled' }), ok: 200 },
+  { name: 'erase-contact', method: 'POST', path: s => `${OR(s.guestOrder.id)}/erase-contact`, ok: { A: 200, B: 404 } },
+  { name: 'payment', method: 'POST', path: s => `${OR(s.adminOrder.id)}/payment`, body: () => ({ paid_amount: 1000, paid_method: 'cash' }), ok: { A: 200, B: 404 } },
+  { name: 'status (requested → confirmed)', method: 'POST', path: s => `${OR(s.guestOrder.id)}/status`, body: () => ({ status: 'confirmed' }), ok: { A: 200, B: 404 } },
+  { name: 'status (bad arrow: 409)', method: 'POST', path: s => `${OR(s.adminOrder.id)}/status`, body: () => ({ status: 'requested' }), ok: { A: 409, B: 404 } },
+  { name: 'status (confirmed → fulfilled)', method: 'POST', path: s => `${OR(s.adminOrder.id)}/status`, body: () => ({ status: 'fulfilled' }), ok: { A: 200, B: 404 } },
 ];
 const send = (w, route, set, token, nope = false) => {
   const path = route.path(set, w);
@@ -184,6 +185,16 @@ for (const route of TARGETED) {
   });
 }
 
+test('a paused order route is 404 for B whatever the method, while A still gets the 405', async () => {
+  const w = await world();
+  const before = snapshot(w.env);
+  for (const [method, path] of [['GET', OR(w.b.adminOrder.id)], ['DELETE', '/api/admin/orders'], ['GET', `${OR(w.b.adminOrder.id)}/payment`], ['PUT', PJ(w.b.project.id)]]) {
+    assert.equal((await call(w.env, path, { method, token: w.B.token })).status, 404, `B ${method} ${path}`);
+  }
+  assert.equal(snapshot(w.env), before);
+  assert.equal((await call(w.env, OR(w.a.adminOrder.id), { method: 'GET', token: w.A.token })).status, 405, 'A: wrong method');
+});
+
 // what the owner's own writes did, on its own rows
 test('B on its own resources: the writes land on B\'s rows', async () => {
   const w = await world();
@@ -200,26 +211,20 @@ test('B on its own resources: the writes land on B\'s rows', async () => {
   assert.equal((await call(w.env, `${PR(w.b.adopted.id)}/retire`, { method: 'POST', token: t })).status, 200);
   assert.equal(one(w.env, 'SELECT active FROM products WHERE id = ?', w.b.adopted.id).active, 0);
   assert.equal(one(w.env, 'SELECT active FROM products WHERE id = ?', w.a.adopted.id).active, 1);
-  assert.equal((await call(w.env, `${OR(w.b.adminOrder.id)}/payment`, { method: 'POST', token: t, body: { paid_amount: 1000, paid_method: 'cash' } })).status, 200);
-  assert.equal(one(w.env, 'SELECT paid_amount FROM orders WHERE id = ?', w.b.adminOrder.id).paid_amount, 1000);
-  assert.equal(one(w.env, 'SELECT paid_amount FROM orders WHERE id = ?', w.a.adminOrder.id).paid_amount, 0);
-  assert.equal((await call(w.env, `${OR(w.b.guestOrder.id)}/erase-contact`, { method: 'POST', token: t })).status, 200);
-  assert.equal(one(w.env, 'SELECT contact_phone FROM orders WHERE id = ?', w.b.guestOrder.id).contact_phone, null);
-  assert.ok(one(w.env, 'SELECT contact_phone FROM orders WHERE id = ?', w.a.guestOrder.id).contact_phone);
-  assert.equal((await call(w.env, `${OR(w.b.guestOrder.id)}/status`, { method: 'POST', token: t, body: { status: 'confirmed' } })).status, 200);
-  assert.equal(one(w.env, 'SELECT status FROM orders WHERE id = ?', w.b.guestOrder.id).status, 'confirmed');
-  assert.equal(one(w.env, 'SELECT status FROM orders WHERE id = ?', w.a.guestOrder.id).status, 'requested');
-  res = await call(w.env, OR(w.b.adminOrder.id), { method: 'PUT', token: t, body: { note: '乙的新備註', discount: 200 } });
-  assert.equal(res.status, 200);
-  assert.equal((await res.json()).order.note, '乙的新備註');
-  const got = await (await call(w.env, PJ(w.b.project.id), { token: t })).json();
-  assert.deepEqual(got.orders.map(o => o.id).sort(), [w.b.adminOrder.id, w.b.guestOrder.id].sort());
-  // with their lines and money (the lines are read under the same owner)
-  for (const o of got.orders) {
-    assert.equal(o.items.length, 1, o.id);
-    assert.equal(o.items[0].option_id, w.b.adopted.options[0].id);
+  // ordering is paused for B: every order route is 404 on B's own orders, and nothing is written
+  const before = snapshot(w.env);
+  for (const [method, path, body] of [
+    ['POST', `${OR(w.b.adminOrder.id)}/payment`, { paid_amount: 1000, paid_method: 'cash' }],
+    ['POST', `${OR(w.b.guestOrder.id)}/erase-contact`, undefined],
+    ['POST', `${OR(w.b.guestOrder.id)}/status`, { status: 'confirmed' }],
+    ['PUT', OR(w.b.adminOrder.id), { note: '乙的新備註', discount: 200 }],
+    ['GET', PJ(w.b.project.id), undefined],
+    ['GET', '/api/admin/orders', undefined],
+  ]) {
+    const r = await call(w.env, path, { method, token: t, body });
+    assert.equal(r.status, 404, `${method} ${path}`);
   }
-  assert.equal(got.orders.find(o => o.id === w.b.adminOrder.id).subtotal, 3000);
+  assert.equal(snapshot(w.env), before, 'a paused order route wrote something');
 });
 
 // ─── the lists ────────────────────────────────────────────────────────────
@@ -257,17 +262,17 @@ test('GET /api/admin/platform-products: one shared catalogue, adopted_product_id
   assert.equal(got.products.find(p => p.id === w.pp.id).adopted_product_id, null);
 });
 
-test('GET /api/admin/orders: each photographer lists its own orders only (filters too)', async () => {
+test('GET /api/admin/orders: the default photographer lists its own orders only (filters too); B is 404 (ordering paused)', async () => {
   const w = await world();
-  for (const [s, other] of [[w.a, w.b], [w.b, w.a]]) {
-    for (const [q, want] of [['', [s.adminOrder.id, s.guestOrder.id]], ['?status=requested', [s.guestOrder.id]], ['?status=confirmed', [s.adminOrder.id]], ['?unpaid=1', [s.adminOrder.id]]]) {
-      const res = await call(w.env, `/api/admin/orders${q}`, { token: s.owner.token });
-      assert.equal(res.status, 200);
-      const got = await res.json();
-      assert.deepEqual(got.orders.map(o => o.id).sort(), want.sort(), `${s.owner.id} ${q}`);
-      const text = JSON.stringify(got);
-      for (const leak of [other.adminOrder.id, other.guestOrder.id, other.tag, other.project.id]) assert.ok(!text.includes(leak), leak);
-    }
+  const other = w.b;
+  for (const [q, want] of [['', [w.a.adminOrder.id, w.a.guestOrder.id]], ['?status=requested', [w.a.guestOrder.id]], ['?status=confirmed', [w.a.adminOrder.id]], ['?unpaid=1', [w.a.adminOrder.id]]]) {
+    const res = await call(w.env, `/api/admin/orders${q}`, { token: w.a.owner.token });
+    assert.equal(res.status, 200);
+    const got = await res.json();
+    assert.deepEqual(got.orders.map(o => o.id).sort(), want.sort(), q);
+    const text = JSON.stringify(got);
+    for (const leak of [other.adminOrder.id, other.guestOrder.id, other.tag, other.project.id]) assert.ok(!text.includes(leak), leak);
+    assert.equal((await call(w.env, `/api/admin/orders${q}`, { token: other.owner.token })).status, 404, `B ${q}`);
   }
 });
 
@@ -275,8 +280,10 @@ test('an order whose project is another photographer\'s reads as not found (ORDE
   const w = await world();
   // data that should never exist: B's order row on A's project
   w.env.DB._db.prepare('UPDATE orders SET project_id = ? WHERE id = ?').run(w.a.project.id, w.b.adminOrder.id);
-  const list = await (await call(w.env, '/api/admin/orders', { token: w.B.token })).json();
-  assert.deepEqual(list.orders.map(o => o.id), [w.b.guestOrder.id]);
+  const list = await (await call(w.env, '/api/admin/orders', { token: w.A.token })).json();
+  assert.ok(!list.orders.some(o => o.id === w.b.adminOrder.id), 'B\'s order on A\'s project is not in A\'s list');
+  assert.ok(list.orders.some(o => o.id === w.a.adminOrder.id), 'A still lists its own');
+  assert.equal((await call(w.env, '/api/admin/orders', { token: w.B.token })).status, 404, 'B: ordering is paused');
   const before = snapshot(w.env);
   for (const token of [w.A.token, w.B.token]) {
     assert.equal((await call(w.env, `${OR(w.b.adminOrder.id)}/status`, { method: 'POST', token, body: { status: 'fulfilled' } })).status, 404);
