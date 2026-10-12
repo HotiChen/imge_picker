@@ -93,9 +93,22 @@ test('#3 options not in the guest shop: hidden, retired, platform-retired, under
   await tryOption(c.print.options[0].id);
   assert.equal((await call(env, `/api/operator/products/${c.ppAlbum.id}/retire`, { method: 'POST', token: OP })).status, 200);
   await tryOption(c.album.options[0].id, { photo_key: undefined, spreads: 10 });
-  // the project's photographer, never the default: a project of 'other' sees theirs only
+  // the project's photographer, never the default: a project of 'other' sees
+  // theirs only in its shop — and, since multi-photographer 2b-2, takes no
+  // guest order at all (another photographer's project is always off,
+  // docs/multi-photographer.md §4), so the order is refused before the shop
+  // is asked (product-order-scope.test.mjs has the switch × owner matrix)
   env.DB._db.prepare("UPDATE projects SET photographer_id = 'other' WHERE id = ?").run(p.id);
-  await tryOption(c.unpriced.options[0].id, { photo_key: undefined, spreads: 10 });
+  const shop = await (await pick(env, 'GET', 'shop', p.token)).json();
+  assert.deepEqual(shop.products.map(x => x.id), ['theirs']);
+  assert.equal(shop.ordering, null);
+  const before = dbSnapshot(env);
+  for (const option_id of [c.unpriced.options[0].id, 'theirs-o']) {
+    const res = await placeOrder(env, p, orderBody(c, { lines: [{ option_id, qty: 1, photo_key: F1 }] }));
+    assert.equal(res.status, 403);
+    assert.equal(await code(res), 'ordering_disabled');
+  }
+  assert.equal(dbSnapshot(env), before);
 });
 
 test('#4 photo keys: proofs (proof download on or off), _thumbs/, _books/, another folder, .., trailing /, control characters, too long', async () => {

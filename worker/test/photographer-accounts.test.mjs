@@ -1,8 +1,9 @@
 // Photographer accounts, batch 1 of docs/multi-photographer.md (帳號與登入):
 // register (pending, Turnstile, per-IP limit) → the operator approves /
 // rejects / suspends / resets the password → login gives a session token
-// stored only as its SHA-256. Batch 1's hard rule: a photographer session
-// opens NO existing route — isAdminToken still checks PHOTOGRAPHER_TOKEN only.
+// stored only as its SHA-256. Batch 1's hard rule, kept by 2b-0 behind the
+// PHOTOGRAPHER_ROUTES switch (off unless exactly "on"): a photographer session
+// opens NO existing route. photographer-routes.test.mjs covers the switch on.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -335,7 +336,7 @@ test('a suspend landing between the password check and the session write leaves 
   const realPrepare = env.DB.prepare.bind(env.DB);
   env.DB.prepare = sql => {
     const stmt = realPrepare(sql);
-    if (!/^SELECT id, display_name, password_hash, status FROM photographers/.test(sql)) return stmt;
+    if (!/^SELECT id, display_name, password_hash, status, \S+ AS must_change_password FROM photographers/.test(sql)) return stmt;
     return { bind: (...a) => { const b = stmt.bind(...a); return { first: async () => {
       const got = await b.first();
       env.DB._db.prepare("UPDATE photographers SET status = 'suspended' WHERE id = ?").run(row.id);
@@ -370,7 +371,8 @@ test('a successful login stores only the SHA-256 of a 32-byte token for 30 days'
   assert.equal(res.status, 200);
   assert.match(res.headers.get('Cache-Control'), /no-store/);
   const body = await res.json();
-  assert.deepEqual(Object.keys(body).sort(), ['photographer', 'token']);
+  assert.deepEqual(Object.keys(body).sort(), ['must_change_password', 'photographer', 'token']);
+  assert.equal(body.must_change_password, false);
   assert.deepEqual(body.photographer, { id: row.id, display_name: '安攝影' });
   assert.match(body.token, /^[0-9a-f]{64}$/);
   const sessions = rows(env, 'SELECT * FROM photographer_sessions');
@@ -396,7 +398,7 @@ test('/me answers the session owner; logout deletes that session only', async ()
   const res = await me(env, token);
   assert.equal(res.status, 200);
   assert.match(res.headers.get('Cache-Control'), /no-store/);
-  assert.deepEqual(await res.json(), { photographer: { id: row.id, display_name: '安攝影', email: 'ann@example.com' } });
+  assert.deepEqual(await res.json(), { photographer: { id: row.id, display_name: '安攝影', email: 'ann@example.com' }, must_change_password: false });
   const out = await call(env, '/api/photographer/logout', { method: 'POST', token });
   assert.equal(out.status, 200);
   assert.equal((await me(env, token)).status, 401);
@@ -462,8 +464,9 @@ test('the operator list: pending first then newest first, a pending count, never
   assert.deepEqual(body.photographers.map(p => p.email), ['c@example.com', 'a@example.com', 'b@example.com']);
   assert.equal(body.pending_count, 2);
   assert.deepEqual(Object.keys(body.photographers[0]).sort(),
-    ['approved_at', 'created_at', 'display_name', 'dup_attempts', 'email', 'id', 'last_dup_at', 'last_login_at', 'status', 'studio_note']);
-  assert.ok(!text.includes('pbkdf2$') && !text.includes('password'), 'no hash');
+    ['approved_at', 'created_at', 'display_name', 'dup_attempts', 'email', 'id', 'last_dup_at', 'last_login_at', 'must_change_password', 'status', 'studio_note']);
+  // 2b-0: must_change_password (a flag, not a secret) joined the list
+  assert.ok(!text.includes('pbkdf2$') && !text.replaceAll('"must_change_password"', '').includes('password'), 'no hash');
   assert.ok(!text.includes(token) && !text.includes(await sha256Hex(token)), 'no token');
 });
 
@@ -597,8 +600,9 @@ test('no response ever carries a password hash', async () => {
 });
 
 // ─── HARD SAFETY RULE: a photographer session opens no existing route ──────
+// (while PHOTOGRAPHER_ROUTES is off, which is the shipped value)
 
-test('an active photographer session gets 401 on every existing admin, upload, operator and client route', async () => {
+test('switch off: an active photographer session gets 401 on every existing admin, upload, operator and client route', async () => {
   const env = envOpen();
   const { token } = await loggedIn(env);
   const project = await createProject(env);
@@ -630,13 +634,19 @@ test('an active photographer session gets 401 on every existing admin, upload, o
   assert.equal((await call(env, '/api/auth/verify-admin', { token: SECRET })).status, 200);
 });
 
-test('isAdminToken still checks PHOTOGRAPHER_TOKEN only; resolvePhotographer is used by the new routes only', () => {
+test('isAdminToken still checks PHOTOGRAPHER_TOKEN only; a session reaches an existing route only through requirePhotographer, behind the switch', () => {
   const src = readFileSync(new URL('../worker.js', import.meta.url), 'utf8');
   const fn = src.slice(src.indexOf('function isAdminToken('), src.indexOf('\n}\n', src.indexOf('function isAdminToken(')));
   assert.ok(fn.includes('env.PHOTOGRAPHER_TOKEN'));
   assert.ok(!/photographer_sessions|resolvePhotographer/.test(fn));
+  // 2b-0: one definition, GET /api/photographer/me, POST …/change-password,
+  // and identify (requirePhotographer's lookup) — which asks only once
+  // photographerRoutesOpen(env)
   const uses = src.split('resolvePhotographer(').length - 1;
-  assert.equal(uses, 2, 'one definition, one call (GET /api/photographer/me)');
+  assert.equal(uses, 4, 'one definition, three calls (me, change-password, identify)');
+  const gate = src.slice(src.indexOf('async function identify('), src.indexOf('\n}\n', src.indexOf('async function identify(')));
+  assert.ok(gate.indexOf('photographerRoutesOpen(env)') > 0 && gate.indexOf('photographerRoutesOpen(env)') < gate.indexOf('resolvePhotographer(request, env)'),
+    'the switch is checked before any session lookup');
 });
 
 // ─── before the migration has run ───────────────────────────────────────────

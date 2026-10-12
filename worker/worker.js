@@ -80,11 +80,12 @@ function sessionExpiry(value) {
 // reachable. The old behaviour ("no token set = open") meant a missing or
 // mistyped Cloudflare secret silently threw upload, book writes and every
 // admin route open to anyone who found the Worker URL.
+// Compared in constant time (sameSecret), like the operator token. Called
+// only from identify(): routes ask requirePhotographer / requireDefault.
 function isAdminToken(request, env) {
-  if (!env.PHOTOGRAPHER_TOKEN) return false;
-  const auth = request.headers.get('Authorization') || '';
-  const token = auth.replace(/^Bearer\s+/i, '').trim();
-  return token === env.PHOTOGRAPHER_TOKEN;
+  const secret = env.PHOTOGRAPHER_TOKEN;
+  if (typeof secret !== 'string' || !secret) return false;
+  return sameSecret(bearerToken(request), secret);
 }
 
 // ─── Operator auth (docs/products-orders.md, platform catalogue) ────────────
@@ -111,9 +112,13 @@ function isOperatorToken(request, env) {
 
 // ─── Photographer accounts (docs/multi-photographer.md, batch 1) ────────────
 // Register (pending) → the operator approves → email + password login gives a
-// bearer session token, stored only as its SHA-256. Batch 1 rule: a session
-// opens /api/photographer/me and /logout and nothing else — isAdminToken above
-// still checks PHOTOGRAPHER_TOKEN only. Registration is closed unless
+// bearer session token, stored only as its SHA-256. A session opens
+// /api/photographer/me, /logout and (batch 2a) /change-password; every other
+// photographer route asks requirePhotographer (batch 2b-0), which lets a
+// session in only while photographerRoutesOpen(env) — isAdminToken above
+// still checks PHOTOGRAPHER_TOKEN only. After an operator reset-password the
+// account must change its password first (must_change_password, enforced in
+// resolvePhotographer). Registration is closed unless
 // PHOTOGRAPHER_SIGNUP is exactly 'on' AND TURNSTILE_SECRET is set.
 const PHOTOGRAPHERS_UNAVAILABLE = { error: '攝影師帳號功能尚未啟用', code: 'photographers_unavailable' };
 const PHOTOGRAPHER_NO_STORE = { 'Cache-Control': 'private, no-store', 'Vary': 'Authorization' };
@@ -258,26 +263,204 @@ async function turnstileVerified(token, request, env) {
 // The session's photographer, or null: the bearer token's SHA-256, a live
 // session, an ACTIVE account — suspended is null at once. Throws when the
 // tables are missing (the routes answer photographers_unavailable).
+// must_change_password: true / false, or null before its column exists
+// (2026-10-15 migration), which the guard treats as unknown.
+// Reached only through resolvePhotographer (the guard): a test pins that.
 async function lookupPhotographerSession(request, env) {
   const token = bearerToken(request);
   if (!/^[0-9a-f]{64}$/.test(token)) return null;
-  const row = await env.DB.prepare(
-    "SELECT p.id, p.display_name, p.email FROM photographer_sessions s JOIN photographers p ON p.id = s.photographer_id WHERE s.token_hash = ? AND s.expires_at > ? AND p.status = 'active'"
-  ).bind(await sha256Hex(token), new Date().toISOString()).first();
-  return row ? { id: row.id, display_name: row.display_name, email: row.email } : null;
+  const tokenHash = await sha256Hex(token);
+  const now = new Date().toISOString();
+  const sql = flag => `SELECT p.id, p.display_name, p.email, ${flag} AS must_change_password FROM photographer_sessions s JOIN photographers p ON p.id = s.photographer_id WHERE s.token_hash = ? AND s.expires_at > ? AND p.status = 'active'`;
+  const row = await withoutMissingColumn(
+    () => env.DB.prepare(sql('p.must_change_password')).bind(tokenHash, now).first(),
+    () => env.DB.prepare(sql('NULL')).bind(tokenHash, now).first(),
+  );
+  return row ? { id: row.id, display_name: row.display_name, email: row.email, must_change_password: mustChangeFlag(row.must_change_password) } : null;
 }
 
-// {id, display_name, email} | null. Batch 1: used by GET /api/photographer/me
-// only; no existing route reads it. Before the migration: null.
-async function resolvePhotographer(request, env) {
-  if (!env.DB) return null;
-  try {
-    return await lookupPhotographerSession(request, env);
-  } catch (e) {
-    if (isMissingSchema(e)) return null;
-    throw e;
-  }
+// The stored flag as the API says it: null (no column yet) stays null, 0 is
+// false, anything else true — an odd value fails closed.
+function mustChangeFlag(value) {
+  return value === null || value === undefined ? null : value !== 0;
 }
+
+// <photographer-route-guard>
+// What a photographer session may open while must_change_password is set (an
+// operator reset): change its password, ask who it is, log out. Read off the
+// request itself — its method and its path with empty segments dropped, as
+// the router splits it — never from anything a caller passes in, so no route
+// can claim to be one of these three (2b-0, security review of 2a).
+const PHOTOGRAPHER_MUST_CHANGE_ROUTES = Object.freeze(['GET api/photographer/me', 'POST api/photographer/logout', 'POST api/photographer/change-password']);
+const PHOTOGRAPHER_UNAUTHORIZED = { error: 'Unauthorized', code: 'unauthorized' };
+const MUST_CHANGE_PASSWORD = { error: '請先修改密碼', code: 'must_change_password' };
+const PASSWORD_CHANGE_UNAVAILABLE = { error: '修改密碼功能尚未啟用', code: 'password_change_unavailable' };
+// {status, body} to answer instead of the route, or null to let it run. Only
+// must_change_password === false opens every route; true is 403, unknown
+// (null: the column is missing) 500 — both only outside the three above.
+function photographerRouteRefusal(who, request) {
+  if (!who) return { status: 401, body: PHOTOGRAPHER_UNAUTHORIZED };
+  if (who.must_change_password === false) return null;
+  const route = `${request.method} ${new URL(request.url).pathname.split('/').filter(Boolean).join('/')}`;
+  if (PHOTOGRAPHER_MUST_CHANGE_ROUTES.includes(route)) return null;
+  if (who.must_change_password === true) return { status: 403, body: MUST_CHANGE_PASSWORD };
+  return { status: 500, body: PASSWORD_CHANGE_UNAVAILABLE };
+}
+// </photographer-route-guard>
+
+// The one way to learn which photographer a SESSION is (the /api/photographer
+// routes, and requirePhotographer below for every other route):
+// {who: {id, display_name, email, must_change_password}} or {refused: Response}
+// (401 no live session — before the migration too; 403 / 500 the guard above,
+// which reads the request's own method and path).
+async function resolvePhotographer(request, env) {
+  let who = null;
+  if (env.DB) {
+    try {
+      who = await lookupPhotographerSession(request, env);
+    } catch (e) {
+      if (!isMissingSchema(e)) throw e;
+    }
+  }
+  const refusal = photographerRouteRefusal(who, request);
+  // `who` rides along with a 403 / 500 so identify() can tell a session row
+  // named 'default' apart; the /api/photographer routes answer `refused` only
+  if (refusal) return { refused: jsonOk(refusal.body, refusal.status, PHOTOGRAPHER_NO_STORE), who };
+  return { who };
+}
+
+// ─── Who is calling a photographer route (batch 2b-0) ─────────────────────
+// The kill switch for every photographer but the default one: while it is
+// off (anything but exactly "on", unset included) a photographer session
+// opens no route outside /api/photographer/*, exactly as before batch 2b.
+// It stays off until every isolation batch (2b-1..3, batch 3) is merged and
+// reviewed. The operator's own toggle (a later batch) replaces this body.
+function photographerRoutesOpen(env) {
+  return env.PHOTOGRAPHER_ROUTES === 'on';
+}
+
+const UNAUTHORIZED = () => jsonErr('Unauthorized', 401);
+
+// Who is calling, worked out once per request (the front and the route both
+// ask): {who} | {nobody} | {squat} | {refusal: Response} | {error}.
+// - PHOTOGRAPHER_TOKEN: the default photographer (fails closed when unset);
+// - while photographerRoutesOpen(env): a live session of an active account,
+//   through resolvePhotographer and its must_change_password guard (a 403 /
+//   500 is `refusal`). A session row named 'default' is `squat`, refused
+//   everywhere, flagged or not: only the token is the default photographer.
+// - a lookup that throws (D1 down) is `error`: a photographer-only route
+//   fails loudly, a route a share link also reaches goes on as anonymous.
+async function identify(request, env) {
+  if (isAdminToken(request, env)) return { who: { id: DEFAULT_PHOTOGRAPHER_ID } };
+  if (!photographerRoutesOpen(env)) return { nobody: true };
+  let session;
+  try {
+    session = await resolvePhotographer(request, env);
+  } catch (error) {
+    return { error };
+  }
+  if (session.who && session.who.id === DEFAULT_PHOTOGRAPHER_ID) return { squat: true };
+  if (session.refused) return session.refused.status === 401 ? { nobody: true } : { refusal: session.refused };
+  return { who: session.who };
+}
+const IDENTITY = new WeakMap();   // request → identify()'s promise
+function photographerIdentity(request, env) {
+  let found = IDENTITY.get(request);
+  if (!found) IDENTITY.set(request, found = identify(request, env));
+  return found;
+}
+// Requests whose route asked requirePhotographer / requireDefault. The front
+// (export default fetch) refuses a photographer-only path whose route did not.
+const GUARDED = new WeakSet();
+
+// The one function every photographer route asks: {who: {id, ...}} or
+// {refused: Response}. The caller's identity is this `who` and nothing else —
+// never a photographer id from the body, the query or a header. Nobody (no
+// token, an unknown one, or any session while the switch is off) gets
+// `unauthorized()`, the route's own answer to no token, so with the switch
+// off nothing changes for anybody. `optional: true` (a route a share link
+// also reaches) gives {who: null} instead, and the route goes on to its
+// share-link checks.
+async function requirePhotographer(request, env, { optional = false, unauthorized = UNAUTHORIZED } = {}) {
+  GUARDED.add(request);
+  const found = await photographerIdentity(request, env);
+  if (found.who) return { who: found.who };
+  if (found.refusal) return { refused: found.refusal.clone() };
+  if (found.squat) return { refused: unauthorized() };
+  if (found.error && !optional) throw found.error;
+  return optional ? { who: null } : { refused: unauthorized() };
+}
+
+// The paths only a photographer may reach, with each one's answer to nobody
+// (null for any other path). The front asks who is calling before their
+// handler runs, and refuses a response their handler made without asking
+// requirePhotographer / requireDefault — a route that forgets its guard, or
+// compares the token by hand, fails closed. Routes a share link also reaches
+// (books, ?list=, objects, upload) guard themselves (`optional`).
+function photographerOnlyPath(pathname) {
+  const [api, area, second, third] = pathname.split('/').filter(Boolean);
+  if (api !== 'api') return null;
+  if (area === 'admin') return UNAUTHORIZED;
+  if (area === 'shares' && (second === 'minted' || (second && third === 'revoke'))) return UNAUTHORIZED;
+  if (area === 'auth' && second === 'studio-token') return UNAUTHORIZED;
+  if (area === 'auth' && second === 'verify-admin') return () => jsonErr('Token 不正確', 401);
+  return null;
+}
+
+// 404 (as for anything that is not yours) unless `who` is the default
+// photographer; null to go on. For what is not scoped to its caller yet.
+function defaultOnly(who) {
+  return who && who.id === DEFAULT_PHOTOGRAPHER_ID ? null : jsonErr('Not found', 404);
+}
+
+// Routes of the products-and-orders block that read, place, change or pay an
+// order (the two GET routes included).
+// Paused for every photographer but the default one (see the block below).
+const ORDER_ROUTES_PAUSED = new Set(['orders', 'project-orders', 'order', 'order-payment', 'order-status', 'order-erase-contact']);
+
+// requirePhotographer, then default only: a route that still reads or writes
+// the default photographer's data (DEFAULT_PHOTOGRAPHER_ID), or R2 keys and
+// folders (unprefixed until batch 3). Each call is marked
+// `// default-only until <batch>`, and that batch replaces it with
+// requirePhotographer and `who.id` (photographer-routes.test.mjs keeps the
+// table). {who: null} passes through for `optional` routes.
+async function requireDefault(request, env, options) {
+  const auth = await requirePhotographer(request, env, options);
+  if (auth.refused || auth.who === null) return auth;
+  const refused = defaultOnly(auth.who);
+  return refused ? { refused } : auth;
+}
+
+// A new password: a string of 10–200 characters (register and change-password)
+function photographerPasswordOk(password) {
+  return typeof password === 'string' && !overChars(password, PHOTOGRAPHER_PASSWORD_MAX) && charCount(password) >= PHOTOGRAPHER_PASSWORD_MIN;
+}
+const INVALID_PHOTOGRAPHER_PASSWORD = { error: `密碼需 ${PHOTOGRAPHER_PASSWORD_MIN}–${PHOTOGRAPHER_PASSWORD_MAX} 個字元`, code: 'invalid_password' };
+
+// The password throttle, shared by login and change-password: this attempt
+// reserves one row per key (the client's network and the email) in one
+// conditional insert, before any PBKDF2, so parallel guesses cannot pass the
+// cap; a success deletes its own rows again, so what stays are failures.
+// Same keys for both routes, so a stolen session gets no extra guesses at the
+// password. `emailText` is the email as typed (login) or stored (change).
+// Returns the attempt id, or null when either key is at its cap (429).
+async function reservePasswordAttempt(request, env, emailText) {
+  const now = Date.now();
+  const pepper = env.TURNSTILE_SECRET || '';
+  const ipKey = await sha256Hex(`photographer-login-ip:${pepper}:${clientNetwork(request)}`);
+  const emailKey = await sha256Hex(`photographer-login-email:${pepper}:${String(emailText).trim().toLowerCase().slice(0, 320)}`);
+  const attempt = randomHex(16);
+  const since = new Date(now - PHOTOGRAPHER_LOGIN_WINDOW_MS).toISOString();
+  await env.DB.prepare('DELETE FROM photographer_login_failures WHERE created_at < ?').bind(new Date(now - 24 * 60 * 60 * 1000).toISOString()).run();
+  const reserved = await env.DB.prepare(
+    `INSERT INTO photographer_login_failures (key_hash, attempt, created_at)
+     SELECT k, ?, ? FROM (SELECT ? AS k UNION ALL SELECT ?)
+      WHERE (SELECT COUNT(*) FROM photographer_login_failures WHERE key_hash = ? AND created_at > ?) < ?
+        AND (SELECT COUNT(*) FROM photographer_login_failures WHERE key_hash = ? AND created_at > ?) < ?`
+  ).bind(attempt, new Date(now).toISOString(), ipKey, emailKey, ipKey, since, PHOTOGRAPHER_LOGIN_FAILURES_MAX, emailKey, since, PHOTOGRAPHER_LOGIN_FAILURES_MAX).run();
+  return reserved.meta.changes ? attempt : null;
+}
+const TOO_MANY_ATTEMPTS = { error: '嘗試次數太多，請 15 分鐘後再試', code: 'too_many_attempts' };
 
 // ─── Client share tokens ─────────────────────────────────────────────────────
 // Clients get an album link over LINE. Two things follow. LINE's crawler
@@ -845,7 +1028,9 @@ async function imageUpload(request, what) {
 // hand-edited row cannot turn it into something a browser would run), never
 // sniffed by the browser, under a CSP that lets it run nothing even if opened
 // directly, with `stamp` (its updated_at) as the ETag. 404 when there is none.
-function imageResponse(request, blob, stamp) {
+// `extra` overrides the headers (a private Cache-Control for a logo read
+// through a link or the photographer's own credential).
+function imageResponse(request, blob, stamp, extra = {}) {
   // D1 hands a BLOB back as an array of byte values
   const bytes = blob ? new Uint8Array(blob) : null;
   const type = bytes && sniffImageType(bytes);
@@ -856,6 +1041,7 @@ function imageResponse(request, blob, stamp) {
     'X-Content-Type-Options': 'nosniff',
     'Content-Security-Policy': "default-src 'none'",
     'Cache-Control': 'public, max-age=300',
+    ...extra,
   };
   const tag = String(stamp || '');
   if (/^[0-9A-Za-z:.+-]+$/.test(tag)) {
@@ -932,6 +1118,18 @@ async function pickStudio(env, photographerId) {
   } catch {
     return { name: null, booking_url: null, has_logo: false };
   }
+}
+
+// `photographerId`'s logo row {logo, logo_updated_at}, or null: none set, or
+// a database the settings migration has not reached. Every logo read goes
+// through here, each with the photographer it is for (the caller's who.id, a
+// link's project.photographer_id, or the default for /api/studio/logo).
+async function readLogo(env, photographerId) {
+  try {
+    return await env.DB.prepare(
+      'SELECT logo, logo_updated_at FROM studio_settings WHERE photographer_id = ? AND logo IS NOT NULL'
+    ).bind(photographerId).first();
+  } catch { return null; }
 }
 
 // The extra_max a new project starts with: the studio's default when it is a
@@ -1328,36 +1526,49 @@ async function platformOptionMap(env, platformProductId) {
 // option set: an option with an id is updated (and restored), one without is
 // inserted, every other one is retired, never deleted — order lines point at
 // them. `t` names the tables and option columns, all fixed strings.
+// `ownerId`: the photographer whose product it is (who.id), for the tables a
+// photographer owns, and null for the platform's (the operator's): every
+// statement on an owned product re-checks the owner itself, so an option
+// write never lands on a product that is not the caller's, whatever was read
+// before the batch.
 const CUSTOM_TABLES = { products: 'products', options: 'product_options', fk: 'product_id', owned: true, cols: ['label', 'price', 'cost'] };
 const ADOPTED_TABLES = { ...CUSTOM_TABLES, cols: ['label', 'price', 'cost', 'platform_option_id'] };
 const PLATFORM_TABLES = { products: 'platform_products', options: 'platform_product_options', fk: 'platform_product_id', owned: false, cols: ['label', 'vendor_cost', 'platform_price'] };
-function catalogueWrites(env, t, id, set, opts, now) {
+function catalogueWrites(env, t, ownerId, id, set, opts, now) {
+  if (t.owned !== (typeof ownerId === 'string' && ownerId !== '')) throw new Error('catalogueWrites: an owned table needs its owner, the platform none');
   const cols = [...Object.keys(set), 'updated_at'];
-  const owner = t.owned ? [DEFAULT_PHOTOGRAPHER_ID] : [];
+  const owner = t.owned ? [ownerId] : [];
+  // the owner gate on an option statement (none for the platform's tables)
+  const mine = t.owned ? ` AND EXISTS (SELECT 1 FROM ${t.products} WHERE id = ? AND photographer_id = ?)` : '';
+  const mineBinds = t.owned ? [id, ownerId] : [];
   const statements = [env.DB.prepare(
     `UPDATE ${t.products} SET ${cols.map(c => `${c} = ?`).join(', ')} WHERE id = ?${t.owned ? ' AND photographer_id = ?' : ''}`
   ).bind(...Object.values(set), now, id, ...owner)];
   if (!opts) return statements;
-  statements.push(env.DB.prepare(`UPDATE ${t.options} SET active = 0 WHERE ${t.fk} = ?`).bind(id));
+  statements.push(env.DB.prepare(`UPDATE ${t.options} SET active = 0 WHERE ${t.fk} = ?${mine}`).bind(id, ...mineBinds));
   for (const o of opts) {
     const values = t.cols.map(c => o[c]);
     statements.push(o.id
-      ? env.DB.prepare(`UPDATE ${t.options} SET ${t.cols.map(c => `${c} = ?`).join(', ')}, sort = ?, active = 1 WHERE id = ? AND ${t.fk} = ?`)
-        .bind(...values, o.sort, o.id, id)
-      : env.DB.prepare(`INSERT INTO ${t.options} (id, ${t.fk}, ${t.cols.join(', ')}, sort) VALUES (?, ?, ${t.cols.map(() => '?').join(', ')}, ?)`)
-        .bind(crypto.randomUUID(), id, ...values, o.sort));
+      ? env.DB.prepare(`UPDATE ${t.options} SET ${t.cols.map(c => `${c} = ?`).join(', ')}, sort = ?, active = 1 WHERE id = ? AND ${t.fk} = ?${mine}`)
+        .bind(...values, o.sort, o.id, id, ...mineBinds)
+      : t.owned
+        ? env.DB.prepare(`INSERT INTO ${t.options} (id, ${t.fk}, ${t.cols.join(', ')}, sort) SELECT ?, ?, ${t.cols.map(() => '?').join(', ')}, ? WHERE 1${mine}`)
+          .bind(crypto.randomUUID(), id, ...values, o.sort, ...mineBinds)
+        : env.DB.prepare(`INSERT INTO ${t.options} (id, ${t.fk}, ${t.cols.join(', ')}, sort) VALUES (?, ?, ${t.cols.map(() => '?').join(', ')}, ?)`)
+          .bind(crypto.randomUUID(), id, ...values, o.sort));
   }
   return statements;
 }
 
-// This photographer's products with their options, retired ones included and
+// `photographerId`'s products (the caller's who.id) with their options, retired ones included and
 // flagged; `id` narrows it to one. Never the image bytes. An adopted product
 // reads the platform's live kind, name, description, photo_count, image and
 // option labels, and its options' cost is the current platform price, flagged
 // when the photographer's price has fallen below it. Never the vendor cost.
-async function readProducts(env, id = null) {
+async function readProducts(env, photographerId, id = null) {
+  if (typeof photographerId !== 'string' || !photographerId) throw new Error('readProducts: no photographer');
   const one = id === null ? '' : ' AND p.id = ?2';
-  const binds = id === null ? [DEFAULT_PHOTOGRAPHER_ID] : [DEFAULT_PHOTOGRAPHER_ID, id];
+  const binds = id === null ? [photographerId] : [photographerId, id];
   const own = (col, expr = `p.${col}`) => `CASE WHEN pp.id IS NULL THEN ${expr} ELSE ${expr.replace('p.', 'pp.')} END AS ${col}`;
   // the page bounds are the platform's only (a custom product has none), and
   // null for a column the database does not have yet
@@ -1483,7 +1694,9 @@ async function readGuestShop(env, photographerId) {
   }
 }
 
-// Orders matching `where` (on `o`, after ORDER_SCOPE_SQL), newest first, with
+// `photographerId`'s orders (the caller's who.id; ORDER_SCOPE_SQL also wants
+// the order's project to be that photographer's) matching `where` (on `o`),
+// newest first, with
 // their lines and computed money. Named columns, never o.* (docs/guest-shop.md
 // S2): request_id stays in the database, and a column a later migration adds
 // cannot reach a response unannounced. The guest-order columns (contact,
@@ -1497,14 +1710,15 @@ const ORDER_BASE_COLUMNS = ['id', 'photographer_id', 'project_id', 'source', 'st
 const ORDER_GUEST_COLUMNS = ['contact_name', 'contact_phone', 'contact_line', 'delivery_method', 'consent_version', 'contact_erased_at'];
 const ORDER_ITEM_LATE_COLUMNS = ['list_price', 'layout'];
 const lateColumns = (alias, cols, late) => cols.map(c => (late ? `${alias}.${c}` : `NULL AS ${c}`)).join(', ');
-async function readOrders(env, where, binds, limit = 500) {
+async function readOrders(env, photographerId, where, binds, limit = 500) {
+  if (typeof photographerId !== 'string' || !photographerId) throw new Error('readOrders: no photographer');
   const { results: orders } = await withoutMissingColumn(...[true, false].map(late => () => env.DB.prepare(
     `SELECT ${ORDER_BASE_COLUMNS.map(c => `o.${c}`).join(', ')}, ${lateColumns('o', ORDER_GUEST_COLUMNS, late)},
             p.title AS project_title, (p.delivered_at IS NOT NULL AND p.final_folders IS NOT NULL) AS project_delivered,
             ${ORDER_SUBTOTAL_SQL} AS subtotal, ${ORDER_TOTAL_SQL} AS total,
             ${ORDER_COST_SQL} AS cost, ${ORDER_OUTSTANDING_SQL} AS outstanding
        ${ORDER_SCOPE_SQL} AND ${where} ORDER BY o.created_at DESC, o.rowid DESC LIMIT ${limit}`
-  ).bind(DEFAULT_PHOTOGRAPHER_ID, ...binds).all()));
+  ).bind(photographerId, ...binds).all()));
   if (!orders.length) return [];
   const { results: items } = await withoutMissingColumn(...[true, false].map(late => () => env.DB.prepare(
     // named columns, never i.*: vendor_cost is the operator's and must not
@@ -1513,7 +1727,7 @@ async function readOrders(env, where, binds, limit = 500) {
             i.qty, i.photo_keys, i.platform_option_id, ${lateColumns('i', ORDER_ITEM_LATE_COLUMNS, late)}
        FROM order_items i WHERE i.order_id IN (SELECT o.id ${ORDER_SCOPE_SQL} AND ${where}
        ORDER BY o.created_at DESC, o.rowid DESC LIMIT ${limit}) ORDER BY i.rowid`
-  ).bind(DEFAULT_PHOTOGRAPHER_ID, ...binds).all()));
+  ).bind(photographerId, ...binds).all()));
   return orders.map(({ contact_name, contact_phone, contact_line, contact_erased_at, project_delivered, ...o }) => ({
     ...o,
     contact: contact_name != null || contact_erased_at != null
@@ -1533,8 +1747,8 @@ function parseLayout(json) {
   } catch { return null; }
 }
 
-async function readOrder(env, id) {
-  const [order] = await readOrders(env, 'o.id = ?', [id], 1);
+async function readOrder(env, photographerId, id) {
+  const [order] = await readOrders(env, photographerId, 'o.id = ?', [id], 1);
   return order || null;
 }
 
@@ -1562,7 +1776,10 @@ function orderPhotoFolders(project, guest) {
 // `photographerId`, and everything else is read from there, list_price (the
 // catalogue price) included. `guest`: the guest order path — finals only, and
 // unit_price is never read from the input. Returns {lines} or {bad: code}.
-async function orderLines(env, project, input, existing, { guest = false, photographerId = DEFAULT_PHOTOGRAPHER_ID } = {}) {
+async function orderLines(env, project, input, existing, { guest = false, photographerId } = {}) {
+  // every caller names the owner: the admin routes who.id, the guest path the
+  // link's project's photographer — never a default
+  if (typeof photographerId !== 'string' || !photographerId) throw new Error('orderLines: no photographer');
   if (!Array.isArray(input) || !input.length) return { bad: 'invalid_lines' };
   if (input.length > ORDER_LINES_MAX) return { bad: 'too_many_lines' };
   if (guest && existing) return { bad: 'invalid_lines' };
@@ -1695,11 +1912,15 @@ function extraPickFee(sub) {
   return { count, pick_limit: limit, extra_price: price, extra, fee };
 }
 
-// The latest submission of a project, the one a fee is charged from.
-function latestSubmission(env, projectId) {
+// The latest submission of a project, the one a fee is charged from — of
+// `ownerId`'s project only: someone else's project reads as one with no
+// submission, the same as an id that does not exist (start-retouch reads it
+// before its own gate, and must not tell the two apart by what it does next).
+function latestSubmission(env, projectId, ownerId) {
   return env.DB.prepare(
-    'SELECT id, count, pick_limit, extra_price FROM submissions WHERE project_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1'
-  ).bind(projectId).first();
+    'SELECT id, count, pick_limit, extra_price FROM submissions WHERE project_id = ? ' +
+    'AND EXISTS (SELECT 1 FROM projects WHERE id = ? AND photographer_id = ?) ORDER BY created_at DESC, rowid DESC LIMIT 1'
+  ).bind(projectId, projectId, ownerId).first();
 }
 
 // The writes that bring a project's automatic extra-pick order in line with
@@ -1710,13 +1931,16 @@ function latestSubmission(env, projectId) {
 // a new one is only inserted when the project has no system order and no
 // order with an extra-pick line at all, so one the photographer edited
 // (source 'admin', cancelled included) is never replaced behind their back.
-async function extraPickWrites(env, projectId, fee, gate, gateBinds) {
+// `ownerId`: the photographer whose project it is (the caller, who.id); the
+// system order is looked up and written as theirs, and `gate` re-checks the
+// project is still theirs inside every statement.
+async function extraPickWrites(env, ownerId, projectId, fee, gate, gateBinds) {
   const now = new Date().toISOString();
   const gated = (sql, ...binds) => env.DB.prepare(`${sql} AND EXISTS (SELECT 1 FROM projects WHERE ${gate})`)
     .bind(...binds, ...gateBinds);
   const sys = await env.DB.prepare(
     "SELECT id, paid_amount FROM orders WHERE project_id = ? AND photographer_id = ? AND source = 'system' ORDER BY created_at, rowid LIMIT 1"
-  ).bind(projectId, DEFAULT_PHOTOGRAPHER_ID).first();
+  ).bind(projectId, ownerId).first();
   const unpaidSystem = "EXISTS (SELECT 1 FROM orders WHERE id = ? AND source = 'system' AND paid_amount = 0)";
   if (sys) {
     if (sys.paid_amount > 0) return [];
@@ -1740,7 +1964,7 @@ async function extraPickWrites(env, projectId, fee, gate, gateBinds) {
       "INSERT INTO orders (id, photographer_id, project_id, source, status, created_at, updated_at, confirmed_at) " +
       "SELECT ?, ?, ?, 'system', 'confirmed', ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM orders WHERE project_id = ? AND source = 'system') " +
       "AND NOT EXISTS (SELECT 1 FROM orders o JOIN order_items i ON i.order_id = o.id WHERE o.project_id = ? AND i.kind = 'extra_pick')",
-      id, DEFAULT_PHOTOGRAPHER_ID, projectId, now, now, now, projectId, projectId),
+      id, ownerId, projectId, now, now, now, projectId, projectId),
     gated(
       "INSERT INTO order_items (id, order_id, kind, name, option_label, unit_price, unit_cost, qty, photo_keys) " +
       "SELECT ?, ?, 'extra_pick', ?, '', ?, 0, ?, '[]' WHERE EXISTS (SELECT 1 FROM orders WHERE id = ?)",
@@ -1928,12 +2152,13 @@ function revisionMessage(value) {
 }
 
 // Resolves a project's open requests, but only once it is confirmed: rides in
-// the same batch as a confirmation (guest or photographer).
-function resolveRevisionsIfConfirmed(env, projectId, at) {
+// the same batch as a confirmation (guest or photographer). `ownerId` is the
+// project's photographer, re-checked inside the statement.
+function resolveRevisionsIfConfirmed(env, projectId, at, ownerId) {
   return env.DB.prepare(
     'UPDATE revision_requests SET resolved_at = ? WHERE project_id = ? AND resolved_at IS NULL ' +
-    'AND EXISTS (SELECT 1 FROM projects WHERE id = ? AND client_confirmed_at IS NOT NULL)'
-  ).bind(at, projectId, projectId);
+    'AND EXISTS (SELECT 1 FROM projects WHERE id = ? AND photographer_id = ? AND client_confirmed_at IS NOT NULL)'
+  ).bind(at, projectId, projectId, ownerId);
 }
 
 // The latest open request of a project ({message, message_auto}) or null —
@@ -1990,11 +2215,22 @@ function pickNotDelivered() {
   return jsonOk({ error: '尚未交件', code: 'not_delivered' }, 409);
 }
 
+// PHOTOGRAPHER_EMAIL is the default photographer's inbox (Tim's). Every
+// notification about a project asks this first: another photographer's
+// project mails nobody — silently, no warning — until per-studio
+// notify_email (docs/multi-photographer.md, batch 4), so none of their
+// guests' names, files, notes or orders reach Tim. The pick submit then stays
+// in that photographer's unnotified badge, as when mail is not set up.
+function mailsDefaultInbox(project) {
+  return Boolean(project) && project.photographer_id === DEFAULT_PHOTOGRAPHER_ID;
+}
+
 // Tells the photographer the guest confirmed (message null) or asked for
 // changes (message: their text). Same transport and rules as
 // sendPickNotification: a skip when mail is not set up, the subject on one
 // line, the guest's words never in a header and escaped in the HTML part.
 async function sendClientNotification(env, project, pickerName, message) {
+  if (!mailsDefaultInbox(project)) return false;
   if (!env.NOTIFY_EMAIL || !env.PHOTOGRAPHER_EMAIL) {
     console.warn('client notification skipped: NOTIFY_EMAIL or PHOTOGRAPHER_EMAIL is not configured');
     return false;
@@ -2136,6 +2372,7 @@ async function loadRound(env, share, project, id) {
 // theirs); `pins` {photo_key: [pins]}. At most REVISION_EMAIL_PHOTOS_MAX
 // photos are listed.
 async function sendRevisionRoundNotification(env, project, pickerName, note, pins) {
+  if (!mailsDefaultInbox(project)) return false;
   if (!env.NOTIFY_EMAIL || !env.PHOTOGRAPHER_EMAIL) {
     console.warn('revision notification skipped: NOTIFY_EMAIL or PHOTOGRAPHER_EMAIL is not configured');
     return false;
@@ -2227,11 +2464,16 @@ const GUEST_ORDER_ERRORS = {
   invalid_layout: '相本頁數不正確', extra_pages_unpriced: '這本相本無法加頁，請選最少頁數或聯絡攝影師',
 };
 
-// Whether guest ordering is open for this project: GUEST_ORDERS exactly "on",
-// or exactly "pilot" with the project listed in GUEST_ORDERS_PILOT (comma
-// separated ids). Unset or anything else is off, so a typo fails closed. The
-// one place either variable is read.
-function guestOrdersEnabled(env, projectId) {
+// Whether guest ordering is open for this project (the projects row): never
+// for a project that is not the default photographer's, whatever the switch
+// says (docs/multi-photographer.md §4: no per-studio switch until payments
+// are decided); otherwise GUEST_ORDERS exactly "on", or exactly "pilot" with
+// the project listed in GUEST_ORDERS_PILOT (comma separated ids). Unset or
+// anything else is off, so a typo fails closed. The one place either
+// variable is read.
+function guestOrdersEnabled(env, project) {
+  if (!project || project.photographer_id !== DEFAULT_PHOTOGRAPHER_ID) return false;
+  const projectId = project.id;
   const mode = env.GUEST_ORDERS;
   if (mode === 'on') return true;
   if (mode !== 'pilot') return false;
@@ -2476,6 +2718,7 @@ async function guestOrdersFor(env, project, pickerId, orderId = null) {
 // body only. `order` is the guest view: never the phone or the LINE ID (no
 // personal contact data in the inbox, docs/guest-shop.md §5.6).
 async function sendOrderNotification(env, project, order, cancelled = false) {
+  if (!mailsDefaultInbox(project)) return false;
   if (!env.NOTIFY_EMAIL || !env.PHOTOGRAPHER_EMAIL) {
     console.warn('order notification skipped: NOTIFY_EMAIL or PHOTOGRAPHER_EMAIL is not configured');
     return false;
@@ -2544,6 +2787,7 @@ async function interestsFor(env, projectId) {
 // the HTML part. The only guest text is the picker's name; the product name
 // is our own catalogue's, snapshotted at this tap.
 async function sendInterestNotification(env, project, pickerName, product, tapCount) {
+  if (!mailsDefaultInbox(project)) return false;
   if (!env.NOTIFY_EMAIL || !env.PHOTOGRAPHER_EMAIL) {
     console.warn('interest notification skipped: NOTIFY_EMAIL or PHOTOGRAPHER_EMAIL is not configured');
     return false;
@@ -2924,6 +3168,7 @@ function pickDiff(current, previous) {
 // set up. `submission` is the row just written; `previous` the one before it
 // for this project (whoever made it), or null.
 async function sendPickNotification(env, project, picker, submission, previous) {
+  if (!mailsDefaultInbox(project)) return false;
   if (!env.NOTIFY_EMAIL || !env.PHOTOGRAPHER_EMAIL) {
     console.warn('pick notification skipped: NOTIFY_EMAIL or PHOTOGRAPHER_EMAIL is not configured');
     return false;
@@ -2989,6 +3234,20 @@ function jsonErr(msg, status = 400) {
 
 export default {
   async fetch(request, env, ctx) {
+    const unauthorized = request.method === 'OPTIONS' ? null : photographerOnlyPath(new URL(request.url).pathname);
+    if (unauthorized) {
+      const found = await photographerIdentity(request, env);
+      if (found.error) throw found.error;
+      if (found.refusal) return found.refusal.clone();
+      if (!found.who) return unauthorized();
+    }
+    const response = await routeRequest(request, env, ctx);
+    if (unauthorized && !GUARDED.has(request)) return unauthorized();
+    return response;
+  },
+};
+
+async function routeRequest(request, env, ctx) {
     const url = new URL(request.url);
     const params = url.searchParams;
 
@@ -3000,23 +3259,25 @@ export default {
     let sharePromise;
     const share = () => (sharePromise ??= resolveShareToken(request, url, env));
 
-    // ─── Photographer accounts: /api/photographer/* (batch 1) ─────────────
-    // register / login / logout (POST), me (GET). API only, no page links
-    // here yet. Anything else under /api/photographer is 404/405 here, so
-    // nothing falls through to the upload route.
+    // ─── Photographer accounts: /api/photographer/* (batches 1, 2a) ───────
+    // register / login / logout / change-password (POST), me (GET). API only,
+    // no page links here yet. Anything else under /api/photographer is
+    // 404/405 here, so nothing falls through to the upload route.
     if (pathParts[0] === 'api' && pathParts[1] === 'photographer') {
       const route = pathParts.length === 3 ? pathParts[2] : null;
-      const method = { register: 'POST', login: 'POST', logout: 'POST', me: 'GET' }[route];
+      const method = Object.assign(Object.create(null), { register: 'POST', login: 'POST', logout: 'POST', 'change-password': 'POST', me: 'GET' })[route];
       if (!method) return jsonErr('Not found', 404);
       if (request.method !== method) return jsonErr('Method not allowed', 405);
       const reply = (data, status = 200) => jsonOk(data, status, PHOTOGRAPHER_NO_STORE);
 
-      // GET /api/photographer/me — who this session is (401 otherwise,
-      // before the migration too: no session can exist then)
+      // GET /api/photographer/me — who this session is, and whether it must
+      // change its password first (null before that migration). 401
+      // otherwise, before the migration too: no session can exist then.
       if (route === 'me') {
-        const who = await resolvePhotographer(request, env);
-        if (!who) return reply({ error: 'Unauthorized', code: 'unauthorized' }, 401);
-        return reply({ photographer: who });
+        const session = await resolvePhotographer(request, env);
+        if (session.refused) return session.refused;
+        const { id, display_name, email, must_change_password } = session.who;
+        return reply({ photographer: { id, display_name, email }, must_change_password });
       }
 
       // closed before anything is read: a typo in the switch, or no secret
@@ -3036,6 +3297,16 @@ export default {
           return reply({ ok: true });
         }
 
+        // change-password: the session first, so a request without one is 401
+        // before its body is read at all (no 413 / 400 to tell it anything)
+        let who = null;
+        if (route === 'change-password') {
+          const session = await resolvePhotographer(request, env);
+          if (session.refused) return session.refused;
+          who = session.who;
+          if (who.must_change_password === null) return reply(PASSWORD_CHANGE_UNAVAILABLE, 500);
+        }
+
         const parsed = await readJsonCapped(request, PHOTOGRAPHER_BODY_MAX);
         if (parsed.refused) return parsed.refused;
         const body = parsed.body && typeof parsed.body === 'object' ? parsed.body : {};
@@ -3046,28 +3317,19 @@ export default {
         if (route === 'login') {
           const email = photographerEmail(body.email);
           const password = typeof body.password === 'string' && body.password.length <= 2 * PHOTOGRAPHER_PASSWORD_MAX ? body.password : '';
-          // The throttle: this attempt reserves one row per key (the client's
-          // network and the email) in one conditional insert, before PBKDF2,
-          // so parallel guesses cannot pass the cap; a success deletes its own
-          // rows again, so what stays are failures. A refused attempt says so
+          // the throttle (reservePasswordAttempt). A refused attempt says so
           // (429) whoever owns the email: the attacker caused it.
           const now = Date.now();
           const nowIso = new Date(now).toISOString();
-          const pepper = env.TURNSTILE_SECRET || '';
-          const ipKey = await sha256Hex(`photographer-login-ip:${pepper}:${clientNetwork(request)}`);
-          const emailKey = await sha256Hex(`photographer-login-email:${pepper}:${typeof body.email === 'string' ? body.email.trim().toLowerCase().slice(0, 320) : ''}`);
-          const attempt = randomHex(16);
-          const since = new Date(now - PHOTOGRAPHER_LOGIN_WINDOW_MS).toISOString();
-          await env.DB.prepare('DELETE FROM photographer_login_failures WHERE created_at < ?').bind(new Date(now - 24 * 60 * 60 * 1000).toISOString()).run();
-          const reserved = await env.DB.prepare(
-            `INSERT INTO photographer_login_failures (key_hash, attempt, created_at)
-             SELECT k, ?, ? FROM (SELECT ? AS k UNION ALL SELECT ?)
-              WHERE (SELECT COUNT(*) FROM photographer_login_failures WHERE key_hash = ? AND created_at > ?) < ?
-                AND (SELECT COUNT(*) FROM photographer_login_failures WHERE key_hash = ? AND created_at > ?) < ?`
-          ).bind(attempt, nowIso, ipKey, emailKey, ipKey, since, PHOTOGRAPHER_LOGIN_FAILURES_MAX, emailKey, since, PHOTOGRAPHER_LOGIN_FAILURES_MAX).run();
-          if (!reserved.meta.changes) return reply({ error: '嘗試次數太多，請 15 分鐘後再試', code: 'too_many_attempts' }, 429);
+          const attempt = await reservePasswordAttempt(request, env, typeof body.email === 'string' ? body.email : '');
+          if (!attempt) return reply(TOO_MANY_ATTEMPTS, 429);
+          // must_change_password: null before its migration
+          const accountSql = flag => `SELECT id, display_name, password_hash, status, ${flag} AS must_change_password FROM photographers WHERE email = ?`;
           const row = email
-            ? await env.DB.prepare('SELECT id, display_name, password_hash, status FROM photographers WHERE email = ?').bind(email).first()
+            ? await withoutMissingColumn(
+              () => env.DB.prepare(accountSql('must_change_password')).bind(email).first(),
+              () => env.DB.prepare(accountSql('NULL')).bind(email).first(),
+            )
             : null;
           const verified = await verifyPhotographerPassword(password, row ? row.password_hash : PHOTOGRAPHER_DUMMY_HASH);
           if (!row || !verified || row.status !== 'active') return reply(LOGIN_FAILED, 401);
@@ -3086,7 +3348,58 @@ export default {
             env.DB.prepare('DELETE FROM photographer_sessions WHERE photographer_id = ? AND expires_at <= ?').bind(row.id, nowIso),
           ]);
           if (!inserted.meta.changes) return reply(LOGIN_FAILED, 401);
-          return reply({ token, photographer: { id: row.id, display_name: row.display_name } });
+          return reply({ token, photographer: { id: row.id, display_name: row.display_name }, must_change_password: mustChangeFlag(row.must_change_password) });
+        }
+
+        // POST /api/photographer/change-password — {current_password,
+        // new_password}, from a live session (a flagged one too: this is how
+        // it clears the flag). Input 400 (no PBKDF2), the login throttle 429
+        // (shared keys), a wrong current password 403 wrong_password (counted
+        // as a failure). Then the new hash, the flag cleared and every
+        // session of this photographer (this one too) replaced by one new
+        // session, whose token is the answer {ok, token} — a token stolen
+        // before the change dies with it. One batch that lands only while
+        // this session is live, the account active and its hash still the
+        // one just verified — a reset, a suspend, a logout or another change
+        // in between is 409 password_change_conflict, nothing written.
+        if (route === 'change-password') {
+          const current = body.current_password;
+          const next = body.new_password;
+          if (typeof current !== 'string' || !current || current.length > 2 * PHOTOGRAPHER_PASSWORD_MAX) {
+            return reply({ error: '請輸入目前的密碼', code: 'invalid_current_password' }, 400);
+          }
+          if (!photographerPasswordOk(next)) return reply(INVALID_PHOTOGRAPHER_PASSWORD, 400);
+          if (next === current) return reply({ error: '新密碼不能和目前的密碼相同', code: 'same_password' }, 400);
+          const attempt = await reservePasswordAttempt(request, env, who.email);
+          if (!attempt) return reply(TOO_MANY_ATTEMPTS, 429);
+          const row = await env.DB.prepare("SELECT password_hash FROM photographers WHERE id = ? AND status = 'active'").bind(who.id).first();
+          // both PBKDF2 runs whatever the answer, so right and wrong take as long
+          const [verified, newHash] = await Promise.all([
+            verifyPhotographerPassword(current, row ? row.password_hash : PHOTOGRAPHER_DUMMY_HASH),
+            hashPhotographerPassword(next),
+          ]);
+          if (!row || !verified) return reply({ error: '目前的密碼不正確', code: 'wrong_password' }, 403);
+          const tokenHash = await sha256Hex(bearerToken(request));
+          const now = Date.now();
+          const nowIso = new Date(now).toISOString();
+          const newToken = randomHex(32);
+          const [updated] = await env.DB.batch([
+            env.DB.prepare(
+              "UPDATE photographers SET password_hash = ?, must_change_password = 0 WHERE id = ? AND status = 'active' AND password_hash = ? AND EXISTS (SELECT 1 FROM photographer_sessions WHERE token_hash = ? AND photographer_id = ? AND expires_at > ?)"
+            ).bind(newHash, who.id, row.password_hash, tokenHash, who.id, nowIso),
+            // only if the new hash landed (its salt is fresh, so it is this
+            // write's): every session of this photographer, this one included…
+            env.DB.prepare('DELETE FROM photographer_sessions WHERE photographer_id = ? AND EXISTS (SELECT 1 FROM photographers WHERE id = ? AND password_hash = ?)')
+              .bind(who.id, who.id, newHash),
+            // …and the one new session, on the same condition
+            env.DB.prepare(
+              "INSERT INTO photographer_sessions (token_hash, photographer_id, created_at, expires_at) SELECT ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM photographers WHERE id = ? AND status = 'active' AND password_hash = ?)"
+            ).bind(await sha256Hex(newToken), who.id, nowIso, new Date(now + PHOTOGRAPHER_SESSION_MS).toISOString(), who.id, newHash),
+            // the current password was right: not a failure
+            env.DB.prepare('DELETE FROM photographer_login_failures WHERE attempt = ?').bind(attempt),
+          ]);
+          if (!updated.meta.changes) return reply({ error: '密碼或登入狀態已改變，請重新登入再試', code: 'password_change_conflict' }, 409);
+          return reply({ ok: true, token: newToken });
         }
 
         // POST /api/photographer/register — {email, password, display_name,
@@ -3098,9 +3411,7 @@ export default {
         const email = photographerEmail(body.email);
         if (!email) return reply({ error: 'Email 格式不正確', code: 'invalid_email' }, 400);
         const password = body.password;
-        if (typeof password !== 'string' || overChars(password, PHOTOGRAPHER_PASSWORD_MAX) || charCount(password) < PHOTOGRAPHER_PASSWORD_MIN) {
-          return reply({ error: `密碼需 ${PHOTOGRAPHER_PASSWORD_MIN}–${PHOTOGRAPHER_PASSWORD_MAX} 個字元`, code: 'invalid_password' }, 400);
-        }
+        if (!photographerPasswordOk(password)) return reply(INVALID_PHOTOGRAPHER_PASSWORD, 400);
         const name = typeof body.display_name === 'string' ? body.display_name.trim() : '';
         if (!name || overChars(name, PHOTOGRAPHER_NAME_MAX) || ACCOUNT_CONTROL.test(name)) {
           return reply({ error: `顯示名稱需 1–${PHOTOGRAPHER_NAME_MAX} 個字`, code: 'invalid_display_name' }, 400);
@@ -3146,14 +3457,16 @@ export default {
 
     // GET /api/auth/verify-admin — check if PHOTOGRAPHER_TOKEN matches
     if (request.method === 'GET' && url.pathname === '/api/auth/verify-admin') {
-      if (isAdminToken(request, env)) return jsonOk({ ok: true });
-      return jsonErr('Token 不正確', 401);
+      const auth = await requirePhotographer(request, env, { unauthorized: () => jsonErr('Token 不正確', 401) }); // open to every photographer: answers no data
+      if (auth.refused) return auth.refused;
+      return jsonOk({ ok: true });
     }
 
     // POST /api/auth/studio-token — a read-only credential the photographer's
     // own pages can put in an <img> src
     if (request.method === 'POST' && url.pathname === '/api/auth/studio-token') {
-      if (!isAdminToken(request, env)) return jsonErr('Unauthorized', 401);
+      const auth = await requireDefault(request, env); // default-only until batch 3
+      if (auth.refused) return auth.refused;
       if (!env.DB) return jsonErr('DB not configured', 500);
       const now = Date.now();
       // both sides are ISO-8601 UTC so this compares as text; a hand-edited
@@ -3339,7 +3652,8 @@ export default {
 
     // GET /api/admin/clients
     if (request.method === 'GET' && url.pathname === '/api/admin/clients') {
-      if (!isAdminToken(request, env)) return jsonErr('Unauthorized', 401);
+      const auth = await requireDefault(request, env); // default-only until retired
+      if (auth.refused) return auth.refused;
       if (!env.DB) return jsonErr('DB not configured', 500);
       const listSql = shoot =>
         `SELECT u.id, u.email, u.name, u.folder_path, u.approved, u.created_at${shoot}, p.can_book, p.can_upload` +
@@ -3369,7 +3683,8 @@ export default {
 
     // PUT /api/admin/clients/:id/approve
     if (request.method === 'PUT' && pathParts[0] === 'api' && pathParts[1] === 'admin' && pathParts[2] === 'clients' && pathParts[4] === 'approve') {
-      if (!isAdminToken(request, env)) return jsonErr('Unauthorized', 401);
+      const auth = await requireDefault(request, env); // default-only until retired
+      if (auth.refused) return auth.refused;
       if (!env.DB) return jsonErr('DB not configured', 500);
       const userId = parseInt(pathParts[3]);
       if (!userId) return jsonErr('Invalid user id');
@@ -3379,7 +3694,8 @@ export default {
 
     // PUT /api/admin/clients/:id/permissions
     if (request.method === 'PUT' && pathParts[0] === 'api' && pathParts[1] === 'admin' && pathParts[2] === 'clients' && pathParts[4] === 'permissions') {
-      if (!isAdminToken(request, env)) return jsonErr('Unauthorized', 401);
+      const auth = await requireDefault(request, env); // default-only until retired
+      if (auth.refused) return auth.refused;
       if (!env.DB) return jsonErr('DB not configured', 500);
       const userId = parseInt(pathParts[3]);
       if (!userId) return jsonErr('Invalid user id');
@@ -3443,7 +3759,8 @@ export default {
 
     // DELETE /api/admin/clients/:id
     if (request.method === 'DELETE' && pathParts[0] === 'api' && pathParts[1] === 'admin' && pathParts[2] === 'clients' && pathParts[3] && !pathParts[4]) {
-      if (!isAdminToken(request, env)) return jsonErr('Unauthorized', 401);
+      const auth = await requireDefault(request, env); // default-only until retired
+      if (auth.refused) return auth.refused;
       if (!env.DB) return jsonErr('DB not configured', 500);
       const userId = parseInt(pathParts[3]);
       if (!userId) return jsonErr('Invalid user id');
@@ -3456,7 +3773,8 @@ export default {
 
     // POST /api/admin/projects — a guest-picking project and its one link
     if (request.method === 'POST' && url.pathname === '/api/admin/projects') {
-      if (!isAdminToken(request, env)) return jsonErr('Unauthorized', 401);
+      const auth = await requireDefault(request, env); // default-only until batch 3
+      if (auth.refused) return auth.refused;
       if (!env.DB) return jsonErr('DB not configured', 500);
       let body;
       try { body = await request.json(); } catch { return jsonErr('Invalid JSON'); }
@@ -3542,7 +3860,9 @@ export default {
     // time order). Archived projects are left out; `?archived=1` lists only
     // them (any other value is the default view).
     if (request.method === 'GET' && url.pathname === '/api/admin/projects') {
-      if (!isAdminToken(request, env)) return jsonErr('Unauthorized', 401);
+      const auth = await requirePhotographer(request, env); // scoped to the caller (who.id)
+      if (auth.refused) return auth.refused;
+      const who = auth.who;
       if (!env.DB) return jsonErr('DB not configured', 500);
       const now = Date.now();
       const archivedFilter = params.get('archived') === '1' ? 'p.archived_at IS NOT NULL' : 'p.archived_at IS NULL';
@@ -3566,7 +3886,7 @@ export default {
       ).bind(
         new Date(now).toISOString(),
         new Date(now - SHARE_MAX_LIFE_MS).toISOString(),
-        DEFAULT_PHOTOGRAPHER_ID,
+        who.id,
       ).all();
       // extra_max (the plan's extra-pick cap) comes from a later hand-run
       // migration still: without it every project lists as uncapped (null)
@@ -3609,10 +3929,12 @@ export default {
     // who set each pick. Guest strings go out raw in JSON; admin.html escapes
     // them when it renders.
     if (request.method === 'GET' && pathParts[0] === 'api' && pathParts[1] === 'admin' && pathParts[2] === 'projects' && pathParts[3] && !pathParts[4]) {
-      if (!isAdminToken(request, env)) return jsonErr('Unauthorized', 401);
+      const auth = await requirePhotographer(request, env); // scoped to the caller (who.id)
+      if (auth.refused) return auth.refused;
+      const who = auth.who;
       if (!env.DB) return jsonErr('DB not configured', 500);
       const project = await env.DB.prepare('SELECT * FROM projects WHERE id = ? AND photographer_id = ?')
-        .bind(pathParts[3], DEFAULT_PHOTOGRAPHER_ID).first();
+        .bind(pathParts[3], who.id).first();
       if (!project) return jsonErr('Not found', 404);
       // key_hash is left out by name: it is the one column here that is a
       // credential's stand-in
@@ -3674,10 +3996,12 @@ export default {
     // POST /api/admin/projects/:id/reset-seat — the guest lost their browser.
     // Frees the seat; the selections belong to the project and stay.
     if (request.method === 'POST' && pathParts[0] === 'api' && pathParts[1] === 'admin' && pathParts[2] === 'projects' && pathParts[3] && pathParts[4] === 'reset-seat') {
-      if (!isAdminToken(request, env)) return jsonErr('Unauthorized', 401);
+      const auth = await requirePhotographer(request, env); // scoped to the caller (who.id)
+      if (auth.refused) return auth.refused;
+      const who = auth.who;
       if (!env.DB) return jsonErr('DB not configured', 500);
       const result = await env.DB.prepare('UPDATE projects SET owner_picker_id = NULL WHERE id = ? AND photographer_id = ?')
-        .bind(pathParts[3], DEFAULT_PHOTOGRAPHER_ID).run();
+        .bind(pathParts[3], who.id).run();
       if (!result.meta?.changes) return jsonErr('Not found', 404);
       return jsonOk({ ok: true });
     }
@@ -3693,13 +4017,15 @@ export default {
     // snapshot stays, as with undeliver.
     if (request.method === 'POST' && pathParts[0] === 'api' && pathParts[1] === 'admin' && pathParts[2] === 'projects' && pathParts[3] && !pathParts[5] &&
         (pathParts[4] === 'start-retouch' || pathParts[4] === 'reopen')) {
-      if (!isAdminToken(request, env)) return jsonErr('Unauthorized', 401);
+      const auth = await requirePhotographer(request, env); // scoped to the caller (who.id)
+      if (auth.refused) return auth.refused;
+      const who = auth.who;
       if (!env.DB) return jsonErr('DB not configured', 500);
       const id = pathParts[3];
       // null: the project is there and past picking, so it was the gate below
       const notMoved = async () => {
         const exists = await env.DB.prepare('SELECT phase FROM projects WHERE id = ? AND photographer_id = ?')
-          .bind(id, DEFAULT_PHOTOGRAPHER_ID).first();
+          .bind(id, who.id).first();
         if (!exists) return jsonErr('Not found', 404);
         if (exists.phase === 'picking') return jsonOk({ error: '客人尚未送出，無法開始修圖', code: 'not_submitted', phase: exists.phase }, 409);
         return null;
@@ -3716,7 +4042,7 @@ export default {
         // without it before the client-confirm migration).
         const reopen = confirm => env.DB.prepare(
           `UPDATE projects SET phase = 'picking', modified_after_submit = 0, delivered_at = NULL${confirm} WHERE id = ? AND photographer_id = ?`
-        ).bind(id, DEFAULT_PHOTOGRAPHER_ID).run();
+        ).bind(id, who.id).run();
         const moved = await withoutMissingColumn(
           () => reopen(', client_confirmed_at = NULL, client_confirmed_by = NULL'), () => reopen(''));
         if (!moved.meta?.changes) return jsonErr('Not found', 404);
@@ -3731,10 +4057,10 @@ export default {
       // over once retouching). The order writes are gated on the phase having
       // moved too, and re-check their own order inside (extraPickWrites).
       for (let attempt = 0; attempt < 3; attempt++) {
-        const latest = await latestSubmission(env, id);
+        const latest = await latestSubmission(env, id, who.id);
         const gate = 'id = ? AND photographer_id = ? AND (SELECT s.id FROM submissions s WHERE s.project_id = ? ORDER BY s.created_at DESC, s.rowid DESC LIMIT 1) IS ?';
-        const gateBinds = [id, DEFAULT_PHOTOGRAPHER_ID, id, latest?.id ?? null];
-        const writes = await extraPickWrites(env, id, extraPickFee(latest), `${gate} AND phase = 'retouching'`, gateBinds);
+        const gateBinds = [id, who.id, id, latest?.id ?? null];
+        const writes = await extraPickWrites(env, who.id, id, extraPickFee(latest), `${gate} AND phase = 'retouching'`, gateBinds);
         const [moved] = await env.DB.batch([
           env.DB.prepare(`UPDATE projects SET phase = 'retouching' WHERE ${gate} AND phase IN ('submitted', 'retouching')`).bind(...gateBinds),
           ...writes,
@@ -3757,27 +4083,29 @@ export default {
     // stay revoked; POST .../links mints a new one.
     if (request.method === 'POST' && pathParts[0] === 'api' && pathParts[1] === 'admin' && pathParts[2] === 'projects' && pathParts[3] && !pathParts[5] &&
         (pathParts[4] === 'archive' || pathParts[4] === 'unarchive')) {
-      if (!isAdminToken(request, env)) return jsonErr('Unauthorized', 401);
+      const auth = await requirePhotographer(request, env); // scoped to the caller (who.id)
+      if (auth.refused) return auth.refused;
+      const who = auth.who;
       if (!env.DB) return jsonErr('DB not configured', 500);
       const id = pathParts[3];
       if (pathParts[4] === 'unarchive') {
         const result = await env.DB.prepare('UPDATE projects SET archived_at = NULL WHERE id = ? AND photographer_id = ?')
-          .bind(id, DEFAULT_PHOTOGRAPHER_ID).run();
+          .bind(id, who.id).run();
         if (!result.meta?.changes) return jsonErr('Not found', 404);
         return jsonOk({ ok: true, archived_at: null }, 200, ADMIN_ONLY_HEADERS);
       }
       const at = new Date().toISOString();
       const [stamped, revoked] = await env.DB.batch([
         env.DB.prepare('UPDATE projects SET archived_at = COALESCE(archived_at, ?) WHERE id = ? AND photographer_id = ?')
-          .bind(at, id, DEFAULT_PHOTOGRAPHER_ID),
+          .bind(at, id, who.id),
         env.DB.prepare(
           "UPDATE share_tokens SET revoked_at = ? WHERE kind = 'pick' AND project_id = ? AND revoked_at IS NULL " +
           'AND EXISTS (SELECT 1 FROM projects WHERE id = ? AND photographer_id = ?)'
-        ).bind(at, id, id, DEFAULT_PHOTOGRAPHER_ID),
+        ).bind(at, id, id, who.id),
       ]);
       if (!stamped.meta?.changes) return jsonErr('Not found', 404);
       const row = await env.DB.prepare('SELECT archived_at FROM projects WHERE id = ? AND photographer_id = ?')
-        .bind(id, DEFAULT_PHOTOGRAPHER_ID).first();
+        .bind(id, who.id).first();
       return jsonOk({ ok: true, archived_at: row?.archived_at ?? at, revoked: revoked.meta?.changes ?? 0 }, 200, ADMIN_ONLY_HEADERS);
     }
 
@@ -3789,7 +4117,9 @@ export default {
     // project row goes last because the others' gate reads it. R2 is never
     // touched: the photos belong to the shoot, not to the project.
     if (request.method === 'DELETE' && pathParts[0] === 'api' && pathParts[1] === 'admin' && pathParts[2] === 'projects' && pathParts[3] && !pathParts[4]) {
-      if (!isAdminToken(request, env)) return jsonErr('Unauthorized', 401);
+      const auth = await requirePhotographer(request, env); // scoped to the caller (who.id)
+      if (auth.refused) return auth.refused;
+      const who = auth.who;
       if (!env.DB) return jsonErr('DB not configured', 500);
       const id = pathParts[3];
       const hasSubmissions = () => jsonOk({ error: '已有送出紀錄，無法刪除（可改為封存）', code: 'has_submissions' }, 409);
@@ -3799,13 +4129,13 @@ export default {
       const found = await env.DB.prepare(
         'SELECT EXISTS (SELECT 1 FROM submissions WHERE project_id = ?1) AS submitted, ' +
         'EXISTS (SELECT 1 FROM orders WHERE project_id = ?1) AS ordered FROM projects WHERE id = ?1 AND photographer_id = ?2'
-      ).bind(id, DEFAULT_PHOTOGRAPHER_ID).first();
+      ).bind(id, who.id).first();
       if (!found) return jsonErr('Not found', 404);
       if (found.submitted) return hasSubmissions();
       if (found.ordered) return hasOrders();
       const gate = 'EXISTS (SELECT 1 FROM projects WHERE id = ?1 AND photographer_id = ?2) AND NOT EXISTS (SELECT 1 FROM submissions WHERE project_id = ?1) ' +
         'AND NOT EXISTS (SELECT 1 FROM orders WHERE project_id = ?1)';
-      const del = sql => env.DB.prepare(`${sql} AND ${gate}`).bind(id, DEFAULT_PHOTOGRAPHER_ID);
+      const del = sql => env.DB.prepare(`${sql} AND ${gate}`).bind(id, who.id);
       // the co-picking rows too, once that migration has run
       const coPicking = await coPickingReady(env)
         ? ['project_collaborators', 'pick_invites', 'pick_join_failures'].map(t => del(`DELETE FROM ${t} WHERE project_id = ?1`))
@@ -3821,7 +4151,7 @@ export default {
       if (!results[results.length - 1].meta?.changes) {
         const still = await env.DB.prepare(
           'SELECT EXISTS (SELECT 1 FROM submissions WHERE project_id = ?1) AS submitted FROM projects WHERE id = ?1 AND photographer_id = ?2'
-        ).bind(id, DEFAULT_PHOTOGRAPHER_ID).first();
+        ).bind(id, who.id).first();
         if (!still) return jsonErr('Not found', 404);
         return still.submitted ? hasSubmissions() : hasOrders();
       }
@@ -3833,10 +4163,12 @@ export default {
     // old link's, not the body's), same expiry as at creation. The old links
     // stay as they are; POST /api/shares/:token/revoke kills one.
     if (request.method === 'POST' && pathParts[0] === 'api' && pathParts[1] === 'admin' && pathParts[2] === 'projects' && pathParts[3] && pathParts[4] === 'links' && !pathParts[5]) {
-      if (!isAdminToken(request, env)) return jsonErr('Unauthorized', 401);
+      const auth = await requirePhotographer(request, env); // scoped to the caller (who.id)
+      if (auth.refused) return auth.refused;
+      const who = auth.who;
       if (!env.DB) return jsonErr('DB not configured', 500);
       const project = await env.DB.prepare('SELECT id, title, folders, archived_at FROM projects WHERE id = ? AND photographer_id = ?')
-        .bind(pathParts[3], DEFAULT_PHOTOGRAPHER_ID).first();
+        .bind(pathParts[3], who.id).first();
       if (!project) return jsonErr('Not found', 404);
       const archivedErr = () => jsonOk({ error: 'Project is archived; unarchive it first', code: 'archived' }, 409);
       if (project.archived_at) return archivedErr();
@@ -3844,11 +4176,12 @@ export default {
       const now = Date.now();
       const createdAt = new Date(now).toISOString();
       const expiresAt = new Date(now + SHARE_TTL_MS).toISOString();
-      // Gated on the project still being open, so an archive landing between
-      // the read above and this write leaves no live link behind it.
+      // Gated on the project still being open and still the caller's, so an
+      // archive (or a delete) landing between the read above and this write
+      // leaves no live link behind it.
       const minted = await env.DB.prepare(
-        "INSERT INTO share_tokens (token, book_id, label, kind, project_id, folders, created_at, expires_at) SELECT ?, '', ?, 'pick', ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM projects WHERE id = ? AND archived_at IS NULL)"
-      ).bind(token, project.title, project.id, project.folders, createdAt, expiresAt, project.id).run();
+        "INSERT INTO share_tokens (token, book_id, label, kind, project_id, folders, created_at, expires_at) SELECT ?, '', ?, 'pick', ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM projects WHERE id = ? AND photographer_id = ? AND archived_at IS NULL)"
+      ).bind(token, project.title, project.id, project.folders, createdAt, expiresAt, project.id, who.id).run();
       if (!minted.meta || !minted.meta.changes) return archivedErr();
       return jsonOk({ token, expires_at: expiresAt, created_at: createdAt, status: 'live' }, 201, ADMIN_ONLY_HEADERS);
     }
@@ -3871,7 +4204,8 @@ export default {
     // the delivery migration adds, so it works before that migration too.
     if (request.method === 'POST' && pathParts[0] === 'api' && pathParts[1] === 'admin' && pathParts[2] === 'projects' && pathParts[3] && !pathParts[5] &&
         (pathParts[4] === 'deliver' || pathParts[4] === 'undeliver')) {
-      if (!isAdminToken(request, env)) return jsonErr('Unauthorized', 401);
+      const auth = await requireDefault(request, env); // default-only until batch 3
+      if (auth.refused) return auth.refused;
       if (!env.DB) return jsonErr('DB not configured', 500);
       const id = pathParts[3];
       if (pathParts[4] === 'undeliver') {
@@ -3950,13 +4284,15 @@ export default {
     // the same batch. No email (the photographer did it).
     if (request.method === 'POST' && pathParts[0] === 'api' && pathParts[1] === 'admin' && pathParts[2] === 'projects' && pathParts[3] &&
         pathParts[4] === 'confirm' && !pathParts[5]) {
-      if (!isAdminToken(request, env)) return jsonErr('Unauthorized', 401);
+      const auth = await requirePhotographer(request, env); // scoped to the caller (who.id)
+      if (auth.refused) return auth.refused;
+      const who = auth.who;
       if (!env.DB) return jsonErr('DB not configured', 500);
       const id = pathParts[3];
       const done = (data, status = 200) => jsonOk(data, status, ADMIN_ONLY_HEADERS);
       const notDelivered = () => done({ error: '尚未交件，無法標記完成', code: 'not_delivered' }, 409);
       const project = await env.DB.prepare('SELECT * FROM projects WHERE id = ? AND photographer_id = ?')
-        .bind(id, DEFAULT_PHOTOGRAPHER_ID).first();
+        .bind(id, who.id).first();
       if (!project) return jsonErr('Not found', 404);
       if (!hasField(project, 'client_confirmed_at')) return done(CONFIRM_UNAVAILABLE, 500);
       if (!project.delivered_at) return notDelivered();
@@ -3966,8 +4302,8 @@ export default {
           env.DB.prepare(
             "UPDATE projects SET client_confirmed_at = ?, client_confirmed_by = 'photographer' " +
             'WHERE id = ? AND photographer_id = ? AND delivered_at IS NOT NULL AND client_confirmed_at IS NULL'
-          ).bind(at, id, DEFAULT_PHOTOGRAPHER_ID),
-          resolveRevisionsIfConfirmed(env, id, at),
+          ).bind(at, id, who.id),
+          resolveRevisionsIfConfirmed(env, id, at, who.id),
         ]);
       } catch (e) {
         // the columns are there but not the table: nothing was written
@@ -3975,7 +4311,7 @@ export default {
         throw e;
       }
       const row = await env.DB.prepare('SELECT client_confirmed_at, client_confirmed_by FROM projects WHERE id = ? AND photographer_id = ?')
-        .bind(id, DEFAULT_PHOTOGRAPHER_ID).first();
+        .bind(id, who.id).first();
       if (!row) return jsonErr('Not found', 404);
       // not confirmed now: an undeliver landed before the write
       if (!row.client_confirmed_at) return notDelivered();
@@ -3994,7 +4330,9 @@ export default {
     // the switch alone still flips, as it always did). Submissions keep the
     // plan as it stood at submit: nothing here touches them.
     if (request.method === 'PATCH' && pathParts[0] === 'api' && pathParts[1] === 'admin' && pathParts[2] === 'projects' && pathParts[3] && !pathParts[4]) {
-      if (!isAdminToken(request, env)) return jsonErr('Unauthorized', 401);
+      const auth = await requirePhotographer(request, env); // scoped to the caller (who.id)
+      if (auth.refused) return auth.refused;
+      const who = auth.who;
       if (!env.DB) return jsonErr('DB not configured', 500);
       let body = null;
       try { body = await request.json(); } catch {}
@@ -4016,7 +4354,7 @@ export default {
       try {
         const update = env.DB.prepare(
           `UPDATE projects SET ${keys.map(k => `${k} = ?`).join(', ')} WHERE id = ? AND photographer_id = ?` + archivedGate
-        ).bind(...keys.map(value), pathParts[3], DEFAULT_PHOTOGRAPHER_ID);
+        ).bind(...keys.map(value), pathParts[3], who.id);
         // a rename also rewrites the one stored copy of the title, the label
         // of this project's own pick links (live or revoked), in the same
         // batch and behind the same gate as the project's UPDATE: both land or
@@ -4024,7 +4362,7 @@ export default {
         const renameLinks = keys.includes('title') ? env.DB.prepare(
           "UPDATE share_tokens SET label = ? WHERE kind = 'pick' AND project_id = ? " +
           `AND EXISTS (SELECT 1 FROM projects WHERE id = ? AND photographer_id = ?${archivedGate})`
-        ).bind(storedValue('title'), pathParts[3], pathParts[3], DEFAULT_PHOTOGRAPHER_ID) : null;
+        ).bind(storedValue('title'), pathParts[3], pathParts[3], who.id) : null;
         result = renameLinks ? (await env.DB.batch([update, renameLinks]))[0] : await update.run();
       } catch (e) {
         // extra_max, shoot_date or project_type before its hand-run migration: one statement (or one batch
@@ -4040,7 +4378,7 @@ export default {
       }
       if (!result.meta?.changes) {
         const row = await env.DB.prepare('SELECT archived_at FROM projects WHERE id = ? AND photographer_id = ?')
-          .bind(pathParts[3], DEFAULT_PHOTOGRAPHER_ID).first();
+          .bind(pathParts[3], who.id).first();
         if (row?.archived_at && planEdit) {
           return jsonOk({ error: 'Project is archived; unarchive it first', code: 'archived' }, 409, ADMIN_ONLY_HEADERS);
         }
@@ -4051,7 +4389,9 @@ export default {
     // any other write to /api/admin/projects/:id is not a route (without this
     // a PUT would fall through to the upload route and store it as a key)
     if ((request.method === 'PUT' || request.method === 'POST') && pathParts[0] === 'api' && pathParts[1] === 'admin' && pathParts[2] === 'projects' && pathParts[3] && !pathParts[4]) {
-      if (!isAdminToken(request, env)) return jsonErr('Unauthorized', 401);
+      // the same 405 for any id and anyone's project: answers no data, asks D1 nothing
+      const auth = await requirePhotographer(request, env); // open to every photographer: a 405, no data
+      if (auth.refused) return auth.refused;
       return jsonErr('Method not allowed', 405);
     }
 
@@ -4094,23 +4434,34 @@ export default {
       if (route === 'photographers' || route === 'photographer-action') {
         try {
           if (route === 'photographers') {
-            const { results } = await env.DB.prepare(
-              `SELECT ${PHOTOGRAPHER_PUBLIC_COLUMNS} FROM photographers ORDER BY status = 'pending' DESC, created_at DESC, rowid DESC LIMIT ${PHOTOGRAPHER_LIST_MAX}`
-            ).all();
+            // must_change_password: true / false, null before its migration
+            const listSql = flag => `SELECT ${PHOTOGRAPHER_PUBLIC_COLUMNS}, ${flag} AS must_change_password FROM photographers ORDER BY status = 'pending' DESC, created_at DESC, rowid DESC LIMIT ${PHOTOGRAPHER_LIST_MAX}`;
+            const { results } = await withoutMissingColumn(
+              () => env.DB.prepare(listSql('must_change_password')).all(),
+              () => env.DB.prepare(listSql('NULL')).all(),
+            );
             const pending = await env.DB.prepare("SELECT COUNT(*) AS n FROM photographers WHERE status = 'pending'").first();
-            return done({ photographers: results, pending_count: pending.n });
+            return done({ photographers: results.map(r => ({ ...r, must_change_password: mustChangeFlag(r.must_change_password) })), pending_count: pending.n });
           }
           const { from, to } = PHOTOGRAPHER_ACTIONS[action];
           let tempPassword = null;
           let statements;
+          let resetResult = null;
           if (action === 'reject') {
             statements = [env.DB.prepare("DELETE FROM photographers WHERE id = ? AND status = 'pending'").bind(id)];
           } else if (action === 'reset-password') {
             tempPassword = tempPhotographerPassword();
-            statements = [
-              env.DB.prepare('UPDATE photographers SET password_hash = ? WHERE id = ?').bind(await hashPhotographerPassword(tempPassword), id),
+            const tempHash = await hashPhotographerPassword(tempPassword);
+            // the new hash and must_change_password = 1 in one statement, every
+            // session gone in the same batch. Before the 2026-10-15 migration
+            // the flag cannot be written, and a temporary password nobody has
+            // to change is worse than none: 500, and the batch (one
+            // transaction) wrote nothing — no new hash, no session ended.
+            resetResult = await withoutMissingColumn(() => env.DB.batch([
+              env.DB.prepare('UPDATE photographers SET password_hash = ?, must_change_password = 1 WHERE id = ?').bind(tempHash, id),
               env.DB.prepare('DELETE FROM photographer_sessions WHERE photographer_id = ?').bind(id),
-            ];
+            ]), () => null);
+            if (!resetResult) return done({ error: '請先執行 must_change_password migration 再重設密碼', code: 'must_change_unavailable' }, 500);
           } else {
             statements = [env.DB.prepare(
               `UPDATE photographers SET status = ?${action === 'approve' ? ', approved_at = ?' : ''} WHERE id = ? AND status = ?`
@@ -4118,7 +4469,7 @@ export default {
             // suspend ends every session in the same batch
             if (action === 'suspend') statements.push(env.DB.prepare('DELETE FROM photographer_sessions WHERE photographer_id = ?').bind(id));
           }
-          const [first] = await env.DB.batch(statements);
+          const [first] = resetResult ?? await env.DB.batch(statements);
           if (!first.meta.changes) {
             const current = await env.DB.prepare('SELECT status FROM photographers WHERE id = ?').bind(id).first();
             if (!current) return jsonErr('Not found', 404);
@@ -4126,7 +4477,8 @@ export default {
           }
           if (action === 'reject') return done({ ok: true, deleted: true });
           const photographer = await env.DB.prepare(`SELECT ${PHOTOGRAPHER_PUBLIC_COLUMNS} FROM photographers WHERE id = ?`).bind(id).first();
-          return done(tempPassword ? { ok: true, photographer, temp_password: tempPassword } : { ok: true, photographer });
+          if (!tempPassword) return done({ ok: true, photographer });
+          return done({ ok: true, photographer, temp_password: tempPassword, must_change_password: true });
         } catch (e) {
           if (isMissingSchema(e)) return done(PHOTOGRAPHERS_UNAVAILABLE, 500);
           throw e;
@@ -4291,7 +4643,7 @@ export default {
       const fit = pageBoundsFit({ ...bounds.set, ...bleed.set, ...extra.set, ...category.set }, cols);
       if (fit.unavailable) return done(fit.unavailable, 500);
       if (kind !== 'album') fields.set.photo_count = null;
-      await env.DB.batch(catalogueWrites(env, PLATFORM_TABLES, id, { ...fields.set, ...fit.set }, opts, now));
+      await env.DB.batch(catalogueWrites(env, PLATFORM_TABLES, null, id, { ...fields.set, ...fit.set }, opts, now));
       const [product] = await readPlatformProducts(env, id);
       return done({ product });
     }
@@ -4313,16 +4665,21 @@ export default {
 
     // ─── Products and orders (docs/products-orders.md) ─────────────────────
     // /api/admin/products[/:id[/retire|/restore]], /api/admin/orders[/:id
-    // [/payment|/status]] and /api/admin/projects/:id/orders. The admin token
-    // first (401), then the method (405), then the id, scoped to this
-    // photographer (404). Every 400 is {error, code} and decided before
+    // [/payment|/status]] and /api/admin/projects/:id/orders. The
+    // photographer first (401); the order routes are then 404 for anyone but
+    // the default photographer (paused), whatever the method; then the method
+    // (405), then the id, scoped to the caller (who.id): another photographer's product, order or project
+    // is 404, exactly as one that does not exist. The platform catalogue is
+    // shared and read only; adopting makes a product of the caller's own. Every 400 is {error, code} and decided before
     // anything is written; writes that touch more than one row are one batch.
     // Anything else under these paths is 404 here, so a PUT can never fall
     // through to the upload route and land in the bucket.
     if (pathParts[0] === 'api' && pathParts[1] === 'admin' &&
         (pathParts[2] === 'products' || pathParts[2] === 'orders' || pathParts[2] === 'platform-products' ||
          (pathParts[2] === 'projects' && pathParts[3] && pathParts[4] === 'orders'))) {
-      if (!isAdminToken(request, env)) return jsonErr('Unauthorized', 401);
+      const auth = await requirePhotographer(request, env); // scoped to the caller (who.id): products and orders
+      if (auth.refused) return auth.refused;
+      const { who } = auth;
       const [, , area, id, action] = pathParts;
       // null for any deeper or unknown path: 404 below
       let route = null;
@@ -4333,6 +4690,14 @@ export default {
       } else if (area === 'platform-products') route = !id ? 'platform-products' : null;
       else if (area === 'projects') route = 'project-orders';
       else route = !id ? 'orders' : !action ? 'order' : ['payment', 'status', 'erase-contact'].includes(action) ? `order-${action}` : null;
+      // Ordering is paused for every photographer but the default one: all
+      // order routes are 404 for the others, as for a path that does not
+      // exist, before the method is looked at and before anything is read
+      // or written. Products stay scoped to the caller.
+      if (ORDER_ROUTES_PAUSED.has(route)) {
+        const paused = defaultOnly(who);
+        if (paused) return paused;
+      }
       const methods = {
         products: ['GET', 'POST'], product: ['PUT'], 'product-active': ['POST'], 'project-orders': ['GET', 'POST'],
         adopt: ['POST'], 'platform-products': ['GET'],
@@ -4360,7 +4725,7 @@ export default {
       // GET /api/admin/products — the catalogue, retired products and
       // options included (active = 0), never the image bytes.
       if (route === 'products' && request.method === 'GET') {
-        return done({ products: await readProducts(env), custom_products_enabled: customProductsEnabled(env) });
+        return done({ products: await readProducts(env, who.id), custom_products_enabled: customProductsEnabled(env) });
       }
 
       // GET /api/admin/platform-products — what the platform offers: active
@@ -4374,7 +4739,7 @@ export default {
                   (SELECT p.id FROM products p WHERE p.photographer_id = ? AND p.platform_product_id = pp.id
                     ORDER BY p.rowid LIMIT 1) AS adopted_product_id
              FROM platform_products pp WHERE pp.active = 1 ORDER BY pp.sort, pp.created_at, pp.rowid`
-        ).bind(DEFAULT_PHOTOGRAPHER_ID).all());
+        ).bind(who.id).all());
         const { results: options } = await env.DB.prepare(
           `SELECT po.id, po.platform_product_id, po.label, po.platform_price, po.sort
              FROM platform_product_options po JOIN platform_products pp ON pp.id = po.platform_product_id
@@ -4410,7 +4775,7 @@ export default {
         const opts = adoptedOptions(body.options, await platformOptionMap(env, pp.id));
         if (opts.bad) return orderBad(opts.bad);
         const adopted = () => env.DB.prepare('SELECT id FROM products WHERE photographer_id = ? AND platform_product_id = ? ORDER BY rowid LIMIT 1')
-          .bind(DEFAULT_PHOTOGRAPHER_ID, pp.id).first();
+          .bind(who.id, pp.id).first();
         const already = row => done({ error: '已加入這個平台商品', code: 'already_adopted', product_id: row ? row.id : null }, 409);
         const existing = await adopted();
         if (existing) return already(existing);
@@ -4422,15 +4787,15 @@ export default {
           env.DB.prepare(
             'INSERT INTO products (id, photographer_id, kind, name, description, photo_count, guest_visible, sort, platform_product_id, created_at, updated_at) ' +
             'SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM products WHERE photographer_id = ? AND platform_product_id = ?)'
-          ).bind(productId, DEFAULT_PHOTOGRAPHER_ID, pp.kind, pp.name, pp.description, pp.kind === 'album' ? pp.photo_count : null,
-            p.guest_visible, p.sort, pp.id, now, now, DEFAULT_PHOTOGRAPHER_ID, pp.id),
+          ).bind(productId, who.id, pp.kind, pp.name, pp.description, pp.kind === 'album' ? pp.photo_count : null,
+            p.guest_visible, p.sort, pp.id, now, now, who.id, pp.id),
           ...opts.options.map(o => env.DB.prepare(
             'INSERT INTO product_options (id, product_id, label, price, cost, sort, platform_option_id) ' +
-            'SELECT ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM products WHERE id = ?)'
-          ).bind(crypto.randomUUID(), productId, o.label, o.price, o.cost, o.sort, o.platform_option_id, productId)),
+            'SELECT ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM products WHERE id = ? AND photographer_id = ?)'
+          ).bind(crypto.randomUUID(), productId, o.label, o.price, o.cost, o.sort, o.platform_option_id, productId, who.id)),
         ]);
         if (!results[0].meta?.changes) return already(await adopted());
-        const [product] = await readProducts(env, productId);
+        const [product] = await readProducts(env, who.id, productId);
         return done({ product }, 201);
       }
 
@@ -4452,12 +4817,12 @@ export default {
         await env.DB.batch([
           env.DB.prepare(
             'INSERT INTO products (id, photographer_id, kind, name, description, photo_count, guest_visible, sort, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
-          ).bind(productId, DEFAULT_PHOTOGRAPHER_ID, p.kind, p.name, p.description, p.photo_count, p.guest_visible, p.sort, now, now),
+          ).bind(productId, who.id, p.kind, p.name, p.description, p.photo_count, p.guest_visible, p.sort, now, now),
           ...opts.options.map(o => env.DB.prepare(
             'INSERT INTO product_options (id, product_id, label, price, cost, sort) VALUES (?, ?, ?, ?, ?, ?)'
           ).bind(crypto.randomUUID(), productId, o.label, o.price, o.cost, o.sort)),
         ]);
-        const [product] = await readProducts(env, productId);
+        const [product] = await readProducts(env, who.id, productId);
         return done({ product }, 201);
       }
 
@@ -4470,7 +4835,7 @@ export default {
       // platform_managed. active is never read here: retire / restore.
       if (route === 'product') {
         const current = await env.DB.prepare('SELECT id, kind, platform_product_id FROM products WHERE id = ? AND photographer_id = ?')
-          .bind(id, DEFAULT_PHOTOGRAPHER_ID).first();
+          .bind(id, who.id).first();
         if (!current) return jsonErr('Not found', 404);
         let statements;
         if (current.platform_product_id) {
@@ -4486,7 +4851,7 @@ export default {
             const byPlatform = new Map(results.map(r => [r.platform_option_id, r.id]));
             opts = checked.options.map(o => ({ ...o, id: byPlatform.get(o.platform_option_id) }));
           }
-          statements = catalogueWrites(env, ADOPTED_TABLES, id, fields.set, opts, now);
+          statements = catalogueWrites(env, ADOPTED_TABLES, who.id, id, fields.set, opts, now);
         } else {
           if (!customProductsEnabled(env)) return done(CUSTOM_PRODUCTS_DISABLED, 403);
           const fields = productFields(body, true);
@@ -4500,10 +4865,10 @@ export default {
             opts = checked.options;
           }
           if ((fields.set.kind ?? current.kind) !== 'album') fields.set.photo_count = null;
-          statements = catalogueWrites(env, CUSTOM_TABLES, id, fields.set, opts, now);
+          statements = catalogueWrites(env, CUSTOM_TABLES, who.id, id, fields.set, opts, now);
         }
         await env.DB.batch(statements);
-        const [product] = await readProducts(env, id);
+        const [product] = await readProducts(env, who.id, id);
         return done({ product });
       }
 
@@ -4515,12 +4880,12 @@ export default {
         const active = action === 'restore' ? 1 : 0;
         if (active && !customProductsEnabled(env)) {
           const current = await env.DB.prepare('SELECT platform_product_id FROM products WHERE id = ? AND photographer_id = ?')
-            .bind(id, DEFAULT_PHOTOGRAPHER_ID).first();
+            .bind(id, who.id).first();
           // no row (unknown, or another photographer's) is the 404 below
           if (current && !current.platform_product_id) return done(CUSTOM_PRODUCTS_DISABLED, 403);
         }
         const result = await env.DB.prepare('UPDATE products SET active = ?, updated_at = ? WHERE id = ? AND photographer_id = ?')
-          .bind(active, now, id, DEFAULT_PHOTOGRAPHER_ID).run();
+          .bind(active, now, id, who.id).run();
         if (!result.meta?.changes) return jsonErr('Not found', 404);
         return done({ ok: true, active });
       }
@@ -4535,14 +4900,14 @@ export default {
         const binds = [];
         if (wanted) { where.push('o.status = ?'); binds.push(wanted); }
         if (params.get('unpaid') === '1') where.push(`${ORDER_OUTSTANDING_SQL} > 0`);
-        return done({ orders: await readOrders(env, where.join(' AND '), binds) });
+        return done({ orders: await readOrders(env, who.id, where.join(' AND '), binds) });
       }
 
       if (route === 'project-orders') {
         // SELECT *: the finals snapshot (final_folders) is one of the folders
         // a line's photo may be in (orderPhotoFolders)
         const project = await env.DB.prepare('SELECT * FROM projects WHERE id = ? AND photographer_id = ?')
-          .bind(id, DEFAULT_PHOTOGRAPHER_ID).first();
+          .bind(id, who.id).first();
         if (!project) return jsonErr('Not found', 404);
 
         // GET /api/admin/projects/:id/orders — the project's orders with
@@ -4551,8 +4916,8 @@ export default {
         // else the newest with an extra-pick line). `matches` compares the
         // photo counts, so a waived price is not a mismatch but 10 → 14 is.
         if (request.method === 'GET') {
-          const orders = await readOrders(env, 'o.project_id = ?', [id]);
-          const fee = extraPickFee(await latestSubmission(env, id));
+          const orders = await readOrders(env, who.id, 'o.project_id = ?', [id]);
+          const fee = extraPickFee(await latestSubmission(env, id, project.photographer_id));
           const charged = orders.map(o => [o, o.items.find(i => i.kind === 'extra_pick')]).filter(([, line]) => line);
           const [order, line] = charged.find(([o]) => o.source === 'system') || charged[0] || [null, null];
           return done({
@@ -4568,8 +4933,12 @@ export default {
 
         // POST /api/admin/projects/:id/orders — {lines: [{option_id, qty,
         // photo_keys?, unit_price?}], discount?, note?}. Confirmed at once;
-        // archived projects too (a late sale is still a sale).
-        const checked = await orderLines(env, project, body.lines, null);
+        // archived projects too (a late sale is still a sale). photo_keys are
+        // R2 keys (unprefixed until batch 3), and every line may carry them:
+        // another photographer gets 404 here even on its own project.
+        const keysRefused = defaultOnly(auth.who); // default-only until batch 3 (photo_keys)
+        if (keysRefused) return keysRefused;
+        const checked = await orderLines(env, project, body.lines, null, { photographerId: who.id });
         if (checked.bad) return orderBad(checked.bad, checked.error);
         const discount = body.discount ?? 0;
         const discountBad = orderDiscount(discount, linesSubtotal(checked.lines));
@@ -4581,10 +4950,10 @@ export default {
           env.DB.prepare(
             "INSERT INTO orders (id, photographer_id, project_id, source, status, discount, note, created_at, updated_at, confirmed_at) " +
             "SELECT ?, ?, ?, 'admin', 'confirmed', ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM projects WHERE id = ? AND photographer_id = ?)"
-          ).bind(orderId, DEFAULT_PHOTOGRAPHER_ID, id, discount, note, now, now, now, id, DEFAULT_PHOTOGRAPHER_ID),
-          ...checked.lines.map(l => orderItemInsert(env, orderId, l, 'EXISTS (SELECT 1 FROM orders WHERE id = ?)', [orderId], late)),
+          ).bind(orderId, who.id, id, discount, note, now, now, now, id, who.id),
+          ...checked.lines.map(l => orderItemInsert(env, orderId, l, 'EXISTS (SELECT 1 FROM orders WHERE id = ? AND photographer_id = ?)', [orderId, who.id], late)),
         ]);
-        const order = await readOrder(env, orderId);
+        const order = await readOrder(env, who.id, orderId);
         if (!order) return jsonErr('Not found', 404);
         return done({ order }, 201);
       }
@@ -4592,7 +4961,7 @@ export default {
       // The three single-order routes. Each write is conditional on the
       // order being exactly as read (updated_at, or the status for a status
       // move), so two edits cannot interleave; the loser is a 409.
-      const order = await readOrder(env, id);
+      const order = await readOrder(env, who.id, id);
       if (!order) return jsonErr('Not found', 404);
       const conflict = () => done({ error: '訂單剛被修改，請重新整理', code: 'conflict' }, 409);
       const cancelled = () => done({ error: '訂單已取消', code: 'cancelled' }, 409);
@@ -4604,13 +4973,20 @@ export default {
       // order's money is frozen (409); its note is not. The total may not
       // drop below what was already paid (400 below_paid).
       if (route === 'order') {
+        // lines carry photo_keys (R2 keys, unprefixed until batch 3): a body
+        // with lines or photo_keys is the default photographer's only, even
+        // on another photographer's own order (a note or a discount is not).
+        if (hasField(body, 'lines') || hasField(body, 'photo_keys')) {
+          const keysRefused = defaultOnly(auth.who); // default-only until batch 3 (photo_keys)
+          if (keysRefused) return keysRefused;
+        }
         const money = hasField(body, 'lines') || hasField(body, 'discount');
         if (order.status === 'cancelled' && money) return cancelled();
         let lines = null;
         if (hasField(body, 'lines')) {
           const project = await env.DB.prepare('SELECT * FROM projects WHERE id = ? AND photographer_id = ?')
-            .bind(order.project_id, DEFAULT_PHOTOGRAPHER_ID).first();
-          const checked = await orderLines(env, project, body.lines, new Map(order.items.map(i => [i.id, i])));
+            .bind(order.project_id, who.id).first();
+          const checked = await orderLines(env, project, body.lines, new Map(order.items.map(i => [i.id, i])), { photographerId: who.id });
           if (checked.bad) return orderBad(checked.bad, checked.error);
           lines = checked.lines;
         }
@@ -4621,8 +4997,10 @@ export default {
         const note = hasField(body, 'note') ? orderNote(body.note) : order.note;
         if (note === null) return orderBad('invalid_note');
         if (subtotal - discount < order.paid_amount) return orderBad('below_paid');
-        const same = 'EXISTS (SELECT 1 FROM orders WHERE id = ? AND updated_at = ?)';
-        const sameBinds = [id, order.updated_at];
+        // the owner too, so a line never changes on an order that is no
+        // longer the caller's (the last statement checks it again)
+        const same = 'EXISTS (SELECT 1 FROM orders WHERE id = ? AND photographer_id = ? AND updated_at = ?)';
+        const sameBinds = [id, who.id, order.updated_at];
         // the statements, with or without the S2 line columns (batchWithItems)
         const build = late => {
           const statements = [];
@@ -4642,12 +5020,12 @@ export default {
           // moves
           statements.push(env.DB.prepare(
             `UPDATE orders SET discount = ?, note = ?, ${takeOver}, updated_at = ? WHERE id = ? AND photographer_id = ? AND updated_at = ?`
-          ).bind(discount, note, now, id, DEFAULT_PHOTOGRAPHER_ID, order.updated_at));
+          ).bind(discount, note, now, id, who.id, order.updated_at));
           return statements;
         };
         const results = await batchWithItems(build);
         if (!results[results.length - 1].meta?.changes) return conflict();
-        return done({ order: await readOrder(env, id) });
+        return done({ order: await readOrder(env, who.id, id) });
       }
 
       // POST /api/admin/orders/:id/erase-contact (no body) — 清除聯絡資料
@@ -4662,9 +5040,9 @@ export default {
           await env.DB.prepare(
             'UPDATE orders SET contact_phone = NULL, contact_line = NULL, contact_erased_at = ?1, updated_at = ?1 ' +
             'WHERE id = ?2 AND photographer_id = ?3 AND contact_erased_at IS NULL'
-          ).bind(now, id, DEFAULT_PHOTOGRAPHER_ID).run();
+          ).bind(now, id, who.id).run();
         }
-        return done({ order: await readOrder(env, id) });
+        return done({ order: await readOrder(env, who.id, id) });
       }
 
       // POST /api/admin/orders/:id/payment — {paid_amount, paid_method,
@@ -4693,9 +5071,9 @@ export default {
         }
         const result = await env.DB.prepare(
           `UPDATE orders SET paid_amount = ?, paid_method = ?, paid_at = ?, ${takeOver}, updated_at = ? WHERE id = ? AND photographer_id = ? AND updated_at = ?`
-        ).bind(amount, method, paidAt, now, id, DEFAULT_PHOTOGRAPHER_ID, order.updated_at).run();
+        ).bind(amount, method, paidAt, now, id, who.id, order.updated_at).run();
         if (!result.meta?.changes) return conflict();
-        return done({ order: await readOrder(env, id) });
+        return done({ order: await readOrder(env, who.id, id) });
       }
 
       // POST /api/admin/orders/:id/status — {status} along ORDER_ARROWS only
@@ -4714,20 +5092,22 @@ export default {
       }[to];
       const result = await env.DB.prepare(
         `UPDATE orders SET status = ?2, ${stamp}, ${takeOver}, updated_at = ?1 WHERE id = ?3 AND photographer_id = ?4 AND status = ?5`
-      ).bind(now, to, id, DEFAULT_PHOTOGRAPHER_ID, order.status).run();
+      ).bind(now, to, id, who.id, order.status).run();
       if (!result.meta?.changes) {
-        const current = await readOrder(env, id);
+        const current = await readOrder(env, who.id, id);
         if (!current) return jsonErr('Not found', 404);
         return badArrow(current.status);
       }
-      return done({ order: await readOrder(env, id) });
+      return done({ order: await readOrder(env, who.id, id) });
     }
 
     // GET /api/admin/stats — the dashboard's counts, this photographer only.
     // One pass over projects for the counts, one for the months (Taipei
     // month boundaries: the stored timestamps are UTC ISO strings).
     if (url.pathname === '/api/admin/stats') {
-      if (!isAdminToken(request, env)) return jsonErr('Unauthorized', 401);
+      const auth = await requirePhotographer(request, env); // scoped to the caller (who.id)
+      if (auth.refused) return auth.refused;
+      const { who } = auth;
       if (request.method !== 'GET') return jsonErr('Method not allowed', 405);
       if (!env.DB) return jsonErr('DB not configured', 500);
       const c = await env.DB.prepare(
@@ -4740,7 +5120,7 @@ export default {
            COALESCE(SUM(p.archived_at IS NULL AND p.modified_after_submit = 1), 0) AS modified,
            COALESCE(SUM(p.archived_at IS NULL AND ${PICK_UNNOTIFIED_SQL} > 0), 0) AS unnotified
            FROM projects p WHERE p.photographer_id = ?`
-      ).bind(DEFAULT_PHOTOGRAPHER_ID).first();
+      ).bind(who.id).first();
       const { months, since } = statsMonths(Date.now());
       const { results: monthly } = await env.DB.prepare(
         `SELECT month, SUM(c) AS created, SUM(d) AS delivered FROM (
@@ -4750,7 +5130,7 @@ export default {
            SELECT strftime('%Y-%m', delivered_at, '+8 hours'), 0, 1
              FROM projects WHERE photographer_id = ?1 AND delivered_at >= ?2
          ) GROUP BY month`
-      ).bind(DEFAULT_PHOTOGRAPHER_ID, since).all();
+      ).bind(who.id, since).all();
       const byMonth = new Map(monthly.map(r => [r.month, r]));
       // Revenue is counted when paid, and an order's cost with it
       // (docs/products-orders.md): by paid_at, in the same Taipei months.
@@ -4759,7 +5139,7 @@ export default {
         `SELECT strftime('%Y-%m', o.paid_at, '+8 hours') AS month, SUM(o.paid_amount) AS paid, SUM(${ORDER_COST_SQL}) AS cost
            ${ORDER_SCOPE_SQL} AND o.status != 'cancelled' AND o.paid_amount > 0 AND o.paid_at >= ?
           GROUP BY month`
-      ).bind(DEFAULT_PHOTOGRAPHER_ID, since).all();
+      ).bind(who.id, since).all();
       const paidByMonth = new Map(paidMonthly.map(r => [r.month, r]));
       // requested: guest orders waiting for the photographer's confirmation
       // (archived projects included: the order still waits)
@@ -4767,7 +5147,7 @@ export default {
         `SELECT COALESCE(SUM(${ORDER_OUTSTANDING_SQL}), 0) AS outstanding, COALESCE(SUM(${ORDER_OUTSTANDING_SQL} > 0), 0) AS unpaid,
                 COALESCE(SUM(o.source = 'guest' AND o.status = 'requested'), 0) AS requested
            ${ORDER_SCOPE_SQL}`
-      ).bind(DEFAULT_PHOTOGRAPHER_ID).first();
+      ).bind(who.id).first();
       return jsonOk({
         by_phase: { picking: c.picking, submitted: c.submitted, retouching: c.retouching },
         delivered: c.delivered,
@@ -4797,7 +5177,9 @@ export default {
     // default plan. PUT changes only the fields it names (null clears one);
     // anything else in the body is ignored, photographer_id above all.
     if (url.pathname === '/api/admin/settings') {
-      if (!isAdminToken(request, env)) return jsonErr('Unauthorized', 401);
+      const auth = await requirePhotographer(request, env); // scoped to the caller (who.id)
+      if (auth.refused) return auth.refused;
+      const { who } = auth;
       if (request.method !== 'GET' && request.method !== 'PUT') return jsonErr('Method not allowed', 405);
       if (!env.DB) return jsonErr('DB not configured', 500);
       if (request.method === 'PUT') {
@@ -4857,7 +5239,7 @@ export default {
           await env.DB.prepare(
             `INSERT INTO studio_settings (${all.join(', ')}) VALUES (${all.map(() => '?').join(', ')}) ` +
             `ON CONFLICT(photographer_id) DO UPDATE SET ${cols.map(k => `${k} = excluded.${k}`).join(', ')}`
-          ).bind(DEFAULT_PHOTOGRAPHER_ID, ...Object.values(set), new Date().toISOString()).run();
+          ).bind(who.id, ...Object.values(set), new Date().toISOString()).run();
         } catch (e) {
           // default_extra_max / transfer_info / pick_link_message before its
           // migration: one statement, so nothing landed; the error names the column
@@ -4871,22 +5253,32 @@ export default {
           throw e;
         }
       }
-      return jsonOk(await readStudioSettings(env, DEFAULT_PHOTOGRAPHER_ID), 200, ADMIN_ONLY_HEADERS);
+      return jsonOk(await readStudioSettings(env, who.id), 200, ADMIN_ONLY_HEADERS);
     }
 
     // PUT /api/admin/settings/logo — raw bytes, ≤ LOGO_MAX_BYTES, PNG / JPEG
     // / WebP by magic bytes (415 otherwise). Kept in D1, not R2: the bucket's
     // lifecycle rule deletes everything after 180 days.
     // DELETE /api/admin/settings/logo — remove it; the rest stays.
+    // GET /api/admin/settings/logo — the caller's own logo (the settings
+    // page's preview; fetched with the Authorization header, never cached).
+    // Each photographer's logo is his own studio_settings row (keyed by
+    // photographer_id): no R2 key at all.
     if (url.pathname === '/api/admin/settings/logo') {
-      if (!isAdminToken(request, env)) return jsonErr('Unauthorized', 401);
-      if (request.method !== 'PUT' && request.method !== 'DELETE') return jsonErr('Method not allowed', 405);
+      const auth = await requirePhotographer(request, env); // scoped to the caller (who.id)
+      if (auth.refused) return auth.refused;
+      const { who } = auth;
+      if (request.method !== 'GET' && request.method !== 'PUT' && request.method !== 'DELETE') return jsonErr('Method not allowed', 405);
       if (!env.DB) return jsonErr('DB not configured', 500);
+      if (request.method === 'GET') {
+        const row = await readLogo(env, who.id);
+        return imageResponse(request, row ? row.logo : null, row ? row.logo_updated_at : null, ADMIN_ONLY_HEADERS);
+      }
       const now = new Date().toISOString();
       if (request.method === 'DELETE') {
         await env.DB.prepare(
           'UPDATE studio_settings SET logo = NULL, logo_type = NULL, logo_updated_at = NULL, updated_at = ? WHERE photographer_id = ?'
-        ).bind(now, DEFAULT_PHOTOGRAPHER_ID).run();
+        ).bind(now, who.id).run();
         return jsonOk({ ok: true, has_logo: false }, 200, ADMIN_ONLY_HEADERS);
       }
       const upload = await imageUpload(request, 'Logo ');
@@ -4896,23 +5288,20 @@ export default {
         'INSERT INTO studio_settings (photographer_id, logo, logo_type, logo_updated_at, updated_at) VALUES (?, ?, ?, ?, ?) ' +
         'ON CONFLICT(photographer_id) DO UPDATE SET logo = excluded.logo, logo_type = excluded.logo_type, ' +
         'logo_updated_at = excluded.logo_updated_at, updated_at = excluded.updated_at'
-      ).bind(DEFAULT_PHOTOGRAPHER_ID, bytes.buffer, type, now, now).run();
+      ).bind(who.id, bytes.buffer, type, now, now).run();
       return jsonOk({ ok: true, has_logo: true, logo_type: type, logo_updated_at: now, size: bytes.byteLength }, 200, ADMIN_ONLY_HEADERS);
     }
 
-    // GET /api/studio/logo — public: the guest page shows it. Served as the
-    // type its bytes are (re-sniffed, so a hand-edited row cannot turn it into
-    // something a browser would run), never sniffed by the browser, and under
-    // a CSP that lets it run nothing even if opened directly.
+    // GET /api/studio/logo — public, the default photographer's logo only
+    // (kept for pages already out there; a guest page reads its link's
+    // photographer's through GET /api/pick/logo). Served as the type its bytes
+    // are (re-sniffed, so a hand-edited row cannot turn it into something a
+    // browser would run), never sniffed by the browser, and under a CSP that
+    // lets it run nothing even if opened directly.
     if (url.pathname === '/api/studio/logo') {
       if (request.method !== 'GET') return jsonErr('Method not allowed', 405);
       if (!env.DB) return jsonErr('Not found', 404);
-      let row = null;
-      try {
-        row = await env.DB.prepare(
-          'SELECT logo, logo_updated_at FROM studio_settings WHERE photographer_id = ? AND logo IS NOT NULL'
-        ).bind(DEFAULT_PHOTOGRAPHER_ID).first();
-      } catch { row = null; }
+      const row = await readLogo(env, DEFAULT_PHOTOGRAPHER_ID);
       return imageResponse(request, row ? row.logo : null, row ? row.logo_updated_at : null);
     }
 
@@ -4921,7 +5310,8 @@ export default {
     // below cannot show them and until this route nothing could: a photographer
     // could not answer "what is out there holding my bucket open".
     if (request.method === 'GET' && pathParts[0] === 'api' && pathParts[1] === 'shares' && pathParts[2] === 'minted' && !pathParts[3]) {
-      if (!isAdminToken(request, env)) return jsonErr('Unauthorized', 401);
+      const auth = await requireDefault(request, env); // default-only until batch 3
+      if (auth.refused) return auth.refused;
       if (!env.DB) return jsonErr('DB not configured', 500);
       const { results } = await env.DB.prepare(
         "SELECT token, kind, user_id, folders, created_at, expires_at FROM share_tokens WHERE kind IN ('studio', 'session') AND revoked_at IS NULL AND expires_at > ? ORDER BY created_at DESC"
@@ -4936,7 +5326,8 @@ export default {
     // clients' chats — which are the expensive thing to kill by accident — are
     // spared, including every row that predates the kind column.
     if (request.method === 'POST' && pathParts[0] === 'api' && pathParts[1] === 'shares' && pathParts[2] === 'minted' && pathParts[3] === 'revoke-all') {
-      if (!isAdminToken(request, env)) return jsonErr('Unauthorized', 401);
+      const auth = await requireDefault(request, env); // default-only until batch 3
+      if (auth.refused) return auth.refused;
       if (!env.DB) return jsonErr('DB not configured', 500);
       const result = await env.DB.prepare(
         "UPDATE share_tokens SET revoked_at = ? WHERE kind IN ('studio', 'session') AND revoked_at IS NULL"
@@ -4946,11 +5337,16 @@ export default {
 
     // POST /api/shares/:token/revoke — kill a link that went to the wrong chat
     if (request.method === 'POST' && pathParts[0] === 'api' && pathParts[1] === 'shares' && pathParts[2] && pathParts[3] === 'revoke') {
-      if (!isAdminToken(request, env)) return jsonErr('Unauthorized', 401);
+      const auth = await requireDefault(request, env); // default-only until batch 3
+      if (auth.refused) return auth.refused;
       if (!env.DB) return jsonErr('DB not configured', 500);
+      // a link of a project only while that project is the caller's (a
+      // project-less link — a book's, a studio one — has no owner to check
+      // until batch 3); anyone else's is a token that does not exist
       const result = await env.DB.prepare(
-        'UPDATE share_tokens SET revoked_at = ? WHERE token = ? AND revoked_at IS NULL'
-      ).bind(new Date().toISOString(), pathParts[2]).run();
+        'UPDATE share_tokens SET revoked_at = ? WHERE token = ? AND revoked_at IS NULL ' +
+        'AND (project_id IS NULL OR EXISTS (SELECT 1 FROM projects WHERE id = share_tokens.project_id AND photographer_id = ?))'
+      ).bind(new Date().toISOString(), pathParts[2], auth.who.id).run();
       if (!result.meta?.changes) return jsonErr('Not found', 404);
       return jsonOk({ ok: true });
     }
@@ -4969,6 +5365,19 @@ export default {
       const { project, picker, isOwner, isCollaborator, canEdit, role, membership, memberStatus } = ctxPick;
       const route = pathParts.slice(2).join('/');
 
+      // GET /api/pick/logo?t=<link> — the studio logo the guest page shows:
+      // the link's project's photographer's (multi-photographer 2b-3), never
+      // the request's and never anyone else's; none of his = 404, the same as
+      // nobody's. Any live link (owner, collaborator or viewer), like the
+      // studio block in /state. Reads only; private, since the URL carries the link.
+      if (route === 'logo') {
+        if (request.method !== 'GET') return jsonOk({ error: 'Method not allowed' }, 405, { ...SHARED_LINK_HEADERS, Allow: 'GET' });
+        const owner = project.photographer_id;
+        const row = typeof owner === 'string' && owner ? await readLogo(env, owner) : null;
+        return imageResponse(request, row ? row.logo : null, row ? row.logo_updated_at : null,
+          { 'Cache-Control': 'private, max-age=300', Vary: 'X-Share-Token' });
+      }
+
       // GET /api/pick/shop — 購買資訊 (docs/guest-shop.md, S1 trimmed): what
       // this link's guest may buy, owner and viewers alike (information
       // only). The link first (401 above), then the method (405), then
@@ -4984,7 +5393,7 @@ export default {
         // migration). Not a secret, the same for owner and viewers, and not a
         // promise that this caller may order (a viewer never may; the page
         // also needs is_owner and confirmed_at from /state).
-        const ordering = guestOrdersEnabled(env, project.id) && await guestOrdersReady(env) ? GUEST_ORDERING_INFO : null;
+        const ordering = guestOrdersEnabled(env, project) && await guestOrdersReady(env) ? GUEST_ORDERING_INFO : null;
         return jsonOk({ products, ordering }, 200, SHARED_LINK_HEADERS);
       }
 
@@ -5126,7 +5535,7 @@ export default {
         }
 
         // POST /api/pick/orders
-        if (!guestOrdersEnabled(env, project.id)) return out({ error: '目前尚未開放線上訂購', code: 'ordering_disabled' }, 403);
+        if (!guestOrdersEnabled(env, project)) return out({ error: '目前尚未開放線上訂購', code: 'ordering_disabled' }, 403);
         const scope = pickReadScope(s);
         const notConfirmed = () => out({ error: '確認完成後才能訂購', code: 'not_confirmed' }, 409);
         if (scope.mode !== 'delivered' || !project.client_confirmed_at) return notConfirmed();
@@ -6081,7 +6490,7 @@ export default {
               env.DB.prepare(
                 `UPDATE projects SET client_confirmed_at = ?3, client_confirmed_by = 'guest' WHERE ${open} AND client_confirmed_at IS NULL`
               ).bind(project.id, picker.id, at),
-              resolveRevisionsIfConfirmed(env, project.id, at),
+              resolveRevisionsIfConfirmed(env, project.id, at, project.photographer_id),
             ]);
             changed = stamped.meta?.changes;
           } else {
@@ -6441,7 +6850,9 @@ export default {
 
     if (pathParts[0] === 'api' && pathParts[1] === 'books' && pathParts[2]) {
       const bookId = pathParts[2];
-      const admin = isAdminToken(request, env);
+      const auth = await requireDefault(request, env, { optional: true }); // default-only until batch 3
+      if (auth.refused) return auth.refused;
+      const admin = auth.who !== null;
 
       // POST /api/books/:id/share — mint a link for this album
       if (request.method === 'POST' && pathParts[3] === 'share') {
@@ -6534,7 +6945,7 @@ export default {
       }
 
       if (request.method === 'PUT' && !pathParts[3]) {
-        if (!isAdminToken(request, env)) return jsonErr('Unauthorized', 401);
+        if (!admin) return jsonErr('Unauthorized', 401);
         // stored as sent (byte for byte), but only once it is a book whose
         // slots cannot carry markup into the editor and the viewer
         const text = await request.text();
@@ -6667,7 +7078,8 @@ export default {
 
     // PUT (upload) — admin only
     if (request.method === 'PUT') {
-      if (!isAdminToken(request, env)) return jsonErr('Unauthorized', 401);
+      const auth = await requireDefault(request, env); // default-only until batch 3
+      if (auth.refused) return auth.refused;
       let key = decodeURIComponent(url.pathname.slice(1));
       if (key.startsWith('_assets/')) key = key.slice('_assets/'.length);
       const contentType = request.headers.get('Content-Type') || 'image/jpeg';
@@ -6679,7 +7091,9 @@ export default {
     const listPrefix = params.get('list');
     if (listPrefix !== null) {
       let listShare = null;
-      if (!isAdminToken(request, env)) {
+      const auth = await requireDefault(request, env, { optional: true }); // default-only until batch 3
+      if (auth.refused) return auth.refused;
+      if (!auth.who) {
         listShare = await share();
         // a pick link lists what it may preview now (pickReadScope)
         const covered = listShare && (isPickShare(listShare)
@@ -6732,7 +7146,9 @@ export default {
       // ?download=1: the original as an attachment. Never a thumbnail.
       const download = params.get('download') === '1';
       if (download && isThumb) return jsonErr('Invalid Request', 400);
-      if (!isAdminToken(request, env)) {
+      const auth = await requireDefault(request, env, { optional: true }); // default-only until batch 3
+      if (auth.refused) return auth.refused;
+      if (!auth.who) {
         const s = await share();
         // checked on the source key, so a thumbnail of a book is a book, and
         // ahead of every kind — a studio token is unscoped, and a folder
@@ -6809,5 +7225,4 @@ export default {
     }
 
     return new Response('Invalid Request', { status: 400, headers: corsHeaders });
-  }
-};
+}
