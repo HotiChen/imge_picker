@@ -110,11 +110,12 @@
   #set-transfer-info { resize: vertical; min-height: 84px; line-height: 1.6; }
   .transfer-count { font-family: 'IBM Plex Mono', monospace; }
   .transfer-count.over { color: var(--danger); font-weight: 600; }
-  #set-pick-link-message { resize: vertical; min-height: 140px; line-height: 1.6; }
+  #set-link-messages textarea { resize: vertical; min-height: 84px; line-height: 1.6; }
+  .link-msg-block { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--rule); }
   .pick-link-preview { margin-top: 8px; padding: 10px 12px; border: 1px dashed var(--rule); border-radius: 10px; background: var(--bg);
     color: var(--ink-90); font-size: 13px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
   .pick-link-preview-label { color: var(--ink-55); font-size: 12px; margin-top: 8px; }
-  #set-pick-link-reset { min-height: 44px; min-width: 44px; margin-top: 8px; background: transparent; border: 1px solid var(--border); color: var(--ink-90); }
+  #set-link-messages .btn-ghost { min-height: 44px; min-width: 44px; margin-top: 8px; background: transparent; border: 1px solid var(--border); color: var(--ink-90); }
 </style>
 </head>
 <body>
@@ -163,13 +164,41 @@
           <textarea id="set-transfer-info" class="field" rows="4" maxlength="500" placeholder="例如：玉山銀行 808&#10;帳號 1234-5678-9012&#10;戶名 王小明"></textarea>
           <div class="hint"><span id="set-transfer-count" class="transfer-count">0/500</span>　客人要等你確認訂單後才看得到這段文字；換行會保留。</div>
         </div>
-        <div class="field-group">
-          <label for="set-pick-link-message">傳給客人的選片訊息</label>
-          <textarea id="set-pick-link-message" class="field" rows="6" maxlength="1000"></textarea>
-          <div class="hint"><span id="set-pick-link-count" class="transfer-count">0/1000</span>　在「傳給客人」視窗裡預設帶入這段文字。可以用 {專案名稱}（專案名稱）和 {連結}（選片連結）；沒寫 {連結} 的話，系統會自動把連結加在最後。</div>
-          <button id="set-pick-link-reset" class="btn btn-ghost" type="button">還原預設</button>
-          <div class="pick-link-preview-label">預覽（用範例資料）</div>
-          <div id="set-pick-link-preview" class="pick-link-preview"></div>
+        <div class="field-group" id="set-link-messages">
+          <label>傳給客人的訊息</label>
+          <div class="hint">按專案目前的階段，「傳給客人」視窗會帶入對應的這段文字。可以用 {專案名稱}（專案名稱）和 {連結}（客人連結）；沒寫 {連結} 的話，系統會自動把連結加在最後。</div>
+          <div class="link-msg-block" data-stage="pick">
+            <label for="set-pick-link-message">選片中</label>
+            <textarea id="set-pick-link-message" class="field" rows="3" maxlength="1000"></textarea>
+            <div class="hint"><span id="set-pick-link-count" class="transfer-count">0/1000</span></div>
+            <button id="set-pick-link-reset" class="btn btn-ghost" type="button">還原預設</button>
+            <div class="pick-link-preview-label">預覽（用範例資料）</div>
+            <div id="set-pick-link-preview" class="pick-link-preview"></div>
+          </div>
+          <div class="link-msg-block" data-stage="submitted">
+            <label for="set-link-message-submitted">已送出 / 精修中</label>
+            <textarea id="set-link-message-submitted" class="field" rows="3" maxlength="1000"></textarea>
+            <div class="hint"><span id="set-link-message-submitted-count" class="transfer-count">0/1000</span></div>
+            <button id="set-link-message-submitted-reset" class="btn btn-ghost" type="button">還原預設</button>
+            <div class="pick-link-preview-label">預覽（用範例資料）</div>
+            <div id="set-link-message-submitted-preview" class="pick-link-preview"></div>
+          </div>
+          <div class="link-msg-block" data-stage="delivered">
+            <label for="set-link-message-delivered">已交件</label>
+            <textarea id="set-link-message-delivered" class="field" rows="3" maxlength="1000"></textarea>
+            <div class="hint"><span id="set-link-message-delivered-count" class="transfer-count">0/1000</span></div>
+            <button id="set-link-message-delivered-reset" class="btn btn-ghost" type="button">還原預設</button>
+            <div class="pick-link-preview-label">預覽（用範例資料）</div>
+            <div id="set-link-message-delivered-preview" class="pick-link-preview"></div>
+          </div>
+          <div class="link-msg-block" data-stage="done">
+            <label for="set-link-message-done">已完成</label>
+            <textarea id="set-link-message-done" class="field" rows="3" maxlength="1000"></textarea>
+            <div class="hint"><span id="set-link-message-done-count" class="transfer-count">0/1000</span></div>
+            <button id="set-link-message-done-reset" class="btn btn-ghost" type="button">還原預設</button>
+            <div class="pick-link-preview-label">預覽（用範例資料）</div>
+            <div id="set-link-message-done-preview" class="pick-link-preview"></div>
+          </div>
         </div>
         <button id="set-save-btn" class="btn btn-accent" type="button">儲存設定</button>
         <div id="set-err" class="err"></div>
@@ -315,24 +344,31 @@
       transferCount.classList.toggle('over', n > TRANSFER_MAX);
     }
     transferInput.addEventListener('input', updateTransferCount);
-    // 傳給客人的選片訊息 as loaded (null = built-in default, stored as NULL): a PUT names pick_link_message only when it changed.
-    // A blank box or the default text itself is "no custom text" = null.
-    const pickInput = document.getElementById('set-pick-link-message');
-    const pickCount = document.getElementById('set-pick-link-count');
-    const pickPreview = document.getElementById('set-pick-link-preview');
+    // 傳給客人的訊息, one per project stage, as loaded (null = built-in default, stored as NULL): a PUT names a field only when
+    // it changed. A blank box or the default text itself is "no custom text" = null.
     const PICK_MAX = 1000;
-    const pickLen = () => [...pickInput.value].length;
-    const pickStored = v => (v.trim() === '' || v.trim() === Util.PICK_LINK_DEFAULT.trim()) ? null : v;
-    let loadedPick = null;
-    function updatePick() {
-      const n = pickLen();
-      pickCount.textContent = `${n}/${PICK_MAX}`;
-      pickCount.classList.toggle('over', n > PICK_MAX);
-      pickPreview.textContent = Util.pickLinkMessage(pickInput.value, '王小明 & 陳小美 婚紗', 'https://imhoti.tw/studio/index.html?t=範例連結');
-    }
-    pickInput.addEventListener('input', updatePick);
-    document.getElementById('set-pick-link-reset').addEventListener('click', () => { pickInput.value = Util.PICK_LINK_DEFAULT; updatePick(); });
-    updatePick();
+    const LM = ['pick', 'submitted', 'delivered', 'done'].map(stage => {
+      const id = stage === 'pick' ? 'set-pick-link' : `set-link-message-${stage}`;
+      const el = {
+        stage, field: stage === 'pick' ? 'pick_link_message' : `link_message_${stage}`,
+        input: document.getElementById(stage === 'pick' ? 'set-pick-link-message' : id),
+        count: document.getElementById(`${id}-count`), preview: document.getElementById(`${id}-preview`),
+        reset: document.getElementById(`${id}-reset`), loaded: null,
+      };
+      el.len = () => [...el.input.value].length;
+      el.stored = () => { const v = el.input.value, d = Util.LINK_MESSAGE_DEFAULTS[stage]; return (v.trim() === '' || v.trim() === d.trim()) ? null : v; };
+      el.update = () => {
+        const n = el.len();
+        el.count.textContent = `${n}/${PICK_MAX}`;
+        el.count.classList.toggle('over', n > PICK_MAX);
+        el.preview.textContent = Util.linkMessage(stage, { [el.field]: el.input.value }, '王小明 & 陳小美 婚紗', 'https://imhoti.tw/studio/index.html?t=範例連結');
+      };
+      el.input.addEventListener('input', el.update);
+      el.reset.addEventListener('click', () => { el.input.value = Util.LINK_MESSAGE_DEFAULTS[stage]; el.update(); });
+      el.update();
+      return el;
+    });
+    const STAGE_LABEL = { pick: '選片中', submitted: '已送出 / 精修中', delivered: '已交件', done: '已完成' };
     const saveBtn = document.getElementById('set-save-btn');
     const errEl = document.getElementById('set-err');
     const okEl = document.getElementById('set-ok');
@@ -378,9 +414,12 @@
         loadedTransfer = typeof s.transfer_info === 'string' ? s.transfer_info : '';
         transferInput.value = loadedTransfer;
         updateTransferCount();
-        loadedPick = typeof s.pick_link_message === 'string' && s.pick_link_message.trim() ? s.pick_link_message : null;
-        pickInput.value = loadedPick == null ? Util.PICK_LINK_DEFAULT : loadedPick;
-        updatePick();
+        for (const m of LM) {
+          const v = s[m.field];
+          m.loaded = typeof v === 'string' && v.trim() ? v : null;
+          m.input.value = m.loaded == null ? Util.LINK_MESSAGE_DEFAULTS[m.stage] : m.loaded;
+          m.update();
+        }
         renderLogo(!!s.has_logo);
       } catch (e) {
         if (e.message !== '401') errEl.textContent = '無法連線到 Worker';
@@ -396,7 +435,11 @@
       invalid_default_extra_max: '最多可加選需為 0–500 的整數',
       extra_max_unavailable: '請先在 D1 執行 extra-max migration',
       invalid_transfer_info: '匯款資訊格式不正確（500 字以內，不可含特殊控制字元）',
-      invalid_pick_link_message: '訊息格式不正確（1000 字以內，不可含特殊控制字元）',
+      invalid_pick_link_message: '選片中的訊息格式不正確（1000 字以內，不可含特殊控制字元）',
+      invalid_link_message_submitted: '已送出 / 精修中的訊息格式不正確（1000 字以內，不可含特殊控制字元）',
+      invalid_link_message_delivered: '已交件的訊息格式不正確（1000 字以內，不可含特殊控制字元）',
+      invalid_link_message_done: '已完成的訊息格式不正確（1000 字以內，不可含特殊控制字元）',
+      link_messages_unavailable: '這個設定還沒啟用，請先執行 migration（2026-10-16-link-messages.sql）',
       orders_unavailable: '客人訂購功能尚未啟用，請先執行 migration',
     };
 
@@ -429,8 +472,8 @@
       if (transferLen() > TRANSFER_MAX) {
         errEl.textContent = `匯款資訊最多 ${TRANSFER_MAX} 字（目前 ${transferLen()} 字）`; return;
       }
-      if (pickLen() > PICK_MAX) {
-        errEl.textContent = `選片訊息最多 ${PICK_MAX} 字（目前 ${pickLen()} 字）`; return;
+      for (const m of LM) {
+        if (m.len() > PICK_MAX) { errEl.textContent = `${STAGE_LABEL[m.stage]}的訊息最多 ${PICK_MAX} 字（目前 ${m.len()} 字）`; return; }
       }
       const putBody = {
         studio_name: nameInput.value.trim() === '' ? '' : nameInput.value.trim(),
@@ -440,8 +483,11 @@
       };
       if (extra_max !== loadedExtraMax) putBody.default_extra_max = extra_max;
       if (transferInput.value !== loadedTransfer) putBody.transfer_info = transferInput.value;
-      const pickNext = pickStored(pickInput.value);
-      if (pickNext !== loadedPick) putBody.pick_link_message = pickNext;
+      const linkNext = {};
+      for (const m of LM) {
+        linkNext[m.field] = m.stored();
+        if (linkNext[m.field] !== m.loaded) putBody[m.field] = linkNext[m.field];
+      }
       saveBtn.disabled = true;
       try {
         const r = await authedFetch('/api/admin/settings', {
@@ -451,15 +497,19 @@
         });
         const data = await r.json().catch(() => ({}));
         if (!r.ok) {
-          if (r.status === 500 && 'pick_link_message' in putBody) {
+          if (data.code === 'link_messages_unavailable') { errEl.textContent = ERROR_LABEL.link_messages_unavailable; return; }
+          if (r.status === 500 && 'pick_link_message' in putBody && !LM.some(m => m.stage !== 'pick' && m.field in putBody)) {
             errEl.textContent = '這個設定還沒啟用，請先執行 migration（2026-10-10-pick-link-message.sql）'; return;
+          }
+          if (r.status === 500 && LM.some(m => m.stage !== 'pick' && m.field in putBody)) {
+            errEl.textContent = ERROR_LABEL.link_messages_unavailable; return;
           }
           errEl.textContent = ERROR_LABEL[data.code] || data.error || `儲存失敗（${r.status}）`;
           return;
         }
         if ('default_extra_max' in putBody) loadedExtraMax = extra_max;
         if ('transfer_info' in putBody) loadedTransfer = transferInput.value;
-        if ('pick_link_message' in putBody) loadedPick = pickNext;
+        for (const m of LM) if (m.field in putBody) m.loaded = linkNext[m.field];
         okEl.textContent = '已儲存';
         setTimeout(() => { okEl.textContent = ''; }, 2500);
       } catch (e) {

@@ -69,6 +69,17 @@ export function dashSettingsMock(opts = {}) {
           if (opts.pickLinkMigrated === false) return json({ error: 'pick_link_message unavailable', code: 'pick_link_message_unavailable' }, 500);
           body = { ...body, pick_link_message: v === null || !v.trim() ? null : v.trim() };
         }
+        // link_message_submitted / _delivered / _done (worker.js): same rules as pick_link_message, own 400 codes;
+        // before 2026-10-16-link-messages.sql a PUT naming any of them -> 500 link_messages_unavailable
+        for (const f of ['submitted', 'delivered', 'done']) {
+          const k = `link_message_${f}`;
+          if (!(k in (body || {}))) continue;
+          const v = body[k];
+          const bad = v !== null && (typeof v !== 'string' || [...v].length > 1000 || /[\u0000-\u0008\u000B-\u001F\u007F-\u009F\u200E\u200F\u202A-\u202E\u2066-\u2069]/.test(v));
+          if (bad) return json({ error: `${k} 格式不正確`, code: `invalid_${k}` }, 400);
+          if (opts.linkMessagesMigrated === false) return json({ error: 'link messages unavailable', code: 'link_messages_unavailable' }, 500);
+          body = { ...body, [k]: v === null || !v.trim() ? null : v.trim() };
+        }
         // default_extra_max: null or a whole number 0-500, else 400 (nothing written)
         if ('default_extra_max' in (body || {}) && body.default_extra_max !== null && !isExtraMaxFake(body.default_extra_max))
           return json({ error: 'default_extra_max must be a whole number from 0 to 500', code: 'invalid_default_extra_max' }, 400);

@@ -41,10 +41,10 @@ const setVal = (page, v) => page.evaluate(x => { const t = document.getElementBy
       const val = () => page.$eval('#set-pick-link-message', e => e.value);
       const count = async () => (await page.textContent('#set-pick-link-count')).replace(/\s/g, '');
       ok('the saved template is loaded, line breaks kept', (await val()) === SAVED, await val());
-      ok('the label names the field', (await page.textContent('label[for="set-pick-link-message"]')).includes('傳給客人的選片訊息'));
+      ok('the label names the stage', (await page.textContent('label[for="set-pick-link-message"]')).includes('選片中'));
       ok('maxlength 1000', (await page.getAttribute('#set-pick-link-message', 'maxlength')) === '1000');
       ok('a counter shows N/1000', (await count()) === `${[...SAVED].length}/1000`, await count());
-      const hint = await page.evaluate(() => document.getElementById('set-pick-link-message').closest('.field-group').textContent);
+      const hint = await page.evaluate(() => document.getElementById('set-link-messages').textContent);
       ok('the hint lists both placeholders and the auto-append rule', hint.includes('{專案名稱}') && hint.includes('{連結}') && hint.includes('沒寫 {連結} 的話，系統會自動把連結加在最後'), hint);
       const pv = () => page.$eval('#set-pick-link-preview', e => e.textContent);
       ok('the preview shows sample values in place of the placeholders', (await pv()).includes('王小明 & 陳小美 婚紗 你好') && /連結：https:\/\/\S+/.test(await pv()) && !(await pv()).includes('{'), await pv());

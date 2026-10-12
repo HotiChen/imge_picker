@@ -1084,6 +1084,15 @@
     }
     return { phase: p ? p.phase : null, delivered, confirm, open };
   }
+  // Which 複製連結 message a project gets (settings 傳給客人的訊息): pick | submitted | delivered | done.
+  // 待修改 is still delivered, not done; only a confirmed / photographer-marked project is done.
+  function linkStage(p) {
+    const st = projectStatus(p);
+    if (st.confirm === 'confirmed' || st.confirm === 'photographer') return 'done';
+    if (st.delivered) return 'delivered';
+    if (st.phase === 'submitted' || st.phase === 'retouching') return 'submitted';
+    return 'pick';
+  }
   function confirmBadgeHtml(p) {
     const st = projectStatus(p);
     if (st.confirm === 'photographer') return '<span class="badge badge-approved st-done" data-confirm-badge="photographer">已標記完成</span>';
@@ -1282,7 +1291,7 @@
     box.querySelectorAll('[data-copy-link]').forEach(btn => {
       btn.addEventListener('click', () => {
         const row = projectsCache.find(x => x.token === btn.dataset.copyLink);
-        copyLinkAndShare(btn, row ? row.title : '', btn.dataset.copyLink);
+        copyLinkAndShare(btn, row ? row.title : '', btn.dataset.copyLink, row ? linkStage(row) : 'pick');
       });
     });
   }
@@ -1387,7 +1396,7 @@
 
   document.getElementById('proj-copy-link-btn')?.addEventListener('click', function () {
     const out = document.getElementById('proj-link-output');
-    if (out.dataset.token) copyLinkAndShare(out, out.dataset.title || '', out.dataset.token);
+    if (out.dataset.token) copyLinkAndShare(out, out.dataset.title || '', out.dataset.token, 'pick');
   });
 
   function pickerNameOf(pickers, id) {
@@ -1907,7 +1916,7 @@
       }
     });
     body.querySelectorAll('[data-copy-link]').forEach(btn => {
-      btn.addEventListener('click', () => copyLinkAndShare(btn, project.title, btn.dataset.copyLink));
+      btn.addEventListener('click', () => copyLinkAndShare(btn, project.title, btn.dataset.copyLink, linkStage(project)));
     });
     body.querySelectorAll('[data-revoke-token]').forEach(btn => {
       btn.addEventListener('click', async () => {
@@ -2292,24 +2301,24 @@
   // The text comes from the studio's saved template (settings 「傳給客人的選片訊息」) via Util.pickLinkMessage; until the
   // settings are loaded, or when they cannot be read, it is the built-in default. Fetched once per page (a failure is retried
   // on the next open), never awaited before the dialog opens.
-  let pickLinkTemplate = null, pickLinkTemplateP = null;
+  let pickLinkTemplate = null, pickLinkTemplateP = null, linkSettings = {};
   function loadPickLinkTemplate() {
     if (!pickLinkTemplateP) {
       pickLinkTemplateP = fetch(`${WORKER_URL}/api/admin/settings`, { headers: { 'Authorization': `Bearer ${getToken()}` } })
         .then(r => (r.ok ? r.json() : Promise.reject(new Error('settings'))))
-        .then(s => { pickLinkTemplate = typeof s.pick_link_message === 'string' ? s.pick_link_message : null; return pickLinkTemplate; })
+        .then(s => { linkSettings = s || {}; pickLinkTemplate = typeof s.pick_link_message === 'string' ? s.pick_link_message : null; return pickLinkTemplate; })
         .catch(() => { pickLinkTemplateP = null; return null; });
     }
     return pickLinkTemplateP;
   }
-  function shareLinkMessage(title, link) {
-    return Util.pickLinkMessage(pickLinkTemplate, title, link);
+  function shareLinkMessage(title, link, stage) {
+    return Util.linkMessage(stage || 'pick', linkSettings, title, link);
   }
   let closeShareDialog = null;   // cleanup of the dialog on screen, so a second open leaves no Esc listener behind
-  function showShareLinkDialog(title, token, linkCopied) {
+  function showShareLinkDialog(title, token, linkCopied, stage) {
     if (closeShareDialog) closeShareDialog();
     const link = projectLink(token);
-    const text = shareLinkMessage(title || '專案', link);
+    const text = shareLinkMessage(title || '專案', link, stage);
     const loadedAtOpen = !!pickLinkTemplateP && pickLinkTemplate !== null;
     const overlay = document.createElement('div');
     overlay.id = 'pd-share-link';
@@ -2362,7 +2371,7 @@
     ta.addEventListener('input', () => { edited = true; });
     if (!loadedAtOpen) {
       loadPickLinkTemplate().then(() => {
-        if (!edited && overlay.isConnected && pickLinkTemplate !== null) ta.value = shareLinkMessage(title || '專案', link);
+        if (!edited && overlay.isConnected && pickLinkTemplateP) ta.value = shareLinkMessage(title || '專案', link, stage);
       });
     }
     const onKey = e => { if (e.key === 'Escape') done(); };
@@ -2377,10 +2386,10 @@
     });
     copy.focus();
   }
-  async function copyLinkAndShare(btn, title, token) {
+  async function copyLinkAndShare(btn, title, token, stage) {
     const ok = await copyText(projectLink(token));
     if (ok && btn) flashGreen(btn);
-    showShareLinkDialog(title, token, ok);
+    showShareLinkDialog(title, token, ok, stage);
   }
   function showDeliverNotice(project, tokens) {
     if (!project || !project.delivered_at) return;
