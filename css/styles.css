@@ -2720,7 +2720,7 @@ body.fg-mode .delivery-done-actions { margin-left: auto; flex: 0 0 auto; }
 .fg-hero-body { position: absolute; left: var(--fg-pad); right: var(--fg-pad); bottom: clamp(16px, 3vw, 36px); min-width: 0; }
 .fg-studio { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; min-width: 0; color: var(--ink-70);
   font-size: 13px; letter-spacing: .14em; }
-.fg-studio-logo { flex: 0 0 auto; width: 28px; height: 28px; object-fit: cover; border-radius: 50%; }
+.fg-studio-logo { flex: 0 0 auto; height: 32px; width: auto; max-width: 140px; object-fit: contain; border-radius: 0; }
 .fg-studio-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .fg-title { margin: 0; font-size: clamp(24px, 4.2vw, 46px); font-weight: 600; line-height: 1.18; letter-spacing: .02em;
   color: var(--ink); overflow-wrap: anywhere; text-wrap: balance; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
