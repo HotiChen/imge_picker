@@ -130,6 +130,7 @@ function crawledPaths() {
   return [...paths].sort();
 }
 
+const NOBODY_ID = '00000000-0000-4000-8000-000000000000';
 test('crawl: every non-public /api path refuses a caller without a photographer identity, on every method', async () => {
   const paths = crawledPaths();
   assert.ok(paths.length >= 30, `only ${paths.length} paths found: the crawl is broken`);
@@ -153,7 +154,24 @@ test('crawl: every non-public /api path refuses a caller without a photographer 
           const allowed = who === 'none' || who === 'unknown' || who === 'squat' || !flags.PHOTOGRAPHER_ROUTES ? [401] : [401, 403, 404];
           // verify-admin is open to every photographer (it answers {ok:true}, no data)
           if (who === 'B' && flags.PHOTOGRAPHER_ROUTES && path === '/api/auth/verify-admin' && method === 'GET') allowed.push(200);
-          assert.ok(allowed.includes(res.status), `${flags.PHOTOGRAPHER_ROUTES ?? 'off'} ${who} ${method} ${path} → ${res.status} ${(await res.text()).slice(0, 120)}`);
+          // scoped since 2b-1: B's own project list (B has none here), and
+          // the 405 a write to a project id gets, the same for any id (no data)
+          const ownList = who === 'B' && flags.PHOTOGRAPHER_ROUTES && path === '/api/admin/projects' && method === 'GET';
+          if (ownList) allowed.push(200);
+          if (who === 'B' && flags.PHOTOGRAPHER_ROUTES && path === `/api/admin/projects/${project.project.id}` && (method === 'PUT' || method === 'POST')) allowed.push(405);
+          const text = await res.clone().text();
+          // a scoped route may refuse B's malformed body before it looks the
+          // project up (PATCH: 400): fine only if it answers exactly the same
+          // for a project id nobody has, so it says nothing about A's
+          if (who === 'B' && flags.PHOTOGRAPHER_ROUTES && !allowed.includes(res.status) && res.status === 400 && path.includes(project.project.id)) {
+            const nobody = await hit(mod, env, method, path.replaceAll(project.project.id, NOBODY_ID), token, method === 'GET' ? undefined : {});
+            assert.equal(res.status, nobody.status, `${method} ${path}`);
+            assert.equal(text, await nobody.text(), `${method} ${path}: B tells A's project from none`);
+            allowed.push(400);
+          }
+          assert.ok(allowed.includes(res.status), `${flags.PHOTOGRAPHER_ROUTES ?? 'off'} ${who} ${method} ${path} → ${res.status} ${text.slice(0, 120)}`);
+          assert.ok(!text.includes(project.project.id) && !text.includes('王先生'), `${who} ${method} ${path} leaked: ${text.slice(0, 200)}`);
+          if (ownList) assert.deepEqual(JSON.parse(text), { projects: [] });
           assert.equal(snapshot(env), before, `${who} ${method} ${path} wrote`);
         }
       }
@@ -236,7 +254,8 @@ test('the front and the route share one session lookup per request', async () =>
   const reads = [];
   const realPrepare = env.DB.prepare.bind(env.DB);
   env.DB.prepare = sql => { if (/^\s*SELECT[\s\S]*FROM photographer_sessions/i.test(sql)) reads.push(sql); return realPrepare(sql); };
-  assert.equal((await call(env, '/api/admin/projects', { token: B.token })).status, 404);
+  // scoped since 2b-1: B's own (empty) list
+  assert.equal((await call(env, '/api/admin/projects', { token: B.token })).status, 200);
   assert.equal(reads.length, 1);
 });
 

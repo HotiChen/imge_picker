@@ -1873,11 +1873,15 @@ function extraPickFee(sub) {
   return { count, pick_limit: limit, extra_price: price, extra, fee };
 }
 
-// The latest submission of a project, the one a fee is charged from.
-function latestSubmission(env, projectId) {
+// The latest submission of a project, the one a fee is charged from — of
+// `ownerId`'s project only: someone else's project reads as one with no
+// submission, the same as an id that does not exist (start-retouch reads it
+// before its own gate, and must not tell the two apart by what it does next).
+function latestSubmission(env, projectId, ownerId) {
   return env.DB.prepare(
-    'SELECT id, count, pick_limit, extra_price FROM submissions WHERE project_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1'
-  ).bind(projectId).first();
+    'SELECT id, count, pick_limit, extra_price FROM submissions WHERE project_id = ? ' +
+    'AND EXISTS (SELECT 1 FROM projects WHERE id = ? AND photographer_id = ?) ORDER BY created_at DESC, rowid DESC LIMIT 1'
+  ).bind(projectId, projectId, ownerId).first();
 }
 
 // The writes that bring a project's automatic extra-pick order in line with
@@ -1888,13 +1892,16 @@ function latestSubmission(env, projectId) {
 // a new one is only inserted when the project has no system order and no
 // order with an extra-pick line at all, so one the photographer edited
 // (source 'admin', cancelled included) is never replaced behind their back.
-async function extraPickWrites(env, projectId, fee, gate, gateBinds) {
+// `ownerId`: the photographer whose project it is (the caller, who.id); the
+// system order is looked up and written as theirs, and `gate` re-checks the
+// project is still theirs inside every statement.
+async function extraPickWrites(env, ownerId, projectId, fee, gate, gateBinds) {
   const now = new Date().toISOString();
   const gated = (sql, ...binds) => env.DB.prepare(`${sql} AND EXISTS (SELECT 1 FROM projects WHERE ${gate})`)
     .bind(...binds, ...gateBinds);
   const sys = await env.DB.prepare(
     "SELECT id, paid_amount FROM orders WHERE project_id = ? AND photographer_id = ? AND source = 'system' ORDER BY created_at, rowid LIMIT 1"
-  ).bind(projectId, DEFAULT_PHOTOGRAPHER_ID).first();
+  ).bind(projectId, ownerId).first();
   const unpaidSystem = "EXISTS (SELECT 1 FROM orders WHERE id = ? AND source = 'system' AND paid_amount = 0)";
   if (sys) {
     if (sys.paid_amount > 0) return [];
@@ -1918,7 +1925,7 @@ async function extraPickWrites(env, projectId, fee, gate, gateBinds) {
       "INSERT INTO orders (id, photographer_id, project_id, source, status, created_at, updated_at, confirmed_at) " +
       "SELECT ?, ?, ?, 'system', 'confirmed', ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM orders WHERE project_id = ? AND source = 'system') " +
       "AND NOT EXISTS (SELECT 1 FROM orders o JOIN order_items i ON i.order_id = o.id WHERE o.project_id = ? AND i.kind = 'extra_pick')",
-      id, DEFAULT_PHOTOGRAPHER_ID, projectId, now, now, now, projectId, projectId),
+      id, ownerId, projectId, now, now, now, projectId, projectId),
     gated(
       "INSERT INTO order_items (id, order_id, kind, name, option_label, unit_price, unit_cost, qty, photo_keys) " +
       "SELECT ?, ?, 'extra_pick', ?, '', ?, 0, ?, '[]' WHERE EXISTS (SELECT 1 FROM orders WHERE id = ?)",
@@ -2106,12 +2113,13 @@ function revisionMessage(value) {
 }
 
 // Resolves a project's open requests, but only once it is confirmed: rides in
-// the same batch as a confirmation (guest or photographer).
-function resolveRevisionsIfConfirmed(env, projectId, at) {
+// the same batch as a confirmation (guest or photographer). `ownerId` is the
+// project's photographer, re-checked inside the statement.
+function resolveRevisionsIfConfirmed(env, projectId, at, ownerId) {
   return env.DB.prepare(
     'UPDATE revision_requests SET resolved_at = ? WHERE project_id = ? AND resolved_at IS NULL ' +
-    'AND EXISTS (SELECT 1 FROM projects WHERE id = ? AND client_confirmed_at IS NOT NULL)'
-  ).bind(at, projectId, projectId);
+    'AND EXISTS (SELECT 1 FROM projects WHERE id = ? AND photographer_id = ? AND client_confirmed_at IS NOT NULL)'
+  ).bind(at, projectId, projectId, ownerId);
 }
 
 // The latest open request of a project ({message, message_auto}) or null —
@@ -2168,11 +2176,22 @@ function pickNotDelivered() {
   return jsonOk({ error: '尚未交件', code: 'not_delivered' }, 409);
 }
 
+// PHOTOGRAPHER_EMAIL is the default photographer's inbox (Tim's). Every
+// notification about a project asks this first: another photographer's
+// project mails nobody — silently, no warning — until per-studio
+// notify_email (docs/multi-photographer.md, batch 4), so none of their
+// guests' names, files, notes or orders reach Tim. The pick submit then stays
+// in that photographer's unnotified badge, as when mail is not set up.
+function mailsDefaultInbox(project) {
+  return Boolean(project) && project.photographer_id === DEFAULT_PHOTOGRAPHER_ID;
+}
+
 // Tells the photographer the guest confirmed (message null) or asked for
 // changes (message: their text). Same transport and rules as
 // sendPickNotification: a skip when mail is not set up, the subject on one
 // line, the guest's words never in a header and escaped in the HTML part.
 async function sendClientNotification(env, project, pickerName, message) {
+  if (!mailsDefaultInbox(project)) return false;
   if (!env.NOTIFY_EMAIL || !env.PHOTOGRAPHER_EMAIL) {
     console.warn('client notification skipped: NOTIFY_EMAIL or PHOTOGRAPHER_EMAIL is not configured');
     return false;
@@ -2314,6 +2333,7 @@ async function loadRound(env, share, project, id) {
 // theirs); `pins` {photo_key: [pins]}. At most REVISION_EMAIL_PHOTOS_MAX
 // photos are listed.
 async function sendRevisionRoundNotification(env, project, pickerName, note, pins) {
+  if (!mailsDefaultInbox(project)) return false;
   if (!env.NOTIFY_EMAIL || !env.PHOTOGRAPHER_EMAIL) {
     console.warn('revision notification skipped: NOTIFY_EMAIL or PHOTOGRAPHER_EMAIL is not configured');
     return false;
@@ -2654,6 +2674,7 @@ async function guestOrdersFor(env, project, pickerId, orderId = null) {
 // body only. `order` is the guest view: never the phone or the LINE ID (no
 // personal contact data in the inbox, docs/guest-shop.md §5.6).
 async function sendOrderNotification(env, project, order, cancelled = false) {
+  if (!mailsDefaultInbox(project)) return false;
   if (!env.NOTIFY_EMAIL || !env.PHOTOGRAPHER_EMAIL) {
     console.warn('order notification skipped: NOTIFY_EMAIL or PHOTOGRAPHER_EMAIL is not configured');
     return false;
@@ -2722,6 +2743,7 @@ async function interestsFor(env, projectId) {
 // the HTML part. The only guest text is the picker's name; the product name
 // is our own catalogue's, snapshotted at this tap.
 async function sendInterestNotification(env, project, pickerName, product, tapCount) {
+  if (!mailsDefaultInbox(project)) return false;
   if (!env.NOTIFY_EMAIL || !env.PHOTOGRAPHER_EMAIL) {
     console.warn('interest notification skipped: NOTIFY_EMAIL or PHOTOGRAPHER_EMAIL is not configured');
     return false;
@@ -3102,6 +3124,7 @@ function pickDiff(current, previous) {
 // set up. `submission` is the row just written; `previous` the one before it
 // for this project (whoever made it), or null.
 async function sendPickNotification(env, project, picker, submission, previous) {
+  if (!mailsDefaultInbox(project)) return false;
   if (!env.NOTIFY_EMAIL || !env.PHOTOGRAPHER_EMAIL) {
     console.warn('pick notification skipped: NOTIFY_EMAIL or PHOTOGRAPHER_EMAIL is not configured');
     return false;
@@ -3793,8 +3816,9 @@ async function routeRequest(request, env, ctx) {
     // time order). Archived projects are left out; `?archived=1` lists only
     // them (any other value is the default view).
     if (request.method === 'GET' && url.pathname === '/api/admin/projects') {
-      const auth = await requireDefault(request, env); // default-only until 2b-1
+      const auth = await requirePhotographer(request, env); // scoped to the caller (who.id)
       if (auth.refused) return auth.refused;
+      const who = auth.who;
       if (!env.DB) return jsonErr('DB not configured', 500);
       const now = Date.now();
       const archivedFilter = params.get('archived') === '1' ? 'p.archived_at IS NOT NULL' : 'p.archived_at IS NULL';
@@ -3818,7 +3842,7 @@ async function routeRequest(request, env, ctx) {
       ).bind(
         new Date(now).toISOString(),
         new Date(now - SHARE_MAX_LIFE_MS).toISOString(),
-        DEFAULT_PHOTOGRAPHER_ID,
+        who.id,
       ).all();
       // extra_max (the plan's extra-pick cap) comes from a later hand-run
       // migration still: without it every project lists as uncapped (null)
@@ -3861,11 +3885,12 @@ async function routeRequest(request, env, ctx) {
     // who set each pick. Guest strings go out raw in JSON; admin.html escapes
     // them when it renders.
     if (request.method === 'GET' && pathParts[0] === 'api' && pathParts[1] === 'admin' && pathParts[2] === 'projects' && pathParts[3] && !pathParts[4]) {
-      const auth = await requireDefault(request, env); // default-only until 2b-1
+      const auth = await requirePhotographer(request, env); // scoped to the caller (who.id)
       if (auth.refused) return auth.refused;
+      const who = auth.who;
       if (!env.DB) return jsonErr('DB not configured', 500);
       const project = await env.DB.prepare('SELECT * FROM projects WHERE id = ? AND photographer_id = ?')
-        .bind(pathParts[3], DEFAULT_PHOTOGRAPHER_ID).first();
+        .bind(pathParts[3], who.id).first();
       if (!project) return jsonErr('Not found', 404);
       // key_hash is left out by name: it is the one column here that is a
       // credential's stand-in
@@ -3927,11 +3952,12 @@ async function routeRequest(request, env, ctx) {
     // POST /api/admin/projects/:id/reset-seat — the guest lost their browser.
     // Frees the seat; the selections belong to the project and stay.
     if (request.method === 'POST' && pathParts[0] === 'api' && pathParts[1] === 'admin' && pathParts[2] === 'projects' && pathParts[3] && pathParts[4] === 'reset-seat') {
-      const auth = await requireDefault(request, env); // default-only until 2b-1
+      const auth = await requirePhotographer(request, env); // scoped to the caller (who.id)
       if (auth.refused) return auth.refused;
+      const who = auth.who;
       if (!env.DB) return jsonErr('DB not configured', 500);
       const result = await env.DB.prepare('UPDATE projects SET owner_picker_id = NULL WHERE id = ? AND photographer_id = ?')
-        .bind(pathParts[3], DEFAULT_PHOTOGRAPHER_ID).run();
+        .bind(pathParts[3], who.id).run();
       if (!result.meta?.changes) return jsonErr('Not found', 404);
       return jsonOk({ ok: true });
     }
@@ -3947,14 +3973,15 @@ async function routeRequest(request, env, ctx) {
     // snapshot stays, as with undeliver.
     if (request.method === 'POST' && pathParts[0] === 'api' && pathParts[1] === 'admin' && pathParts[2] === 'projects' && pathParts[3] && !pathParts[5] &&
         (pathParts[4] === 'start-retouch' || pathParts[4] === 'reopen')) {
-      const auth = await requireDefault(request, env); // default-only until 2b-1
+      const auth = await requirePhotographer(request, env); // scoped to the caller (who.id)
       if (auth.refused) return auth.refused;
+      const who = auth.who;
       if (!env.DB) return jsonErr('DB not configured', 500);
       const id = pathParts[3];
       // null: the project is there and past picking, so it was the gate below
       const notMoved = async () => {
         const exists = await env.DB.prepare('SELECT phase FROM projects WHERE id = ? AND photographer_id = ?')
-          .bind(id, DEFAULT_PHOTOGRAPHER_ID).first();
+          .bind(id, who.id).first();
         if (!exists) return jsonErr('Not found', 404);
         if (exists.phase === 'picking') return jsonOk({ error: '客人尚未送出，無法開始修圖', code: 'not_submitted', phase: exists.phase }, 409);
         return null;
@@ -3971,7 +3998,7 @@ async function routeRequest(request, env, ctx) {
         // without it before the client-confirm migration).
         const reopen = confirm => env.DB.prepare(
           `UPDATE projects SET phase = 'picking', modified_after_submit = 0, delivered_at = NULL${confirm} WHERE id = ? AND photographer_id = ?`
-        ).bind(id, DEFAULT_PHOTOGRAPHER_ID).run();
+        ).bind(id, who.id).run();
         const moved = await withoutMissingColumn(
           () => reopen(', client_confirmed_at = NULL, client_confirmed_by = NULL'), () => reopen(''));
         if (!moved.meta?.changes) return jsonErr('Not found', 404);
@@ -3986,10 +4013,10 @@ async function routeRequest(request, env, ctx) {
       // over once retouching). The order writes are gated on the phase having
       // moved too, and re-check their own order inside (extraPickWrites).
       for (let attempt = 0; attempt < 3; attempt++) {
-        const latest = await latestSubmission(env, id);
+        const latest = await latestSubmission(env, id, who.id);
         const gate = 'id = ? AND photographer_id = ? AND (SELECT s.id FROM submissions s WHERE s.project_id = ? ORDER BY s.created_at DESC, s.rowid DESC LIMIT 1) IS ?';
-        const gateBinds = [id, DEFAULT_PHOTOGRAPHER_ID, id, latest?.id ?? null];
-        const writes = await extraPickWrites(env, id, extraPickFee(latest), `${gate} AND phase = 'retouching'`, gateBinds);
+        const gateBinds = [id, who.id, id, latest?.id ?? null];
+        const writes = await extraPickWrites(env, who.id, id, extraPickFee(latest), `${gate} AND phase = 'retouching'`, gateBinds);
         const [moved] = await env.DB.batch([
           env.DB.prepare(`UPDATE projects SET phase = 'retouching' WHERE ${gate} AND phase IN ('submitted', 'retouching')`).bind(...gateBinds),
           ...writes,
@@ -4012,28 +4039,29 @@ async function routeRequest(request, env, ctx) {
     // stay revoked; POST .../links mints a new one.
     if (request.method === 'POST' && pathParts[0] === 'api' && pathParts[1] === 'admin' && pathParts[2] === 'projects' && pathParts[3] && !pathParts[5] &&
         (pathParts[4] === 'archive' || pathParts[4] === 'unarchive')) {
-      const auth = await requireDefault(request, env); // default-only until 2b-1
+      const auth = await requirePhotographer(request, env); // scoped to the caller (who.id)
       if (auth.refused) return auth.refused;
+      const who = auth.who;
       if (!env.DB) return jsonErr('DB not configured', 500);
       const id = pathParts[3];
       if (pathParts[4] === 'unarchive') {
         const result = await env.DB.prepare('UPDATE projects SET archived_at = NULL WHERE id = ? AND photographer_id = ?')
-          .bind(id, DEFAULT_PHOTOGRAPHER_ID).run();
+          .bind(id, who.id).run();
         if (!result.meta?.changes) return jsonErr('Not found', 404);
         return jsonOk({ ok: true, archived_at: null }, 200, ADMIN_ONLY_HEADERS);
       }
       const at = new Date().toISOString();
       const [stamped, revoked] = await env.DB.batch([
         env.DB.prepare('UPDATE projects SET archived_at = COALESCE(archived_at, ?) WHERE id = ? AND photographer_id = ?')
-          .bind(at, id, DEFAULT_PHOTOGRAPHER_ID),
+          .bind(at, id, who.id),
         env.DB.prepare(
           "UPDATE share_tokens SET revoked_at = ? WHERE kind = 'pick' AND project_id = ? AND revoked_at IS NULL " +
           'AND EXISTS (SELECT 1 FROM projects WHERE id = ? AND photographer_id = ?)'
-        ).bind(at, id, id, DEFAULT_PHOTOGRAPHER_ID),
+        ).bind(at, id, id, who.id),
       ]);
       if (!stamped.meta?.changes) return jsonErr('Not found', 404);
       const row = await env.DB.prepare('SELECT archived_at FROM projects WHERE id = ? AND photographer_id = ?')
-        .bind(id, DEFAULT_PHOTOGRAPHER_ID).first();
+        .bind(id, who.id).first();
       return jsonOk({ ok: true, archived_at: row?.archived_at ?? at, revoked: revoked.meta?.changes ?? 0 }, 200, ADMIN_ONLY_HEADERS);
     }
 
@@ -4045,8 +4073,9 @@ async function routeRequest(request, env, ctx) {
     // project row goes last because the others' gate reads it. R2 is never
     // touched: the photos belong to the shoot, not to the project.
     if (request.method === 'DELETE' && pathParts[0] === 'api' && pathParts[1] === 'admin' && pathParts[2] === 'projects' && pathParts[3] && !pathParts[4]) {
-      const auth = await requireDefault(request, env); // default-only until 2b-1
+      const auth = await requirePhotographer(request, env); // scoped to the caller (who.id)
       if (auth.refused) return auth.refused;
+      const who = auth.who;
       if (!env.DB) return jsonErr('DB not configured', 500);
       const id = pathParts[3];
       const hasSubmissions = () => jsonOk({ error: '已有送出紀錄，無法刪除（可改為封存）', code: 'has_submissions' }, 409);
@@ -4056,13 +4085,13 @@ async function routeRequest(request, env, ctx) {
       const found = await env.DB.prepare(
         'SELECT EXISTS (SELECT 1 FROM submissions WHERE project_id = ?1) AS submitted, ' +
         'EXISTS (SELECT 1 FROM orders WHERE project_id = ?1) AS ordered FROM projects WHERE id = ?1 AND photographer_id = ?2'
-      ).bind(id, DEFAULT_PHOTOGRAPHER_ID).first();
+      ).bind(id, who.id).first();
       if (!found) return jsonErr('Not found', 404);
       if (found.submitted) return hasSubmissions();
       if (found.ordered) return hasOrders();
       const gate = 'EXISTS (SELECT 1 FROM projects WHERE id = ?1 AND photographer_id = ?2) AND NOT EXISTS (SELECT 1 FROM submissions WHERE project_id = ?1) ' +
         'AND NOT EXISTS (SELECT 1 FROM orders WHERE project_id = ?1)';
-      const del = sql => env.DB.prepare(`${sql} AND ${gate}`).bind(id, DEFAULT_PHOTOGRAPHER_ID);
+      const del = sql => env.DB.prepare(`${sql} AND ${gate}`).bind(id, who.id);
       // the co-picking rows too, once that migration has run
       const coPicking = await coPickingReady(env)
         ? ['project_collaborators', 'pick_invites', 'pick_join_failures'].map(t => del(`DELETE FROM ${t} WHERE project_id = ?1`))
@@ -4078,7 +4107,7 @@ async function routeRequest(request, env, ctx) {
       if (!results[results.length - 1].meta?.changes) {
         const still = await env.DB.prepare(
           'SELECT EXISTS (SELECT 1 FROM submissions WHERE project_id = ?1) AS submitted FROM projects WHERE id = ?1 AND photographer_id = ?2'
-        ).bind(id, DEFAULT_PHOTOGRAPHER_ID).first();
+        ).bind(id, who.id).first();
         if (!still) return jsonErr('Not found', 404);
         return still.submitted ? hasSubmissions() : hasOrders();
       }
@@ -4090,11 +4119,12 @@ async function routeRequest(request, env, ctx) {
     // old link's, not the body's), same expiry as at creation. The old links
     // stay as they are; POST /api/shares/:token/revoke kills one.
     if (request.method === 'POST' && pathParts[0] === 'api' && pathParts[1] === 'admin' && pathParts[2] === 'projects' && pathParts[3] && pathParts[4] === 'links' && !pathParts[5]) {
-      const auth = await requireDefault(request, env); // default-only until 2b-1
+      const auth = await requirePhotographer(request, env); // scoped to the caller (who.id)
       if (auth.refused) return auth.refused;
+      const who = auth.who;
       if (!env.DB) return jsonErr('DB not configured', 500);
       const project = await env.DB.prepare('SELECT id, title, folders, archived_at FROM projects WHERE id = ? AND photographer_id = ?')
-        .bind(pathParts[3], DEFAULT_PHOTOGRAPHER_ID).first();
+        .bind(pathParts[3], who.id).first();
       if (!project) return jsonErr('Not found', 404);
       const archivedErr = () => jsonOk({ error: 'Project is archived; unarchive it first', code: 'archived' }, 409);
       if (project.archived_at) return archivedErr();
@@ -4102,11 +4132,12 @@ async function routeRequest(request, env, ctx) {
       const now = Date.now();
       const createdAt = new Date(now).toISOString();
       const expiresAt = new Date(now + SHARE_TTL_MS).toISOString();
-      // Gated on the project still being open, so an archive landing between
-      // the read above and this write leaves no live link behind it.
+      // Gated on the project still being open and still the caller's, so an
+      // archive (or a delete) landing between the read above and this write
+      // leaves no live link behind it.
       const minted = await env.DB.prepare(
-        "INSERT INTO share_tokens (token, book_id, label, kind, project_id, folders, created_at, expires_at) SELECT ?, '', ?, 'pick', ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM projects WHERE id = ? AND archived_at IS NULL)"
-      ).bind(token, project.title, project.id, project.folders, createdAt, expiresAt, project.id).run();
+        "INSERT INTO share_tokens (token, book_id, label, kind, project_id, folders, created_at, expires_at) SELECT ?, '', ?, 'pick', ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM projects WHERE id = ? AND photographer_id = ? AND archived_at IS NULL)"
+      ).bind(token, project.title, project.id, project.folders, createdAt, expiresAt, project.id, who.id).run();
       if (!minted.meta || !minted.meta.changes) return archivedErr();
       return jsonOk({ token, expires_at: expiresAt, created_at: createdAt, status: 'live' }, 201, ADMIN_ONLY_HEADERS);
     }
@@ -4209,14 +4240,15 @@ async function routeRequest(request, env, ctx) {
     // the same batch. No email (the photographer did it).
     if (request.method === 'POST' && pathParts[0] === 'api' && pathParts[1] === 'admin' && pathParts[2] === 'projects' && pathParts[3] &&
         pathParts[4] === 'confirm' && !pathParts[5]) {
-      const auth = await requireDefault(request, env); // default-only until 2b-1
+      const auth = await requirePhotographer(request, env); // scoped to the caller (who.id)
       if (auth.refused) return auth.refused;
+      const who = auth.who;
       if (!env.DB) return jsonErr('DB not configured', 500);
       const id = pathParts[3];
       const done = (data, status = 200) => jsonOk(data, status, ADMIN_ONLY_HEADERS);
       const notDelivered = () => done({ error: '尚未交件，無法標記完成', code: 'not_delivered' }, 409);
       const project = await env.DB.prepare('SELECT * FROM projects WHERE id = ? AND photographer_id = ?')
-        .bind(id, DEFAULT_PHOTOGRAPHER_ID).first();
+        .bind(id, who.id).first();
       if (!project) return jsonErr('Not found', 404);
       if (!hasField(project, 'client_confirmed_at')) return done(CONFIRM_UNAVAILABLE, 500);
       if (!project.delivered_at) return notDelivered();
@@ -4226,8 +4258,8 @@ async function routeRequest(request, env, ctx) {
           env.DB.prepare(
             "UPDATE projects SET client_confirmed_at = ?, client_confirmed_by = 'photographer' " +
             'WHERE id = ? AND photographer_id = ? AND delivered_at IS NOT NULL AND client_confirmed_at IS NULL'
-          ).bind(at, id, DEFAULT_PHOTOGRAPHER_ID),
-          resolveRevisionsIfConfirmed(env, id, at),
+          ).bind(at, id, who.id),
+          resolveRevisionsIfConfirmed(env, id, at, who.id),
         ]);
       } catch (e) {
         // the columns are there but not the table: nothing was written
@@ -4235,7 +4267,7 @@ async function routeRequest(request, env, ctx) {
         throw e;
       }
       const row = await env.DB.prepare('SELECT client_confirmed_at, client_confirmed_by FROM projects WHERE id = ? AND photographer_id = ?')
-        .bind(id, DEFAULT_PHOTOGRAPHER_ID).first();
+        .bind(id, who.id).first();
       if (!row) return jsonErr('Not found', 404);
       // not confirmed now: an undeliver landed before the write
       if (!row.client_confirmed_at) return notDelivered();
@@ -4254,8 +4286,9 @@ async function routeRequest(request, env, ctx) {
     // the switch alone still flips, as it always did). Submissions keep the
     // plan as it stood at submit: nothing here touches them.
     if (request.method === 'PATCH' && pathParts[0] === 'api' && pathParts[1] === 'admin' && pathParts[2] === 'projects' && pathParts[3] && !pathParts[4]) {
-      const auth = await requireDefault(request, env); // default-only until 2b-1
+      const auth = await requirePhotographer(request, env); // scoped to the caller (who.id)
       if (auth.refused) return auth.refused;
+      const who = auth.who;
       if (!env.DB) return jsonErr('DB not configured', 500);
       let body = null;
       try { body = await request.json(); } catch {}
@@ -4277,7 +4310,7 @@ async function routeRequest(request, env, ctx) {
       try {
         const update = env.DB.prepare(
           `UPDATE projects SET ${keys.map(k => `${k} = ?`).join(', ')} WHERE id = ? AND photographer_id = ?` + archivedGate
-        ).bind(...keys.map(value), pathParts[3], DEFAULT_PHOTOGRAPHER_ID);
+        ).bind(...keys.map(value), pathParts[3], who.id);
         // a rename also rewrites the one stored copy of the title, the label
         // of this project's own pick links (live or revoked), in the same
         // batch and behind the same gate as the project's UPDATE: both land or
@@ -4285,7 +4318,7 @@ async function routeRequest(request, env, ctx) {
         const renameLinks = keys.includes('title') ? env.DB.prepare(
           "UPDATE share_tokens SET label = ? WHERE kind = 'pick' AND project_id = ? " +
           `AND EXISTS (SELECT 1 FROM projects WHERE id = ? AND photographer_id = ?${archivedGate})`
-        ).bind(storedValue('title'), pathParts[3], pathParts[3], DEFAULT_PHOTOGRAPHER_ID) : null;
+        ).bind(storedValue('title'), pathParts[3], pathParts[3], who.id) : null;
         result = renameLinks ? (await env.DB.batch([update, renameLinks]))[0] : await update.run();
       } catch (e) {
         // extra_max, shoot_date or project_type before its hand-run migration: one statement (or one batch
@@ -4301,7 +4334,7 @@ async function routeRequest(request, env, ctx) {
       }
       if (!result.meta?.changes) {
         const row = await env.DB.prepare('SELECT archived_at FROM projects WHERE id = ? AND photographer_id = ?')
-          .bind(pathParts[3], DEFAULT_PHOTOGRAPHER_ID).first();
+          .bind(pathParts[3], who.id).first();
         if (row?.archived_at && planEdit) {
           return jsonOk({ error: 'Project is archived; unarchive it first', code: 'archived' }, 409, ADMIN_ONLY_HEADERS);
         }
@@ -4312,7 +4345,8 @@ async function routeRequest(request, env, ctx) {
     // any other write to /api/admin/projects/:id is not a route (without this
     // a PUT would fall through to the upload route and store it as a key)
     if ((request.method === 'PUT' || request.method === 'POST') && pathParts[0] === 'api' && pathParts[1] === 'admin' && pathParts[2] === 'projects' && pathParts[3] && !pathParts[4]) {
-      const auth = await requireDefault(request, env); // default-only until 2b-1
+      // the same 405 for any id and anyone's project: answers no data, asks D1 nothing
+      const auth = await requirePhotographer(request, env); // open to every photographer: a 405, no data
       if (auth.refused) return auth.refused;
       return jsonErr('Method not allowed', 405);
     }
@@ -4827,7 +4861,7 @@ async function routeRequest(request, env, ctx) {
         // photo counts, so a waived price is not a mismatch but 10 → 14 is.
         if (request.method === 'GET') {
           const orders = await readOrders(env, 'o.project_id = ?', [id]);
-          const fee = extraPickFee(await latestSubmission(env, id));
+          const fee = extraPickFee(await latestSubmission(env, id, project.photographer_id));
           const charged = orders.map(o => [o, o.items.find(i => i.kind === 'extra_pick')]).filter(([, line]) => line);
           const [order, line] = charged.find(([o]) => o.source === 'system') || charged[0] || [null, null];
           return done({
@@ -6377,7 +6411,7 @@ async function routeRequest(request, env, ctx) {
               env.DB.prepare(
                 `UPDATE projects SET client_confirmed_at = ?3, client_confirmed_by = 'guest' WHERE ${open} AND client_confirmed_at IS NULL`
               ).bind(project.id, picker.id, at),
-              resolveRevisionsIfConfirmed(env, project.id, at),
+              resolveRevisionsIfConfirmed(env, project.id, at, project.photographer_id),
             ]);
             changed = stamped.meta?.changes;
           } else {

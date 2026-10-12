@@ -5,9 +5,11 @@
 // session is someone else, and is let in only while the kill switch
 // photographerRoutesOpen(env) says so (PHOTOGRAPHER_ROUTES = "on"; anything
 // else, unset included, is off). Off, a session gets exactly what an unknown
-// token gets today. On, every route that is not yet scoped to its caller (all
-// of them but verify-admin, until batches 2b-1..3 and batch 3 land) answers a
-// non-default photographer 404 and writes nothing.
+// token gets today. On, every route that is not yet scoped to its caller
+// (until batches 2b-2, 2b-3 and batch 3 land) answers a non-default
+// photographer 404 and writes nothing; the scoped ones (2b-1: the project
+// routes) answer B's own data only, and A's resource is 404 to B
+// (project-scope.test.mjs has the per-route two-photographer tests).
 //
 // The route table below is checked against the source: every call site must
 // be reached by a table route (an instrumented copy of worker.js records which
@@ -23,6 +25,7 @@ import { fakeDB, ctx, req } from './fakes.mjs';
 import { SECRET, MINE, CUSTOM_ON, setup, call, createProject, rows } from './pick-helpers.mjs';
 import { seedPhotographer, twoTenants, snapshot, ROUTES_ON } from './tenant-helpers.mjs';
 
+const hasOwn = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
 const SRC = readFileSync(new URL('../worker.js', import.meta.url), 'utf8');
 const UNKNOWN = 'e'.repeat(64);           // shaped like a session token, matches none
 // occurrences outside `//` comments
@@ -30,11 +33,11 @@ const codeCount = needle => SRC.split('\n').reduce((n, line) => n + (line.split(
 // 'open': any photographer, no data. 'scoped': any photographer, its own data
 // only (who.id) — what 2b-1..3 turn their routes into. The rest: default only
 // until that batch.
-const UNTIL = ['open', 'scoped', '2b-1', '2b-2', '2b-3', 'batch 3', 'retired'];
+const UNTIL = ['open', 'scoped', '2b-2', '2b-3', 'batch 3', 'retired'];   // 2b-1 is merged: its routes are 'scoped'
 // which helper a mark requires at its call site
 const helperFor = until => (until === 'open' || until === 'scoped' ? 'requirePhotographer' : 'requireDefault');
 // the mark on a call-site line
-const markOf = line => /\/\/ default-only until (2b-1|2b-2|2b-3|batch 3|retired)\b/.exec(line)?.[1]
+const markOf = line => /\/\/ default-only until (2b-2|2b-3|batch 3|retired)\b/.exec(line)?.[1]
   ?? (/\/\/ open to every photographer\b/.test(line) ? 'open' : /\/\/ scoped to the caller\b/.test(line) ? 'scoped' : null);
 
 // ─── fixture: one of everything the default photographer owns ──────────────
@@ -63,21 +66,21 @@ const ROUTES = [
   R('retired', 'PUT', f => `/api/admin/clients/${f.userId}/permissions`, { can_book: true }),
   R('retired', 'DELETE', f => `/api/admin/clients/${f.userId}`),
   R('batch 3', 'POST', () => '/api/admin/projects', { title: '新案', folders: [MINE] }),
-  R('2b-1', 'GET', () => '/api/admin/projects'),
-  R('2b-1', 'GET', P),
-  R('2b-1', 'POST', f => `${P(f)}/reset-seat`),
-  R('2b-1', 'POST', f => `${P(f)}/start-retouch`),
-  R('2b-1', 'POST', f => `${P(f)}/reopen`),
-  R('2b-1', 'POST', f => `${P(f)}/archive`),
-  R('2b-1', 'POST', f => `${P(f)}/unarchive`),
-  R('2b-1', 'DELETE', P),
-  R('2b-1', 'POST', f => `${P(f)}/links`),
+  R('scoped', 'GET', () => '/api/admin/projects'),
+  R('scoped', 'GET', P),
+  R('scoped', 'POST', f => `${P(f)}/reset-seat`),
+  R('scoped', 'POST', f => `${P(f)}/start-retouch`),
+  R('scoped', 'POST', f => `${P(f)}/reopen`),
+  R('scoped', 'POST', f => `${P(f)}/archive`),
+  R('scoped', 'POST', f => `${P(f)}/unarchive`),
+  R('scoped', 'DELETE', P),
+  R('scoped', 'POST', f => `${P(f)}/links`),
   R('batch 3', 'POST', f => `${P(f)}/deliver`, { final_folders: [MINE] }),
   R('batch 3', 'POST', f => `${P(f)}/undeliver`),
-  R('2b-1', 'POST', f => `${P(f)}/confirm`),
-  R('2b-1', 'PATCH', P, { title: '改名' }),
-  R('2b-1', 'PUT', P, {}),
-  R('2b-1', 'POST', P, {}),
+  R('scoped', 'POST', f => `${P(f)}/confirm`),
+  R('scoped', 'PATCH', P, { title: '改名' }),
+  R('open', 'PUT', P, {}),
+  R('open', 'POST', P, {}),
   R('2b-2', 'GET', () => '/api/admin/products'),
   R('2b-2', 'POST', () => '/api/admin/products', { kind: 'service', name: 'x', options: [{ label: '', price: 1 }] }),
   R('2b-2', 'GET', () => '/api/admin/platform-products'),
@@ -242,26 +245,33 @@ test('PHOTOGRAPHER_ROUTES=on: a non-default session is 404 on every default-only
     const res = await send(mod, env, r, f, B.token);
     const text = await res.text();
     assert.equal(snapshot(env), before, `${label(r)} wrote something`);
-    // scoped (2b-1..3 flip their routes to it): B on A's resource is 404 and
-    // writes nothing, like default-only — and A still gets it (the positive
-    // control above runs every route with A's token)
-    if (r.until === 'open') {
-      assert.equal(res.status, 200, label(r));
-      assert.deepEqual(JSON.parse(text), { ok: true }, 'verify-admin says nothing about anyone');
+    // nothing of A's in any answer to B
+    assert.ok(!text.includes(f.projectId) && !text.includes('王先生') && !text.includes(MINE), `${label(r)} leaked: ${text}`);
+    // the answers that are not a 404: verify-admin (no data), the 405 on a
+    // project id (no data, the same for any id, D1 never asked) and the
+    // project list, scoped (B's own projects: none here). Every other scoped
+    // route is B on A's resource: 404 and nothing written, like default-only
+    // (project-scope.test.mjs: per route, against a nonexistent id too) — and
+    // A still gets it (the positive control above runs every route with A's token)
+    const notRefused = { 'GET /api/auth/verify-admin': 200, 'PUT /api/admin/projects/:id': 405, 'POST /api/admin/projects/:id': 405, 'GET /api/admin/projects': 200 };
+    if (hasOwn(notRefused, label(r))) {
+      assert.equal(res.status, notRefused[label(r)], label(r));
+      if (r.until === 'open' && res.status === 200) assert.deepEqual(JSON.parse(text), { ok: true }, 'verify-admin says nothing about anyone');
+      if (label(r) === 'GET /api/admin/projects') assert.deepEqual(JSON.parse(text), { projects: [] }, 'B has no projects of its own here');
       continue;
     }
     assert.equal(res.status, 404, `${label(r)}: ${res.status} ${text.slice(0, 200)}`);
-    assert.ok(!text.includes(f.projectId) && !text.includes('王先生') && !text.includes(MINE), `${label(r)} leaked: ${text}`);
     refused++;
   }
-  assert.equal(refused, ROUTES.length - 1);
+  assert.equal(refused, ROUTES.length - 4);
 });
 
-test('marks: the scoped classification is ready for 2b-1 (requirePhotographer, a 404 for B like default-only)', () => {
+test('marks: scoped (2b-1 onwards) is requirePhotographer; a leftover 2b-1 default-only mark is unknown now', () => {
   assert.equal(markOf("const auth = await requirePhotographer(request, env); // scoped to the caller (who.id)"), 'scoped');
   assert.equal(helperFor('scoped'), 'requirePhotographer');
-  assert.equal(markOf('const auth = await requireDefault(request, env); // default-only until 2b-1'), '2b-1');
-  assert.equal(helperFor('2b-1'), 'requireDefault');
+  assert.equal(markOf('const auth = await requireDefault(request, env); // default-only until 2b-2'), '2b-2');
+  assert.equal(helperFor('2b-2'), 'requireDefault');
+  assert.equal(markOf('const auth = await requireDefault(request, env); // default-only until 2b-1'), null, '2b-1 is merged');
   assert.equal(markOf('const auth = await requirePhotographer(request, env); // open to every photographer: answers no data'), 'open');
   assert.equal(markOf('const auth = await requireDefault(request, env);'), null, 'an unmarked site');
   assert.equal(markOf('const auth = await requireDefault(request, env); // default-only until later'), null, 'an unknown batch');
@@ -282,9 +292,12 @@ test('PHOTOGRAPHER_ROUTES=on: the default photographer still gets its data; the 
   const mine = await call(env, '/api/admin/projects', { token: A.token });
   assert.equal(mine.status, 200);
   assert.ok((await mine.text()).includes(f.projectId));
+  // scoped since 2b-1: B gets its own list (empty here), never A's rows
   const theirs = await call(env, '/api/admin/projects', { token: B.token });
-  assert.equal(theirs.status, 404);
-  assert.ok(!(await theirs.text()).includes(f.projectId));
+  assert.equal(theirs.status, 200);
+  const text = await theirs.text();
+  assert.ok(!text.includes(f.projectId));
+  assert.deepEqual(JSON.parse(text).projects, []);
 });
 
 test('PHOTOGRAPHER_ROUTES=on: a flagged session (operator reset) is 403 must_change_password on every route', async () => {
@@ -391,8 +404,8 @@ const DEFAULT_ID_USES = {
   readProducts: 2,           // 2b-2
   readOrders: 2,             // 2b-2 (readOrder goes through it)
   orderLines: 1,             // 2b-2: the admin callers' default owner
-  extraPickWrites: 2,        // 2b-1 / 2b-2
-  routeRequest: 53,          // the routes themselves: 2b-1..3
+  mailsDefaultInbox: 1,      // PHOTOGRAPHER_EMAIL is the default photographer's inbox only (until batch 4)
+  routeRequest: 33,          // the routes themselves: 2b-2, 2b-3, and batch 3's POST projects / deliver / undeliver
 };
 test('DEFAULT_PHOTOGRAPHER_ID appears only in the allow-listed functions, with exact counts', () => {
   const counts = {};

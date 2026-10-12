@@ -141,6 +141,25 @@ CREATE TABLE photographer_sessions (
     `photographer-routes.test.mjs` 多了 `scoped` 標記（`// scoped to the caller`，必須用 `requirePhotographer`），2b-1 只要換標記；
     並禁止 `?? / || DEFAULT_PHOTOGRAPHER_ID` 與 `who?.`。
 
+**第 2b-1 批（專案路由按攝影師隔離，只有 Worker，無 migration）**：
+- 改成 `requirePhotographer` + `who.id`（標 `// scoped to the caller (who.id)`）：`GET /api/admin/projects`、
+  `GET / PATCH / DELETE /api/admin/projects/:id`、`POST …/:id/reset-seat | start-retouch | reopen | archive | unarchive | links | confirm`。
+  每句 SELECT / UPDATE / DELETE 都帶 `photographer_id = who.id`。別人的專案 = 不存在的 id：同樣 404、同樣 body、
+  **同樣的 SQL 語句序列**（測試逐條比對），D1 + R2 全快照不變。清單只列自己的（沒有就是空清單，不是 404）。
+- **default 不是超級使用者**：`PHOTOGRAPHER_TOKEN` 只看得到 `photographer_id = 'default'`，對別人的專案一樣 404。
+- `PUT / POST /api/admin/projects/:id`（405）：標 `open`，任何攝影師、任何 id 都回同一個 405，不查 D1。
+- PATCH 先驗 body 再查專案：B 送壞 body 到 A 的專案得 400，和不存在的 id 完全相同（不洩漏存在），沿用原本順序。
+- 語句內再檢查擁有者（防與刪除／轉移賽跑）：`links` 的 INSERT、`resolveRevisionsIfConfirmed`（admin 與客人 confirm 都傳專案擁有者）、
+  `extraPickWrites(env, ownerId, …)`（系統單以擁有者查、以擁有者寫）、`latestSubmission(env, id, ownerId)`
+  （別人的專案讀起來像沒有送出，所以 start-retouch 的語句序列和不存在的 id 一樣）。
+- 仍是 default 專用（batch 3，碰 R2 資料夾）：`POST /api/admin/projects`（建立）、`deliver`、`undeliver`。
+  **所以非 default 攝影師目前無法建立專案**，只能管理「被指派」給他的專案（現在沒有路由會指派，測試直接改 D1）。
+- 通知信：`mailsDefaultInbox(project)`，五個寄信函式第一行都問它；`project.photographer_id !== 'default'` 就不寄、不警告
+  （選片送出、要求修改、修改輪次、客人確認、我有興趣、客人訂單）。選片送出因此留在該攝影師的未通知數字裡。
+- 測試：`worker/test/project-scope.test.mjs`（每條 scoped 路由 × 兩個方向 × 各自正向控制、競態、通知、客人端不讀請求裡的攝影師 id）。
+- 未處理（之後的批次）：`guestOrdersEnabled` 仍未按攝影師關閉（`GUEST_ORDERS=on` 時別人的專案也能下單，doc §4 說非 default 一律 off）；
+  公開 logo、商品／訂單、設定／儀表板仍是 default 專用（2b-2、2b-3）。
+
 - 所有 `/api/admin/*`、`/api/upload`、`/api/books` 等攝影師路由：`const who = await resolvePhotographer(...)`，
   所有查詢與寫入的 `WHERE` 都帶 `photographer_id = who.id`。別人的資源回 **404**（不是 403，不洩漏存在）。
 - 新增一支 worker 測試：**用兩位攝影師逐條路由試跨帳號讀／改／刪**，全部必須 404 且資料不變。
