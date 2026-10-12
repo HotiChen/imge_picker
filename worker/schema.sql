@@ -300,7 +300,17 @@ CREATE TABLE IF NOT EXISTS studio_settings (
   -- guest route returns it. Appended, from a hand-run
   --   ALTER TABLE studio_settings ADD COLUMN pick_link_message TEXT;
   -- (worker/migrations/2026-10-10-pick-link-message.sql).
-  pick_link_message   TEXT
+  pick_link_message   TEXT,
+  -- the same, for the later stages: 已送出, 已交件, 已完成 (pick_link_message
+  -- is the 選片中 one). Same rules; NULL = the built-in text. Admin-only.
+  -- Appended, from three hand-run statements
+  --   ALTER TABLE studio_settings ADD COLUMN link_message_submitted TEXT;
+  --   ALTER TABLE studio_settings ADD COLUMN link_message_delivered TEXT;
+  --   ALTER TABLE studio_settings ADD COLUMN link_message_done TEXT;
+  -- (worker/migrations/2026-10-16-link-messages.sql).
+  link_message_submitted TEXT,
+  link_message_delivered TEXT,
+  link_message_done   TEXT
 );
 
 -- ─── Products and orders (docs/products-orders.md) ─────────────────────────

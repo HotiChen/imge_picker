@@ -24,6 +24,9 @@ const table = env => JSON.stringify(rows(env, 'SELECT * FROM studio_settings'));
 // schema.sql as a database that has not had this migration (the S2 columns stay)
 // (functions: s2Schema throws while schema.sql lacks the column line)
 const PRE = () => s2Schema({ orders: [], items: [], settings: [FIELD], index: false });
+// ... nor the later per-stage link messages appended after it (link-messages.test.mjs)
+const LATER = ['link_message_submitted', 'link_message_delivered', 'link_message_done'];
+const LATER_MIGRATION = new URL('../migrations/2026-10-16-link-messages.sql', import.meta.url);
 // ... nor the S2 one (transfer_info) before it
 const PRE_BOTH = () => s2Schema({ orders: [], items: [], settings: ['transfer_info', FIELD], index: false });
 
@@ -37,9 +40,10 @@ test('migration: one append-only ALTER, noted in schema.sql; the fixture really 
   assert.deepEqual(statementsOf(MIGRATION), [`ALTER TABLE studio_settings ADD COLUMN ${FIELD} TEXT`]);
   assert.match(FRESH, /2026-10-10-pick-link-message\.sql/);
   assert.match(FRESH, /ALTER TABLE studio_settings ADD COLUMN pick_link_message TEXT;/);
-  const old = fakeDB({ schema: PRE() });
+  const old = fakeDB({ schema: s2Schema({ orders: [], items: [], settings: [FIELD, ...LATER], index: false }) });
   assert.throws(() => old._db.prepare(`SELECT ${FIELD} FROM studio_settings`).all(), /no such column/);
   old._db.exec(MIGRATION);
+  old._db.exec(readFileSync(LATER_MIGRATION, 'utf8'));
   const shape = d => d._db.prepare('PRAGMA table_info(studio_settings)').all().map(c => ({ ...c }));
   assert.deepEqual(shape(old), shape(fakeDB()));
   assert.throws(() => old._db.exec(MIGRATION), /duplicate column/);
