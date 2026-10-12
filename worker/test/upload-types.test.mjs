@@ -215,23 +215,30 @@ test('upload: who may upload is still decided first (401), and the reserved and 
 });
 
 // ─── serving: nosniff + sandbox CSP everywhere; non-photos as attachments ──
+// key → [the type stored, the type served (null: octet-stream as an attachment)]
 const LEGACY = {
-  // stored by the old route as sent
-  'shoot/毛片/evil.jpg': 'text/html',
-  'shoot/毛片/evil.svg': 'image/svg+xml',
-  'shoot/毛片/evil.html': 'text/html; charset=utf-8',
-  'shoot/毛片/raw.heic': 'image/heic',
-  'shoot/毛片/scan.tif': 'application/octet-stream',
-  'shoot/毛片/anim.gif': 'image/gif',
-  // the four that are served inline
-  'shoot/毛片/ok.jpg': 'image/jpeg',
-  'shoot/毛片/ok.png': 'image/png',
-  'shoot/毛片/ok.webp': 'image/webp; q=1',
-  'shoot/毛片/ok.avif': 'IMAGE/AVIF',
+  // stored by the old route as sent, under a key the picker lists: served as
+  // the extension's own inline type (nosniff: the browser renders it as an
+  // image or not at all, it never runs it) — review of r2-hardening
+  'shoot/毛片/evil.jpg': ['text/html', 'image/jpeg'],
+  'shoot/毛片/legacy.png': ['application/octet-stream', 'image/png'],
+  'shoot/毛片/alias.jpeg': ['image/pjpeg', 'image/jpeg'],
+  'shoot/毛片/odd.webp': ['image/svg+xml', 'image/webp'],
+  'shoot/毛片/odd.AVIF': ['', 'image/avif'],
+  // not a listed photo: an opaque download
+  'shoot/毛片/evil.svg': ['image/svg+xml', null],
+  'shoot/毛片/evil.html': ['text/html; charset=utf-8', null],
+  'shoot/毛片/raw.heic': ['image/heic', null],
+  'shoot/毛片/scan.tif': ['application/octet-stream', null],
+  'shoot/毛片/anim.gif': ['image/gif', null],
+  // stored inline: served as stored
+  'shoot/毛片/ok.jpg': ['image/jpeg', 'image/jpeg'],
+  'shoot/毛片/ok.png': ['image/png', 'image/png'],
+  'shoot/毛片/ok.webp': ['image/webp; q=1', 'image/webp; q=1'],
+  'shoot/毛片/ok.avif': ['IMAGE/AVIF', 'IMAGE/AVIF'],
 };
-const INLINE = /^shoot\/毛片\/ok\./;
 function seed(env, who) {
-  for (const [key, type] of Object.entries(LEGACY)) {
+  for (const [key, [type]] of Object.entries(LEGACY)) {
     const k = at(who, key);
     env.imagepicker._store.set(k, { key: k, body: `${who.tag}:${key}`, contentType: type, uploaded: new Date('2026-01-01T00:00:00Z') });
     // a thumbnail stored with the same type as its original
@@ -249,8 +256,9 @@ function assertHardened(res, key, label, { download = false } = {}) {
   assert.equal(res.headers.get('Content-Security-Policy'), CSP, tag);
   const type = res.headers.get('Content-Type');
   const disposition = res.headers.get('Content-Disposition');
-  if (INLINE.test(key)) {
-    assert.match(type, /^image\/(jpeg|png|webp|avif)/i, tag);
+  const served = LEGACY[key]?.[1] ?? null;
+  if (served) {
+    assert.equal(type, served, tag);
     if (download) assert.match(disposition, /^attachment;/, tag);
     else assert.equal(disposition, null, tag);
   } else {
@@ -311,6 +319,27 @@ for (const whoName of ['A', 'B']) {
     assert.equal(scanned, 2 * Object.keys(LEGACY).length);
   });
 }
+
+test('serving: ?w= with no thumbnail falls back to a legacy original under its extension\'s image type; a non-photo stays a download', async () => {
+  const w = await world();
+  const put1 = (k, type) => w.env.imagepicker._store.set(k, { key: k, body: `X:${k}`, contentType: type, uploaded: new Date('2026-01-01T00:00:00Z') });
+  put1('shoot/毛片/nothumb.png', 'text/html');
+  put1('shoot/毛片/nothumb.svg', 'image/svg+xml');
+  const png = await call(w.env, `/${encodeURIComponent('shoot/毛片/nothumb.png')}?w=400`, { token: SECRET });
+  assert.equal(png.status, 200);
+  assert.equal(await png.text(), 'X:shoot/毛片/nothumb.png');
+  assert.equal(png.headers.get('Content-Type'), 'image/png');
+  assert.equal(png.headers.get('Content-Disposition'), null);
+  assert.equal(png.headers.get('X-Content-Type-Options'), 'nosniff');
+  assert.equal(png.headers.get('Content-Security-Policy'), CSP);
+  const svg = await call(w.env, `/${encodeURIComponent('shoot/毛片/nothumb.svg')}?w=400`, { token: SECRET });
+  assert.equal(svg.headers.get('Content-Type'), 'application/octet-stream');
+  assert.match(svg.headers.get('Content-Disposition') || '', /^attachment;/);
+  // ?download=1 of the legacy png: its image type, as an attachment
+  const dl = await call(w.env, `/${encodeURIComponent('shoot/毛片/nothumb.png')}?download=1`, { token: SECRET });
+  assert.equal(dl.headers.get('Content-Type'), 'image/png');
+  assert.match(dl.headers.get('Content-Disposition') || '', /^attachment; filename="nothumb.png"/);
+});
 
 test('serving through a pick link: the delivered preview and the original carry the same headers', async () => {
   const w = await world();

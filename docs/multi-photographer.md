@@ -290,7 +290,7 @@ CREATE TABLE photographer_sessions (
   縮圖 `_thumbs/<數字>/<照片鍵>.thumb` 只收 jpeg/png/webp/avif（沒帶 = jpeg，和以前一樣）。其餘（text/html、SVG、XML、JS、text/plain、
   沒有副檔名、`.thumb` 不在 `_thumbs/` 下）一律 415 `unsupported_type`、不寫。物件路由的**每個**回應（200、Range 206、304、`?w=` 縮圖、
   `?download=1`，攝影師或任何連結）都帶 `X-Content-Type-Options: nosniff` 與 `Content-Security-Policy: default-src 'none'; sandbox`；
-  存的型別不是 jpeg/png/webp/avif 的（舊的上傳、HEIC/TIFF/GIF/BMP 原檔）改成 `application/octet-stream` + attachment。
+  存的型別不是 jpeg/png/webp/avif 時：鍵（縮圖看它的原檔鍵）是 .jpg/.jpeg/.png/.webp/.avif 就送**副檔名自己的**圖片型別（舊上傳存成 text/html、octet-stream、別名的照片照常顯示；nosniff 下瀏覽器只會當圖片或不顯示，不會執行），`?download=1` 仍是 attachment；其他副檔名（舊的 .svg/.html、HEIC/TIFF/GIF/BMP 原檔）改成 `application/octet-stream` + attachment。
   前端沒改：upload.html 遇到 415 會顯示「HTTP 415」。舊測試用字串 body（`Request` 自動標 `text/plain`）上傳的幾條改成帶照片型別。
   測試：`worker/test/upload-types.test.mjs`。
 - **default 擁有的連結列 = NULL 或字面 `'default'`**：`shareOwner` 本來就把 `'default'` 讀成 default 的檔案，但 `minted` / `revoke-all` /

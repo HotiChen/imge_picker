@@ -17,9 +17,11 @@ const THUMB_BUCKETS = [400, 1200, 1600];
 // that stored text/html or an SVG would be a page running script there.
 //
 // The types the object route serves inline (as the task and the rounds
-// thumbnail route already do). Anything else stored — a legacy text/html or
-// SVG upload, a HEIC / TIFF / GIF / BMP original — goes out as
-// application/octet-stream, as an attachment. Uploads keep the photos the
+// thumbnail route already do). Anything else stored goes out, under a key the
+// picker lists (.jpg/.jpeg/.png/.webp/.avif), as that extension's own image
+// type (a legacy photo stored as text/html, octet-stream or an alias), and
+// otherwise — a legacy SVG or HTML upload, a HEIC / TIFF / GIF / BMP original
+// — as application/octet-stream, as an attachment. Uploads keep the photos the
 // picker shows on this list: the listing (`?list=`) only ever shows
 // .jpg/.jpeg/.png/.webp/.avif keys, and a key with one of those extensions
 // is only ever stored as one of these four types (below), so nothing the
@@ -7560,9 +7562,18 @@ async function routeRequest(request, env, ctx) {
         // inline image type (a legacy text/html or SVG upload, a HEIC or
         // TIFF original) as an opaque download. On every response below:
         // 200, 206 and 304, original, thumbnail and ?download=1.
+        // A legacy object under a key the picker lists (.jpg/.jpeg/.png/.webp/
+        // .avif — of the original, for a thumbnail) goes out as that
+        // extension's own image type: with nosniff the browser renders it as
+        // that image or not at all, and the grid keeps working.
         if (!INLINE_IMAGE_TYPES.includes(bareType(headers.get('Content-Type')))) {
-          headers.set('Content-Type', OCTET_STREAM);
-          headers.set('Content-Disposition', attachmentDisposition(key));
+          const listed = UPLOAD_TYPES[keyExtension(sourceKey(candidate))];
+          if (listed && INLINE_IMAGE_TYPES.includes(listed.own)) {
+            headers.set('Content-Type', listed.own);
+          } else {
+            headers.set('Content-Type', OCTET_STREAM);
+            headers.set('Content-Disposition', attachmentDisposition(key));
+          }
         }
         headers.set('X-Content-Type-Options', 'nosniff');
         headers.set('Content-Security-Policy', "default-src 'none'; sandbox");
