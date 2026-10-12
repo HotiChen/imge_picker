@@ -29,6 +29,7 @@
     const OPTIONS_MAX = 20;
     const COVER_MIN_ASPECT = 1.2;                     // landscape enough for the 3:2 hero
     const COVER_CANDIDATES = 12;
+    const COVER_PORTRAITS = 3;                        // portrait finals side by side when no final is landscape
     const COVER_PROBE_MS = 3000;
 
     const el = (tag, cls, txt, id) => {
@@ -254,31 +255,37 @@
             box.hidden = !box.childNodes.length;
         },
 
-        // The cover: the first LANDSCAPE final (width/height >= COVER_MIN_ASPECT) among the first COVER_CANDIDATES,
-        // else the first final. Candidates are probed in parallel as 400px thumbnails (the bucket the grid already
-        // uses, so no new size is requested); the choice is made in list order, so it never depends on which
-        // probe answered first. A probe that errors or takes longer than COVER_PROBE_MS is skipped.
-        // The cover is chosen once per mount (coverKey), like before.
+        // The cover: the first LANDSCAPE final (width/height >= COVER_MIN_ASPECT) among the first COVER_CANDIDATES, one
+        // image in the 3:2 banner. With none, up to COVER_PORTRAITS PORTRAIT finals (width < height) of those candidates
+        // side by side, each whole in a 2:3 box (a portrait cropped into the banner loses the face); with none of those
+        // either (squares only, or every probe failed), the first final as before. Candidates are probed in parallel
+        // as 400px thumbnails (the bucket the grid already uses, so no new size is requested); the choice is made in
+        // list order, so it never depends on which probe answered first. A probe that errors or takes longer than
+        // COVER_PROBE_MS is skipped. The cover is chosen once per mount (coverKey), like before.
         setCover(photo, drive, candidates) {
             if (!this.root || this.coverKey || !photo || !drive) return;
             this.coverKey = photo.id;
             const frame = this.root.querySelector('.cp-cover-frame');
             const list = (Array.isArray(candidates) && candidates.length ? candidates : [photo])
                 .filter(p => p && p.id).slice(0, COVER_CANDIDATES);
-            const show = chosen => {
+            const show = (chosen, portrait) => {
                 if (!this.root || !this.root.contains(frame)) return;
                 const w = frame.getBoundingClientRect().width || window.innerWidth;
-                const img = el('img', 'cp-cover', null, 'cpCover');
-                img.alt = '';
-                img.decoding = 'async';
-                img.fetchPriority = 'high';
-                img.dataset.photoId = chosen.id;
-                img.addEventListener('load', () => img.classList.add('on'));
-                img.addEventListener('error', () => img.remove());
-                img.src = drive.getImageUrl(chosen, drive.previewWidth(w, window.devicePixelRatio || 1));
-                frame.replaceChildren(img);
+                const imgs = chosen.map((p, i) => {
+                    const img = el('img', 'cp-cover', null, i === 0 ? 'cpCover' : null);
+                    img.alt = '';
+                    img.decoding = 'async';
+                    img.fetchPriority = 'high';
+                    img.dataset.photoId = p.id;
+                    img.addEventListener('load', () => img.classList.add('on'));
+                    img.addEventListener('error', () => img.remove());
+                    img.src = drive.getImageUrl(p, drive.previewWidth(portrait ? w / chosen.length : w, window.devicePixelRatio || 1));
+                    return img;
+                });
+                frame.classList.toggle('cp-cover-portraits', portrait);
+                frame.dataset.covers = String(imgs.length);
+                frame.replaceChildren(...imgs);
             };
-            if (list.length < 2) { show(photo); return; }
             const probes = list.map(p => new Promise(res => {
                 const im = new Image();
                 let done = false;
@@ -289,11 +296,14 @@
                 im.src = drive.getImageUrl(p, 400);
             }));
             (async () => {
-                let chosen = photo;
+                const ratios = [];
                 for (let i = 0; i < probes.length; i++) {
-                    if ((await probes[i]) >= COVER_MIN_ASPECT) { chosen = list[i]; break; }
+                    ratios.push(await probes[i]);
+                    if (ratios[i] >= COVER_MIN_ASPECT) { show([list[i]], false); return; }
                 }
-                show(chosen);
+                const tall = list.filter((p, i) => ratios[i] > 0 && ratios[i] < 1).slice(0, COVER_PORTRAITS);
+                if (tall.length) { show(tall, true); return; }
+                show([photo], false);
             })();
         },
 

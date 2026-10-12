@@ -17,7 +17,7 @@ const CORS = { 'Access-Control-Allow-Origin': '*' };
 
 // ── 1. hero choice ────────────────────────────────────────────────────────
 // shapes: the aspect of photo i (1-based). tune(page): extra routes on top of the world's (a later route runs first).
-const heroCase = (name, shapes, expectIdx, { tune, wait = 5000, n = shapes.length } = {}) => {
+const heroCase = (name, shapes, expectIdx, { tune, wait = 5000, n = shapes.length, heroes = 1 } = {}) => {
   const w = albumWorld({ n, shapes, fake: { title: '婚禮精修', confirmedAt: T0 } });
   return suite(`hero 完成頁 — ${name}`, `${base}/index.html?t=TOK`,
     async page => {
@@ -26,7 +26,7 @@ const heroCase = (name, shapes, expectIdx, { tune, wait = 5000, n = shapes.lengt
       await page.waitForFunction(() => document.getElementById('cpCover')?.classList.contains('on'), null, { timeout: wait });
       const s = await page.evaluate(() => { const i = document.getElementById('cpCover'); return { id: i.dataset.photoId, nat: i.naturalWidth, n: document.querySelectorAll('#cpHero .cp-cover').length }; });
       ok(`hero is photo ${expectIdx} (${key(expectIdx)})`, s.id === key(expectIdx), JSON.stringify(s));
-      ok('positive: the hero image really loaded, exactly one hero img', s.nat > 0 && s.n === 1, JSON.stringify(s));
+      ok('positive: the hero image really loaded, exactly the expected number of hero imgs', s.nat > 0 && s.n === heroes, JSON.stringify(s));
       return out;
     },
     { before: async page => { await w.before(page); if (tune) await tune(page); }, initScript: OWNER, contextOptions: ALB_DESK });
@@ -38,10 +38,10 @@ const only400 = (page, k, fn) => page.route(`**/${W}/**`, async route => {
 });
 
 await heroCase('first portrait, second landscape -> the second', [P, L, L, P], 2);
-await heroCase('all portrait -> the first (as before)', [P, P, SQ, P], 1);
+await heroCase('all portrait -> three portraits side by side, the first is the #cpCover (test/suites/72)', [P, P, SQ, P], 1, { heroes: 3 });
 await heroCase('first landscape -> the first', [L, L, P], 1);
 await heroCase('threshold: 1.19 is not landscape, 1.2 is', [[500, 420], [600, 500], L], 2);
-await heroCase('a landscape beyond the first 12 is not looked for -> the first', [...Array(12).fill(P), L, L], 1, { n: 14 });
+await heroCase('a landscape beyond the first 12 is not looked for -> the first three portraits', [...Array(12).fill(P), L, L], 1, { n: 14, heroes: 3 });
 await heroCase('a candidate that fails to load is skipped (2nd errors -> 3rd)', [P, L, L], 3,
   { tune: page => only400(page, 2, r => r.fulfill({ status: 404, body: 'x', headers: CORS })) });
 await heroCase('deterministic: a slow 2nd landscape still wins over a fast 3rd', [P, L, L], 2,
