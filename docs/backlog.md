@@ -136,6 +136,21 @@ Design: `docs/products-orders.md`.
      costs real money. Print files are rendered in the browser today (too
      heavy for a phone), so the photographer's desktop renders them.
    - Warn when a crop is too low-resolution for its print size.
+   - **Agreed with Tim 2026-10-12 (client swaps photos, orders, it gets printed).** The
+     client changes photos on the 完成頁 preview (first a local swap, nothing stored: tap one
+     photo, tap another), then confirms and orders; the chosen layout is stored with the
+     project and travels with the order (S3: `albumPagesProblem` and the layout on the
+     order; needs a migration; books and their share tokens need an owner column first,
+     see `docs/multi-photographer.md`, batch 3 leaves them default-only).
+     Not fully automatic printing at first: the system checks by itself (resolution for
+     the print size, page count against the product's min/max spreads, empty slots,
+     repeated photos, blank cover) and an order that passes AND is paid shows green in
+     the back office, so the photographer exports a batch with one tap and only opens
+     the flagged ones. The photographer is looking at the order to confirm the bank
+     transfer anyway, so this adds a glance, not a step. Fully automatic send-to-print
+     only after a print-lab API exists and a few dozen books went through without an
+     error. Open: which file format and upload path the print lab takes.
+     Order of work: multi-photographer first (the main line), then this.
 4. **Vendor jobs** — see below.
 5. **Photographer accounts** with real login, replacing the shared
    PHOTOGRAPHER_TOKEN; referral code on sign-up, `referred_by` recorded from
