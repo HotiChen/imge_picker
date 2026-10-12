@@ -102,7 +102,7 @@ const posts = m => m.requests.filter(r => r.method === 'POST' && r.path === '/ap
 // ── 2. one badge per row, order, meta, size ──
 {
   const m = fx();
-  await suite('admin 專案列表（手機）— 每列只有一個狀態徽章（已確認 > 待修改 > 已交件 > 階段）、類別在 meta 行、按鈕同一行 >= 44px、列高與不橫向溢出',
+  await suite('admin 專案列表（手機）— 每列只有一個狀態徽章（已確認 > 待修改 > 已交件 > 階段）、類別在 meta 行、複製連結 在右側 >= 44px、列高與不橫向溢出',
     ADMIN_URL,
     async page => {
       const { out, ok } = lines();
@@ -123,6 +123,8 @@ const posts = m => m.requests.filter(r => r.method === 'POST' && r.path === '/ap
           badgeBottom: badges[0] ? badges[0].getBoundingClientRect().bottom : null, titleBottom: tr ? tr.bottom : null,
           meta: (r.querySelector('[data-row-meta]') || {}).textContent || '', tag: (r.querySelector('[data-row-meta] [data-project-type-tag]') || {}).textContent || null,
           btnH: bs.map(b => b.height), btnW: bs.map(b => b.width), btnN: btns.length,
+          openShown: !!r.querySelector('[data-open-project]') && vis(r.querySelector('[data-open-project]')),
+          copyBox: (() => { const c = r.querySelector('[data-copy-link]'); const b = c ? c.getBoundingClientRect() : null; const mr = r.querySelector('.proj-recent-main').getBoundingClientRect(); return b ? { l: b.left, r: b.right, t: b.top, b: b.bottom, mainR: mr.right, mainT: mr.top, mainB: mr.bottom } : null; })(),
           btnTop: bs.map(b => Math.round(b.top)), metaBottom: r.querySelector('[data-row-meta]').getBoundingClientRect().bottom, btnMinTop: Math.min(...bs.map(b => b.top)),
           data: { phase: r.dataset.phase, delivered: r.dataset.delivered, confirm: r.dataset.confirm, flags: r.dataset.flags },
         };
@@ -138,13 +140,15 @@ const posts = m => m.requests.filter(r => r.method === 'POST' && r.path === '/ap
         ok(`${r.id}: exactly one badge element in the DOM and one visible`, r.allBadges === 1 && r.badges.length === 1, JSON.stringify(r.badges) + '/' + r.allBadges);
         ok(`${r.id}: the badge reads 「${label}」`, r.badges[0] === label, r.badges[0]);
         ok(`${r.id}: the badge sits on the title line (inside .proj-row-title)`, r.badgeInTitle);
-        ok(`${r.id}: row <= ${r.id === 'proj-F' ? 180 : 130}px tall at 390px (long title wraps)`, r.h <= (r.id === 'proj-F' ? 180 : 130), String(r.h));
+        ok(`${r.id}: row <= ${r.id === 'proj-F' ? 150 : 96}px tall at 390px (long title wraps)`, r.h <= (r.id === 'proj-F' ? 150 : 96), String(r.h));
         ok(`${r.id}: row stays inside the 390px screen`, r.left >= 0 && r.right <= 390, `${r.left}..${r.right}`);
-        ok(`${r.id}: buttons >= 44px tall, 複製連結 + 開啟`, r.btnN === 2 && r.btnH.every(h => h >= 44) && r.btnW.every(w => w >= 44), JSON.stringify(r.btnH));
-        ok(`${r.id}: both buttons share one line, under the meta line`, r.btnTop[0] === r.btnTop[1] && r.btnMinTop >= r.metaBottom - 1, JSON.stringify(r.btnTop));
+        ok(`${r.id}: 複製連結 is >= 44px tall and wide`, !!r.copyBox && r.btnH[0] >= 44 && r.btnW[0] >= 44, JSON.stringify(r.btnH));
+        ok(`${r.id}: 複製連結 sits to the right of the title block, on its own row line (not under the meta)`, !!r.copyBox && r.copyBox.l >= r.copyBox.mainR - 1 && r.copyBox.t < r.copyBox.mainB && r.btnMinTop < r.metaBottom, JSON.stringify(r.copyBox));
+        ok(`${r.id}: 開啟 is not shown on a phone (the whole row opens the project)`, r.openShown === false, String(r.openShown));
+        ok(`${r.id}: exactly the two buttons are still in the DOM (only 開啟 is hidden)`, r.btnN === 2, String(r.btnN));
       }
       const by = Object.fromEntries(rows.map(r => [r.id, r]));
-      ok('the long-title row wraps without extra badge or overflow (<= 180px)', by['proj-F'].h <= 180, String(by['proj-F'].h));
+      ok('the long-title row wraps without extra badge or overflow (<= 150px)', by['proj-F'].h <= 150, String(by['proj-F'].h));
       ok('priority: confirmed beats an open revision (proj-E has both)', by['proj-E'].badges[0] === '客戶已確認' && by['proj-E'].data.confirm === 'confirmed');
       ok('priority: photographer-marked done shows 已標記完成', by['proj-G'].badges[0] === '已標記完成');
       ok('priority: open revision beats delivered', by['proj-F'].badges[0].startsWith('待修改') && by['proj-F'].data.delivered === '1');
@@ -157,6 +161,26 @@ const posts = m => m.requests.filter(r => r.method === 'POST' && r.path === '/ap
       const overflow = await page.evaluate(() => ({ sw: document.documentElement.scrollWidth, cw: document.documentElement.clientWidth, lw: document.getElementById('proj-recent-list').scrollWidth, lc: document.getElementById('proj-recent-list').clientWidth }));
       ok('no horizontal overflow at 390px', overflow.sw <= overflow.cw && overflow.lw <= overflow.lc, JSON.stringify(overflow));
 
+      // the controls above the list: two lines (search + 顯示已封存; 狀態 / 類別 / 排序), not one line each
+      await page.tap('[data-pl-tab="active"]');
+      const ctl = await page.evaluate(() => {
+        const ids = ['pl-q', 'proj-show-archived-toggle', 'pl-status', 'pl-type', 'pl-sort'];
+        const box = id => { const e = document.getElementById(id); const r = e.getBoundingClientRect(); return { id, shown: e.getClientRects().length > 0, t: Math.round(r.top), b: Math.round(r.bottom), l: Math.round(r.left), r: Math.round(r.right) }; };
+        const f = document.getElementById('pl-filter').getBoundingClientRect();
+        const tabs = document.getElementById('pl-tabs').getBoundingClientRect();
+        const first = document.querySelector('[data-project-row]').getBoundingClientRect();
+        return { boxes: ids.map(box), filterH: Math.round(f.height), tabsBottom: Math.round(tabs.bottom), filterTop: Math.round(f.top), firstTop: Math.round(first.top), archivedInFilter: document.getElementById('pl-filter').contains(document.getElementById('proj-show-archived-toggle')) };
+      });
+      ok('all five controls are shown (floor)', ctl.boxes.length === 5 && ctl.boxes.every(b => b.shown), JSON.stringify(ctl.boxes));
+      const tops = [...new Set(ctl.boxes.map(b => b.t))].sort((a, b) => a - b);
+      const lines2 = tops.filter((t, i) => i === 0 || t - tops[i - 1] > 20);   // a line starts where the top jumps by more than a few px of centring
+      ok('the controls fill at most two lines', lines2.length <= 2, JSON.stringify(ctl.boxes.map(b => [b.id, b.t])));
+      ok('顯示已封存 is in the same line as the search box', ctl.boxes[1].t === ctl.boxes[0].t || Math.abs(ctl.boxes[1].t - ctl.boxes[0].t) < 12, JSON.stringify(ctl.boxes.slice(0, 2)));
+      ok('the three selects share one line', ctl.boxes[2].t === ctl.boxes[3].t && ctl.boxes[3].t === ctl.boxes[4].t, JSON.stringify(ctl.boxes.slice(2)));
+      ok('nothing leaves the 390px screen', ctl.boxes.every(b => b.l >= 0 && b.r <= 390), JSON.stringify(ctl.boxes));
+      ok('the controls take at most 100px of height in all', ctl.firstTop - ctl.tabsBottom <= 150 && ctl.filterH <= 100, JSON.stringify(ctl));
+      await page.tap('[data-pl-tab="done"]');
+      await page.waitForFunction(() => document.querySelectorAll('[data-project-row]').length === 2, null, { timeout: 4000 });
       // the status filter still reads the same states
       // (the old 已確認 status is now the 已完成 tab, which is still up)
       const ids = await page.$$eval('[data-project-row]', els => els.map(e => e.dataset.projectRow));
