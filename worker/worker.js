@@ -80,11 +80,12 @@ function sessionExpiry(value) {
 // reachable. The old behaviour ("no token set = open") meant a missing or
 // mistyped Cloudflare secret silently threw upload, book writes and every
 // admin route open to anyone who found the Worker URL.
+// Compared in constant time (sameSecret), like the operator token. Called
+// only from identify(): routes ask requirePhotographer / requireDefault.
 function isAdminToken(request, env) {
-  if (!env.PHOTOGRAPHER_TOKEN) return false;
-  const auth = request.headers.get('Authorization') || '';
-  const token = auth.replace(/^Bearer\s+/i, '').trim();
-  return token === env.PHOTOGRAPHER_TOKEN;
+  const secret = env.PHOTOGRAPHER_TOKEN;
+  if (typeof secret !== 'string' || !secret) return false;
+  return sameSecret(bearerToken(request), secret);
 }
 
 // ─── Operator auth (docs/products-orders.md, platform catalogue) ────────────
@@ -322,7 +323,9 @@ async function resolvePhotographer(request, env) {
     }
   }
   const refusal = photographerRouteRefusal(who, request);
-  if (refusal) return { refused: jsonOk(refusal.body, refusal.status, PHOTOGRAPHER_NO_STORE) };
+  // `who` rides along with a 403 / 500 so identify() can tell a session row
+  // named 'default' apart; the /api/photographer routes answer `refused` only
+  if (refusal) return { refused: jsonOk(refusal.body, refusal.status, PHOTOGRAPHER_NO_STORE), who };
   return { who };
 }
 
@@ -338,27 +341,70 @@ function photographerRoutesOpen(env) {
 
 const UNAUTHORIZED = () => jsonErr('Unauthorized', 401);
 
+// Who is calling, worked out once per request (the front and the route both
+// ask): {who} | {nobody} | {squat} | {refusal: Response} | {error}.
+// - PHOTOGRAPHER_TOKEN: the default photographer (fails closed when unset);
+// - while photographerRoutesOpen(env): a live session of an active account,
+//   through resolvePhotographer and its must_change_password guard (a 403 /
+//   500 is `refusal`). A session row named 'default' is `squat`, refused
+//   everywhere, flagged or not: only the token is the default photographer.
+// - a lookup that throws (D1 down) is `error`: a photographer-only route
+//   fails loudly, a route a share link also reaches goes on as anonymous.
+async function identify(request, env) {
+  if (isAdminToken(request, env)) return { who: { id: DEFAULT_PHOTOGRAPHER_ID } };
+  if (!photographerRoutesOpen(env)) return { nobody: true };
+  let session;
+  try {
+    session = await resolvePhotographer(request, env);
+  } catch (error) {
+    return { error };
+  }
+  if (session.who && session.who.id === DEFAULT_PHOTOGRAPHER_ID) return { squat: true };
+  if (session.refused) return session.refused.status === 401 ? { nobody: true } : { refusal: session.refused };
+  return { who: session.who };
+}
+const IDENTITY = new WeakMap();   // request → identify()'s promise
+function photographerIdentity(request, env) {
+  let found = IDENTITY.get(request);
+  if (!found) IDENTITY.set(request, found = identify(request, env));
+  return found;
+}
+// Requests whose route asked requirePhotographer / requireDefault. The front
+// (export default fetch) refuses a photographer-only path whose route did not.
+const GUARDED = new WeakSet();
+
 // The one function every photographer route asks: {who: {id, ...}} or
 // {refused: Response}. The caller's identity is this `who` and nothing else —
-// never a photographer id from the body, the query or a header.
-// - PHOTOGRAPHER_TOKEN is the default photographer (fails closed when unset);
-// - while photographerRoutesOpen(env): a live session of an active account,
-//   through resolvePhotographer and its must_change_password guard (403 /
-//   500). A session row named 'default' is nobody: only the token is the
-//   default photographer;
-// - anyone else gets `unauthorized()`, the route's own answer to no token, so
-//   with the switch off nothing changes for anybody. `optional: true` (a route
-//   a share link also reaches) gives {who: null} instead, and the route goes
-//   on to its share-link checks.
+// never a photographer id from the body, the query or a header. Nobody (no
+// token, an unknown one, or any session while the switch is off) gets
+// `unauthorized()`, the route's own answer to no token, so with the switch
+// off nothing changes for anybody. `optional: true` (a route a share link
+// also reaches) gives {who: null} instead, and the route goes on to its
+// share-link checks.
 async function requirePhotographer(request, env, { optional = false, unauthorized = UNAUTHORIZED } = {}) {
-  if (isAdminToken(request, env)) return { who: { id: DEFAULT_PHOTOGRAPHER_ID } };
-  const nobody = () => (optional ? { who: null } : { refused: unauthorized() });
-  if (!photographerRoutesOpen(env)) return nobody();
-  const session = await resolvePhotographer(request, env);
-  // no live session (the guard's only 401): the route's own answer
-  if (session.refused) return session.refused.status === 401 ? nobody() : session;
-  if (session.who.id === DEFAULT_PHOTOGRAPHER_ID) return nobody();
-  return session;
+  GUARDED.add(request);
+  const found = await photographerIdentity(request, env);
+  if (found.who) return { who: found.who };
+  if (found.refusal) return { refused: found.refusal.clone() };
+  if (found.squat) return { refused: unauthorized() };
+  if (found.error && !optional) throw found.error;
+  return optional ? { who: null } : { refused: unauthorized() };
+}
+
+// The paths only a photographer may reach, with each one's answer to nobody
+// (null for any other path). The front asks who is calling before their
+// handler runs, and refuses a response their handler made without asking
+// requirePhotographer / requireDefault — a route that forgets its guard, or
+// compares the token by hand, fails closed. Routes a share link also reaches
+// (books, ?list=, objects, upload) guard themselves (`optional`).
+function photographerOnlyPath(pathname) {
+  const [api, area, second, third] = pathname.split('/').filter(Boolean);
+  if (api !== 'api') return null;
+  if (area === 'admin') return UNAUTHORIZED;
+  if (area === 'shares' && (second === 'minted' || (second && third === 'revoke'))) return UNAUTHORIZED;
+  if (area === 'auth' && second === 'studio-token') return UNAUTHORIZED;
+  if (area === 'auth' && second === 'verify-admin') return () => jsonErr('Token 不正確', 401);
+  return null;
 }
 
 // 404 (as for anything that is not yours) unless `who` is the default
@@ -3121,6 +3167,20 @@ function jsonErr(msg, status = 400) {
 
 export default {
   async fetch(request, env, ctx) {
+    const unauthorized = request.method === 'OPTIONS' ? null : photographerOnlyPath(new URL(request.url).pathname);
+    if (unauthorized) {
+      const found = await photographerIdentity(request, env);
+      if (found.error) throw found.error;
+      if (found.refusal) return found.refusal.clone();
+      if (!found.who) return unauthorized();
+    }
+    const response = await routeRequest(request, env, ctx);
+    if (unauthorized && !GUARDED.has(request)) return unauthorized();
+    return response;
+  },
+};
+
+async function routeRequest(request, env, ctx) {
     const url = new URL(request.url);
     const params = url.searchParams;
 
@@ -4825,12 +4885,15 @@ export default {
       // order's money is frozen (409); its note is not. The total may not
       // drop below what was already paid (400 below_paid).
       if (route === 'order') {
-        // lines carry photo_keys (R2 keys): stays default-only when 2b-2 opens
-        // the block. A no-op today (the block's requireDefault already let
-        // only the default photographer in); it starts refusing once 2b-2
-        // turns that into requirePhotographer.
-        const keysRefused = defaultOnly(auth.who); // default-only until batch 3 (photo_keys)
-        if (keysRefused) return keysRefused;
+        // lines carry photo_keys (R2 keys): a body with lines stays
+        // default-only when 2b-2 opens the block (a note or a discount does
+        // not). A no-op today (the block's requireDefault already let only
+        // the default photographer in); it starts refusing once 2b-2 turns
+        // that into requirePhotographer.
+        if (hasField(body, 'lines') || hasField(body, 'photo_keys')) {
+          const keysRefused = defaultOnly(auth.who); // default-only until batch 3 (photo_keys)
+          if (keysRefused) return keysRefused;
+        }
         const money = hasField(body, 'lines') || hasField(body, 'discount');
         if (order.status === 'cancelled' && money) return cancelled();
         let lines = null;
@@ -7049,5 +7112,4 @@ export default {
     }
 
     return new Response('Invalid Request', { status: 400, headers: corsHeaders });
-  }
-};
+}

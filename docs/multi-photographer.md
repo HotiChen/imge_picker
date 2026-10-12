@@ -124,6 +124,22 @@ CREATE TABLE photographer_sessions (
   標記和表一致；開關關（含 `ON`、` on`、`true` 等錯拼）／開兩種情況下非 default session 的回應與整個 D1 + R2 快照；
   `DEFAULT_PHOTOGRAPHER_ID` 依所在函式計數（精確數字，之後每批往下減）；不准從 body／query／header 讀攝影師 id。
   兩位攝影師 fixture 在 `worker/test/tenant-helpers.mjs`（`seedPhotographer`、`twoTenants`、`snapshot`），給 2b-1..3 用。
+- 安全審查後補上（同批）：
+  - **前門閘**（`export default fetch` → `routeRequest`）：`photographerOnlyPath` 列出只有攝影師能到的路徑（`/api/admin/*`、
+    `/api/shares/minted*`、`/api/shares/:t/revoke*`、`/api/auth/studio-token`、`/api/auth/verify-admin`）。這些路徑在任何 handler
+    跑之前先問身分，沒有就回該路由原本的 401，handler 根本不會執行；handler 回應後，若這個 request 沒呼叫過
+    `requirePhotographer` / `requireDefault`（per-request `GUARDED`），回應換成 401。所以新路由忘了守門、或自己比對 token，
+    都會失敗關閉。限制：用 default token 打一條「自己比對 token」的新路由時，handler 的寫入已經發生，只是回應變 401
+    （匿名或其他攝影師到不了 handler）。書、`?list=`、物件、上傳這些也接分享連結的路由不在前門，自己用 `optional` 守。
+  - 身分每個 request 只查一次（`identify` 的結果按 request 快取，前門和路由共用）。
+  - `isAdminToken` 改成常數時間比對（`sameSecret`），沒設或空字串的 secret 一律 false。
+  - 名為 `'default'` 的 session（不論有沒有 must_change 旗標）在所有路由一律 401，含分享連結也到得了的路由。
+  - 分享連結也到得了的路由：查 session 時 D1 出錯，不會讓帶分享連結的訪客 500，改當匿名、照連結檢查走；只有攝影師能到的路由照樣丟錯。
+  - `PUT /api/admin/orders/:id` 只有 body 帶 `lines` / `photo_keys` 時才是 default-only（batch 3），只改備註、折扣不受影響（2b-2 生效）。
+  - 測試：`photographer-route-gate.test.mjs`（審查的 PoC：注入沒守門／自己比對 token 的路由；掃 worker.js 裡所有 `/api/...`
+    路徑逐一以各種身分、五種 method 打；`PHOTOGRAPHER_TOKEN` 只能出現 2 次；`isAdminToken` 不得被別名或當值傳遞）。
+    `photographer-routes.test.mjs` 多了 `scoped` 標記（`// scoped to the caller`，必須用 `requirePhotographer`），2b-1 只要換標記；
+    並禁止 `?? / || DEFAULT_PHOTOGRAPHER_ID` 與 `who?.`。
 
 - 所有 `/api/admin/*`、`/api/upload`、`/api/books` 等攝影師路由：`const who = await resolvePhotographer(...)`，
   所有查詢與寫入的 `WHERE` 都帶 `photographer_id = who.id`。別人的資源回 **404**（不是 403，不洩漏存在）。

@@ -640,10 +640,11 @@ test('isAdminToken still checks PHOTOGRAPHER_TOKEN only; a session reaches an ex
   assert.ok(fn.includes('env.PHOTOGRAPHER_TOKEN'));
   assert.ok(!/photographer_sessions|resolvePhotographer/.test(fn));
   // 2b-0: one definition, GET /api/photographer/me, POST …/change-password,
-  // and requirePhotographer — which asks only once photographerRoutesOpen(env)
+  // and identify (requirePhotographer's lookup) — which asks only once
+  // photographerRoutesOpen(env)
   const uses = src.split('resolvePhotographer(').length - 1;
-  assert.equal(uses, 4, 'one definition, three calls (me, change-password, requirePhotographer)');
-  const gate = src.slice(src.indexOf('async function requirePhotographer('), src.indexOf('\n}\n', src.indexOf('async function requirePhotographer(')));
+  assert.equal(uses, 4, 'one definition, three calls (me, change-password, identify)');
+  const gate = src.slice(src.indexOf('async function identify('), src.indexOf('\n}\n', src.indexOf('async function identify(')));
   assert.ok(gate.indexOf('photographerRoutesOpen(env)') > 0 && gate.indexOf('photographerRoutesOpen(env)') < gate.indexOf('resolvePhotographer(request, env)'),
     'the switch is checked before any session lookup');
 });

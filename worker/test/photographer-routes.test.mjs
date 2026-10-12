@@ -27,7 +27,15 @@ const SRC = readFileSync(new URL('../worker.js', import.meta.url), 'utf8');
 const UNKNOWN = 'e'.repeat(64);           // shaped like a session token, matches none
 // occurrences outside `//` comments
 const codeCount = needle => SRC.split('\n').reduce((n, line) => n + (line.split('//')[0].split(needle).length - 1), 0);
-const UNTIL = ['open', '2b-1', '2b-2', '2b-3', 'batch 3', 'retired'];
+// 'open': any photographer, no data. 'scoped': any photographer, its own data
+// only (who.id) — what 2b-1..3 turn their routes into. The rest: default only
+// until that batch.
+const UNTIL = ['open', 'scoped', '2b-1', '2b-2', '2b-3', 'batch 3', 'retired'];
+// which helper a mark requires at its call site
+const helperFor = until => (until === 'open' || until === 'scoped' ? 'requirePhotographer' : 'requireDefault');
+// the mark on a call-site line
+const markOf = line => /\/\/ default-only until (2b-1|2b-2|2b-3|batch 3|retired)\b/.exec(line)?.[1]
+  ?? (/\/\/ open to every photographer\b/.test(line) ? 'open' : /\/\/ scoped to the caller\b/.test(line) ? 'scoped' : null);
 
 // ─── fixture: one of everything the default photographer owns ──────────────
 async function fixture(env) {
@@ -114,8 +122,9 @@ async function worker() { return (realWorker ??= (await import('../worker.js')).
 // ─── the call sites, read from the source ─────────────────────────────────
 // Each `requirePhotographer(` / `requireDefault(` call outside the two helpers
 // themselves, with the batch named on its line.
-// the nearest top-level declaration above `index`: `function NAME(`, or the
-// Worker's `async fetch(` (a top-level `const` closes the previous one)
+// the nearest top-level declaration above `index`: `function NAME(` (the
+// Worker's routes live in routeRequest), or the export's `async fetch(` (a
+// top-level `const` closes the previous one)
 function enclosingFunction(src, index) {
   let name = null;
   for (const m of src.slice(0, index).matchAll(/^(?:async )?function ([A-Za-z_$][\w$]*)\(|^  async (fetch)\(|^(?:const|let) /gm)) name = m[1] || m[2] || '(top level)';
@@ -129,8 +138,7 @@ function callSites(src = SRC) {
     if (/^\s*(async\s+)?function\s/.test(line) || /^\s*\/\//.test(line)) continue;   // the definition, or prose
     const inside = enclosingFunction(src, m.index);
     if (inside === 'requirePhotographer' || inside === 'requireDefault') continue;
-    const until = /\/\/ default-only until (2b-1|2b-2|2b-3|batch 3|retired)\b/.exec(line)?.[1]
-      ?? (/\/\/ open to every photographer\b/.test(line) ? 'open' : null);
+    const until = markOf(line);
     sites.push({ fn: m[1], index: m.index, line: line.trim(), until });
   }
   return sites;
@@ -143,14 +151,16 @@ test('route table: at least 45 routes, every call site is marked, and the marks 
   for (const s of sites) {
     assert.ok(UNTIL.includes(s.until), `unmarked call site: ${s.line}`);
     // requireDefault is the default-only gate; requirePhotographer alone opens the route
-    assert.equal(s.fn === 'requireDefault', s.until !== 'open', s.line);
+    assert.equal(s.fn, helperFor(s.until), s.line);
   }
   for (const r of ROUTES) assert.ok(UNTIL.includes(r.until), label(r));
-  // isAdminToken survives only inside requirePhotographer
-  assert.equal(codeCount('isAdminToken('), 2, 'its definition and requirePhotographer');
-  const fn = SRC.slice(SRC.indexOf('async function requirePhotographer('), SRC.indexOf('\n}\n', SRC.indexOf('async function requirePhotographer(')));
+  // isAdminToken survives only inside identify (requirePhotographer's lookup)
+  assert.equal(codeCount('isAdminToken('), 2, 'its definition and identify');
+  const fn = SRC.slice(SRC.indexOf('async function identify('), SRC.indexOf('\n}\n', SRC.indexOf('async function identify(')));
   assert.ok(fn.includes('isAdminToken(request, env)'));
   assert.ok(fn.includes('photographerRoutesOpen(env)'));
+  const gate = SRC.slice(SRC.indexOf('async function requirePhotographer('), SRC.indexOf('\n}\n', SRC.indexOf('async function requirePhotographer(')));
+  assert.ok(gate.includes('photographerIdentity(request, env)'));
 });
 
 // An instrumented copy of worker.js: each call site reports its number before
@@ -232,6 +242,9 @@ test('PHOTOGRAPHER_ROUTES=on: a non-default session is 404 on every default-only
     const res = await send(mod, env, r, f, B.token);
     const text = await res.text();
     assert.equal(snapshot(env), before, `${label(r)} wrote something`);
+    // scoped (2b-1..3 flip their routes to it): B on A's resource is 404 and
+    // writes nothing, like default-only — and A still gets it (the positive
+    // control above runs every route with A's token)
     if (r.until === 'open') {
       assert.equal(res.status, 200, label(r));
       assert.deepEqual(JSON.parse(text), { ok: true }, 'verify-admin says nothing about anyone');
@@ -242,6 +255,16 @@ test('PHOTOGRAPHER_ROUTES=on: a non-default session is 404 on every default-only
     refused++;
   }
   assert.equal(refused, ROUTES.length - 1);
+});
+
+test('marks: the scoped classification is ready for 2b-1 (requirePhotographer, a 404 for B like default-only)', () => {
+  assert.equal(markOf("const auth = await requirePhotographer(request, env); // scoped to the caller (who.id)"), 'scoped');
+  assert.equal(helperFor('scoped'), 'requirePhotographer');
+  assert.equal(markOf('const auth = await requireDefault(request, env); // default-only until 2b-1'), '2b-1');
+  assert.equal(helperFor('2b-1'), 'requireDefault');
+  assert.equal(markOf('const auth = await requirePhotographer(request, env); // open to every photographer: answers no data'), 'open');
+  assert.equal(markOf('const auth = await requireDefault(request, env);'), null, 'an unmarked site');
+  assert.equal(markOf('const auth = await requireDefault(request, env); // default-only until later'), null, 'an unknown batch');
 });
 
 test('PHOTOGRAPHER_ROUTES=on: the photo_keys order routes stay default-only on their own (batch 3), not only through the block', () => {
@@ -333,13 +356,21 @@ test('without PHOTOGRAPHER_TOKEN configured nothing is the default photographer 
 test('the switch is one function, and wrangler.toml ships it off', () => {
   const fn = SRC.slice(SRC.indexOf('function photographerRoutesOpen('), SRC.indexOf('\n}\n', SRC.indexOf('function photographerRoutesOpen(')));
   assert.match(fn, /return env\.PHOTOGRAPHER_ROUTES === 'on';/);
-  assert.equal(codeCount('photographerRoutesOpen('), 2, 'its definition and requirePhotographer');
+  assert.equal(codeCount('photographerRoutesOpen('), 2, 'its definition and identify');
   assert.equal(codeCount('PHOTOGRAPHER_ROUTES'), 1, 'read nowhere else');
   const toml = readFileSync(new URL('../wrangler.toml', import.meta.url), 'utf8');
   assert.match(toml, /^PHOTOGRAPHER_ROUTES = "off"$/m);
 });
 
 // ─── identity comes only from the helpers' return value ───────────────────
+test('no fallback to the default photographer: no `?? DEFAULT_PHOTOGRAPHER_ID`, `|| DEFAULT_PHOTOGRAPHER_ID`, `who?.`', () => {
+  const code = SRC.split('\n').map(l => l.split('//')[0]).join('\n');
+  assert.ok(!/(\?\?|\|\|)\s*DEFAULT_PHOTOGRAPHER_ID\b/.test(code), 'a ?? / || fallback to the default photographer');
+  assert.ok(!/DEFAULT_PHOTOGRAPHER_ID\s*(\?\?|\|\|)/.test(code), 'the default photographer ahead of a fallback');
+  assert.ok(!/\bwho\?\./.test(code) && !/\bwho\s*\?\?/.test(code), 'an optional who: identity is there or the route refused');
+  assert.ok(!/\.who\?\./.test(code), 'auth.who?. / session.who?.');
+});
+
 test('no route reads a photographer id from the request (body, query or header)', () => {
   const bad = [
     /body\??\.photographer_?[iI]d\b/, /body\[\s*['"]photographer_?id['"]\s*\]/i, /\{[^}]*\bphotographer_id\b[^}]*\}\s*=\s*body\b/,
@@ -355,13 +386,13 @@ test('no route reads a photographer id from the request (body, query or header)'
 const DEFAULT_ID_USES = {
   '(top level)': 1,          // the definition
   defaultOnly: 1,            // the default-only gate
-  requirePhotographer: 2,    // PHOTOGRAPHER_TOKEN → 'default'; a session named 'default' is refused
+  identify: 2,               // PHOTOGRAPHER_TOKEN → 'default'; a session named 'default' is refused
   catalogueWrites: 1,        // 2b-2
   readProducts: 2,           // 2b-2
   readOrders: 2,             // 2b-2 (readOrder goes through it)
   orderLines: 1,             // 2b-2: the admin callers' default owner
   extraPickWrites: 2,        // 2b-1 / 2b-2
-  fetch: 53,                 // the routes themselves: 2b-1..3
+  routeRequest: 53,          // the routes themselves: 2b-1..3
 };
 test('DEFAULT_PHOTOGRAPHER_ID appears only in the allow-listed functions, with exact counts', () => {
   const counts = {};
