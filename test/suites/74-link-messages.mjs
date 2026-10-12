@@ -132,6 +132,9 @@ const linkKeys = b => Object.keys(b).filter(k => /link_message|pick_link/.test(k
       ok('submitted preview is the submitted default', (await pv(page, 'submitted')).includes('的選片我收到囉'), await pv(page, 'submitted'));
       ok('delivered preview is the saved text filled in', (await pv(page, 'delivered')).startsWith('好了 王小明 & 陳小美 婚紗\nhttps'), await pv(page, 'delivered'));
       ok('done preview is the done default', (await pv(page, 'done')).includes('謝謝你的信任'), await pv(page, 'done'));
+      await setVal(page, 'submitted', '  ');
+      ok('a blank box previews THAT stage\'s default (not the pick one)', (await pv(page, 'submitted')).includes('的選片我收到囉') && !(await pv(page, 'submitted')).includes('選片連結來囉'), await pv(page, 'submitted'));
+      await setVal(page, 'submitted', DEF.submitted);
       await setVal(page, 'done', '完成 {專案名稱} {連結}');
       ok('typing in done updates only its preview', (await pv(page, 'done')).startsWith('完成 王小明 & 陳小美 婚紗 https') && (await pv(page, 'submitted')).includes('的選片我收到囉'), await pv(page, 'done'));
       await save(page);
