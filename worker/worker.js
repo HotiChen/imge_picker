@@ -1069,18 +1069,20 @@ function cleanBookingUrl(raw) {
 // Everything the photographer set, minus the logo bytes. An absent row reads
 // as all-null.
 async function readStudioSettings(env, photographerId) {
-  // default_extra_max, transfer_info and pick_link_message arrive in hand-run
-  // migrations, in any order; until a column exists it reads unset
+  // default_extra_max, transfer_info, pick_link_message and the three
+  // link_message_* arrive in hand-run migrations, in any order; until a
+  // column exists it reads unset
+  const late = ['default_extra_max', 'transfer_info', 'pick_link_message', ...LINK_MESSAGE_FIELDS];
   const read = cols => env.DB.prepare(
     `SELECT studio_name, booking_url, default_pick_limit, default_extra_price${cols}, logo IS NOT NULL AS has_logo, logo_type, logo_updated_at, updated_at FROM studio_settings WHERE photographer_id = ?`
   ).bind(photographerId).first();
-  const row = await withoutMissingColumn(() => read(', default_extra_max, transfer_info, pick_link_message'), async () => {
+  const row = await withoutMissingColumn(() => read(late.map(c => `, ${c}`).join('')), async () => {
     // Not every migration has run, and not necessarily in order: read the
     // base row, then each late column on its own, so one missing column never
     // hides another that is there.
     const base = await read('');
     if (!base) return base;
-    for (const col of ['default_extra_max', 'transfer_info', 'pick_link_message']) {
+    for (const col of late) {
       const one = await withoutMissingColumn(() => read(`, ${col}`), () => null);
       if (one) base[col] = one[col];
     }
@@ -1099,6 +1101,8 @@ async function readStudioSettings(env, photographerId) {
     // the photographer's default text sent with a pick link; null = the
     // page's built-in one. Admin-only: pickStudio passes three other fields
     pick_link_message: row?.pick_link_message ?? null,
+    // the same for the later stages (已送出 / 已交件 / 已完成); admin-only too
+    ...Object.fromEntries(LINK_MESSAGE_FIELDS.map(f => [f, row?.[f] ?? null])),
     // what a new project gets when the create body leaves extra_max out
     effective_default_extra_max: isExtraMax(extraMax) ? extraMax : EXTRA_MAX_DEFAULT,
     has_logo: hasLogo,
@@ -2447,6 +2451,10 @@ const ORDERS_UNAVAILABLE = { error: '線上訂購功能尚未啟用', code: 'ord
 // whose tabs stay (people indent a list of steps)
 const PICK_LINK_MESSAGE_MAX = 1000;
 const PICK_LINK_MESSAGE_UNAVAILABLE = { error: '選片連結訊息預設尚未啟用', code: 'pick_link_message_unavailable' };
+// the same template for the later stages (已送出 / 已交件 / 已完成), one
+// column each from 2026-10-16-link-messages.sql; same rules (pickLinkMessageValue)
+const LINK_MESSAGE_FIELDS = ['link_message_submitted', 'link_message_delivered', 'link_message_done'];
+const LINK_MESSAGES_UNAVAILABLE = { error: '各階段連結訊息預設尚未啟用', code: 'link_messages_unavailable' };
 const ORDERS_REQUESTED_URL = 'https://imhoti.tw/studio/orders.html?status=requested';
 const GUEST_ORDER_EMAIL_LINES_MAX = 20;
 // what /api/pick/shop tells the page when ordering is open
@@ -5232,6 +5240,13 @@ async function routeRequest(request, env, ctx) {
           if (v === undefined) return bad('pick_link_message');
           set.pick_link_message = v;
         }
+        // ... and the later stages' (admin-only, same rules)
+        for (const field of LINK_MESSAGE_FIELDS) {
+          if (!has(field)) continue;
+          const v = pickLinkMessageValue(body[field]);
+          if (v === undefined) return bad(field);
+          set[field] = v;
+        }
         // column names come from the fixed list above, never from the body
         const cols = [...Object.keys(set), 'updated_at'];
         const all = ['photographer_id', ...cols];
@@ -5241,8 +5256,13 @@ async function routeRequest(request, env, ctx) {
             `ON CONFLICT(photographer_id) DO UPDATE SET ${cols.map(k => `${k} = excluded.${k}`).join(', ')}`
           ).bind(who.id, ...Object.values(set), new Date().toISOString()).run();
         } catch (e) {
-          // default_extra_max / transfer_info / pick_link_message before its
-          // migration: one statement, so nothing landed; the error names the column
+          // default_extra_max / transfer_info / pick_link_message /
+          // link_message_* before its migration: one statement, so nothing
+          // landed; the error names the column
+          const msg = String(e?.message || '');
+          if (isMissingColumn(e) && LINK_MESSAGE_FIELDS.some(f => f in set && msg.includes(f))) {
+            return jsonOk(LINK_MESSAGES_UNAVAILABLE, 500, ADMIN_ONLY_HEADERS);
+          }
           if (isMissingColumn(e) && 'pick_link_message' in set && /pick_link_message/.test(String(e?.message || ''))) {
             return jsonOk(PICK_LINK_MESSAGE_UNAVAILABLE, 500, ADMIN_ONLY_HEADERS);
           }

@@ -53,8 +53,8 @@ Responses carry `Cache-Control: private, no-store`.
 | `POST /api/admin/projects/:id/deliver` | `{ok: true, delivered_at}` (a repeat keeps the first stamp); 409 `{error, code: 'not_retouching', phase}` from picking/submitted; 404 unknown / other photographer |
 | `POST /api/admin/projects/:id/undeliver` | `{ok: true, delivered_at: null}`; 404 |
 | `GET /api/admin/projects` | rows gain `delivered_at` (detail has it via `project`) |
-| `GET /api/admin/settings` | `{studio_name, booking_url, default_pick_limit, default_extra_price, default_extra_max, effective_default_extra_max, transfer_info, pick_link_message, has_logo, logo_type, logo_updated_at, updated_at}` — all null / `has_logo: false` before anything is set (`effective_default_extra_max` is then 10: what a new project gets, `docs/project-plan.md`); never the blob |
-| `PUT /api/admin/settings` | JSON; only the fields present change, `null` (or `''` for the strings) clears one, unknown fields ignored → same shape as GET. 400 `{error, code}` with `code` one of `invalid_studio_name` (not string/null, > 60 chars after trim), `invalid_booking_url`, `invalid_default_pick_limit`, `invalid_default_extra_price` (not a safe integer ≥ 0 or null), `invalid_default_extra_max` (not a safe integer 0–500 or null; 500 `extra_max_unavailable` before its migration), `invalid_transfer_info` (匯款資訊 for guest orders, ≤ 500 characters; 500 `orders_unavailable` before `2026-10-09-guest-orders.sql`, see `docs/guest-shop.md`), `invalid_pick_link_message` (see below; 500 `pick_link_message_unavailable` before `2026-10-10-pick-link-message.sql`); plain 400 for non-object JSON. Nothing written on any 400 |
+| `GET /api/admin/settings` | `{studio_name, booking_url, default_pick_limit, default_extra_price, default_extra_max, effective_default_extra_max, transfer_info, pick_link_message, link_message_submitted, link_message_delivered, link_message_done, has_logo, logo_type, logo_updated_at, updated_at}` — all null / `has_logo: false` before anything is set (`effective_default_extra_max` is then 10: what a new project gets, `docs/project-plan.md`); never the blob |
+| `PUT /api/admin/settings` | JSON; only the fields present change, `null` (or `''` for the strings) clears one, unknown fields ignored → same shape as GET. 400 `{error, code}` with `code` one of `invalid_studio_name` (not string/null, > 60 chars after trim), `invalid_booking_url`, `invalid_default_pick_limit`, `invalid_default_extra_price` (not a safe integer ≥ 0 or null), `invalid_default_extra_max` (not a safe integer 0–500 or null; 500 `extra_max_unavailable` before its migration), `invalid_transfer_info` (匯款資訊 for guest orders, ≤ 500 characters; 500 `orders_unavailable` before `2026-10-09-guest-orders.sql`, see `docs/guest-shop.md`), `invalid_pick_link_message` (see below; 500 `pick_link_message_unavailable` before `2026-10-10-pick-link-message.sql`), `invalid_link_message_submitted` / `invalid_link_message_delivered` / `invalid_link_message_done` (same rules; 500 `link_messages_unavailable` before `2026-10-16-link-messages.sql`); plain 400 for non-object JSON. Nothing written on any 400 |
 | `PUT /api/admin/settings/logo` | raw bytes → `{ok: true, has_logo: true, logo_type, logo_updated_at, size}`; 413 `{code: 'too_large', max: 204800}`; 415 `{code: 'unsupported_type'}` |
 | `DELETE /api/admin/settings/logo` | `{ok: true, has_logo: false}` (idempotent) |
 | `GET /api/studio/logo` | public. The bytes, `Content-Type` = sniffed type, `X-Content-Type-Options: nosniff`, `Content-Security-Policy: default-src 'none'`, `Cache-Control: public, max-age=300`, `ETag: "<logo_updated_at>"` (304 on `If-None-Match`); 404 when none. Other methods 405 |
@@ -119,3 +119,35 @@ link (admin.html 「複製連結」 dialog; the built-in text read cold). Column
 - Admin-only: no guest route (`/api/pick/state`, `shop`, `rounds`, orders,
   `?list=`) returns it. The guest brand (`pickStudio`) passes only `name`,
   `booking_url` and `has_logo` from the settings read.
+
+### Per stage (`link_message_submitted` / `_delivered` / `_done`)
+
+The 「複製連結」 message differs by the project's stage, so the photographer
+keeps one default per stage. `pick_link_message` stays the 選片中 one
+(unchanged, so a saved template keeps working); three more nullable columns
+hold the others:
+
+| Stage | Column |
+|---|---|
+| 選片中 | `pick_link_message` |
+| 已送出 | `studio_settings.link_message_submitted TEXT` |
+| 已交件 | `studio_settings.link_message_delivered TEXT` |
+| 已完成 | `studio_settings.link_message_done TEXT` |
+
+From the hand-run `worker/migrations/2026-10-16-link-messages.sql`: three
+separate `ALTER TABLE` statements, run one by one in the D1 Console (a
+"duplicate column name" on a re-run means that one already ran).
+
+- Same rules as `pick_link_message` in every respect (≤ 1000 code points, CRLF
+  → LF, tabs and line breaks kept, trimmed, `''` / whitespace / `null` → `null`,
+  the same characters refused, placeholders plain text). A bad value → 400 with
+  that field's own code (`invalid_link_message_submitted`, …), nothing written.
+- GET returns all four (stored string or `null`); a PUT changes only the
+  fields it names.
+- Before the migration: GET reads `null` for the three; a PUT naming any of
+  them answers 500 `link_messages_unavailable` and writes nothing (the other
+  fields in that body included); a PUT without them works. Each column reads
+  on its own, so a half-run paste keeps the ones that ran.
+- Per photographer (the caller's `studio_settings` row, `who.id`), like every
+  other setting. Admin-only: no guest route returns them; `pickStudio` passes
+  only `name`, `booking_url`, `has_logo` (`worker/test/link-messages.test.mjs`).
