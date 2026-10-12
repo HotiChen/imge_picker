@@ -198,6 +198,11 @@
   .pl-filter { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px; }
   .pl-filter .field { width: auto; padding: 7px 10px; font-size: 13px; }
   .pl-filter #pl-q { flex: 1; min-width: 160px; }
+  .pl-tabs { display: flex; gap: 4px; padding: 4px; margin-bottom: 10px; background: var(--card); border: 1px solid var(--rule); border-radius: 12px; }
+  .pl-tab { flex: 1 1 0; min-width: 0; min-height: 44px; padding: 8px 10px; border: 0; border-radius: 9px; background: transparent; color: var(--ink-70); font: inherit; font-size: 14px; font-weight: 600; cursor: pointer; white-space: nowrap; }
+  .pl-tab[aria-selected="true"] { background: var(--surface); color: var(--accent-ink); box-shadow: 0 1px 3px rgba(35,27,18,.15); }
+  .pl-tab:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .pl-tab-n { font-weight: 500; color: var(--ink-55); margin-left: 2px; }
   .pl-count { font-size: 12px; color: var(--ink-55); margin-bottom: 8px; min-height: 1em; }
   #proj-type-other { margin-top: 6px; }
   /* 交件 notice dialog */
@@ -443,6 +448,10 @@
     </div>
 
     <h3 style="font-size:14px;margin-bottom:10px;">選片專案列表</h3>
+    <div class="pl-tabs" id="pl-tabs" role="tablist" aria-label="專案分頁">
+      <button type="button" class="pl-tab" role="tab" data-pl-tab="active" aria-selected="true">進行中 <span class="pl-tab-n" data-pl-tab-n="active"></span></button>
+      <button type="button" class="pl-tab" role="tab" data-pl-tab="done" aria-selected="false">已完成 <span class="pl-tab-n" data-pl-tab-n="done"></span></button>
+    </div>
     <label style="font-size:13px;display:inline-flex;align-items:center;gap:6px;margin-bottom:8px;">
       <input type="checkbox" id="proj-show-archived-toggle"> 顯示已封存
     </label>
@@ -456,6 +465,7 @@
       </select>
     </div>
     <div class="pl-count" id="pl-count" aria-live="polite"></div>
+    <div class="pl-count" data-pl-search-note style="display:none;">搜尋中：兩個分頁一起找</div>
     <div id="proj-recent-list" style="margin-bottom:24px;"></div>
     </div>
 
@@ -560,16 +570,24 @@
   }
 
   // The hash is `#project=<id>` (the detail) and/or the list's filters
-  // (`#q=…&status=…&type=…&sort=…`, only what differs from the default), so a reload, a link and
+  // (`#q=…&tab=done&status=…&type=…&sort=…`, only what differs from the default), so a reload, a link and
   // Back all land on the same list. parseHash / buildHash are the only readers and writers.
-  const LIST_STATUSES = [['all', '全部狀態'], ['picking', '選片中'], ['submitted', '已送出'], ['retouching', '精修中'],
-    ['delivered', '已交件'], ['confirmed', '客戶已確認'], ['revising', '待修改']];
-  const listFilter = { q: '', status: 'all', type: 'all', sort: 'default' };
+  // Two tabs: 進行中 (default) and 已完成 (the client's confirmation is in: 客戶已確認 / 已標記完成). The status
+  // choices belong to a tab. Old links still work: status=confirmed is the 已完成 tab, status=delivered is
+  // 進行中 + `awaiting` (delivered, not confirmed, not revising) — see syncFilterFromHash.
+  const LIST_STATUSES_BY_TAB = {
+    active: [['all', '全部狀態'], ['picking', '選片中'], ['submitted', '已送出'], ['retouching', '精修中'],
+      ['awaiting', '已交件（待客戶確認）'], ['revising', '待修改']],
+    done: [['all', '全部已完成']],
+  };
+  const LIST_TABS = ['active', 'done'];
+  const listFilter = { q: '', tab: 'active', status: 'all', type: 'all', sort: 'default' };
   function parseHash() { return new URLSearchParams(location.hash.replace(/^#/, '')); }
   function buildHash(projectId) {
     const p = new URLSearchParams();
     if (projectId) p.set('project', projectId);
     if (listFilter.q) p.set('q', listFilter.q);
+    if (listFilter.tab !== 'active') p.set('tab', listFilter.tab);
     if (listFilter.status !== 'all') p.set('status', listFilter.status);
     if (listFilter.type !== 'all') p.set('type', listFilter.type);
     if (listFilter.sort !== 'default') p.set('sort', listFilter.sort);
@@ -1063,6 +1081,8 @@
   }
   // the photographer's turn: a selection is in (已送出), or the client asked for changes
   const needsPhotographer = p => { const st = projectStatus(p); return st.phase === 'submitted' || st.confirm === 'revising'; };
+  // the 已完成 tab: the client's confirmation is in (or the photographer marked it done). Nothing else.
+  const isDone = p => { const c = projectStatus(p).confirm; return c === 'confirmed' || c === 'photographer'; };
   function statusMatches(p, key) {
     if (key === 'all') return true;
     const st = projectStatus(p);
@@ -1070,8 +1090,7 @@
       case 'picking': return st.phase === 'picking';
       case 'submitted': return st.phase === 'submitted';
       case 'retouching': return st.phase === 'retouching' && !st.delivered;
-      case 'delivered': return st.delivered;
-      case 'confirmed': return st.confirm === 'confirmed' || st.confirm === 'photographer';
+      case 'awaiting': return st.delivered && st.confirm === null;
       case 'revising': return st.confirm === 'revising';
       default: return true;
     }
@@ -1116,7 +1135,7 @@
   // ── list filters ──
   let projectsCache = [];
   function initListControls() {
-    document.getElementById('pl-status').innerHTML = LIST_STATUSES.map(([v, t]) => `<option value="${escHtml(v)}">${escHtml(t)}</option>`).join('');
+    renderStatusOptions();
     document.getElementById('pl-type').innerHTML = [['all', '全部類別'], ['none', '未分類']].concat(SHOOT_TYPES.map(t => [t, t]))
       .map(([v, t]) => `<option value="${escHtml(v)}">${escHtml(t)}</option>`).join('');
     document.getElementById('proj-type').innerHTML = projectTypeOptionsHtml('');
@@ -1129,15 +1148,37 @@
       history.replaceState(history.state, '', listUrl());
       drawProjectList();
     };
+    document.querySelectorAll('[data-pl-tab]').forEach(btn => btn.addEventListener('click', () => {
+      if (listFilter.tab === btn.dataset.plTab) return;
+      listFilter.tab = btn.dataset.plTab;
+      listFilter.status = 'all';   // the status choices differ per tab
+      renderStatusOptions();
+      history.replaceState(history.state, '', listUrl());
+      drawProjectList();
+    }));
     ['pl-q'].forEach(id => document.getElementById(id).addEventListener('input', onChange));
     ['pl-status', 'pl-type', 'pl-sort'].forEach(id => document.getElementById(id).addEventListener('change', onChange));
   }
-  // the hash → listFilter → the controls → the list (page load, Back, a link). Unknown values are ignored.
+  // the status select shows the current tab's choices (the 已完成 tab has only 全部已完成, so it is hidden there)
+  function renderStatusOptions() {
+    const sel = document.getElementById('pl-status');
+    sel.innerHTML = LIST_STATUSES_BY_TAB[listFilter.tab].map(([v, t]) => `<option value="${escHtml(v)}">${escHtml(t)}</option>`).join('');
+    sel.value = listFilter.status;
+    sel.style.display = LIST_STATUSES_BY_TAB[listFilter.tab].length > 1 ? '' : 'none';
+  }
+  // the hash → listFilter → the controls → the list (page load, Back, a link). Unknown values are ignored;
+  // a status that does not belong to the tab falls back to all.
   function syncFilterFromHash() {
     const p = parseHash();
-    const status = p.get('status'), type = p.get('type'), sort = p.get('sort');
+    const status = p.get('status'), type = p.get('type'), sort = p.get('sort'), tab = p.get('tab');
     listFilter.q = (p.get('q') || '').slice(0, 100);
-    listFilter.status = LIST_STATUSES.some(([v]) => v === status) ? status : 'all';
+    listFilter.tab = LIST_TABS.includes(tab) ? tab : 'active';
+    listFilter.status = LIST_STATUSES_BY_TAB[listFilter.tab].some(([v]) => v === status) ? status : 'all';
+    if (!LIST_TABS.includes(tab)) {   // links from before the tabs
+      if (status === 'confirmed') listFilter.tab = 'done';
+      else if (status === 'delivered') listFilter.status = 'awaiting';
+    }
+    renderStatusOptions();
     listFilter.type = type === 'none' || SHOOT_TYPES.includes(type) ? type : 'all';
     listFilter.sort = sort === 'me' ? 'me' : 'default';
     document.getElementById('pl-q').value = listFilter.q;
@@ -1164,12 +1205,24 @@
     if (!box) return;
     const count = document.getElementById('pl-count');
     if (count) count.textContent = '';
+    const nDone = projectsCache.filter(isDone).length;
+    const tabN = { active: projectsCache.length - nDone, done: nDone };
+    LIST_TABS.forEach(t => {
+      const b = document.querySelector(`[data-pl-tab="${t}"]`);
+      if (b) b.setAttribute('aria-selected', String(listFilter.tab === t));
+      const n = document.querySelector(`[data-pl-tab-n="${t}"]`);
+      if (n) n.textContent = projectsCache.length ? String(tabN[t]) : '';
+    });
+    // a search looks at BOTH tabs and ignores the status choice; the tab and status only decide the list while the box is empty
+    const searching = listFilter.q.trim() !== '';
+    const note = document.querySelector('[data-pl-search-note]');
+    if (note) note.style.display = searching ? '' : 'none';
     if (!projectsCache.length) { box.innerHTML = '<div class="empty">尚未建立過專案</div>'; return; }
-    let projects = projectsCache.filter(p => statusMatches(p, listFilter.status) && typeMatches(p, listFilter.type) && searchMatches(p, listFilter.q));
+    let projects = projectsCache.filter(p => (searching || isDone(p) === (listFilter.tab === 'done')) && statusMatches(p, searching ? 'all' : listFilter.status) && typeMatches(p, listFilter.type) && searchMatches(p, listFilter.q));
     if (listFilter.sort === 'me') projects = projects.filter(needsPhotographer).concat(projects.filter(p => !needsPhotographer(p)));
-    const filtering = listFilter.q !== '' || listFilter.status !== 'all' || listFilter.type !== 'all';
+    const filtering = searching || listFilter.status !== 'all' || listFilter.type !== 'all';
     if (count && filtering) count.textContent = `顯示 ${projects.length} / ${projectsCache.length} 個專案`;
-    if (!projects.length) { box.innerHTML = '<div class="empty">沒有符合的專案</div>'; return; }
+    if (!projects.length) { box.innerHTML = `<div class="empty">${filtering ? '沒有符合的專案' : listFilter.tab === 'done' ? '沒有已完成的專案' : '沒有進行中的專案'}</div>`; return; }
     box.innerHTML = projects.map(p => {
       const st = projectStatus(p);
       // ONE visible badge per row: confirmed > client asked for changes > delivered > phase.

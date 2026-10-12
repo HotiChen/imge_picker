@@ -367,7 +367,7 @@ for (const st of STATES) {
   const m = pickFakeWorker({ projectId: 'proj-st', ownerName: 'Zoe', folders: ['shoot/毛片/'], ...st.opts });
   if (st.mutate) st.mutate(m);
   await suite(`35 狀態顏色 — ${st.name}：列表（每列只有一個徽章）與詳情標題（全部徽章）的每個徽章各有自己的顏色類別、文字對比 ≥ 4.5`,
-    `${base}/admin.html`,
+    `${base}/admin.html${/已確認|已標記完成/.test(st.name) ? '#tab=done' : ''}`,
     async page => {
       const out = [], ok = okFn(out);
       await page.waitForSelector('#proj-recent-list [data-project-row] .badge', { timeout: 5000 });

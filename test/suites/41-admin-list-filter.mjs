@@ -21,7 +21,8 @@ const EXTRA = [
   { id: 'proj-G', title: 'Plain Picking', phase: 'picking', owner_name: 'Bob', project_type: null },
   { id: 'proj-H', title: '<b>bold</b> tag', phase: 'picking', project_type: null },
 ];
-const IDS = ['proj-A', ...EXTRA.map(x => x.id)];
+// the default list is the 進行中 tab: the confirmed E is on 已完成 (suite 72 covers the tabs). Search spans both tabs.
+const IDS = ['proj-A', ...EXTRA.map(x => x.id)].filter(id => id !== 'proj-E');
 const fx = (o = {}) => pickFakeWorker({ projectId: 'proj-A', title: '王小明 婚紗', phase: 'picking', projectType: '婚紗', folders: ['shoot/毛片/'], extraProjects: EXTRA, ...o });
 const lines = () => { const out = []; return { out, ok: (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`) }; };
 const rowIds = page => page.$$eval('[data-project-row]', els => els.map(e => e.dataset.projectRow));
@@ -40,11 +41,11 @@ const setStatus = async (page, v, n) => { await page.selectOption('#pl-status', 
     async page => {
       const { out, ok } = lines();
       await waitList(page);
-      await waitRows(page, 8);
-      ok('baseline: all 8 rows are listed (floor)', same(await rowIds(page), IDS), JSON.stringify(await rowIds(page)));
+      await waitRows(page, 7);
+      ok('baseline: the 7 進行中 rows are listed (floor; E is on 已完成)', same(await rowIds(page), IDS), JSON.stringify(await rowIds(page)));
       const tagOf = id => page.$eval(`[data-project-row="${id}"]`, r => { const t = r.querySelector('[data-project-type-tag]'); return t ? t.textContent.trim() : null; });
       ok('row A carries the 婚紗 tag', (await tagOf('proj-A')) === '婚紗', await tagOf('proj-A'));
-      ok('row B carries 婚禮, row E carries the typed 嬰兒寫真', (await tagOf('proj-B')) === '婚禮' && (await tagOf('proj-E')) === '嬰兒寫真');
+      ok('row B carries 婚禮', (await tagOf('proj-B')) === '婚禮');
       ok('a row without a category has NO tag (positive controls above)', (await tagOf('proj-D')) === null && (await tagOf('proj-G')) === null);
 
       await page.fill('#pl-q', 'AMY');
@@ -68,8 +69,8 @@ const setStatus = async (page, v, n) => { await page.selectOption('#pl-status', 
       const txt = await page.$eval('#proj-recent-list', e => e.textContent.trim());
       ok('no match → 「沒有符合的專案」 (not the 尚未建立過專案 text)', txt === '沒有符合的專案', txt);
       await page.fill('#pl-q', '');
-      await waitRows(page, 8);
-      ok('clearing the box brings all 8 back', same(await rowIds(page), IDS));
+      await waitRows(page, 7);
+      ok('clearing the box brings the 7 back', same(await rowIds(page), IDS));
       return out;
     },
     { before: m.attach, initScript: ADMIN_PLAIN });
@@ -83,25 +84,23 @@ const setStatus = async (page, v, n) => { await page.selectOption('#pl-status', 
     async page => {
       const { out, ok } = lines();
       await waitList(page);
-      await waitRows(page, 8);
+      await waitRows(page, 7);
       const opts = await page.$$eval('#pl-status option', o => o.map(x => x.textContent.trim()));
-      ok('status options: 全部, 選片中, 已送出, 精修中, 已交件, 客戶已確認, 待修改', same(opts, ['全部狀態', '選片中', '已送出', '精修中', '已交件', '客戶已確認', '待修改']), JSON.stringify(opts));
+      ok('status options (進行中 tab): 全部, 選片中, 已送出, 精修中, 已交件（待客戶確認）, 待修改', same(opts, ['全部狀態', '選片中', '已送出', '精修中', '已交件（待客戶確認）', '待修改']), JSON.stringify(opts));
       let r = await setStatus(page, 'picking', 3);
       ok('選片中 → A, G, H', same(r, ['proj-A', 'proj-G', 'proj-H']), JSON.stringify(r));
       r = await setStatus(page, 'submitted', 1);
       ok('已送出 → B', same(r, ['proj-B']), JSON.stringify(r));
       r = await setStatus(page, 'retouching', 1);
       ok('精修中 → C only (a delivered project is 已交件, not still 精修中)', same(r, ['proj-C']), JSON.stringify(r));
-      r = await setStatus(page, 'delivered', 3);
-      ok('已交件 → D, E, F (delivered_at set)', same(r, ['proj-D', 'proj-E', 'proj-F']), JSON.stringify(r));
-      r = await setStatus(page, 'confirmed', 1);
-      ok('客戶已確認 → E', same(r, ['proj-E']), JSON.stringify(r));
+      r = await setStatus(page, 'awaiting', 1);
+      ok('已交件（待客戶確認） → D (delivered, not confirmed, no open request)', same(r, ['proj-D']), JSON.stringify(r));
       r = await setStatus(page, 'revising', 1);
       ok('待修改 → F (open revision requests)', same(r, ['proj-F']), JSON.stringify(r));
       // the filter agrees with the badges drawn on the same rows
       const badgeOk = await page.$eval('[data-project-row="proj-F"]', row => !!row.querySelector('[data-confirm-badge="revising"]'));
       ok('and that row really shows the 待修改 badge (same status source)', badgeOk);
-      await page.selectOption('#pl-status', 'all'); await waitRows(page, 8);
+      await page.selectOption('#pl-status', 'all'); await waitRows(page, 7);
 
       const types = await page.$$eval('#pl-type option', o => o.map(x => x.textContent.trim()));
       ok('category options: 全部類別, 未分類 + the SHOOT_TYPES list', same(types, ['全部類別', '未分類', '婚紗', '婚禮', '親子', '個人', '活動', '其他']), JSON.stringify(types));
@@ -109,23 +108,25 @@ const setStatus = async (page, v, n) => { await page.selectOption('#pl-status', 
       ok('婚禮 → B', same(await rowIds(page), ['proj-B']));
       await page.selectOption('#pl-type', 'none'); await waitRows(page, 3);
       ok('未分類 → D, G, H', same(await rowIds(page), ['proj-D', 'proj-G', 'proj-H']), JSON.stringify(await rowIds(page)));
+      await page.click('[data-pl-tab="done"]');
       await page.selectOption('#pl-type', '其他'); await waitRows(page, 1);
-      ok('其他 also catches a typed category (嬰兒寫真 → E)', same(await rowIds(page), ['proj-E']), JSON.stringify(await rowIds(page)));
-      await page.selectOption('#pl-type', 'all'); await waitRows(page, 8);
+      ok('其他 also catches a typed category (嬰兒寫真 → E, on the 已完成 tab)', same(await rowIds(page), ['proj-E']), JSON.stringify(await rowIds(page)));
+      await page.click('[data-pl-tab="active"]');
+      await page.selectOption('#pl-type', 'all'); await waitRows(page, 7);
 
       // combined: 已交件 AND 未分類 AND search
-      await page.selectOption('#pl-status', 'delivered'); await page.selectOption('#pl-type', 'none'); await waitRows(page, 1);
-      ok('status + category are ANDed: 已交件 + 未分類 → D', same(await rowIds(page), ['proj-D']), JSON.stringify(await rowIds(page)));
+      await page.selectOption('#pl-status', 'awaiting'); await page.selectOption('#pl-type', 'none'); await waitRows(page, 1);
+      ok('status + category are ANDed: 已交件（待客戶確認） + 未分類 → D', same(await rowIds(page), ['proj-D']), JSON.stringify(await rowIds(page)));
       await page.fill('#pl-q', 'nothing-here'); await waitRows(page, 0);
       ok('and search is ANDed on top (no row, still the 沒有符合 text)', (await page.$eval('#proj-recent-list', e => e.textContent.trim())) === '沒有符合的專案');
-      await page.fill('#pl-q', ''); await page.selectOption('#pl-status', 'all'); await page.selectOption('#pl-type', 'all'); await waitRows(page, 8);
+      await page.fill('#pl-q', ''); await page.selectOption('#pl-status', 'all'); await page.selectOption('#pl-type', 'all'); await waitRows(page, 7);
 
       ok('default order is the server order', same(await rowIds(page), IDS));
       await page.selectOption('#pl-sort', 'me');
       await page.waitForFunction(() => document.querySelector('[data-project-row]').dataset.projectRow === 'proj-B', null, { timeout: 3000 });
       r = await rowIds(page);
       ok('待我處理: B (submitted) and F (open revision) first, in their old relative order, rest keep order',
-        same(r, ['proj-B', 'proj-F', 'proj-A', 'proj-C', 'proj-D', 'proj-E', 'proj-G', 'proj-H']), JSON.stringify(r));
+        same(r, ['proj-B', 'proj-F', 'proj-A', 'proj-C', 'proj-D', 'proj-G', 'proj-H']), JSON.stringify(r));
       return out;
     },
     { before: m.attach, initScript: ADMIN_PLAIN });
@@ -139,19 +140,19 @@ const setStatus = async (page, v, n) => { await page.selectOption('#pl-status', 
     async page => {
       const { out, ok } = lines();
       await waitList(page);
-      await waitRows(page, 8);
+      await waitRows(page, 7);
       ok('no filters → the hash stays empty', (await hash(page)) === '', await hash(page));
       await page.fill('#pl-q', 'co');
-      await page.selectOption('#pl-status', 'delivered');
+      await page.selectOption('#pl-status', 'awaiting');
       await page.selectOption('#pl-type', 'none');
       await waitRows(page, 1);
       const h = await hash(page);
       const hp = new URLSearchParams(h.slice(1));
-      ok('hash carries q, status, type', hp.get('q') === 'co' && hp.get('status') === 'delivered' && hp.get('type') === 'none' && !hp.has('project'), h);
+      ok('hash carries q, status, type', hp.get('q') === 'co' && hp.get('status') === 'awaiting' && hp.get('type') === 'none' && !hp.has('project'), h);
       await page.reload({ waitUntil: 'load' });
       await waitList(page);
       await waitRows(page, 1);
-      ok('after reload: the controls show the same values', (await page.inputValue('#pl-q')) === 'co' && (await page.inputValue('#pl-status')) === 'delivered' && (await page.inputValue('#pl-type')) === 'none');
+      ok('after reload: the controls show the same values', (await page.inputValue('#pl-q')) === 'co' && (await page.inputValue('#pl-status')) === 'awaiting' && (await page.inputValue('#pl-type')) === 'none');
       ok('after reload: the list is filtered (D only)', same(await rowIds(page), ['proj-D']), JSON.stringify(await rowIds(page)));
 
       // open a project from the filtered list, then 返回
@@ -197,8 +198,8 @@ const setStatus = async (page, v, n) => { await page.selectOption('#pl-status', 
       ok('hash is the filters only', hp.get('q') === '王' && hp.get('status') === 'picking' && !hp.has('project'), await hash(page));
       await page.goto(`${ADMIN_URL}#status=bogus&type=bogus&sort=bogus`, { waitUntil: 'load' });
       await waitList(page);
-      await waitRows(page, 8);
-      ok('unknown status / type / sort values are ignored: all 8 rows, selects on their first option',
+      await waitRows(page, 7);
+      ok('unknown status / type / sort values are ignored: the 7 進行中 rows, selects on their first option',
         (await page.inputValue('#pl-status')) === 'all' && (await page.inputValue('#pl-type')) === 'all' && (await page.inputValue('#pl-sort')) === 'default');
       return out;
     },

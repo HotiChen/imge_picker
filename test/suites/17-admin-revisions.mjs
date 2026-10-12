@@ -28,7 +28,7 @@ const admRevItems = page => page.$$eval('#pd-revisions .pd-rev', els => els.map(
     async page => {
       const out = [];
       const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
-      const reload = async () => { await page.reload({ waitUntil: 'load' }); await page.waitForSelector('#proj-recent-list [data-project-row]', { timeout: 5000 }); return admListBadges(page); };
+      const reload = async (done = false) => { await page.evaluate(d => { location.hash = d ? '#tab=done' : ''; }, done); await page.reload({ waitUntil: 'load' }); await page.waitForSelector('#proj-recent-list [data-project-row]', { timeout: 5000 }); return admListBadges(page); };
       await page.waitForSelector('#proj-recent-list [data-project-row]', { timeout: 5000 });
       let b = await admListBadges(page);
       ok('delivered, nothing asked, not confirmed: the 已交件 badge and no confirmation badge', b.some(x => x.d && x.t === '已交件') && !b.some(x => x.c), JSON.stringify(b));
@@ -37,10 +37,10 @@ const admRevItems = page => page.$$eval('#pd-revisions .pd-rev', els => els.map(
       b = await reload();
       ok('2 open requests: 待修改 2 (data-confirm-badge=revising) replaces 已交件 (one badge per row)', b.length === 1 && b.some(x => x.c === 'revising' && x.t === '待修改 2') && !b.some(x => x.d), JSON.stringify(b));
       put([{ message: 'a' }], '2026-09-23T00:00:00.000Z', 'guest');
-      b = await reload();
+      b = await reload(true);
       ok('confirmed by the guest: 客戶已確認 — and it wins over an open request; no 待修改', b.length === 1 && b.some(x => x.c === 'confirmed' && x.t === '客戶已確認') && !b.some(x => x.c === 'revising') && !b.some(x => x.d), JSON.stringify(b));
       put([], '2026-09-23T00:00:00.000Z', 'photographer');
-      b = await reload();
+      b = await reload(true);
       ok('confirmed by the photographer: 已標記完成 (told apart from the guest\'s), not 客戶已確認', b.some(x => x.c === 'photographer' && x.t === '已標記完成') && !b.some(x => x.t === '客戶已確認') && b.length === 1 && !b.some(x => x.d), JSON.stringify(b));
       put([{ message: 'a' }, { message: 'b' }]);
       m.state.project.delivered_at = null;
@@ -94,6 +94,11 @@ const admRevItems = page => page.$$eval('#pd-revisions .pd-rev', els => els.map(
       ok('the Worker resolved the requests: every item is now 已處理', after.length === 3 && after.every(i => i.resolved && i.tag === '已處理'), JSON.stringify(after));
       ok('the head badge turned into 已標記完成, and 已交件 is still there', (await page.$eval('.pd-head [data-confirm-badge]', e => e.textContent.trim() + '|' + e.dataset.confirmBadge)) === '已標記完成|photographer' &&
         (await page.$('.pd-head [data-delivered-badge]')) !== null);
+      // marked done: the row leaves the 進行中 tab (list tabs, test 72) and shows up on 已完成
+      await page.waitForFunction(() => document.querySelector('[data-pl-tab-n="done"]').textContent === '1', null, { timeout: 5000 });
+      ok('the row left 進行中 (not in the DOM there any more)', (await page.$('#proj-recent-list [data-project-row]')) === null);
+      await page.evaluate(() => document.querySelector('[data-pl-tab="done"]').click());
+      await page.evaluate(() => history.replaceState(history.state, '', location.pathname + location.search + '#project=proj-cf&tab=done'));   // the tab click rewrote the hash to the list's
       await page.waitForFunction(() => document.querySelector('#proj-recent-list [data-confirm-badge="photographer"]'), null, { timeout: 5000 });
       ok('the list row followed (已標記完成)', (await admListBadges(page)).some(x => x.c === 'photographer' && x.t === '已標記完成') && !(await admListBadges(page)).some(x => x.c === 'revising'));
       ok('updated in place: the detail was not fetched again', admDetailGets(m) === gets0, `${gets0} -> ${admDetailGets(m)}`);
