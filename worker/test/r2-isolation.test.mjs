@@ -245,6 +245,27 @@ test('?list= follows R2\'s cursor through pages and still returns only the calle
   assert.deepEqual(a.body.data.map(f => f.id).sort(), [0, 1, 2, 3, 4].map(i => `${folder}${i}a.jpg`));
 });
 
+// Security review of batch 3 (test gap): a tenant's list entries are rebuilt
+// from R2's (to strip the prefix), so a field dropped there vanishes from
+// the JSON for everyone but the default. The same object under the same
+// logical key must list identically for the default, a tenant and a link.
+test('?list=: a tenant\'s entries carry the same id, name, size and uploaded as the default\'s for the same object', async () => {
+  const w = await world();
+  const key = `${PROOF}same.jpg`;
+  const uploaded = new Date('2026-03-04T05:06:07.890Z');
+  for (const k of [key, `_t/${w.B.id}/${key}`]) {
+    w.env.imagepicker._store.set(k, { key: k, body: 'SAME-BYTES-1234', contentType: 'image/jpeg', uploaded });
+  }
+  const entry = r => r.body.data.find(f => f.id === key);
+  const a = entry(await list(w.env, PROOF, SECRET));
+  assert.deepEqual(a, { id: key, name: 'same.jpg', size: 15, uploaded: uploaded.toISOString() });
+  const b = entry(await list(w.env, PROOF, w.B.token));
+  assert.deepEqual(b, a, 'B lists the same entry');
+  // and through B's studio token (a link's listing goes through the same rebuild)
+  const tk = await studio(w.env, w.B);
+  assert.deepEqual(entry(await list(w.env, PROOF, undefined, tk)), a, 'B\'s studio token');
+});
+
 // ─── object reads ──────────────────────────────────────────────────────────
 test('GET object: the same logical key gives each photographer its own bytes', async () => {
   const w = await world();
