@@ -9,11 +9,10 @@
 -- Until it has run: login and /me work and say must_change_password: null;
 -- POST /api/photographer/change-password answers 500
 -- password_change_unavailable and writes nothing; operator reset-password
--- still replaces the password and ends every session, but cannot force the
--- change, and its answer says must_change_password: false, warning:
--- must_change_unavailable. Any account reset in that window keeps a temporary
--- password that never has to be changed: after running this, reset that
--- account again from operator.html.
+-- answers 500 must_change_unavailable and writes nothing either (no new
+-- password, no session ended): a temporary password nobody is forced to
+-- change is worse than no reset. The operator list shows
+-- must_change_password: null.
 --
 -- Not safe to re-run: a second run fails with "duplicate column name:
 -- must_change_password", which means it already ran and can be ignored.

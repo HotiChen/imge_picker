@@ -111,11 +111,13 @@ function isOperatorToken(request, env) {
 
 // ─── Photographer accounts (docs/multi-photographer.md, batch 1) ────────────
 // Register (pending) → the operator approves → email + password login gives a
-// bearer session token, stored only as its SHA-256. Batch 1 rule: a session
-// opens /api/photographer/me, /logout and (batch 2a) /change-password and
-// nothing else — isAdminToken above still checks PHOTOGRAPHER_TOKEN only.
-// After an operator reset-password the account must change its password
-// first (must_change_password, enforced in resolvePhotographer). Registration is closed unless
+// bearer session token, stored only as its SHA-256. A session opens
+// /api/photographer/me, /logout and (batch 2a) /change-password; every other
+// photographer route asks requirePhotographer (batch 2b-0), which lets a
+// session in only while photographerRoutesOpen(env) — isAdminToken above
+// still checks PHOTOGRAPHER_TOKEN only. After an operator reset-password the
+// account must change its password first (must_change_password, enforced in
+// resolvePhotographer). Registration is closed unless
 // PHOTOGRAPHER_SIGNUP is exactly 'on' AND TURNSTILE_SECRET is set.
 const PHOTOGRAPHERS_UNAVAILABLE = { error: '攝影師帳號功能尚未啟用', code: 'photographers_unavailable' };
 const PHOTOGRAPHER_NO_STORE = { 'Cache-Control': 'private, no-store', 'Vary': 'Authorization' };
@@ -284,30 +286,33 @@ function mustChangeFlag(value) {
 
 // <photographer-route-guard>
 // What a photographer session may open while must_change_password is set (an
-// operator reset): change its password, ask who it is, log out. Route ids are
-// 'area/name'; every resolvePhotographer call names one. Batch 2b's routes get
-// the refusal by going through resolvePhotographer.
-const PHOTOGRAPHER_MUST_CHANGE_ROUTES = Object.freeze(['photographer/me', 'photographer/logout', 'photographer/change-password']);
+// operator reset): change its password, ask who it is, log out. Read off the
+// request itself — its method and its path with empty segments dropped, as
+// the router splits it — never from anything a caller passes in, so no route
+// can claim to be one of these three (2b-0, security review of 2a).
+const PHOTOGRAPHER_MUST_CHANGE_ROUTES = Object.freeze(['GET api/photographer/me', 'POST api/photographer/logout', 'POST api/photographer/change-password']);
 const PHOTOGRAPHER_UNAUTHORIZED = { error: 'Unauthorized', code: 'unauthorized' };
 const MUST_CHANGE_PASSWORD = { error: '請先修改密碼', code: 'must_change_password' };
 const PASSWORD_CHANGE_UNAVAILABLE = { error: '修改密碼功能尚未啟用', code: 'password_change_unavailable' };
 // {status, body} to answer instead of the route, or null to let it run. Only
 // must_change_password === false opens every route; true is 403, unknown
 // (null: the column is missing) 500 — both only outside the three above.
-function photographerRouteRefusal(who, route) {
+function photographerRouteRefusal(who, request) {
   if (!who) return { status: 401, body: PHOTOGRAPHER_UNAUTHORIZED };
   if (who.must_change_password === false) return null;
+  const route = `${request.method} ${new URL(request.url).pathname.split('/').filter(Boolean).join('/')}`;
   if (PHOTOGRAPHER_MUST_CHANGE_ROUTES.includes(route)) return null;
   if (who.must_change_password === true) return { status: 403, body: MUST_CHANGE_PASSWORD };
   return { status: 500, body: PASSWORD_CHANGE_UNAVAILABLE };
 }
 // </photographer-route-guard>
 
-// The one way a route learns which photographer a session is:
+// The one way to learn which photographer a SESSION is (the /api/photographer
+// routes, and requirePhotographer below for every other route):
 // {who: {id, display_name, email, must_change_password}} or {refused: Response}
-// (401 no live session — before the migration too; 403 / 500 the guard above).
-// `route` is the caller's route id ('photographer/me').
-async function resolvePhotographer(request, env, route) {
+// (401 no live session — before the migration too; 403 / 500 the guard above,
+// which reads the request's own method and path).
+async function resolvePhotographer(request, env) {
   let who = null;
   if (env.DB) {
     try {
@@ -316,9 +321,63 @@ async function resolvePhotographer(request, env, route) {
       if (!isMissingSchema(e)) throw e;
     }
   }
-  const refusal = photographerRouteRefusal(who, route);
+  const refusal = photographerRouteRefusal(who, request);
   if (refusal) return { refused: jsonOk(refusal.body, refusal.status, PHOTOGRAPHER_NO_STORE) };
   return { who };
+}
+
+// ─── Who is calling a photographer route (batch 2b-0) ─────────────────────
+// The kill switch for every photographer but the default one: while it is
+// off (anything but exactly "on", unset included) a photographer session
+// opens no route outside /api/photographer/*, exactly as before batch 2b.
+// It stays off until every isolation batch (2b-1..3, batch 3) is merged and
+// reviewed. The operator's own toggle (a later batch) replaces this body.
+function photographerRoutesOpen(env) {
+  return env.PHOTOGRAPHER_ROUTES === 'on';
+}
+
+const UNAUTHORIZED = () => jsonErr('Unauthorized', 401);
+
+// The one function every photographer route asks: {who: {id, ...}} or
+// {refused: Response}. The caller's identity is this `who` and nothing else —
+// never a photographer id from the body, the query or a header.
+// - PHOTOGRAPHER_TOKEN is the default photographer (fails closed when unset);
+// - while photographerRoutesOpen(env): a live session of an active account,
+//   through resolvePhotographer and its must_change_password guard (403 /
+//   500). A session row named 'default' is nobody: only the token is the
+//   default photographer;
+// - anyone else gets `unauthorized()`, the route's own answer to no token, so
+//   with the switch off nothing changes for anybody. `optional: true` (a route
+//   a share link also reaches) gives {who: null} instead, and the route goes
+//   on to its share-link checks.
+async function requirePhotographer(request, env, { optional = false, unauthorized = UNAUTHORIZED } = {}) {
+  if (isAdminToken(request, env)) return { who: { id: DEFAULT_PHOTOGRAPHER_ID } };
+  const nobody = () => (optional ? { who: null } : { refused: unauthorized() });
+  if (!photographerRoutesOpen(env)) return nobody();
+  const session = await resolvePhotographer(request, env);
+  // no live session (the guard's only 401): the route's own answer
+  if (session.refused) return session.refused.status === 401 ? nobody() : session;
+  if (session.who.id === DEFAULT_PHOTOGRAPHER_ID) return nobody();
+  return session;
+}
+
+// 404 (as for anything that is not yours) unless `who` is the default
+// photographer; null to go on. For what is not scoped to its caller yet.
+function defaultOnly(who) {
+  return who && who.id === DEFAULT_PHOTOGRAPHER_ID ? null : jsonErr('Not found', 404);
+}
+
+// requirePhotographer, then default only: a route that still reads or writes
+// the default photographer's data (DEFAULT_PHOTOGRAPHER_ID), or R2 keys and
+// folders (unprefixed until batch 3). Each call is marked
+// `// default-only until <batch>`, and that batch replaces it with
+// requirePhotographer and `who.id` (photographer-routes.test.mjs keeps the
+// table). {who: null} passes through for `optional` routes.
+async function requireDefault(request, env, options) {
+  const auth = await requirePhotographer(request, env, options);
+  if (auth.refused || auth.who === null) return auth;
+  const refused = defaultOnly(auth.who);
+  return refused ? { refused } : auth;
 }
 
 // A new password: a string of 10–200 characters (register and change-password)
@@ -3088,7 +3147,7 @@ export default {
       // change its password first (null before that migration). 401
       // otherwise, before the migration too: no session can exist then.
       if (route === 'me') {
-        const session = await resolvePhotographer(request, env, 'photographer/me');
+        const session = await resolvePhotographer(request, env);
         if (session.refused) return session.refused;
         const { id, display_name, email, must_change_password } = session.who;
         return reply({ photographer: { id, display_name, email }, must_change_password });
@@ -3109,6 +3168,16 @@ export default {
             await env.DB.prepare('DELETE FROM photographer_sessions WHERE token_hash = ?').bind(await sha256Hex(token)).run();
           }
           return reply({ ok: true });
+        }
+
+        // change-password: the session first, so a request without one is 401
+        // before its body is read at all (no 413 / 400 to tell it anything)
+        let who = null;
+        if (route === 'change-password') {
+          const session = await resolvePhotographer(request, env);
+          if (session.refused) return session.refused;
+          who = session.who;
+          if (who.must_change_password === null) return reply(PASSWORD_CHANGE_UNAVAILABLE, 500);
         }
 
         const parsed = await readJsonCapped(request, PHOTOGRAPHER_BODY_MAX);
@@ -3159,16 +3228,14 @@ export default {
         // new_password}, from a live session (a flagged one too: this is how
         // it clears the flag). Input 400 (no PBKDF2), the login throttle 429
         // (shared keys), a wrong current password 403 wrong_password (counted
-        // as a failure). Then the new hash, the flag cleared and every OTHER
-        // session of this photographer deleted, in one batch that lands only
-        // while this session is live, the account active and its hash still
-        // the one just verified — a reset, a suspend, a logout or another
-        // change in between is 409 password_change_conflict, nothing written.
+        // as a failure). Then the new hash, the flag cleared and every
+        // session of this photographer (this one too) replaced by one new
+        // session, whose token is the answer {ok, token} — a token stolen
+        // before the change dies with it. One batch that lands only while
+        // this session is live, the account active and its hash still the
+        // one just verified — a reset, a suspend, a logout or another change
+        // in between is 409 password_change_conflict, nothing written.
         if (route === 'change-password') {
-          const session = await resolvePhotographer(request, env, 'photographer/change-password');
-          if (session.refused) return session.refused;
-          const who = session.who;
-          if (who.must_change_password === null) return reply(PASSWORD_CHANGE_UNAVAILABLE, 500);
           const current = body.current_password;
           const next = body.new_password;
           if (typeof current !== 'string' || !current || current.length > 2 * PHOTOGRAPHER_PASSWORD_MAX) {
@@ -3186,19 +3253,26 @@ export default {
           ]);
           if (!row || !verified) return reply({ error: '目前的密碼不正確', code: 'wrong_password' }, 403);
           const tokenHash = await sha256Hex(bearerToken(request));
-          const nowIso = new Date().toISOString();
+          const now = Date.now();
+          const nowIso = new Date(now).toISOString();
+          const newToken = randomHex(32);
           const [updated] = await env.DB.batch([
             env.DB.prepare(
               "UPDATE photographers SET password_hash = ?, must_change_password = 0 WHERE id = ? AND status = 'active' AND password_hash = ? AND EXISTS (SELECT 1 FROM photographer_sessions WHERE token_hash = ? AND photographer_id = ? AND expires_at > ?)"
             ).bind(newHash, who.id, row.password_hash, tokenHash, who.id, nowIso),
-            // only if the new hash landed (its salt is fresh, so it is this write's)
-            env.DB.prepare('DELETE FROM photographer_sessions WHERE photographer_id = ? AND token_hash != ? AND EXISTS (SELECT 1 FROM photographers WHERE id = ? AND password_hash = ?)')
-              .bind(who.id, tokenHash, who.id, newHash),
+            // only if the new hash landed (its salt is fresh, so it is this
+            // write's): every session of this photographer, this one included…
+            env.DB.prepare('DELETE FROM photographer_sessions WHERE photographer_id = ? AND EXISTS (SELECT 1 FROM photographers WHERE id = ? AND password_hash = ?)')
+              .bind(who.id, who.id, newHash),
+            // …and the one new session, on the same condition
+            env.DB.prepare(
+              "INSERT INTO photographer_sessions (token_hash, photographer_id, created_at, expires_at) SELECT ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM photographers WHERE id = ? AND status = 'active' AND password_hash = ?)"
+            ).bind(await sha256Hex(newToken), who.id, nowIso, new Date(now + PHOTOGRAPHER_SESSION_MS).toISOString(), who.id, newHash),
             // the current password was right: not a failure
             env.DB.prepare('DELETE FROM photographer_login_failures WHERE attempt = ?').bind(attempt),
           ]);
           if (!updated.meta.changes) return reply({ error: '密碼或登入狀態已改變，請重新登入再試', code: 'password_change_conflict' }, 409);
-          return reply({ ok: true });
+          return reply({ ok: true, token: newToken });
         }
 
         // POST /api/photographer/register — {email, password, display_name,
@@ -3256,14 +3330,16 @@ export default {
 
     // GET /api/auth/verify-admin — check if PHOTOGRAPHER_TOKEN matches
     if (request.method === 'GET' && url.pathname === '/api/auth/verify-admin') {
-      if (isAdminToken(request, env)) return jsonOk({ ok: true });
-      return jsonErr('Token 不正確', 401);
+      const auth = await requirePhotographer(request, env, { unauthorized: () => jsonErr('Token 不正確', 401) }); // open to every photographer: answers no data
+      if (auth.refused) return auth.refused;
+      return jsonOk({ ok: true });
     }
 
     // POST /api/auth/studio-token — a read-only credential the photographer's
     // own pages can put in an <img> src
     if (request.method === 'POST' && url.pathname === '/api/auth/studio-token') {
-      if (!isAdminToken(request, env)) return jsonErr('Unauthorized', 401);
+      const auth = await requireDefault(request, env); // default-only until batch 3
+      if (auth.refused) return auth.refused;
       if (!env.DB) return jsonErr('DB not configured', 500);
       const now = Date.now();
       // both sides are ISO-8601 UTC so this compares as text; a hand-edited
@@ -3449,7 +3525,8 @@ export default {
 
     // GET /api/admin/clients
     if (request.method === 'GET' && url.pathname === '/api/admin/clients') {
-      if (!isAdminToken(request, env)) return jsonErr('Unauthorized', 401);
+      const auth = await requireDefault(request, env); // default-only until retired
+      if (auth.refused) return auth.refused;
       if (!env.DB) return jsonErr('DB not configured', 500);
       const listSql = shoot =>
         `SELECT u.id, u.email, u.name, u.folder_path, u.approved, u.created_at${shoot}, p.can_book, p.can_upload` +
@@ -3479,7 +3556,8 @@ export default {
 
     // PUT /api/admin/clients/:id/approve
     if (request.method === 'PUT' && pathParts[0] === 'api' && pathParts[1] === 'admin' && pathParts[2] === 'clients' && pathParts[4] === 'approve') {
-      if (!isAdminToken(request, env)) return jsonErr('Unauthorized', 401);
+      const auth = await requireDefault(request, env); // default-only until retired
+      if (auth.refused) return auth.refused;
       if (!env.DB) return jsonErr('DB not configured', 500);
       const userId = parseInt(pathParts[3]);
       if (!userId) return jsonErr('Invalid user id');
@@ -3489,7 +3567,8 @@ export default {
 
     // PUT /api/admin/clients/:id/permissions
     if (request.method === 'PUT' && pathParts[0] === 'api' && pathParts[1] === 'admin' && pathParts[2] === 'clients' && pathParts[4] === 'permissions') {
-      if (!isAdminToken(request, env)) return jsonErr('Unauthorized', 401);
+      const auth = await requireDefault(request, env); // default-only until retired
+      if (auth.refused) return auth.refused;
       if (!env.DB) return jsonErr('DB not configured', 500);
       const userId = parseInt(pathParts[3]);
       if (!userId) return jsonErr('Invalid user id');
@@ -3553,7 +3632,8 @@ export default {
 
     // DELETE /api/admin/clients/:id
     if (request.method === 'DELETE' && pathParts[0] === 'api' && pathParts[1] === 'admin' && pathParts[2] === 'clients' && pathParts[3] && !pathParts[4]) {
-      if (!isAdminToken(request, env)) return jsonErr('Unauthorized', 401);
+      const auth = await requireDefault(request, env); // default-only until retired
+      if (auth.refused) return auth.refused;
       if (!env.DB) return jsonErr('DB not configured', 500);
       const userId = parseInt(pathParts[3]);
       if (!userId) return jsonErr('Invalid user id');
@@ -3566,7 +3646,8 @@ export default {
 
     // POST /api/admin/projects — a guest-picking project and its one link
     if (request.method === 'POST' && url.pathname === '/api/admin/projects') {
-      if (!isAdminToken(request, env)) return jsonErr('Unauthorized', 401);
+      const auth = await requireDefault(request, env); // default-only until batch 3
+      if (auth.refused) return auth.refused;
       if (!env.DB) return jsonErr('DB not configured', 500);
       let body;
       try { body = await request.json(); } catch { return jsonErr('Invalid JSON'); }
@@ -3652,7 +3733,8 @@ export default {
     // time order). Archived projects are left out; `?archived=1` lists only
     // them (any other value is the default view).
     if (request.method === 'GET' && url.pathname === '/api/admin/projects') {
-      if (!isAdminToken(request, env)) return jsonErr('Unauthorized', 401);
+      const auth = await requireDefault(request, env); // default-only until 2b-1
+      if (auth.refused) return auth.refused;
       if (!env.DB) return jsonErr('DB not configured', 500);
       const now = Date.now();
       const archivedFilter = params.get('archived') === '1' ? 'p.archived_at IS NOT NULL' : 'p.archived_at IS NULL';
@@ -3719,7 +3801,8 @@ export default {
     // who set each pick. Guest strings go out raw in JSON; admin.html escapes
     // them when it renders.
     if (request.method === 'GET' && pathParts[0] === 'api' && pathParts[1] === 'admin' && pathParts[2] === 'projects' && pathParts[3] && !pathParts[4]) {
-      if (!isAdminToken(request, env)) return jsonErr('Unauthorized', 401);
+      const auth = await requireDefault(request, env); // default-only until 2b-1
+      if (auth.refused) return auth.refused;
       if (!env.DB) return jsonErr('DB not configured', 500);
       const project = await env.DB.prepare('SELECT * FROM projects WHERE id = ? AND photographer_id = ?')
         .bind(pathParts[3], DEFAULT_PHOTOGRAPHER_ID).first();
@@ -3784,7 +3867,8 @@ export default {
     // POST /api/admin/projects/:id/reset-seat — the guest lost their browser.
     // Frees the seat; the selections belong to the project and stay.
     if (request.method === 'POST' && pathParts[0] === 'api' && pathParts[1] === 'admin' && pathParts[2] === 'projects' && pathParts[3] && pathParts[4] === 'reset-seat') {
-      if (!isAdminToken(request, env)) return jsonErr('Unauthorized', 401);
+      const auth = await requireDefault(request, env); // default-only until 2b-1
+      if (auth.refused) return auth.refused;
       if (!env.DB) return jsonErr('DB not configured', 500);
       const result = await env.DB.prepare('UPDATE projects SET owner_picker_id = NULL WHERE id = ? AND photographer_id = ?')
         .bind(pathParts[3], DEFAULT_PHOTOGRAPHER_ID).run();
@@ -3803,7 +3887,8 @@ export default {
     // snapshot stays, as with undeliver.
     if (request.method === 'POST' && pathParts[0] === 'api' && pathParts[1] === 'admin' && pathParts[2] === 'projects' && pathParts[3] && !pathParts[5] &&
         (pathParts[4] === 'start-retouch' || pathParts[4] === 'reopen')) {
-      if (!isAdminToken(request, env)) return jsonErr('Unauthorized', 401);
+      const auth = await requireDefault(request, env); // default-only until 2b-1
+      if (auth.refused) return auth.refused;
       if (!env.DB) return jsonErr('DB not configured', 500);
       const id = pathParts[3];
       // null: the project is there and past picking, so it was the gate below
@@ -3867,7 +3952,8 @@ export default {
     // stay revoked; POST .../links mints a new one.
     if (request.method === 'POST' && pathParts[0] === 'api' && pathParts[1] === 'admin' && pathParts[2] === 'projects' && pathParts[3] && !pathParts[5] &&
         (pathParts[4] === 'archive' || pathParts[4] === 'unarchive')) {
-      if (!isAdminToken(request, env)) return jsonErr('Unauthorized', 401);
+      const auth = await requireDefault(request, env); // default-only until 2b-1
+      if (auth.refused) return auth.refused;
       if (!env.DB) return jsonErr('DB not configured', 500);
       const id = pathParts[3];
       if (pathParts[4] === 'unarchive') {
@@ -3899,7 +3985,8 @@ export default {
     // project row goes last because the others' gate reads it. R2 is never
     // touched: the photos belong to the shoot, not to the project.
     if (request.method === 'DELETE' && pathParts[0] === 'api' && pathParts[1] === 'admin' && pathParts[2] === 'projects' && pathParts[3] && !pathParts[4]) {
-      if (!isAdminToken(request, env)) return jsonErr('Unauthorized', 401);
+      const auth = await requireDefault(request, env); // default-only until 2b-1
+      if (auth.refused) return auth.refused;
       if (!env.DB) return jsonErr('DB not configured', 500);
       const id = pathParts[3];
       const hasSubmissions = () => jsonOk({ error: '已有送出紀錄，無法刪除（可改為封存）', code: 'has_submissions' }, 409);
@@ -3943,7 +4030,8 @@ export default {
     // old link's, not the body's), same expiry as at creation. The old links
     // stay as they are; POST /api/shares/:token/revoke kills one.
     if (request.method === 'POST' && pathParts[0] === 'api' && pathParts[1] === 'admin' && pathParts[2] === 'projects' && pathParts[3] && pathParts[4] === 'links' && !pathParts[5]) {
-      if (!isAdminToken(request, env)) return jsonErr('Unauthorized', 401);
+      const auth = await requireDefault(request, env); // default-only until 2b-1
+      if (auth.refused) return auth.refused;
       if (!env.DB) return jsonErr('DB not configured', 500);
       const project = await env.DB.prepare('SELECT id, title, folders, archived_at FROM projects WHERE id = ? AND photographer_id = ?')
         .bind(pathParts[3], DEFAULT_PHOTOGRAPHER_ID).first();
@@ -3981,7 +4069,8 @@ export default {
     // the delivery migration adds, so it works before that migration too.
     if (request.method === 'POST' && pathParts[0] === 'api' && pathParts[1] === 'admin' && pathParts[2] === 'projects' && pathParts[3] && !pathParts[5] &&
         (pathParts[4] === 'deliver' || pathParts[4] === 'undeliver')) {
-      if (!isAdminToken(request, env)) return jsonErr('Unauthorized', 401);
+      const auth = await requireDefault(request, env); // default-only until batch 3
+      if (auth.refused) return auth.refused;
       if (!env.DB) return jsonErr('DB not configured', 500);
       const id = pathParts[3];
       if (pathParts[4] === 'undeliver') {
@@ -4060,7 +4149,8 @@ export default {
     // the same batch. No email (the photographer did it).
     if (request.method === 'POST' && pathParts[0] === 'api' && pathParts[1] === 'admin' && pathParts[2] === 'projects' && pathParts[3] &&
         pathParts[4] === 'confirm' && !pathParts[5]) {
-      if (!isAdminToken(request, env)) return jsonErr('Unauthorized', 401);
+      const auth = await requireDefault(request, env); // default-only until 2b-1
+      if (auth.refused) return auth.refused;
       if (!env.DB) return jsonErr('DB not configured', 500);
       const id = pathParts[3];
       const done = (data, status = 200) => jsonOk(data, status, ADMIN_ONLY_HEADERS);
@@ -4104,7 +4194,8 @@ export default {
     // the switch alone still flips, as it always did). Submissions keep the
     // plan as it stood at submit: nothing here touches them.
     if (request.method === 'PATCH' && pathParts[0] === 'api' && pathParts[1] === 'admin' && pathParts[2] === 'projects' && pathParts[3] && !pathParts[4]) {
-      if (!isAdminToken(request, env)) return jsonErr('Unauthorized', 401);
+      const auth = await requireDefault(request, env); // default-only until 2b-1
+      if (auth.refused) return auth.refused;
       if (!env.DB) return jsonErr('DB not configured', 500);
       let body = null;
       try { body = await request.json(); } catch {}
@@ -4161,7 +4252,8 @@ export default {
     // any other write to /api/admin/projects/:id is not a route (without this
     // a PUT would fall through to the upload route and store it as a key)
     if ((request.method === 'PUT' || request.method === 'POST') && pathParts[0] === 'api' && pathParts[1] === 'admin' && pathParts[2] === 'projects' && pathParts[3] && !pathParts[4]) {
-      if (!isAdminToken(request, env)) return jsonErr('Unauthorized', 401);
+      const auth = await requireDefault(request, env); // default-only until 2b-1
+      if (auth.refused) return auth.refused;
       return jsonErr('Method not allowed', 405);
     }
 
@@ -4204,17 +4296,19 @@ export default {
       if (route === 'photographers' || route === 'photographer-action') {
         try {
           if (route === 'photographers') {
-            const { results } = await env.DB.prepare(
-              `SELECT ${PHOTOGRAPHER_PUBLIC_COLUMNS} FROM photographers ORDER BY status = 'pending' DESC, created_at DESC, rowid DESC LIMIT ${PHOTOGRAPHER_LIST_MAX}`
-            ).all();
+            // must_change_password: true / false, null before its migration
+            const listSql = flag => `SELECT ${PHOTOGRAPHER_PUBLIC_COLUMNS}, ${flag} AS must_change_password FROM photographers ORDER BY status = 'pending' DESC, created_at DESC, rowid DESC LIMIT ${PHOTOGRAPHER_LIST_MAX}`;
+            const { results } = await withoutMissingColumn(
+              () => env.DB.prepare(listSql('must_change_password')).all(),
+              () => env.DB.prepare(listSql('NULL')).all(),
+            );
             const pending = await env.DB.prepare("SELECT COUNT(*) AS n FROM photographers WHERE status = 'pending'").first();
-            return done({ photographers: results, pending_count: pending.n });
+            return done({ photographers: results.map(r => ({ ...r, must_change_password: mustChangeFlag(r.must_change_password) })), pending_count: pending.n });
           }
           const { from, to } = PHOTOGRAPHER_ACTIONS[action];
           let tempPassword = null;
           let statements;
           let resetResult = null;
-          let mustChange = null;
           if (action === 'reject') {
             statements = [env.DB.prepare("DELETE FROM photographers WHERE id = ? AND status = 'pending'").bind(id)];
           } else if (action === 'reset-password') {
@@ -4222,13 +4316,14 @@ export default {
             const tempHash = await hashPhotographerPassword(tempPassword);
             // the new hash and must_change_password = 1 in one statement, every
             // session gone in the same batch. Before the 2026-10-15 migration
-            // the flag cannot be written: the reset still lands and says so.
-            const reset = flag => env.DB.batch([
-              env.DB.prepare(`UPDATE photographers SET password_hash = ?${flag} WHERE id = ?`).bind(tempHash, id),
+            // the flag cannot be written, and a temporary password nobody has
+            // to change is worse than none: 500, and the batch (one
+            // transaction) wrote nothing — no new hash, no session ended.
+            resetResult = await withoutMissingColumn(() => env.DB.batch([
+              env.DB.prepare('UPDATE photographers SET password_hash = ?, must_change_password = 1 WHERE id = ?').bind(tempHash, id),
               env.DB.prepare('DELETE FROM photographer_sessions WHERE photographer_id = ?').bind(id),
-            ]);
-            mustChange = await withoutMissingColumn(async () => { resetResult = await reset(', must_change_password = 1'); return true; },
-              async () => { resetResult = await reset(''); return false; });
+            ]), () => null);
+            if (!resetResult) return done({ error: '請先執行 must_change_password migration 再重設密碼', code: 'must_change_unavailable' }, 500);
           } else {
             statements = [env.DB.prepare(
               `UPDATE photographers SET status = ?${action === 'approve' ? ', approved_at = ?' : ''} WHERE id = ? AND status = ?`
@@ -4245,9 +4340,7 @@ export default {
           if (action === 'reject') return done({ ok: true, deleted: true });
           const photographer = await env.DB.prepare(`SELECT ${PHOTOGRAPHER_PUBLIC_COLUMNS} FROM photographers WHERE id = ?`).bind(id).first();
           if (!tempPassword) return done({ ok: true, photographer });
-          return done(mustChange
-            ? { ok: true, photographer, temp_password: tempPassword, must_change_password: true }
-            : { ok: true, photographer, temp_password: tempPassword, must_change_password: false, warning: 'must_change_unavailable' });
+          return done({ ok: true, photographer, temp_password: tempPassword, must_change_password: true });
         } catch (e) {
           if (isMissingSchema(e)) return done(PHOTOGRAPHERS_UNAVAILABLE, 500);
           throw e;
@@ -4443,7 +4536,8 @@ export default {
     if (pathParts[0] === 'api' && pathParts[1] === 'admin' &&
         (pathParts[2] === 'products' || pathParts[2] === 'orders' || pathParts[2] === 'platform-products' ||
          (pathParts[2] === 'projects' && pathParts[3] && pathParts[4] === 'orders'))) {
-      if (!isAdminToken(request, env)) return jsonErr('Unauthorized', 401);
+      const auth = await requireDefault(request, env); // default-only until 2b-2
+      if (auth.refused) return auth.refused;
       const [, , area, id, action] = pathParts;
       // null for any deeper or unknown path: 404 below
       let route = null;
@@ -4689,7 +4783,13 @@ export default {
 
         // POST /api/admin/projects/:id/orders — {lines: [{option_id, qty,
         // photo_keys?, unit_price?}], discount?, note?}. Confirmed at once;
-        // archived projects too (a late sale is still a sale).
+        // archived projects too (a late sale is still a sale). photo_keys are
+        // R2 keys: this route stays default-only when 2b-2 opens the block.
+        // A no-op today (the block's requireDefault already let only the
+        // default photographer in); it starts refusing once 2b-2 turns that
+        // into requirePhotographer.
+        const keysRefused = defaultOnly(auth.who); // default-only until batch 3 (photo_keys)
+        if (keysRefused) return keysRefused;
         const checked = await orderLines(env, project, body.lines, null);
         if (checked.bad) return orderBad(checked.bad, checked.error);
         const discount = body.discount ?? 0;
@@ -4725,6 +4825,12 @@ export default {
       // order's money is frozen (409); its note is not. The total may not
       // drop below what was already paid (400 below_paid).
       if (route === 'order') {
+        // lines carry photo_keys (R2 keys): stays default-only when 2b-2 opens
+        // the block. A no-op today (the block's requireDefault already let
+        // only the default photographer in); it starts refusing once 2b-2
+        // turns that into requirePhotographer.
+        const keysRefused = defaultOnly(auth.who); // default-only until batch 3 (photo_keys)
+        if (keysRefused) return keysRefused;
         const money = hasField(body, 'lines') || hasField(body, 'discount');
         if (order.status === 'cancelled' && money) return cancelled();
         let lines = null;
@@ -4848,7 +4954,8 @@ export default {
     // One pass over projects for the counts, one for the months (Taipei
     // month boundaries: the stored timestamps are UTC ISO strings).
     if (url.pathname === '/api/admin/stats') {
-      if (!isAdminToken(request, env)) return jsonErr('Unauthorized', 401);
+      const auth = await requireDefault(request, env); // default-only until 2b-3
+      if (auth.refused) return auth.refused;
       if (request.method !== 'GET') return jsonErr('Method not allowed', 405);
       if (!env.DB) return jsonErr('DB not configured', 500);
       const c = await env.DB.prepare(
@@ -4918,7 +5025,8 @@ export default {
     // default plan. PUT changes only the fields it names (null clears one);
     // anything else in the body is ignored, photographer_id above all.
     if (url.pathname === '/api/admin/settings') {
-      if (!isAdminToken(request, env)) return jsonErr('Unauthorized', 401);
+      const auth = await requireDefault(request, env); // default-only until 2b-3
+      if (auth.refused) return auth.refused;
       if (request.method !== 'GET' && request.method !== 'PUT') return jsonErr('Method not allowed', 405);
       if (!env.DB) return jsonErr('DB not configured', 500);
       if (request.method === 'PUT') {
@@ -5000,7 +5108,8 @@ export default {
     // lifecycle rule deletes everything after 180 days.
     // DELETE /api/admin/settings/logo — remove it; the rest stays.
     if (url.pathname === '/api/admin/settings/logo') {
-      if (!isAdminToken(request, env)) return jsonErr('Unauthorized', 401);
+      const auth = await requireDefault(request, env); // default-only until 2b-3
+      if (auth.refused) return auth.refused;
       if (request.method !== 'PUT' && request.method !== 'DELETE') return jsonErr('Method not allowed', 405);
       if (!env.DB) return jsonErr('DB not configured', 500);
       const now = new Date().toISOString();
@@ -5042,7 +5151,8 @@ export default {
     // below cannot show them and until this route nothing could: a photographer
     // could not answer "what is out there holding my bucket open".
     if (request.method === 'GET' && pathParts[0] === 'api' && pathParts[1] === 'shares' && pathParts[2] === 'minted' && !pathParts[3]) {
-      if (!isAdminToken(request, env)) return jsonErr('Unauthorized', 401);
+      const auth = await requireDefault(request, env); // default-only until batch 3
+      if (auth.refused) return auth.refused;
       if (!env.DB) return jsonErr('DB not configured', 500);
       const { results } = await env.DB.prepare(
         "SELECT token, kind, user_id, folders, created_at, expires_at FROM share_tokens WHERE kind IN ('studio', 'session') AND revoked_at IS NULL AND expires_at > ? ORDER BY created_at DESC"
@@ -5057,7 +5167,8 @@ export default {
     // clients' chats — which are the expensive thing to kill by accident — are
     // spared, including every row that predates the kind column.
     if (request.method === 'POST' && pathParts[0] === 'api' && pathParts[1] === 'shares' && pathParts[2] === 'minted' && pathParts[3] === 'revoke-all') {
-      if (!isAdminToken(request, env)) return jsonErr('Unauthorized', 401);
+      const auth = await requireDefault(request, env); // default-only until batch 3
+      if (auth.refused) return auth.refused;
       if (!env.DB) return jsonErr('DB not configured', 500);
       const result = await env.DB.prepare(
         "UPDATE share_tokens SET revoked_at = ? WHERE kind IN ('studio', 'session') AND revoked_at IS NULL"
@@ -5067,7 +5178,8 @@ export default {
 
     // POST /api/shares/:token/revoke — kill a link that went to the wrong chat
     if (request.method === 'POST' && pathParts[0] === 'api' && pathParts[1] === 'shares' && pathParts[2] && pathParts[3] === 'revoke') {
-      if (!isAdminToken(request, env)) return jsonErr('Unauthorized', 401);
+      const auth = await requireDefault(request, env); // default-only until batch 3
+      if (auth.refused) return auth.refused;
       if (!env.DB) return jsonErr('DB not configured', 500);
       const result = await env.DB.prepare(
         'UPDATE share_tokens SET revoked_at = ? WHERE token = ? AND revoked_at IS NULL'
@@ -6562,7 +6674,9 @@ export default {
 
     if (pathParts[0] === 'api' && pathParts[1] === 'books' && pathParts[2]) {
       const bookId = pathParts[2];
-      const admin = isAdminToken(request, env);
+      const auth = await requireDefault(request, env, { optional: true }); // default-only until batch 3
+      if (auth.refused) return auth.refused;
+      const admin = auth.who !== null;
 
       // POST /api/books/:id/share — mint a link for this album
       if (request.method === 'POST' && pathParts[3] === 'share') {
@@ -6655,7 +6769,7 @@ export default {
       }
 
       if (request.method === 'PUT' && !pathParts[3]) {
-        if (!isAdminToken(request, env)) return jsonErr('Unauthorized', 401);
+        if (!admin) return jsonErr('Unauthorized', 401);
         // stored as sent (byte for byte), but only once it is a book whose
         // slots cannot carry markup into the editor and the viewer
         const text = await request.text();
@@ -6788,7 +6902,8 @@ export default {
 
     // PUT (upload) — admin only
     if (request.method === 'PUT') {
-      if (!isAdminToken(request, env)) return jsonErr('Unauthorized', 401);
+      const auth = await requireDefault(request, env); // default-only until batch 3
+      if (auth.refused) return auth.refused;
       let key = decodeURIComponent(url.pathname.slice(1));
       if (key.startsWith('_assets/')) key = key.slice('_assets/'.length);
       const contentType = request.headers.get('Content-Type') || 'image/jpeg';
@@ -6800,7 +6915,9 @@ export default {
     const listPrefix = params.get('list');
     if (listPrefix !== null) {
       let listShare = null;
-      if (!isAdminToken(request, env)) {
+      const auth = await requireDefault(request, env, { optional: true }); // default-only until batch 3
+      if (auth.refused) return auth.refused;
+      if (!auth.who) {
         listShare = await share();
         // a pick link lists what it may preview now (pickReadScope)
         const covered = listShare && (isPickShare(listShare)
@@ -6853,7 +6970,9 @@ export default {
       // ?download=1: the original as an attachment. Never a thumbnail.
       const download = params.get('download') === '1';
       if (download && isThumb) return jsonErr('Invalid Request', 400);
-      if (!isAdminToken(request, env)) {
+      const auth = await requireDefault(request, env, { optional: true }); // default-only until batch 3
+      if (auth.refused) return auth.refused;
+      if (!auth.who) {
         const s = await share();
         // checked on the source key, so a thumbnail of a book is a book, and
         // ahead of every kind — a studio token is unscoped, and a folder

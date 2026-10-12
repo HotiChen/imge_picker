@@ -87,23 +87,43 @@ CREATE TABLE photographer_sessions (
 
 **第 2a 批實作（2026-10-12，只有 Worker）**：migration `worker/migrations/2026-10-15-photographer-must-change-password.sql`
 （1 句 `ALTER TABLE photographers ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0`，不可重跑）。
-- `POST /api/photographer/change-password {current_password, new_password}` → `{ok:true}`。要有效 session（旗標在時也可）；
+- `POST /api/photographer/change-password {current_password, new_password}` → `{ok:true, token}`（2b-0 起多 `token`，見下）。要有效 session（旗標在時也可）；
   新密碼規則同註冊（10–200 字元）且不得等於目前密碼；輸入錯誤 400（`invalid_current_password` / `invalid_password` /
   `same_password`，不跑 PBKDF2、不記次數）。目前密碼錯 403 `wrong_password`，和登入**共用** `photographer_login_failures`
   的同一組鍵（IP、email），所以偷到 session 也不能多猜；超過 429 `too_many_attempts`。對錯都跑兩次 PBKDF2（驗證＋新雜湊）。
-  成功時一個 batch：新雜湊、清旗標、刪掉此帳號**其他**所有 session（保留目前這個）；只在「目前 session 還活著、帳號 active、
+  成功時一個 batch：新雜湊、清旗標、刪掉此帳號**所有** session（含目前這個），再發一個新 session，回應 `{ok:true, token}`
+  （2b-0 改：改密碼前被偷的 token 一起失效，前端要換成新 token）；只在「目前 session 還活著、帳號 active、
   雜湊仍是剛驗證的那個」時寫入，否則 409 `password_change_conflict`、什麼都不寫（重設、停用、登出、另一次改密碼搶先時）。
+  先驗 session 再讀 body（2b-0 改）：沒有有效 session 一律 401，不會先回 413 / 400。
 - operator 重設密碼：新雜湊與 `must_change_password = 1` 同一句、同一個 batch 刪所有 session；回應多 `must_change_password: true`。
+  operator 帳號清單每列多 `must_change_password`（true / false；migration 前為 null，清單照常）。
 - 登入回應與 `GET /me` 多一個頂層欄位 `must_change_password`（true / false；migration 前為 null）。
-- 守門在 `resolvePhotographer(request, env, route)`：回 `{who}` 或 `{refused}`；旗標為 true 時只放行
-  `photographer/me|logout|change-password`，其餘 403 `must_change_password`；旗標未知（欄位不存在）其餘一律 500
-  `password_change_unavailable`。**第 2b 批每條路由都要經過它並傳自己的 route id**（測試掃描所有呼叫都帶字串 route，
-  並另外用一張假路由表直接跑守門函式）。
-- Migration 前：登入、`/me` 照常（旗標 null）；改密碼 500 `password_change_unavailable` 不寫入；operator 重設仍會換密碼、
-  刪 session，但回應 `must_change_password: false, warning: 'must_change_unavailable'`（operator.html 這批不顯示）。
-  在這段期間被重設過的帳號，跑完 migration 後要再重設一次，否則臨時密碼不會被強制更換。
+- 守門在 `resolvePhotographer(request, env)`：回 `{who}` 或 `{refused}`；旗標為 true 時只放行
+  `GET /api/photographer/me`、`POST …/logout`、`POST …/change-password`，其餘 403 `must_change_password`；旗標未知（欄位不存在）
+  其餘一律 500 `password_change_unavailable`。2b-0 改：放行與否**由守門自己讀 request 的 method + 路徑**（空段落去掉，和路由器
+  一樣），不再收呼叫端傳的 route id，所以把 `/me` 的呼叫抄到別條路由也繞不過。讀 `photographer_sessions` 的 SELECT 只能在
+  `lookupPhotographerSession` 裡（測試掃描）。
+- Migration 前：登入、`/me` 照常（旗標 null）；改密碼 500 `password_change_unavailable` 不寫入；operator 重設密碼
+  **500 `must_change_unavailable`、什麼都不寫**（2b-0 改：原本會換密碼但不強制更換，臨時密碼可能永遠不換，比不重設更糟）。
 
 ### 2. 資料隔離（第 2 批）
+
+**第 2b-0 批（身分入口與總開關，只有 Worker，無 migration）**：
+- `requirePhotographer(request, env, {optional, unauthorized})` 是所有攝影師路由唯一的身分入口，回 `{who}` 或 `{refused}`：
+  `PHOTOGRAPHER_TOKEN` → `{id:'default'}`（沒設 secret 一律拒絕）；攝影師 session → 經 `resolvePhotographer`（含改密碼守門）→ `{id}`；
+  其他 → 該路由今天對「沒 token」的原回應。名為 `'default'` 的 session 一律當成沒登入：只有 token 才是 default。
+  `isAdminToken` 只剩在 `requirePhotographer` 裡用（31 處呼叫全換掉）。
+- 總開關 `photographerRoutesOpen(env)`：wrangler var `PHOTOGRAPHER_ROUTES`，只有 `"on"` 才開，其他值／打錯／沒設都算關。
+  關的時候 session 打任何既有路由（`/api/photographer/*` 以外）得到的回應和不認得的 token **完全相同**（測試逐條比對 status + body），
+  所以合併後誰的行為都不變。之後 operator 頁的開關只要改這個函式。
+- `requireDefault(...)`：還沒按攝影師隔離的路由，非 default 一律 404、什麼都不寫，開關開著也一樣。每個呼叫點都標
+  `// default-only until <批次>`（2b-1 專案／連結、2b-2 商品／訂單、2b-3 設定／儀表板、batch 3 碰 R2 或資料夾、retired 舊客人帳號），
+  該批次合併時把它換成 `requirePhotographer` + `who.id`。訂單的 `photo_keys`（R2 鍵）另有 `defaultOnly(auth.who)` 標 `batch 3`，
+  2b-2 打開商品／訂單區塊時這兩條仍關著。這批只有 `GET /api/auth/verify-admin` 對任何攝影師開放（只回 `{ok:true}`，沒有資料）。
+- 測試 `worker/test/photographer-routes.test.mjs`：路由表 52 條（下限 45），用插樁的 worker.js 證明每個呼叫點都被表裡至少一條路由走到、
+  標記和表一致；開關關（含 `ON`、` on`、`true` 等錯拼）／開兩種情況下非 default session 的回應與整個 D1 + R2 快照；
+  `DEFAULT_PHOTOGRAPHER_ID` 依所在函式計數（精確數字，之後每批往下減）；不准從 body／query／header 讀攝影師 id。
+  兩位攝影師 fixture 在 `worker/test/tenant-helpers.mjs`（`seedPhotographer`、`twoTenants`、`snapshot`），給 2b-1..3 用。
 
 - 所有 `/api/admin/*`、`/api/upload`、`/api/books` 等攝影師路由：`const who = await resolvePhotographer(...)`，
   所有查詢與寫入的 `WHERE` 都帶 `photographer_id = who.id`。別人的資源回 **404**（不是 403，不洩漏存在）。

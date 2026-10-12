@@ -1,8 +1,9 @@
 // Photographer accounts, batch 1 of docs/multi-photographer.md (帳號與登入):
 // register (pending, Turnstile, per-IP limit) → the operator approves /
 // rejects / suspends / resets the password → login gives a session token
-// stored only as its SHA-256. Batch 1's hard rule: a photographer session
-// opens NO existing route — isAdminToken still checks PHOTOGRAPHER_TOKEN only.
+// stored only as its SHA-256. Batch 1's hard rule, kept by 2b-0 behind the
+// PHOTOGRAPHER_ROUTES switch (off unless exactly "on"): a photographer session
+// opens NO existing route. photographer-routes.test.mjs covers the switch on.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -463,8 +464,9 @@ test('the operator list: pending first then newest first, a pending count, never
   assert.deepEqual(body.photographers.map(p => p.email), ['c@example.com', 'a@example.com', 'b@example.com']);
   assert.equal(body.pending_count, 2);
   assert.deepEqual(Object.keys(body.photographers[0]).sort(),
-    ['approved_at', 'created_at', 'display_name', 'dup_attempts', 'email', 'id', 'last_dup_at', 'last_login_at', 'status', 'studio_note']);
-  assert.ok(!text.includes('pbkdf2$') && !text.includes('password'), 'no hash');
+    ['approved_at', 'created_at', 'display_name', 'dup_attempts', 'email', 'id', 'last_dup_at', 'last_login_at', 'must_change_password', 'status', 'studio_note']);
+  // 2b-0: must_change_password (a flag, not a secret) joined the list
+  assert.ok(!text.includes('pbkdf2$') && !text.replaceAll('"must_change_password"', '').includes('password'), 'no hash');
   assert.ok(!text.includes(token) && !text.includes(await sha256Hex(token)), 'no token');
 });
 
@@ -598,8 +600,9 @@ test('no response ever carries a password hash', async () => {
 });
 
 // ─── HARD SAFETY RULE: a photographer session opens no existing route ──────
+// (while PHOTOGRAPHER_ROUTES is off, which is the shipped value)
 
-test('an active photographer session gets 401 on every existing admin, upload, operator and client route', async () => {
+test('switch off: an active photographer session gets 401 on every existing admin, upload, operator and client route', async () => {
   const env = envOpen();
   const { token } = await loggedIn(env);
   const project = await createProject(env);
@@ -631,14 +634,18 @@ test('an active photographer session gets 401 on every existing admin, upload, o
   assert.equal((await call(env, '/api/auth/verify-admin', { token: SECRET })).status, 200);
 });
 
-test('isAdminToken still checks PHOTOGRAPHER_TOKEN only; resolvePhotographer is used by the new routes only', () => {
+test('isAdminToken still checks PHOTOGRAPHER_TOKEN only; a session reaches an existing route only through requirePhotographer, behind the switch', () => {
   const src = readFileSync(new URL('../worker.js', import.meta.url), 'utf8');
   const fn = src.slice(src.indexOf('function isAdminToken('), src.indexOf('\n}\n', src.indexOf('function isAdminToken(')));
   assert.ok(fn.includes('env.PHOTOGRAPHER_TOKEN'));
   assert.ok(!/photographer_sessions|resolvePhotographer/.test(fn));
-  // batch 2a: one definition, GET /api/photographer/me and POST …/change-password
+  // 2b-0: one definition, GET /api/photographer/me, POST …/change-password,
+  // and requirePhotographer — which asks only once photographerRoutesOpen(env)
   const uses = src.split('resolvePhotographer(').length - 1;
-  assert.equal(uses, 3, 'one definition, two calls (me, change-password)');
+  assert.equal(uses, 4, 'one definition, three calls (me, change-password, requirePhotographer)');
+  const gate = src.slice(src.indexOf('async function requirePhotographer('), src.indexOf('\n}\n', src.indexOf('async function requirePhotographer(')));
+  assert.ok(gate.indexOf('photographerRoutesOpen(env)') > 0 && gate.indexOf('photographerRoutesOpen(env)') < gate.indexOf('resolvePhotographer(request, env)'),
+    'the switch is checked before any session lookup');
 });
 
 // ─── before the migration has run ───────────────────────────────────────────

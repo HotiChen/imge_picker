@@ -100,14 +100,21 @@ function gateBatch(env, re) {
 
 // ─── the happy path ─────────────────────────────────────────────────────────
 
-test('change-password: {ok:true}; the new password works, the old one does not', async () => {
+// 2b-0 (security review of 2a): a successful change replaces EVERY session of
+// the account, the one that made the change included, with one new token in
+// the answer — a session that was stolen before the change dies with it.
+test('change-password: {ok:true, token}; the new password works, the old one does not', async () => {
   const env = envOpen();
   const { row, token } = await loggedIn(env);
   const before = account(env).password_hash;
   const res = await change(env, token);
   assert.equal(res.status, 200);
   assert.match(res.headers.get('Cache-Control'), /no-store/);
-  assert.deepEqual(await res.json(), { ok: true });
+  const answer = await res.json();
+  assert.deepEqual(Object.keys(answer).sort(), ['ok', 'token']);
+  assert.equal(answer.ok, true);
+  assert.match(answer.token, /^[0-9a-f]{64}$/);
+  assert.notEqual(answer.token, token);
   const after = account(env);
   assert.notEqual(after.password_hash, before);
   assert.match(after.password_hash, /^pbkdf2\$100000\$[0-9a-f]{32}\$[0-9a-f]{64}$/);
@@ -115,11 +122,16 @@ test('change-password: {ok:true}; the new password works, the old one does not',
   assert.equal(after.status, 'active');
   await bad(await login(env, 'ann@example.com', PASSWORD), 401, 'login_failed', 'old password');
   assert.equal((await login(env, 'ann@example.com', NEW_PASSWORD)).status, 200, 'new password');
-  assert.equal((await me(env, token)).status, 200, 'the session that changed it is kept');
+  assert.equal((await me(env, token)).status, 401, 'the token that made the change is dead too');
+  const fresh = await me(env, answer.token);
+  assert.equal(fresh.status, 200, 'the new token is a live session');
+  assert.equal((await fresh.json()).photographer.id, row.id);
+  const [session] = rows(env, 'SELECT * FROM photographer_sessions WHERE token_hash = ?', await sha256Hex(answer.token));
+  assert.ok(Date.parse(session.expires_at) > Date.now() + 29 * 86400000, 'a full session lifetime');
   assert.equal(account(env).id, row.id);
 });
 
-test('change-password ends every OTHER session of this photographer, and nobody else’s', async () => {
+test('change-password ends every session of this photographer (its own too) for one new one, and nobody else’s', async () => {
   const env = envOpen();
   const { row, token } = await loggedIn(env);
   const second = await tokenFor(env);
@@ -127,11 +139,14 @@ test('change-password ends every OTHER session of this photographer, and nobody 
   const { token: bob } = await loggedIn(env, 'bob@example.com');
   const bobHash = account(env, 'bob@example.com').password_hash;
   assert.equal(sessionsOf(env, row.id).length, 3);
-  assert.equal((await change(env, token)).status, 200);
+  const res = await change(env, token);
+  assert.equal(res.status, 200);
+  const { token: fresh } = await res.json();
   const left = sessionsOf(env, row.id);
   assert.equal(left.length, 1);
-  assert.equal(left[0].token_hash, await sha256Hex(token));
-  assert.equal((await me(env, token)).status, 200);
+  assert.equal(left[0].token_hash, await sha256Hex(fresh));
+  assert.equal((await me(env, fresh)).status, 200);
+  assert.equal((await me(env, token)).status, 401);
   assert.equal((await me(env, second)).status, 401);
   assert.equal((await me(env, third)).status, 401);
   assert.equal((await me(env, bob)).status, 200, 'another account keeps its session');
@@ -147,7 +162,7 @@ test('a successful change leaves no throttle rows behind; the hash is never in a
   assert.equal(res.status, 200);
   assert.equal(rows(env, 'SELECT * FROM photographer_login_failures').length, before);
   assert.ok(!/pbkdf2|password_hash|token_hash/.test(text));
-  const meText = await (await me(env, token)).text();
+  const meText = await (await me(env, JSON.parse(text).token)).text();
   assert.ok(!/pbkdf2|password_hash|token_hash/.test(meText));
 });
 
@@ -194,7 +209,9 @@ test('changing the temporary password clears the flag; the temporary password st
   const res = await change(env, token, { current_password: temp, new_password: NEW_PASSWORD });
   assert.equal(res.status, 200, await res.clone().text());
   assert.equal(account(env).must_change_password, 0);
-  assert.equal((await (await me(env, token)).json()).must_change_password, false);
+  const { token: fresh } = await res.json();
+  assert.equal((await me(env, token)).status, 401, 'the flagged token is gone');
+  assert.equal((await (await me(env, fresh)).json()).must_change_password, false);
   assert.equal((await login(env, 'ann@example.com', temp)).status, 401);
   const again = await (await login(env, 'ann@example.com', NEW_PASSWORD)).json();
   assert.equal(again.must_change_password, false);
@@ -224,41 +241,60 @@ test('a flagged session can call me and logout (change-password: above)', async 
 
 // ─── the guard: while flagged, nothing but change-password / me / logout ───
 
-// The guard's own source, evaluated alone, so it can be run against routes
-// that do not open to sessions yet (batch 2b adds them).
+// The guard's own source, evaluated alone, so it can be run against requests
+// for any route. 2b-0 (security review of 2a): the guard no longer takes a
+// route id from its caller — it reads the request's own method and path, so a
+// route cannot claim to be /me by passing the wrong string.
 function loadGuard() {
   const start = SRC.indexOf('// <photographer-route-guard>');
   const end = SRC.indexOf('// </photographer-route-guard>');
   assert.ok(start > 0 && end > start, 'worker.js marks the guard');
-  const ctx = {};
-  vm.runInNewContext(`${SRC.slice(start, end)}\nthis.guard = photographerRouteRefusal; this.allowed = PHOTOGRAPHER_MUST_CHANGE_ROUTES;`, ctx);
+  const ctx = { URL };
+  vm.runInNewContext(`${SRC.slice(start, end)}\nthis.guard = photographerRouteRefusal;`, ctx);
   return ctx;
 }
-// routes batch 2b will open to sessions (names are the guard's route ids)
-const STUB_ROUTES = ['admin/projects', 'admin/project', 'admin/settings', 'admin/products', 'admin/orders', 'upload', 'books',
-  'photographer/settings', 'photographer/me/x', 'me', 'logout', 'change-password', '', undefined, null, 'PHOTOGRAPHER/ME', 'photographer/me ',
-  'constructor', '__proto__', 'toString'];
-const ALLOWED = ['photographer/me', 'photographer/logout', 'photographer/change-password'];
+const rq = (method, path) => new Request(`https://worker.test${path}`, { method });
+const ALLOWED = [['GET', '/api/photographer/me'], ['POST', '/api/photographer/logout'], ['POST', '/api/photographer/change-password'],
+  // the router reads these as the same three routes (empty segments drop out)
+  ['GET', '/api/photographer/me/'], ['GET', '//api//photographer/me'], ['POST', '/api/photographer/change-password?x=1']];
+const STUB = [
+  ['GET', '/api/admin/projects'], ['POST', '/api/admin/projects'], ['GET', '/api/admin/settings'], ['PUT', '/2026/a.jpg'],
+  ['GET', '/api/auth/verify-admin'], ['GET', '/?list=x/'], ['GET', '/api/books/b1'],
+  // the right path with the wrong method, and near misses
+  ['POST', '/api/photographer/me'], ['GET', '/api/photographer/change-password'], ['GET', '/api/photographer/logout'],
+  ['PUT', '/api/photographer/change-password'], ['GET', '/api/photographer/me/x'], ['GET', '/api/photographer/ME'],
+  ['GET', '/api/photographer/%6De'], ['GET', '/api/photographer/me%2F'], ['GET', '/photographer/me'], ['GET', '/me'],
+  ['POST', '/api/photographer/change-password/x'], ['GET', '/api/photographer'], ['GET', '/x/api/photographer/me'],
+];
 
-test('guard: a flagged session is refused 403 must_change_password on every route but the three', () => {
-  const { guard, allowed } = loadGuard();
-  assert.deepEqual([...allowed].sort(), [...ALLOWED].sort());
+test('guard: a flagged session is refused 403 must_change_password on every request but the three', () => {
+  const { guard } = loadGuard();
   const who = { id: 'p1', must_change_password: true };
-  for (const route of STUB_ROUTES) {
-    const r = guard(who, route);
-    assert.ok(r, `refused: ${String(route)}`);
-    assert.equal(r.status, 403, String(route));
-    assert.equal(r.body.code, 'must_change_password', String(route));
+  for (const [m, p] of STUB) {
+    const r = guard(who, rq(m, p));
+    assert.ok(r, `refused: ${m} ${p}`);
+    assert.equal(r.status, 403, `${m} ${p}`);
+    assert.equal(r.body.code, 'must_change_password', `${m} ${p}`);
   }
-  for (const route of ALLOWED) assert.equal(guard(who, route), null, route);
+  for (const [m, p] of ALLOWED) assert.equal(guard(who, rq(m, p)), null, `${m} ${p}`);
 });
 
-test('guard: an unflagged session passes every route; no session is 401 everywhere', () => {
+test('guard: a route id handed in by the caller changes nothing (the request decides)', () => {
   const { guard } = loadGuard();
-  for (const route of [...STUB_ROUTES, ...ALLOWED]) {
-    assert.equal(guard({ id: 'p1', must_change_password: false }, route), null, String(route));
-    const r = guard(null, route);
-    assert.equal(r.status, 401, String(route));
+  assert.equal(guard.length, 2, '(who, request)');
+  const who = { id: 'p1', must_change_password: true };
+  for (const claim of ['photographer/me', 'photographer/change-password', 'GET /api/photographer/me']) {
+    const r = guard(who, rq('GET', '/api/admin/projects'), claim);
+    assert.equal(r?.status, 403, claim);
+  }
+});
+
+test('guard: an unflagged session passes every request; no session is 401 everywhere', () => {
+  const { guard } = loadGuard();
+  for (const [m, p] of [...STUB, ...ALLOWED]) {
+    assert.equal(guard({ id: 'p1', must_change_password: false }, rq(m, p)), null, `${m} ${p}`);
+    const r = guard(null, rq(m, p));
+    assert.equal(r.status, 401, `${m} ${p}`);
     assert.equal(r.body.code, 'unauthorized');
   }
 });
@@ -266,27 +302,38 @@ test('guard: an unflagged session passes every route; no session is 401 everywhe
 test('guard: an unknown flag (column missing, or not 0/1) fails closed outside the three', () => {
   const { guard } = loadGuard();
   for (const flag of [null, undefined, 1, 'false', 0]) {
-    for (const route of STUB_ROUTES) {
-      const r = guard({ id: 'p1', must_change_password: flag }, route);
-      assert.ok(r, `${flag} ${String(route)}`);
-      assert.ok(r.status === 403 || r.status === 500, `${flag} ${String(route)}`);
+    for (const [m, p] of STUB) {
+      const r = guard({ id: 'p1', must_change_password: flag }, rq(m, p));
+      assert.ok(r, `${flag} ${m} ${p}`);
+      assert.ok(r.status === 403 || r.status === 500, `${flag} ${m} ${p}`);
     }
-    for (const route of ALLOWED) assert.equal(guard({ id: 'p1', must_change_password: flag }, route), null);
+    for (const [m, p] of ALLOWED) assert.equal(guard({ id: 'p1', must_change_password: flag }, rq(m, p)), null);
   }
-  assert.equal(guard({ id: 'p1', must_change_password: null }, 'upload').body.code, 'password_change_unavailable');
+  assert.equal(guard({ id: 'p1', must_change_password: null }, rq('PUT', '/2026/a.jpg')).body.code, 'password_change_unavailable');
 });
 
-test('every resolvePhotographer call names its route; the raw lookup is only reached through the guard', () => {
-  const calls = [...SRC.matchAll(/resolvePhotographer\(([^)]*)\)/g)].map(m => m[1]);
-  const def = calls.filter(a => /^request, env, route$/.test(a.trim()));
-  assert.equal(def.length, 1, 'one definition');
-  const uses = calls.filter(a => !/^request, env, route$/.test(a.trim()));
-  assert.ok(uses.length >= 2, 'me and change-password');
-  for (const a of uses) assert.match(a.trim(), /^request, env, '[a-z/-]+'$/, a);
+test('resolvePhotographer takes no route id; the raw lookup and every session read are only reached through the guard', () => {
+  const calls = [...SRC.matchAll(/resolvePhotographer\(([^)]*)\)/g)].map(m => m[1].trim());
+  assert.ok(calls.length >= 4, 'definition, me, change-password, requirePhotographer');
+  for (const a of calls) assert.equal(a, 'request, env', a);
   assert.equal(SRC.split('lookupPhotographerSession(').length - 1, 2, 'one definition, one call');
   const fn = SRC.slice(SRC.indexOf('async function resolvePhotographer('), SRC.indexOf('\n}\n', SRC.indexOf('async function resolvePhotographer(')));
   assert.ok(fn.includes('who = await lookupPhotographerSession(request, env)'), 'the raw lookup is inside resolvePhotographer');
-  assert.ok(fn.includes('photographerRouteRefusal(who, route)'), 'the guard sees the caller’s own route');
+  assert.ok(fn.includes('photographerRouteRefusal(who, request)'), 'the guard sees the request itself');
+  // a SELECT from photographer_sessions (a read of who a token is) lives only
+  // in lookupPhotographerSession; writes may name the table, and their
+  // EXISTS sub-selects only gate the write
+  const lookup = [SRC.indexOf('async function lookupPhotographerSession('), SRC.indexOf('\n}\n', SRC.indexOf('async function lookupPhotographerSession('))];
+  let reads = 0;
+  for (const m of SRC.matchAll(/(['"`])((?:(?!\1)[^\\\n]|\\.)*photographer_sessions(?:(?!\1)[^\\\n]|\\.)*)\1/g)) {
+    if (!/^\s*SELECT\b/i.test(m[2])) {
+      assert.match(m[2], /^\s*(INSERT|UPDATE|DELETE)\b/i, m[2]);
+      continue;
+    }
+    reads++;
+    assert.ok(m.index > lookup[0] && m.index < lookup[1], `a session read outside lookupPhotographerSession: ${m[2]}`);
+  }
+  assert.equal(reads, 1, 'the one lookup');
 });
 
 test('a flagged session is refused (never 2xx) on every existing route; the routes still work for PHOTOGRAPHER_TOKEN', async () => {
@@ -308,9 +355,9 @@ test('a flagged session is refused (never 2xx) on every existing route; the rout
   ];
   for (const [method, path, body] of routes) {
     const res = await call(env, path, { method, token, body });
-    // batch 2a: these do not take sessions at all (401). Batch 2b opens them
-    // through resolvePhotographer, and then a flagged session must get 403
-    // must_change_password — never anything else.
+    // PHOTOGRAPHER_ROUTES is off here: a session is nobody (401). With it on
+    // a flagged session gets 403 must_change_password on every one of them
+    // (photographer-routes.test.mjs) — never anything else.
     if (res.status === 403) assert.equal((await res.json()).code, 'must_change_password', `${method} ${path}`);
     else assert.equal(res.status, 401, `${method} ${path}`);
   }
@@ -396,8 +443,10 @@ test('invalid input is 400 before any PBKDF2 or throttle row, and changes nothin
 test('boundaries: 10 and 200 characters are accepted (characters, not UTF-16 units)', async () => {
   const env = envOpen();
   const { token } = await loggedIn(env);
-  assert.equal((await change(env, token, { current_password: PASSWORD, new_password: '1234567890' })).status, 200);
-  assert.equal((await change(env, token, { current_password: '1234567890', new_password: '😀'.repeat(200) })).status, 200);
+  const first = await change(env, token, { current_password: PASSWORD, new_password: '1234567890' });
+  assert.equal(first.status, 200);
+  const { token: next } = await first.json();
+  assert.equal((await change(env, next, { current_password: '1234567890', new_password: '😀'.repeat(200) })).status, 200);
   assert.equal((await login(env, 'ann@example.com', '😀'.repeat(200))).status, 200);
 });
 
@@ -494,8 +543,9 @@ test('two parallel changes from two sessions: exactly one wins; the loser’s se
   assert.equal((await login(env, 'ann@example.com', 'second new password')).status, 200);
   assert.equal((await login(env, 'ann@example.com', 'first new password')).status, 401);
   assert.equal((await me(env, a)).status, 401, 'the loser’s session was ended by the winner');
-  assert.equal((await me(env, b)).status, 200);
-  assert.equal(sessionsOf(env, row.id).length, 2, 'b plus the one login above');
+  assert.equal((await me(env, b)).status, 401, 'the winner’s old token is replaced too');
+  assert.equal((await me(env, (await second.json()).token)).status, 200, 'by the token in its answer');
+  assert.equal(sessionsOf(env, row.id).length, 2, 'the winner’s new one plus the one login above');
 });
 
 test('an operator reset landing between the verify and the write wins; the flag stays set', async () => {
@@ -576,7 +626,7 @@ test('a login with the old password racing a change mints no session', async () 
   assert.equal((await change(env, token)).status, 200);
   release();
   assert.equal((await pendingLogin).status, 401);
-  assert.equal(sessionsOf(env, row.id).length, 1, 'only the changing session');
+  assert.equal(sessionsOf(env, row.id).length, 1, 'only the changing session’s replacement');
 });
 
 // ─── before the migration (no must_change_password column) ─────────────────
@@ -610,20 +660,27 @@ test('without the column: login and /me work and say null; change-password is 50
   assert.equal((await me(env, body.token)).status, 401);
 });
 
-test('without the column: reset-password still resets and ends sessions, and says the change is not enforced', async () => {
+// 2b-0 (security review of 2a): a reset that cannot force the change is not
+// done at all — a temporary password that never has to be changed is worse
+// than no reset. 500 must_change_unavailable, nothing written anywhere.
+test('without the column: reset-password is 500 must_change_unavailable and writes nothing', async () => {
   const env = envOpen({ DB: fakeDB({ schema: withoutMustChangeColumn() }) });
   const row = await activeAccount(env);
   const token = await tokenFor(env);
+  const dump = () => JSON.stringify([rows(env, 'SELECT * FROM photographers'), rows(env, 'SELECT * FROM photographer_sessions')]);
+  const before = dump();
   const res = await act(env, row.id, 'reset-password');
-  assert.equal(res.status, 200);
+  assert.equal(res.status, 500);
   const body = await res.json();
-  assert.equal(typeof body.temp_password, 'string');
-  assert.equal(body.must_change_password, false);
-  assert.equal(body.warning, 'must_change_unavailable');
-  assert.equal(sessionsOf(env, row.id).length, 0);
-  assert.equal((await me(env, token)).status, 401);
-  assert.equal((await login(env, 'ann@example.com', PASSWORD)).status, 401);
-  assert.equal((await login(env, 'ann@example.com', body.temp_password)).status, 200);
+  assert.equal(body.code, 'must_change_unavailable');
+  assert.equal(body.temp_password, undefined);
+  assert.equal(dump(), before, 'no hash change, no session deleted');
+  assert.equal((await me(env, token)).status, 200);
+  assert.equal((await login(env, 'ann@example.com', PASSWORD)).status, 200, 'the old password still works');
+  // an unknown id answers the same (nothing to tell apart before the migration)
+  assert.equal((await act(env, 'nobody', 'reset-password')).status, 500);
+  // the other actions still work
+  assert.equal((await act(env, row.id, 'suspend')).status, 200);
 });
 
 test('the migration adds exactly the column, append-only', () => {
@@ -635,4 +692,46 @@ test('the migration adds exactly the column, append-only', () => {
   env.DB._db.prepare("INSERT INTO photographers (id, email, password_hash, display_name, status, created_at) VALUES ('p', 'p@example.com', 'x', 'P', 'active', 'now')").run();
   env.DB._db.exec(statements[0]);
   assert.equal(one(env, 'SELECT must_change_password FROM photographers').must_change_password, 0);
+});
+
+// ─── 2b-0 (security review of 2a) ──────────────────────────────────────────
+
+test('change-password checks the session before it reads the body: 401 before 413 / 400', async () => {
+  const env = envOpen();
+  await activeAccount(env);
+  const huge = JSON.stringify({ current_password: PASSWORD, new_password: 'x'.repeat(20000) });
+  for (const token of [undefined, 'f'.repeat(64), SECRET, OP]) {
+    for (const body of [huge, 'not json', { current_password: PASSWORD }]) {
+      await bad(await change(env, token, body), 401, 'unauthorized', `${String(token).slice(0, 8)} ${String(body).slice(0, 12)}`);
+    }
+  }
+  assert.equal(rows(env, 'SELECT * FROM photographer_login_failures').length, 0);
+  // with a live session the body checks still apply
+  const token = await tokenFor(env);
+  assert.equal((await change(env, token, huge)).status, 413);
+  assert.equal((await change(env, token, 'not json')).status, 400);
+});
+
+test('the operator list says must_change_password per account (true / false)', async () => {
+  const env = envOpen();
+  const { row } = await loggedIn(env);
+  await activeAccount(env, 'bob@example.com');
+  assert.equal((await act(env, row.id, 'reset-password')).status, 200);
+  const res = await call(env, '/api/operator/photographers', { token: OP });
+  assert.equal(res.status, 200);
+  const { photographers } = await res.json();
+  const by = Object.fromEntries(photographers.map(p => [p.email, p.must_change_password]));
+  assert.deepEqual(by, { 'ann@example.com': true, 'bob@example.com': false });
+  for (const p of photographers) assert.ok(!('password_hash' in p));
+});
+
+test('without the column the operator list still answers, with must_change_password: null', async () => {
+  const env = envOpen({ DB: fakeDB({ schema: withoutMustChangeColumn() }) });
+  await activeAccount(env);
+  const res = await call(env, '/api/operator/photographers', { token: OP });
+  assert.equal(res.status, 200);
+  const { photographers, pending_count } = await res.json();
+  assert.equal(photographers.length, 1);
+  assert.equal(photographers[0].must_change_password, null);
+  assert.equal(pending_count, 0);
 });
