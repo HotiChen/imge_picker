@@ -281,10 +281,24 @@ test('before the share-token owner migration: every project-less link is the def
   assert.equal((await reads(w.env, a.token)).state.status, 200);
 });
 
-test('the share object handed to the routes carries no helper column', async () => {
-  // GET /api/pick/state echoes nothing named like the owner check
+// The owner check is a WHERE condition, not a selected column: the rows the
+// routes get are exactly the table's columns, so no helper field can ride
+// along on `share` / `share.project` (no route echoes those rows whole, so
+// a selected-and-stripped column could not be tested from outside).
+test('the statements that load a link select only the table\'s own columns; the owner check is in the WHERE', async () => {
   const w = await world();
   const p = await projectOf(w.env, w.B);
-  const body = await (await call(w.env, `/api/pick/state?t=${enc(p.token)}`)).text();
-  assert.doesNotMatch(body, /owner_live/);
+  const studio = await mint(w.env, w.B);
+  for (const path of [`/${PA}?w=400&t=${enc(p.token)}`, `/${PA}?t=${enc(studio)}`]) {
+    const from = w.env.DB._sql.length;
+    assert.equal((await call(w.env, path)).status, 200, path);
+    const selects = w.env.DB._sql.slice(from).filter(s => /^\s*SELECT/i.test(s) && /FROM (share_tokens|projects)\b/.test(s));
+    assert.ok(selects.length >= 1, path);
+    for (const sql of selects) {
+      const m = /^\s*SELECT\s+(.*?)\s+FROM\s+(share_tokens|projects)\b/is.exec(sql);
+      assert.ok(m, sql);
+      assert.match(m[1], /^(s|p)\.\*$/, `selects more than the row: ${sql}`);
+      assert.match(sql, /WHERE[\s\S]*photographers[\s\S]*status = 'active'/, `owner check in the WHERE: ${sql}`);
+    }
+  }
 });

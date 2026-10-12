@@ -275,7 +275,7 @@ CREATE TABLE photographer_sessions (
   default 沒有帳號列，永遠不碰（NULL 或字面 `'default'` 的列都不會）。
   恢復（unsuspend）**不會**把 studio token 還回來（12 小時的憑證，重新登入再發一個就好）。share-token-owner migration 前沒有欄位、
   也不可能有非 default 的 studio token，batch 就不帶這句。
-- **選片連結（Tim 的決定：可逆）**：`resolveShareToken` 在**本來就要跑的那句 SELECT** 裡帶一個子查詢，看連結擁有者（選片連結 = 專案的
+- **選片連結（Tim 的決定：可逆）**：`resolveShareToken` 在**本來就要跑的那句 SELECT** 的 WHERE 裡加一個條件（`ownerLiveSql`，不多選任何欄位，回給路由的列就是表本身的欄位），看連結擁有者（選片連結 = 專案的
   `photographer_id`；其他連結 = 該列的 `photographer_id`）是否為 `active` 帳號（熱路徑不多一次 D1 來回）。default（NULL 或 `'default'`）永遠算有效，
   不看帳號表。停用、待審核、帳號被刪掉的擁有者 → 連結解析為 null，回應和不存在的連結**完全相同**；連結列本身沒被撤，所以 unsuspend 後立刻恢復。
   封存／專案不存在的行為不變。帳號表或擁有者欄位不存在時（migration 前）退回舊語句：default 照常，其他擁有者一律失效。

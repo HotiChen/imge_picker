@@ -898,30 +898,29 @@ function shareCeiling(row) {
 // batch 3): the default photographer always (it has no photographers row, and
 // a row that names it changes nothing); anyone else only while their account
 // is active — suspended (until un-suspended), pending or deleted is dark.
-// `col` is the column holding the owner, NULL meaning the default. An SQL
-// expression, so the check rides in the statement that already loads the row
-// (no extra round trip on a hot read). It is selected AS OWNER_LIVE_COLUMN and
-// taken off again before the row goes anywhere.
-const OWNER_LIVE_COLUMN = 'owner_live__';
+// A WHERE condition on `col` (the owner column, NULL meaning the default)
+// with its bound values, so the check rides in the statement that already
+// loads the row (no extra round trip on a hot read) and the row the routes
+// get is exactly the table's columns. A dark owner reads as no row at all.
+function ownerLiveSql(col) {
+  const def = DEFAULT_PHOTOGRAPHER_ID;
+  return {
+    sql: `(COALESCE(${col}, ?) = ? OR EXISTS (SELECT 1 FROM photographers WHERE id = ${col} AND status = 'active'))`,
+    args: [def, def],
+  };
+}
 // The default photographer as a link owner: NULL (every row from before the
-// owner column, album links, client sessions) or its id written out.
+// owner column, album links, client sessions) or its id written out. What
+// the fallback reads below go by: without the photographers table or the
+// share-token owner column only the default can own anything, so any other
+// owner fails closed there.
 function isDefaultOwner(owner) {
   return owner === null || owner === undefined || owner === DEFAULT_PHOTOGRAPHER_ID;
 }
-// 1 when `col` names an active account; the default (no row) is let through
-// by splitOwnerLive, in JS
-const ownerLiveSql = col =>
-  `EXISTS (SELECT 1 FROM photographers WHERE id = ${col} AND status = 'active') AS ${OWNER_LIVE_COLUMN}`;
-// A row read with ownerLiveSql (or by the fallback without it): the row
-// without the helper column, and whether its owner is live. The fallback
-// runs on a database without the photographers table or the share-token owner
-// column, where only the default can own anything: there the default is live
-// and any other owner fails closed.
-function splitOwnerLive(row, owner) {
-  if (!row) return { row: null, live: false };
-  const { [OWNER_LIVE_COLUMN]: flag, ...rest } = row;
-  return { row: rest, live: isDefaultOwner(owner) || flag === 1 };
-}
+// A pick link's owner is its project's photographer (shareOwner), checked on
+// the project; its own row's photographer_id is not looked at. SQL and JS
+// say the same thing (a project_id of NULL or '' is no project).
+const PICK_WITH_PROJECT_SQL = "(s.kind = 'pick' AND COALESCE(s.project_id, '') != '')";
 
 // Returns the token row (folders already parsed) or null. Revoked, expired,
 // unknown, an owner that is not live (ownerLiveSql) and "no D1 bound at all"
@@ -931,13 +930,15 @@ async function resolveShareToken(request, url, env) {
   const value = url.searchParams.get('t') || request.headers.get('X-Share-Token') || '';
   if (!value) return null;
   let row;
-  let ownerLive;
   try {
-    const read = await withoutMissingSchema(
-      () => env.DB.prepare(`SELECT s.*, ${ownerLiveSql('s.photographer_id')} FROM share_tokens s WHERE s.token = ?`).bind(value).first(),
-      () => env.DB.prepare('SELECT * FROM share_tokens WHERE token = ?').bind(value).first(),
+    const live = ownerLiveSql('s.photographer_id');
+    let checked = true;
+    row = await withoutMissingSchema(
+      () => env.DB.prepare(`SELECT s.* FROM share_tokens s WHERE s.token = ? AND (${PICK_WITH_PROJECT_SQL} OR ${live.sql})`)
+        .bind(value, ...live.args).first(),
+      () => { checked = false; return env.DB.prepare('SELECT * FROM share_tokens WHERE token = ?').bind(value).first(); },
     );
-    ({ row, live: ownerLive } = splitOwnerLive(read, read?.photographer_id));
+    if (row && !checked && !(isPickShare(row) && row.project_id) && !isDefaultOwner(row.photographer_id)) return null;
   } catch { return null; }
   if (!row || row.revoked_at) return null;
   const expiry = Date.parse(row.expires_at);
@@ -961,19 +962,18 @@ async function resolveShareToken(request, url, env) {
   if (isPickShare(row) && row.project_id) {
     let project;
     try {
-      const read = await withoutMissingSchema(
-        () => env.DB.prepare(`SELECT p.*, ${ownerLiveSql('p.photographer_id')} FROM projects p WHERE p.id = ? AND p.archived_at IS NULL`).bind(row.project_id).first(),
-        () => env.DB.prepare('SELECT * FROM projects WHERE id = ? AND archived_at IS NULL').bind(row.project_id).first(),
+      const live = ownerLiveSql('p.photographer_id');
+      let checked = true;
+      project = await withoutMissingSchema(
+        () => env.DB.prepare(`SELECT p.* FROM projects p WHERE p.id = ? AND p.archived_at IS NULL AND ${live.sql}`)
+          .bind(row.project_id, ...live.args).first(),
+        () => { checked = false; return env.DB.prepare('SELECT * FROM projects WHERE id = ? AND archived_at IS NULL').bind(row.project_id).first(); },
       );
-      const checked = splitOwnerLive(read, read?.photographer_id);
-      if (!checked.live) return null;
-      project = checked.row;
+      if (project && !checked && !isDefaultOwner(project.photographer_id)) return null;
     } catch { return null; }
     if (!project) return null;
     return { ...row, folders, project };
   }
-  // any other link reads its own row's owner's files (shareOwner)
-  if (!ownerLive) return null;
   return { ...row, folders };
 }
 
