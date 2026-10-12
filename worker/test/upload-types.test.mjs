@@ -68,6 +68,27 @@ const ALLOWED = [
   ['shoot/m.jpg', undefined, 'image/jpeg'],
   ['shoot/n.png', undefined, 'image/png'],
   ['shoot/o.heic', undefined, 'image/heic'],
+  // what browsers really send for a listed photo besides its type — no type
+  // known (octet-stream), an empty header, and the legacy aliases — stores
+  // the extension's own inline type, never the alias (review of r2-hardening)
+  ['shoot/p.jpg', 'application/octet-stream', 'image/jpeg'],
+  ['shoot/p2.JPEG', 'application/octet-stream', 'image/jpeg'],
+  ['shoot/p3.png', 'application/octet-stream', 'image/png'],
+  ['shoot/p4.webp', 'application/octet-stream', 'image/webp'],
+  ['shoot/p5.avif', 'application/octet-stream', 'image/avif'],
+  ['shoot/q.jpg', '', 'image/jpeg'],
+  ['shoot/q2.avif', '', 'image/avif'],
+  ['shoot/r.jpg', 'image/jpg', 'image/jpeg'],
+  ['shoot/r2.jpeg', 'IMAGE/PJPEG; x=1', 'image/jpeg'],
+  ['shoot/r3.png', 'image/x-png', 'image/png'],
+  ['shoot/r4.webp', 'image/jpg', 'image/webp'],
+  ['shoot/r5.jpg', 'image/x-png', 'image/jpeg'],
+  // .gif sent as octet-stream (or with an empty header) is image/gif
+  ['shoot/s.gif', 'application/octet-stream', 'image/gif'],
+  ['shoot/s2.GIF', '', 'image/gif'],
+  // an empty Content-Type is none for the other photo formats too
+  ['shoot/u.heic', '', 'image/heic'],
+  ['shoot/u2.tif', '', 'image/tiff'],
   // upload.html's thumbnails (webp, or jpeg where the browser cannot encode webp)
   ['_thumbs/400/shoot/a.jpg.thumb', 'image/webp', 'image/webp'],
   ['_thumbs/1200/shoot/IMG_0001.JPG.thumb', 'image/jpeg', 'image/jpeg'],
@@ -110,17 +131,16 @@ const REFUSED = [
   ['shoot/x.jpg', 'text/plain'],
   ['shoot/x.jpg', 'application/pdf'],
   ['shoot/x.jpg', 'image/jpeg, text/html'],
-  ['shoot/x.jpg', ''],
   ['shoot/x.json', 'application/json'],
   ['shoot/x.jpg.html', 'image/jpeg'],
   ['shoot/x.html.jpg', 'text/html'],
   ['shoot/noextension', 'image/jpeg'],
   ['shoot/.jpg', 'image/jpeg'],
   ['shoot/x.jpg/', 'image/jpeg'],
-  // octet-stream only where browsers really send it (HEIC / HEIF / TIFF / BMP)
-  ['shoot/x.jpg', 'application/octet-stream'],
-  ['shoot/x.png', 'application/octet-stream'],
-  ['shoot/x.gif', 'application/octet-stream'],
+  // aliases and octet-stream do not open a key that is no photo
+  ['shoot/x.html', 'application/octet-stream'],
+  ['shoot/x.svg', 'image/jpg'],
+  ['shoot/x.html', ''],
   // a listed extension is stored only as an inline type (it would be a
   // download, a broken image in the grid, otherwise)
   ['shoot/x.jpg', 'image/gif'],
@@ -142,6 +162,9 @@ const REFUSED = [
   ['_thumbs/400/shoot/x.jpg.thumb', 'text/html'],
   ['_thumbs/400/shoot/x.jpg.thumb', 'image/gif'],
   ['_thumbs/400/shoot/x.jpg.thumb', 'application/octet-stream'],
+  // a thumbnail keeps the old rule: only a missing header defaults to jpeg
+  ['_thumbs/400/shoot/x.jpg.thumb', ''],
+  ['_thumbs/400/shoot/x.jpg.thumb', 'image/jpg'],
   ['_thumbs/abc/shoot/x.jpg.thumb', 'image/webp'],
   ['_thumbs/400/shoot/x.jpg', 'text/html'],
 ];
@@ -166,7 +189,7 @@ for (const whoName of ['A', 'B']) {
 test('upload → serve: whatever is accepted under a key the picker lists comes back inline, never as a download', async () => {
   const w = await world();
   const types = [undefined, 'image/jpeg', 'image/png', 'image/webp', 'image/avif', 'image/gif', 'image/heic', 'image/heif',
-    'image/tiff', 'image/bmp', 'application/octet-stream', 'IMAGE/PNG; x=1'];
+    'image/tiff', 'image/bmp', 'application/octet-stream', 'IMAGE/PNG; x=1', '', 'image/jpg', 'image/pjpeg', 'image/x-png', 'text/html'];
   let accepted = 0;
   for (const ext of ['jpg', 'JPG', 'jpeg', 'png', 'webp', 'avif']) {
     for (const [i, type] of types.entries()) {
@@ -179,8 +202,9 @@ test('upload → serve: whatever is accepted under a key the picker lists comes 
       assert.equal(got.headers.get('Content-Disposition'), null, `${key} ${type}`);
     }
   }
-  // no type, and the four inline ones (one with parameters), on each of the six
-  assert.equal(accepted, 6 * 6);
+  // no type, an empty one, octet-stream, the four inline ones (one with
+  // parameters) and the three aliases, on each of the six
+  assert.equal(accepted, 6 * 11);
 });
 
 test('upload: who may upload is still decided first (401), and the reserved and empty keys keep their 400', async () => {

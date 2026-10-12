@@ -22,32 +22,40 @@ const THUMB_BUCKETS = [400, 1200, 1600];
 // application/octet-stream, as an attachment. Uploads keep the photos the
 // picker shows on this list: the listing (`?list=`) only ever shows
 // .jpg/.jpeg/.png/.webp/.avif keys, and a key with one of those extensions
-// may only be stored as one of these four types (below), so nothing the
+// is only ever stored as one of these four types (below), so nothing the
 // grid, a thumbnail fallback or the lightbox can ask for turns into a
 // download. The other formats upload.html takes are never listed: they are
 // kept as files, served as downloads.
 const INLINE_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/avif'];
 const OCTET_STREAM = 'application/octet-stream';
 // What upload.html takes (its IMAGE_EXTS) and the album editor's backgrounds
-// are: the key's extension, lowercased → the types it may be sent as, the
-// first being what is stored when no Content-Type comes. A listed extension
-// takes any of the four inline types (a PNG named .jpg is still a photo);
-// HEIC / HEIF / TIFF / BMP also application/octet-stream, which upload.html
-// sends when the browser knows no type for them. Never HTML, SVG, XML or
-// script.
+// are, by the key's extension (lowercased):
+// - own: what is stored when the request names no type of its own — no
+//   Content-Type, an empty one, or one listed in `asOwn`;
+// - keep: the types stored as sent;
+// - asOwn: accepted, but stored as `own`: application/octet-stream (what
+//   upload.html sends when the browser knows no type) and, for the listed
+//   extensions, the legacy aliases image/jpg, image/pjpeg, image/x-png —
+//   never stored as such, so a listed photo is always served inline.
+// HEIC / HEIF / TIFF / BMP keep octet-stream as sent (served as downloads
+// anyway). Never HTML, SVG, XML or script, whatever the extension.
+const LEGACY_IMAGE_ALIASES = ['image/jpg', 'image/pjpeg', 'image/x-png'];
+const listedPhoto = own => ({ own, keep: INLINE_IMAGE_TYPES, asOwn: [...LEGACY_IMAGE_ALIASES, OCTET_STREAM] });
 const UPLOAD_TYPES = Object.assign(Object.create(null), {
-  jpg: ['image/jpeg', ...INLINE_IMAGE_TYPES],
-  jpeg: ['image/jpeg', ...INLINE_IMAGE_TYPES],
-  png: ['image/png', ...INLINE_IMAGE_TYPES],
-  webp: ['image/webp', ...INLINE_IMAGE_TYPES],
-  avif: ['image/avif', ...INLINE_IMAGE_TYPES],
-  gif: ['image/gif'],
-  heic: ['image/heic', 'image/heic-sequence', OCTET_STREAM],
-  heif: ['image/heif', 'image/heif-sequence', OCTET_STREAM],
-  tif: ['image/tiff', OCTET_STREAM],
-  tiff: ['image/tiff', OCTET_STREAM],
-  bmp: ['image/bmp', 'image/x-ms-bmp', OCTET_STREAM],
+  jpg: listedPhoto('image/jpeg'),
+  jpeg: listedPhoto('image/jpeg'),
+  png: listedPhoto('image/png'),
+  webp: listedPhoto('image/webp'),
+  avif: listedPhoto('image/avif'),
+  gif: { own: 'image/gif', keep: ['image/gif'], asOwn: [OCTET_STREAM] },
+  heic: { own: 'image/heic', keep: ['image/heic', 'image/heic-sequence', OCTET_STREAM], asOwn: [] },
+  heif: { own: 'image/heif', keep: ['image/heif', 'image/heif-sequence', OCTET_STREAM], asOwn: [] },
+  tif: { own: 'image/tiff', keep: ['image/tiff', OCTET_STREAM], asOwn: [] },
+  tiff: { own: 'image/tiff', keep: ['image/tiff', OCTET_STREAM], asOwn: [] },
+  bmp: { own: 'image/bmp', keep: ['image/bmp', 'image/x-ms-bmp', OCTET_STREAM], asOwn: [] },
 });
+// upload.html's thumbnails: webp, or jpeg where the browser cannot encode webp
+const THUMB_TYPES = { own: 'image/jpeg', keep: INLINE_IMAGE_TYPES, asOwn: [] };
 const THUMB_KEY = /^_thumbs\/\d+\/(.+)\.thumb$/;
 // A type as sent: lowercased, parameters off. '' when there is none.
 const bareType = value => String(value ?? '').split(';')[0].trim().toLowerCase();
@@ -59,17 +67,19 @@ function keyExtension(key) {
 }
 // The Content-Type to store for an upload of `key` sent as `sent` (the
 // request's Content-Type header, null when there is none), or null to refuse
-// it (415). A photo key: its extension's types (none sent: the first). A
-// thumbnail `_thumbs/<w>/<photo key>.thumb`: one of the inline types (none
-// sent: jpeg, as the route always defaulted to).
+// it (415). A photo key goes by its extension (UPLOAD_TYPES); a thumbnail
+// `_thumbs/<w>/<photo key>.thumb` needs a photo key and one of the inline
+// types (none: jpeg, as the route always defaulted to).
 function uploadContentType(key, sent) {
   const thumb = THUMB_KEY.exec(key);
-  const types = UPLOAD_TYPES[keyExtension(thumb ? thumb[1] : key)];
-  if (!types) return null;
-  const allowed = thumb ? INLINE_IMAGE_TYPES : types;
-  if (sent === null) return allowed[0];
+  const byExtension = UPLOAD_TYPES[keyExtension(thumb ? thumb[1] : key)];
+  if (!byExtension) return null;
+  const rule = thumb ? THUMB_TYPES : byExtension;
   const type = bareType(sent);
-  return allowed.includes(type) ? type : null;
+  // an empty Content-Type counts as none for a photo; a thumbnail keeps the
+  // old rule (only a missing header defaults)
+  if (sent === null || (!thumb && !type) || rule.asOwn.includes(type)) return rule.own;
+  return rule.keep.includes(type) ? type : null;
 }
 
 // Every bucket at least as large as the requested width, smallest first, then

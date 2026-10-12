@@ -284,8 +284,8 @@ CREATE TABLE photographer_sessions (
   `2026/api/x.jpg`、`apiary/…` 這類照常。測試：`worker/test/upload-paths.test.mjs`。
 - **上傳只收照片、物件一律不能當網頁**：上傳 PUT 看鍵的副檔名**和** Content-Type（`uploadContentType`）。副檔名只收 upload.html 的
   `IMAGE_EXTS`（jpg/jpeg/png/webp/avif/gif/heic/heif/tif/tiff/bmp，大小寫不拘），型別看副檔名（參數、大小寫去掉後存）：
-  選片格線會列出的 .jpg/.jpeg/.png/.webp/.avif 只收 jpeg/png/webp/avif 四種（所以格線、縮圖退回原檔、燈箱拿到的永遠是行內圖片，不會變下載）；
-  .gif 只收 image/gif；HEIC/HEIF/TIFF/BMP 收自己的型別或 `application/octet-stream`（瀏覽器常不知道它們的型別，upload.html 就送這個）。
+  選片格線會列出的 .jpg/.jpeg/.png/.webp/.avif 收 jpeg/png/webp/avif（照送來的存），以及 `application/octet-stream`、空的 Content-Type、舊別名 `image/jpg` / `image/pjpeg` / `image/x-png`（一律存成**副檔名自己的**行內型別，別名永遠不存）；所以格線、縮圖退回原檔、燈箱拿到的永遠是行內圖片，不會變下載；
+  .gif 收 image/gif，octet-stream／空的也存成 image/gif；HEIC/HEIF/TIFF/BMP 收自己的型別或 `application/octet-stream`（瀏覽器常不知道它們的型別，upload.html 就送這個）。
   這些格式 `?list=` 本來就不列，只當檔案保存、以下載送出。沒帶型別時存副檔名的型別。
   縮圖 `_thumbs/<數字>/<照片鍵>.thumb` 只收 jpeg/png/webp/avif（沒帶 = jpeg，和以前一樣）。其餘（text/html、SVG、XML、JS、text/plain、
   沒有副檔名、`.thumb` 不在 `_thumbs/` 下）一律 415 `unsupported_type`、不寫。物件路由的**每個**回應（200、Range 206、304、`?w=` 縮圖、
