@@ -132,6 +132,18 @@ test('a pick link goes by its PROJECT\'s owner, not by what its own row says', a
   assert.deepEqual(await reads(w.env, b.token), await reads(w.env, BOGUS));
 });
 
+test('a project-less pick row (project_id NULL or empty) owned by a suspended account is dark: SQL and JS agree', async () => {
+  for (const pid of [null, '']) {
+    const w = await world();
+    const b = await projectOf(w.env, w.B);
+    w.env.DB._db.prepare('UPDATE share_tokens SET project_id = ?, photographer_id = ? WHERE token = ?').run(pid, w.B.id, b.token);
+    // positive control: while B is active the row is B's and is not dark by accident
+    assert.notDeepEqual(await reads(w.env, b.token), await reads(w.env, BOGUS), `control, project_id=${JSON.stringify(pid)}`);
+    assert.equal((await act(w.env, w.B.id, 'suspend')).status, 200);
+    assert.deepEqual(await reads(w.env, b.token), await reads(w.env, BOGUS), `project_id=${JSON.stringify(pid)}`);
+  }
+});
+
 // ─── the default photographer is never affected ────────────────────────────
 test('the default photographer\'s links and studio token keep working when another photographer is suspended, and even beside a suspended row named "default"', async () => {
   const w = await world();

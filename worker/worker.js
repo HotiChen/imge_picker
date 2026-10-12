@@ -3729,7 +3729,7 @@ async function routeRequest(request, env, ctx) {
         // this row and the bucket.
         // A photographer session's row is written only while that session
         // still exists, unexpired, for an active account (review of
-        // r2-hardening): a suspend / reset / logout landing after the check
+        // r2-hardening): a suspend / reset / reject landing after the check
         // above has already revoked the account's studio tokens, and a row
         // written after it would outlive them. Not written → the same 401 as
         // an expired session, and nothing else is written. The default
