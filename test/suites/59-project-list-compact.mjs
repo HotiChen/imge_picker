@@ -45,7 +45,7 @@ const posts = m => m.requests.filter(r => r.method === 'POST' && r.path === '/ap
       const bb = await page.$eval('#proj-new-btn', e => { const r = e.getBoundingClientRect(); return { h: r.height, w: r.width, top: r.top, txt: e.textContent.trim() }; });
       ok('新增專案 button >= 44px tall, labelled ＋ 新增專案', bb.h >= 44 && bb.txt.includes('新增專案'), JSON.stringify(bb));
       const firstRowTop = await page.$eval('[data-project-row]', e => e.getBoundingClientRect().top);
-      ok('the first list row starts within the first screen (form no longer pushes it down)', firstRowTop < 400, String(firstRowTop));
+      ok('the first list row starts within the first screen (form no longer pushes it down; the 進行中/已完成 tabs add ~54px)', firstRowTop < 500, String(firstRowTop));
 
       await page.tap('#proj-new-btn');
       for (const f of formFields) ok(`open: ${f} is visible`, await shown(page, f));
@@ -107,8 +107,8 @@ const posts = m => m.requests.filter(r => r.method === 'POST' && r.path === '/ap
     async page => {
       const { out, ok } = lines();
       await page.waitForSelector('[data-project-row]', { state: 'visible', timeout: 5000 });
-      await page.waitForFunction(n => document.querySelectorAll('[data-project-row]').length === n, Object.keys(WANT).length, { timeout: 4000 });
-      const rows = await page.$$eval('[data-project-row]', els => els.map(r => {
+      await page.waitForFunction(n => document.querySelectorAll('[data-project-row]').length === n, 5, { timeout: 4000 });   // 進行中 tab: A B C D F (E and G are 已完成)
+      const scan = () => page.$$eval('[data-project-row]', els => els.map(r => {
         const vis = e => e.getClientRects().length > 0 && getComputedStyle(e).display !== 'none' && getComputedStyle(e).visibility !== 'hidden';
         const rr = r.getBoundingClientRect();
         const title = r.querySelector('.proj-row-title');
@@ -127,6 +127,11 @@ const posts = m => m.requests.filter(r => r.method === 'POST' && r.path === '/ap
           data: { phase: r.dataset.phase, delivered: r.dataset.delivered, confirm: r.dataset.confirm, flags: r.dataset.flags },
         };
       }));
+      // the confirmed rows live on the 已完成 tab: scan both tabs, same checks for all 7 rows
+      const activeRows = await scan();
+      await page.tap('[data-pl-tab="done"]');
+      await page.waitForFunction(() => document.querySelectorAll('[data-project-row]').length === 2, null, { timeout: 4000 });
+      const rows = activeRows.concat(await scan());
       ok('scanned all 7 rows (floor)', rows.length === 7, String(rows.length));
       for (const r of rows) {
         const [label] = WANT[r.id] || [];
@@ -153,10 +158,9 @@ const posts = m => m.requests.filter(r => r.method === 'POST' && r.path === '/ap
       ok('no horizontal overflow at 390px', overflow.sw <= overflow.cw && overflow.lw <= overflow.lc, JSON.stringify(overflow));
 
       // the status filter still reads the same states
-      await page.selectOption('#pl-status', 'confirmed');
-      await page.waitForFunction(() => document.querySelectorAll('[data-project-row]').length === 2, null, { timeout: 3000 });
+      // (the old 已確認 status is now the 已完成 tab, which is still up)
       const ids = await page.$$eval('[data-project-row]', els => els.map(e => e.dataset.projectRow));
-      ok('filter 已確認 still lists E and G', JSON.stringify(ids) === '["proj-E","proj-G"]', JSON.stringify(ids));
+      ok('the 已完成 tab lists E and G', JSON.stringify(ids) === '["proj-E","proj-G"]', JSON.stringify(ids));
       return out;
     },
     { before: m.attach, initScript: ADMIN_PLAIN, contextOptions: MOBILE });

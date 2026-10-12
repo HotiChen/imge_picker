@@ -277,7 +277,7 @@ for (const [tag, ctx] of [['1280', DESKTOP], ['390', PHONE]]) {
   ]) {
     const m = pickFakeWorker(o);
     await suite(`亮色主題 — admin 交件的確認狀態與要求修改清單（${state}）[${tag}]`,
-      `${base}/admin.html#project=proj-cf`,
+      `${base}/admin.html#project=proj-cf${state === 'open requests' ? '' : '&tab=done'}`,
       async page => {
         const out = [];
         const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
