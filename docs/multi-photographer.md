@@ -157,8 +157,28 @@ CREATE TABLE photographer_sessions (
 - 通知信：`mailsDefaultInbox(project)`，五個寄信函式第一行都問它；`project.photographer_id !== 'default'` 就不寄、不警告
   （選片送出、要求修改、修改輪次、客人確認、我有興趣、客人訂單）。選片送出因此留在該攝影師的未通知數字裡。
 - 測試：`worker/test/project-scope.test.mjs`（每條 scoped 路由 × 兩個方向 × 各自正向控制、競態、通知、客人端不讀請求裡的攝影師 id）。
-- 未處理（之後的批次）：`guestOrdersEnabled` 仍未按攝影師關閉（`GUEST_ORDERS=on` 時別人的專案也能下單，doc §4 說非 default 一律 off）；
-  公開 logo、商品／訂單、設定／儀表板仍是 default 專用（2b-2、2b-3）。
+- 未處理（之後的批次）：公開 logo、設定／儀表板仍是 default 專用（2b-3）。（`guestOrdersEnabled` 與商品／訂單見 2b-2。）
+
+**第 2b-2 批（商品／訂單按攝影師隔離，只有 Worker，無 migration）**：
+- 改成 `requirePhotographer` + `who.id`（整個區塊一個呼叫點，標 `// scoped to the caller (who.id): products and orders`）：
+  `GET / POST /api/admin/products`、`GET /api/admin/platform-products`、`POST …/products/from-platform`、`PUT …/products/:id`、
+  `POST …/products/:id/retire | restore`、`GET /api/admin/orders`、`GET / POST /api/admin/projects/:id/orders`、
+  `PUT /api/admin/orders/:id`、`POST …/orders/:id/erase-contact | payment | status`。別人的商品／訂單／專案 = 不存在的 id：
+  同樣 404、同樣 body、同樣的 SQL 語句序列，D1 + R2 全快照不變；default token 一樣看不到別人的。清單只列自己的。
+  方法不對的 405 在查 id 之前決定，對任何 id 都一樣。
+- 平台目錄（`platform_products`）共用唯讀；`adopted_product_id` 與「已採用 409」都只看自己的；採用的商品是採用者自己的。
+- 輔助函式不再有預設擁有者：`readProducts(env, photographerId, id)`、`readOrders(env, photographerId, …)`、`readOrder(env, photographerId, id)`、
+  `orderLines(…, {photographerId})`（沒傳就丟錯）、`catalogueWrites(env, t, ownerId, …)`（平台表傳 null）。
+- 語句內再檢查擁有者：商品選項的 UPDATE / INSERT（`catalogueWrites`）、採用時的選項 INSERT、訂單品項的 INSERT（新增訂單）
+  與 DELETE / UPDATE / INSERT（改訂單，`same` 閘多帶 `photographer_id`）。
+- 仍是 default 專用（batch 3，`photo_keys` 是 R2 鍵）：`POST /api/admin/projects/:id/orders`（整條），以及 `PUT /api/admin/orders/:id`
+  body 帶 `lines` 或 `photo_keys` 時。所以非 default 攝影師目前**不能新增訂單或改品項**，只能看、改備註／折扣、收款、改狀態、清聯絡資料。
+- `guestOrdersEnabled(env, project)`：專案不是 default 的一律 off（不論 `GUEST_ORDERS` on / pilot）：`/api/pick/shop` 的 `ordering`
+  為 null、`POST /api/pick/orders` 403 `ordering_disabled`。客人看自己的訂單、取消 `requested` 的訂單不受開關影響（設計如此）。
+- 客人商店與「我有興趣」只讀連結專案攝影師的商品（原本就是 `project.photographer_id`，這批加測試）。
+- 2b-1 安全審查補上：`POST /api/shares/:token/revoke` 只撤「沒有專案的連結」或「呼叫者自己專案的連結」，別人的 = 不存在的 token（404）；
+  這條仍是 default 專用（batch 3）。另補兩條行為測試：客人確認時解決該專案（非 default）的修改要求、B 改名自己的專案會改到 B 的連結名稱。
+- 測試：`worker/test/product-order-scope.test.mjs`。
 
 - 所有 `/api/admin/*`、`/api/upload`、`/api/books` 等攝影師路由：`const who = await resolvePhotographer(...)`，
   所有查詢與寫入的 `WHERE` 都帶 `photographer_id = who.id`。別人的資源回 **404**（不是 403，不洩漏存在）。

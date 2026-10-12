@@ -326,7 +326,9 @@ async function mailFlows(owner) {
       request_id: crypto.randomUUID(), lines: [{ option_id: product.options[0].id, qty: 1, photo_key: F1 }],
       contact: { name: '王小明', phone: '0912-345-678' }, delivery: { method: 'pickup' }, note: '', expected_total: 3000, consent: 'v1',
     });
-    assert.equal(r.status, 201, await r.clone().text());
+    // since 2b-2 another photographer's project takes no guest order at all
+    // (docs/multi-photographer.md §4), GUEST_ORDERS=on or not: nothing to mail
+    assert.equal(r.status, owner === 'A' ? 201 : 403, await r.clone().text());
   });
   return sent;
 }
@@ -387,7 +389,7 @@ test('guest side: no /api/pick route reads a photographer id from the request; e
 test('source: no `default-only until 2b-1` mark is left, and every project route asks requirePhotographer', () => {
   assert.equal((SRC.match(/default-only until 2b-1\b/g) || []).length, 0);
   const scoped = SRC.match(/requirePhotographer\(request, env\); \/\/ scoped to the caller/g) || [];
-  assert.equal(scoped.length, 9, 'list, detail, reset-seat, start-retouch/reopen, archive/unarchive, delete, links, confirm, patch');
+  assert.equal(scoped.length, 9 + 1, 'list, detail, reset-seat, start-retouch/reopen, archive/unarchive, delete, links, confirm, patch; and (2b-2) the products / orders block');
   const open405 = SRC.match(/requirePhotographer\(request, env\); \/\/ open to every photographer: a 405/g) || [];
   assert.equal(open405.length, 1);
 });
@@ -469,4 +471,54 @@ test('start-retouch: the system order is looked up as the caller\'s — another 
   w.env.DB._db.prepare('UPDATE submissions SET extra_price = 300 WHERE project_id = ?').run(w.b.id);
   assert.equal((await call(w.env, `${P(w.b.id)}/start-retouch`, { method: 'POST', token: w.B.token })).status, 200);
   assert.equal(JSON.stringify(rows(w.env, 'SELECT * FROM order_items i JOIN orders o ON o.id = i.order_id WHERE o.project_id = ?', w.b.id)), before);
+});
+
+// ─── behaviour behind the owner binds a static count alone used to catch ──
+test('guest confirm on another photographer\'s project resolves its open 要求修改 (the resolve is bound to the project\'s owner)', async () => {
+  const w = await world('delivered');
+  for (const p of [w.b, w.a]) {
+    const open = () => one(w.env, 'SELECT COUNT(*) AS n FROM revision_requests WHERE project_id = ? AND resolved_at IS NULL', p.id).n;
+    assert.equal(open(), 1, 'the fixture has an open request');
+    const res = await confirm(w.env, p.token, p.key);
+    assert.equal(res.status, 200, await res.clone().text());
+    assert.ok(one(w.env, 'SELECT client_confirmed_at FROM projects WHERE id = ?', p.id).client_confirmed_at);
+    assert.equal(open(), 0, `${p.owner.id}: confirmed with an open request`);
+  }
+});
+
+test('PATCH :id title on B\'s own project renames B\'s link label too, and not A\'s', async () => {
+  const w = await world('fresh');
+  const label = id => one(w.env, "SELECT label FROM share_tokens WHERE kind = 'pick' AND project_id = ?", id).label;
+  const aLabel = label(w.a.id);
+  const res = await call(w.env, P(w.b.id), { method: 'PATCH', token: w.B.token, body: { title: '乙 新名字' } });
+  assert.equal(res.status, 200, await res.clone().text());
+  assert.equal(one(w.env, 'SELECT title FROM projects WHERE id = ?', w.b.id).title, '乙 新名字');
+  assert.equal(label(w.b.id), '乙 新名字');
+  assert.equal(label(w.a.id), aLabel);
+});
+
+// ─── POST /api/shares/:token/revoke: a pick link only of the caller's own ─
+// Still default-only (batch 3), so today the caller is the default
+// photographer: a pick link of another photographer's project is a token
+// that does not exist (404, the same body, nothing written).
+test('shares revoke: the default token cannot revoke another photographer\'s pick link (404 like an unknown token); its own still revokes', async () => {
+  const w = await world('fresh');
+  const before = snapshot(w.env);
+  const res = await call(w.env, `/api/shares/${encodeURIComponent(w.b.token)}/revoke`, { method: 'POST', token: SECRET });
+  const text = await res.text();
+  assert.equal(res.status, 404);
+  assert.equal(snapshot(w.env), before, 'B\'s link was revoked');
+  const none = await call(w.env, '/api/shares/no-such-token/revoke', { method: 'POST', token: SECRET });
+  assert.equal(none.status, 404);
+  assert.equal(text, await none.text());
+  // B itself is refused (default-only until batch 3), even on its own link
+  assert.equal((await call(w.env, `/api/shares/${encodeURIComponent(w.b.token)}/revoke`, { method: 'POST', token: w.B.token })).status, 404);
+  assert.equal(snapshot(w.env), before);
+  assert.equal((await pick(w.env, 'GET', 'state', w.b.token)).status, 200, 'B\'s link still works');
+  // positive control: the default photographer's own pick link, and a link with no project (a book link)
+  assert.equal((await call(w.env, `/api/shares/${encodeURIComponent(w.a.token)}/revoke`, { method: 'POST', token: SECRET })).status, 200);
+  assert.ok(one(w.env, 'SELECT revoked_at FROM share_tokens WHERE token = ?', w.a.token).revoked_at);
+  w.env.DB._db.prepare("INSERT INTO share_tokens (token, book_id, label, kind, project_id, folders, created_at, expires_at) VALUES ('BOOKLINK', 'b1', '', 'client', NULL, '[]', ?, ?)")
+    .run(new Date().toISOString(), new Date(Date.now() + 86400000).toISOString());
+  assert.equal((await call(w.env, '/api/shares/BOOKLINK/revoke', { method: 'POST', token: SECRET })).status, 200);
 });

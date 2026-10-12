@@ -159,7 +159,30 @@ test('crawl: every non-public /api path refuses a caller without a photographer 
           const ownList = who === 'B' && flags.PHOTOGRAPHER_ROUTES && path === '/api/admin/projects' && method === 'GET';
           if (ownList) allowed.push(200);
           if (who === 'B' && flags.PHOTOGRAPHER_ROUTES && path === `/api/admin/projects/${project.project.id}` && (method === 'PUT' || method === 'POST')) allowed.push(405);
+          // scoped since 2b-2, the products / orders block: B's own lists
+          // (empty here) and the shared platform catalogue (empty here); the
+          // two creates take no id (custom products off: 403; no platform
+          // product: 400); and the 405 for a method the path does not take,
+          // decided before any id is looked up — the same for an id nobody
+          // has (checked below), so it says nothing about A's
+          const block = /^\/api\/admin\/(products|platform-products|orders)(\/|$)|^\/api\/admin\/projects\/[^/]+\/orders$/.test(path);
+          const blockList = block && method === 'GET' && ['/api/admin/products', '/api/admin/platform-products', '/api/admin/orders'].includes(path);
+          if (who === 'B' && flags.PHOTOGRAPHER_ROUTES && block) {
+            if (blockList) allowed.push(200);
+            if (method === 'POST' && path === '/api/admin/products') allowed.push(403);
+            if (method === 'POST' && path === '/api/admin/products/from-platform') allowed.push(400);
+          }
           const text = await res.clone().text();
+          if (who === 'B' && flags.PHOTOGRAPHER_ROUTES && block && res.status === 405) {
+            const nobody = await hit(mod, env, method, path.replaceAll(project.project.id, NOBODY_ID), token, method === 'GET' ? undefined : {});
+            assert.equal(nobody.status, 405, `${method} ${path}`);
+            assert.equal(text, await nobody.text(), `${method} ${path}: B tells A's resource from none`);
+            allowed.push(405);
+          }
+          if (blockList && res.status === 200) {
+            const empty = { '/api/admin/products': { products: [], custom_products_enabled: false }, '/api/admin/platform-products': { products: [] }, '/api/admin/orders': { orders: [] } }[path];
+            assert.deepEqual(JSON.parse(text), empty, `B ${path}`);
+          }
           // a scoped route may refuse B's malformed body before it looks the
           // project up (PATCH: 400): fine only if it answers exactly the same
           // for a project id nobody has, so it says nothing about A's

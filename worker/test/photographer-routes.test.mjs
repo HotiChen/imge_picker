@@ -6,10 +6,11 @@
 // photographerRoutesOpen(env) says so (PHOTOGRAPHER_ROUTES = "on"; anything
 // else, unset included, is off). Off, a session gets exactly what an unknown
 // token gets today. On, every route that is not yet scoped to its caller
-// (until batches 2b-2, 2b-3 and batch 3 land) answers a non-default
-// photographer 404 and writes nothing; the scoped ones (2b-1: the project
-// routes) answer B's own data only, and A's resource is 404 to B
-// (project-scope.test.mjs has the per-route two-photographer tests).
+// (until batch 2b-3 and batch 3 land) answers a non-default photographer 404
+// and writes nothing; the scoped ones (2b-1: the project routes; 2b-2:
+// products and orders) answer B's own data only, and A's resource is 404 to B
+// (project-scope.test.mjs and product-order-scope.test.mjs have the per-route
+// two-photographer tests).
 //
 // The route table below is checked against the source: every call site must
 // be reached by a table route (an instrumented copy of worker.js records which
@@ -33,11 +34,11 @@ const codeCount = needle => SRC.split('\n').reduce((n, line) => n + (line.split(
 // 'open': any photographer, no data. 'scoped': any photographer, its own data
 // only (who.id) — what 2b-1..3 turn their routes into. The rest: default only
 // until that batch.
-const UNTIL = ['open', 'scoped', '2b-2', '2b-3', 'batch 3', 'retired'];   // 2b-1 is merged: its routes are 'scoped'
+const UNTIL = ['open', 'scoped', '2b-3', 'batch 3', 'retired'];   // 2b-1 and 2b-2 are merged: their routes are 'scoped'
 // which helper a mark requires at its call site
 const helperFor = until => (until === 'open' || until === 'scoped' ? 'requirePhotographer' : 'requireDefault');
 // the mark on a call-site line
-const markOf = line => /\/\/ default-only until (2b-2|2b-3|batch 3|retired)\b/.exec(line)?.[1]
+const markOf = line => /\/\/ default-only until (2b-3|batch 3|retired)\b/.exec(line)?.[1]
   ?? (/\/\/ open to every photographer\b/.test(line) ? 'open' : /\/\/ scoped to the caller\b/.test(line) ? 'scoped' : null);
 
 // ─── fixture: one of everything the default photographer owns ──────────────
@@ -81,20 +82,20 @@ const ROUTES = [
   R('scoped', 'PATCH', P, { title: '改名' }),
   R('open', 'PUT', P, {}),
   R('open', 'POST', P, {}),
-  R('2b-2', 'GET', () => '/api/admin/products'),
-  R('2b-2', 'POST', () => '/api/admin/products', { kind: 'service', name: 'x', options: [{ label: '', price: 1 }] }),
-  R('2b-2', 'GET', () => '/api/admin/platform-products'),
-  R('2b-2', 'POST', () => '/api/admin/products/from-platform', { platform_product_id: 'nope' }),
-  R('2b-2', 'PUT', () => '/api/admin/products/prod-a', { guest_visible: 1 }),
-  R('2b-2', 'POST', () => '/api/admin/products/prod-a/retire'),
-  R('2b-2', 'POST', () => '/api/admin/products/prod-a/restore'),
-  R('2b-2', 'GET', () => '/api/admin/orders'),
-  R('2b-2', 'GET', f => `${P(f)}/orders`),
-  R('2b-2', 'POST', f => `${P(f)}/orders`, { lines: [{ option_id: 'opt-a', qty: 1 }] }),
-  R('2b-2', 'PUT', () => '/api/admin/orders/ord-a', { note: '備註' }),
-  R('2b-2', 'POST', () => '/api/admin/orders/ord-a/erase-contact'),
-  R('2b-2', 'POST', () => '/api/admin/orders/ord-a/payment', { paid_amount: 0 }),
-  R('2b-2', 'POST', () => '/api/admin/orders/ord-a/status', { status: 'fulfilled' }),
+  R('scoped', 'GET', () => '/api/admin/products'),
+  R('scoped', 'POST', () => '/api/admin/products', { kind: 'service', name: 'x', options: [{ label: '', price: 1 }] }),
+  R('scoped', 'GET', () => '/api/admin/platform-products'),
+  R('scoped', 'POST', () => '/api/admin/products/from-platform', { platform_product_id: 'nope' }),
+  R('scoped', 'PUT', () => '/api/admin/products/prod-a', { guest_visible: 1 }),
+  R('scoped', 'POST', () => '/api/admin/products/prod-a/retire'),
+  R('scoped', 'POST', () => '/api/admin/products/prod-a/restore'),
+  R('scoped', 'GET', () => '/api/admin/orders'),
+  R('scoped', 'GET', f => `${P(f)}/orders`),
+  R('scoped', 'POST', f => `${P(f)}/orders`, { lines: [{ option_id: 'opt-a', qty: 1 }] }),
+  R('scoped', 'PUT', () => '/api/admin/orders/ord-a', { note: '備註' }),
+  R('scoped', 'POST', () => '/api/admin/orders/ord-a/erase-contact'),
+  R('scoped', 'POST', () => '/api/admin/orders/ord-a/payment', { paid_amount: 0 }),
+  R('scoped', 'POST', () => '/api/admin/orders/ord-a/status', { status: 'fulfilled' }),
   R('2b-3', 'GET', () => '/api/admin/stats'),
   R('2b-3', 'GET', () => '/api/admin/settings'),
   R('2b-3', 'PUT', () => '/api/admin/settings', { studio_name: '工作室' }),
@@ -253,25 +254,38 @@ test('PHOTOGRAPHER_ROUTES=on: a non-default session is 404 on every default-only
     // route is B on A's resource: 404 and nothing written, like default-only
     // (project-scope.test.mjs: per route, against a nonexistent id too) — and
     // A still gets it (the positive control above runs every route with A's token)
-    const notRefused = { 'GET /api/auth/verify-admin': 200, 'PUT /api/admin/projects/:id': 405, 'POST /api/admin/projects/:id': 405, 'GET /api/admin/projects': 200 };
+    // Since 2b-2 the products / orders lists are B's own (empty here), the
+    // shared platform catalogue (empty here), and the two creates answer B
+    // without touching anything of A's: custom products are off in this
+    // env (403), and the platform product does not exist (400).
+    const notRefused = {
+      'GET /api/auth/verify-admin': [200, { ok: true }], 'PUT /api/admin/projects/:id': [405], 'POST /api/admin/projects/:id': [405],
+      'GET /api/admin/projects': [200, { projects: [] }],
+      'GET /api/admin/products': [200, { products: [], custom_products_enabled: false }],
+      'POST /api/admin/products': [403],
+      'GET /api/admin/platform-products': [200, { products: [] }],
+      'POST /api/admin/products/from-platform': [400],
+      'GET /api/admin/orders': [200, { orders: [] }],
+    };
     if (hasOwn(notRefused, label(r))) {
-      assert.equal(res.status, notRefused[label(r)], label(r));
-      if (r.until === 'open' && res.status === 200) assert.deepEqual(JSON.parse(text), { ok: true }, 'verify-admin says nothing about anyone');
-      if (label(r) === 'GET /api/admin/projects') assert.deepEqual(JSON.parse(text), { projects: [] }, 'B has no projects of its own here');
+      const [status, body] = notRefused[label(r)];
+      assert.equal(res.status, status, label(r));
+      if (body) assert.deepEqual(JSON.parse(text), body, `${label(r)}: B sees nothing of anyone else's`);
       continue;
     }
     assert.equal(res.status, 404, `${label(r)}: ${res.status} ${text.slice(0, 200)}`);
     refused++;
   }
-  assert.equal(refused, ROUTES.length - 4);
+  assert.equal(refused, ROUTES.length - 9);
 });
 
 test('marks: scoped (2b-1 onwards) is requirePhotographer; a leftover 2b-1 default-only mark is unknown now', () => {
   assert.equal(markOf("const auth = await requirePhotographer(request, env); // scoped to the caller (who.id)"), 'scoped');
   assert.equal(helperFor('scoped'), 'requirePhotographer');
-  assert.equal(markOf('const auth = await requireDefault(request, env); // default-only until 2b-2'), '2b-2');
-  assert.equal(helperFor('2b-2'), 'requireDefault');
+  assert.equal(markOf('const auth = await requireDefault(request, env); // default-only until 2b-3'), '2b-3');
+  assert.equal(helperFor('2b-3'), 'requireDefault');
   assert.equal(markOf('const auth = await requireDefault(request, env); // default-only until 2b-1'), null, '2b-1 is merged');
+  assert.equal(markOf('const auth = await requireDefault(request, env); // default-only until 2b-2'), null, '2b-2 is merged');
   assert.equal(markOf('const auth = await requirePhotographer(request, env); // open to every photographer: answers no data'), 'open');
   assert.equal(markOf('const auth = await requireDefault(request, env);'), null, 'an unmarked site');
   assert.equal(markOf('const auth = await requireDefault(request, env); // default-only until later'), null, 'an unknown batch');
@@ -400,12 +414,9 @@ const DEFAULT_ID_USES = {
   '(top level)': 1,          // the definition
   defaultOnly: 1,            // the default-only gate
   identify: 2,               // PHOTOGRAPHER_TOKEN → 'default'; a session named 'default' is refused
-  catalogueWrites: 1,        // 2b-2
-  readProducts: 2,           // 2b-2
-  readOrders: 2,             // 2b-2 (readOrder goes through it)
-  orderLines: 1,             // 2b-2: the admin callers' default owner
   mailsDefaultInbox: 1,      // PHOTOGRAPHER_EMAIL is the default photographer's inbox only (until batch 4)
-  routeRequest: 33,          // the routes themselves: 2b-2, 2b-3, and batch 3's POST projects / deliver / undeliver
+  guestOrdersEnabled: 1,     // guest ordering: the default photographer's projects only (doc §4)
+  routeRequest: 17,          // the routes themselves: 2b-3, and batch 3's POST projects / deliver / undeliver
 };
 test('DEFAULT_PHOTOGRAPHER_ID appears only in the allow-listed functions, with exact counts', () => {
   const counts = {};

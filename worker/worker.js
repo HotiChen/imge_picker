@@ -1506,36 +1506,49 @@ async function platformOptionMap(env, platformProductId) {
 // option set: an option with an id is updated (and restored), one without is
 // inserted, every other one is retired, never deleted — order lines point at
 // them. `t` names the tables and option columns, all fixed strings.
+// `ownerId`: the photographer whose product it is (who.id), for the tables a
+// photographer owns, and null for the platform's (the operator's): every
+// statement on an owned product re-checks the owner itself, so an option
+// write never lands on a product that is not the caller's, whatever was read
+// before the batch.
 const CUSTOM_TABLES = { products: 'products', options: 'product_options', fk: 'product_id', owned: true, cols: ['label', 'price', 'cost'] };
 const ADOPTED_TABLES = { ...CUSTOM_TABLES, cols: ['label', 'price', 'cost', 'platform_option_id'] };
 const PLATFORM_TABLES = { products: 'platform_products', options: 'platform_product_options', fk: 'platform_product_id', owned: false, cols: ['label', 'vendor_cost', 'platform_price'] };
-function catalogueWrites(env, t, id, set, opts, now) {
+function catalogueWrites(env, t, ownerId, id, set, opts, now) {
+  if (t.owned !== (typeof ownerId === 'string' && ownerId !== '')) throw new Error('catalogueWrites: an owned table needs its owner, the platform none');
   const cols = [...Object.keys(set), 'updated_at'];
-  const owner = t.owned ? [DEFAULT_PHOTOGRAPHER_ID] : [];
+  const owner = t.owned ? [ownerId] : [];
+  // the owner gate on an option statement (none for the platform's tables)
+  const mine = t.owned ? ` AND EXISTS (SELECT 1 FROM ${t.products} WHERE id = ? AND photographer_id = ?)` : '';
+  const mineBinds = t.owned ? [id, ownerId] : [];
   const statements = [env.DB.prepare(
     `UPDATE ${t.products} SET ${cols.map(c => `${c} = ?`).join(', ')} WHERE id = ?${t.owned ? ' AND photographer_id = ?' : ''}`
   ).bind(...Object.values(set), now, id, ...owner)];
   if (!opts) return statements;
-  statements.push(env.DB.prepare(`UPDATE ${t.options} SET active = 0 WHERE ${t.fk} = ?`).bind(id));
+  statements.push(env.DB.prepare(`UPDATE ${t.options} SET active = 0 WHERE ${t.fk} = ?${mine}`).bind(id, ...mineBinds));
   for (const o of opts) {
     const values = t.cols.map(c => o[c]);
     statements.push(o.id
-      ? env.DB.prepare(`UPDATE ${t.options} SET ${t.cols.map(c => `${c} = ?`).join(', ')}, sort = ?, active = 1 WHERE id = ? AND ${t.fk} = ?`)
-        .bind(...values, o.sort, o.id, id)
-      : env.DB.prepare(`INSERT INTO ${t.options} (id, ${t.fk}, ${t.cols.join(', ')}, sort) VALUES (?, ?, ${t.cols.map(() => '?').join(', ')}, ?)`)
-        .bind(crypto.randomUUID(), id, ...values, o.sort));
+      ? env.DB.prepare(`UPDATE ${t.options} SET ${t.cols.map(c => `${c} = ?`).join(', ')}, sort = ?, active = 1 WHERE id = ? AND ${t.fk} = ?${mine}`)
+        .bind(...values, o.sort, o.id, id, ...mineBinds)
+      : t.owned
+        ? env.DB.prepare(`INSERT INTO ${t.options} (id, ${t.fk}, ${t.cols.join(', ')}, sort) SELECT ?, ?, ${t.cols.map(() => '?').join(', ')}, ? WHERE 1${mine}`)
+          .bind(crypto.randomUUID(), id, ...values, o.sort, ...mineBinds)
+        : env.DB.prepare(`INSERT INTO ${t.options} (id, ${t.fk}, ${t.cols.join(', ')}, sort) VALUES (?, ?, ${t.cols.map(() => '?').join(', ')}, ?)`)
+          .bind(crypto.randomUUID(), id, ...values, o.sort));
   }
   return statements;
 }
 
-// This photographer's products with their options, retired ones included and
+// `photographerId`'s products (the caller's who.id) with their options, retired ones included and
 // flagged; `id` narrows it to one. Never the image bytes. An adopted product
 // reads the platform's live kind, name, description, photo_count, image and
 // option labels, and its options' cost is the current platform price, flagged
 // when the photographer's price has fallen below it. Never the vendor cost.
-async function readProducts(env, id = null) {
+async function readProducts(env, photographerId, id = null) {
+  if (typeof photographerId !== 'string' || !photographerId) throw new Error('readProducts: no photographer');
   const one = id === null ? '' : ' AND p.id = ?2';
-  const binds = id === null ? [DEFAULT_PHOTOGRAPHER_ID] : [DEFAULT_PHOTOGRAPHER_ID, id];
+  const binds = id === null ? [photographerId] : [photographerId, id];
   const own = (col, expr = `p.${col}`) => `CASE WHEN pp.id IS NULL THEN ${expr} ELSE ${expr.replace('p.', 'pp.')} END AS ${col}`;
   // the page bounds are the platform's only (a custom product has none), and
   // null for a column the database does not have yet
@@ -1661,7 +1674,9 @@ async function readGuestShop(env, photographerId) {
   }
 }
 
-// Orders matching `where` (on `o`, after ORDER_SCOPE_SQL), newest first, with
+// `photographerId`'s orders (the caller's who.id; ORDER_SCOPE_SQL also wants
+// the order's project to be that photographer's) matching `where` (on `o`),
+// newest first, with
 // their lines and computed money. Named columns, never o.* (docs/guest-shop.md
 // S2): request_id stays in the database, and a column a later migration adds
 // cannot reach a response unannounced. The guest-order columns (contact,
@@ -1675,14 +1690,15 @@ const ORDER_BASE_COLUMNS = ['id', 'photographer_id', 'project_id', 'source', 'st
 const ORDER_GUEST_COLUMNS = ['contact_name', 'contact_phone', 'contact_line', 'delivery_method', 'consent_version', 'contact_erased_at'];
 const ORDER_ITEM_LATE_COLUMNS = ['list_price', 'layout'];
 const lateColumns = (alias, cols, late) => cols.map(c => (late ? `${alias}.${c}` : `NULL AS ${c}`)).join(', ');
-async function readOrders(env, where, binds, limit = 500) {
+async function readOrders(env, photographerId, where, binds, limit = 500) {
+  if (typeof photographerId !== 'string' || !photographerId) throw new Error('readOrders: no photographer');
   const { results: orders } = await withoutMissingColumn(...[true, false].map(late => () => env.DB.prepare(
     `SELECT ${ORDER_BASE_COLUMNS.map(c => `o.${c}`).join(', ')}, ${lateColumns('o', ORDER_GUEST_COLUMNS, late)},
             p.title AS project_title, (p.delivered_at IS NOT NULL AND p.final_folders IS NOT NULL) AS project_delivered,
             ${ORDER_SUBTOTAL_SQL} AS subtotal, ${ORDER_TOTAL_SQL} AS total,
             ${ORDER_COST_SQL} AS cost, ${ORDER_OUTSTANDING_SQL} AS outstanding
        ${ORDER_SCOPE_SQL} AND ${where} ORDER BY o.created_at DESC, o.rowid DESC LIMIT ${limit}`
-  ).bind(DEFAULT_PHOTOGRAPHER_ID, ...binds).all()));
+  ).bind(photographerId, ...binds).all()));
   if (!orders.length) return [];
   const { results: items } = await withoutMissingColumn(...[true, false].map(late => () => env.DB.prepare(
     // named columns, never i.*: vendor_cost is the operator's and must not
@@ -1691,7 +1707,7 @@ async function readOrders(env, where, binds, limit = 500) {
             i.qty, i.photo_keys, i.platform_option_id, ${lateColumns('i', ORDER_ITEM_LATE_COLUMNS, late)}
        FROM order_items i WHERE i.order_id IN (SELECT o.id ${ORDER_SCOPE_SQL} AND ${where}
        ORDER BY o.created_at DESC, o.rowid DESC LIMIT ${limit}) ORDER BY i.rowid`
-  ).bind(DEFAULT_PHOTOGRAPHER_ID, ...binds).all()));
+  ).bind(photographerId, ...binds).all()));
   return orders.map(({ contact_name, contact_phone, contact_line, contact_erased_at, project_delivered, ...o }) => ({
     ...o,
     contact: contact_name != null || contact_erased_at != null
@@ -1711,8 +1727,8 @@ function parseLayout(json) {
   } catch { return null; }
 }
 
-async function readOrder(env, id) {
-  const [order] = await readOrders(env, 'o.id = ?', [id], 1);
+async function readOrder(env, photographerId, id) {
+  const [order] = await readOrders(env, photographerId, 'o.id = ?', [id], 1);
   return order || null;
 }
 
@@ -1740,7 +1756,10 @@ function orderPhotoFolders(project, guest) {
 // `photographerId`, and everything else is read from there, list_price (the
 // catalogue price) included. `guest`: the guest order path — finals only, and
 // unit_price is never read from the input. Returns {lines} or {bad: code}.
-async function orderLines(env, project, input, existing, { guest = false, photographerId = DEFAULT_PHOTOGRAPHER_ID } = {}) {
+async function orderLines(env, project, input, existing, { guest = false, photographerId } = {}) {
+  // every caller names the owner: the admin routes who.id, the guest path the
+  // link's project's photographer — never a default
+  if (typeof photographerId !== 'string' || !photographerId) throw new Error('orderLines: no photographer');
   if (!Array.isArray(input) || !input.length) return { bad: 'invalid_lines' };
   if (input.length > ORDER_LINES_MAX) return { bad: 'too_many_lines' };
   if (guest && existing) return { bad: 'invalid_lines' };
@@ -2425,11 +2444,16 @@ const GUEST_ORDER_ERRORS = {
   invalid_layout: '相本頁數不正確', extra_pages_unpriced: '這本相本無法加頁，請選最少頁數或聯絡攝影師',
 };
 
-// Whether guest ordering is open for this project: GUEST_ORDERS exactly "on",
-// or exactly "pilot" with the project listed in GUEST_ORDERS_PILOT (comma
-// separated ids). Unset or anything else is off, so a typo fails closed. The
-// one place either variable is read.
-function guestOrdersEnabled(env, projectId) {
+// Whether guest ordering is open for this project (the projects row): never
+// for a project that is not the default photographer's, whatever the switch
+// says (docs/multi-photographer.md §4: no per-studio switch until payments
+// are decided); otherwise GUEST_ORDERS exactly "on", or exactly "pilot" with
+// the project listed in GUEST_ORDERS_PILOT (comma separated ids). Unset or
+// anything else is off, so a typo fails closed. The one place either
+// variable is read.
+function guestOrdersEnabled(env, project) {
+  if (!project || project.photographer_id !== DEFAULT_PHOTOGRAPHER_ID) return false;
+  const projectId = project.id;
   const mode = env.GUEST_ORDERS;
   if (mode === 'on') return true;
   if (mode !== 'pilot') return false;
@@ -4599,7 +4623,7 @@ async function routeRequest(request, env, ctx) {
       const fit = pageBoundsFit({ ...bounds.set, ...bleed.set, ...extra.set, ...category.set }, cols);
       if (fit.unavailable) return done(fit.unavailable, 500);
       if (kind !== 'album') fields.set.photo_count = null;
-      await env.DB.batch(catalogueWrites(env, PLATFORM_TABLES, id, { ...fields.set, ...fit.set }, opts, now));
+      await env.DB.batch(catalogueWrites(env, PLATFORM_TABLES, null, id, { ...fields.set, ...fit.set }, opts, now));
       const [product] = await readPlatformProducts(env, id);
       return done({ product });
     }
@@ -4621,17 +4645,20 @@ async function routeRequest(request, env, ctx) {
 
     // ─── Products and orders (docs/products-orders.md) ─────────────────────
     // /api/admin/products[/:id[/retire|/restore]], /api/admin/orders[/:id
-    // [/payment|/status]] and /api/admin/projects/:id/orders. The admin token
-    // first (401), then the method (405), then the id, scoped to this
-    // photographer (404). Every 400 is {error, code} and decided before
+    // [/payment|/status]] and /api/admin/projects/:id/orders. The
+    // photographer first (401), then the method (405), then the id, scoped to
+    // the caller (who.id): another photographer's product, order or project
+    // is 404, exactly as one that does not exist. The platform catalogue is
+    // shared and read only; adopting makes a product of the caller's own. Every 400 is {error, code} and decided before
     // anything is written; writes that touch more than one row are one batch.
     // Anything else under these paths is 404 here, so a PUT can never fall
     // through to the upload route and land in the bucket.
     if (pathParts[0] === 'api' && pathParts[1] === 'admin' &&
         (pathParts[2] === 'products' || pathParts[2] === 'orders' || pathParts[2] === 'platform-products' ||
          (pathParts[2] === 'projects' && pathParts[3] && pathParts[4] === 'orders'))) {
-      const auth = await requireDefault(request, env); // default-only until 2b-2
+      const auth = await requirePhotographer(request, env); // scoped to the caller (who.id): products and orders
       if (auth.refused) return auth.refused;
+      const { who } = auth;
       const [, , area, id, action] = pathParts;
       // null for any deeper or unknown path: 404 below
       let route = null;
@@ -4669,7 +4696,7 @@ async function routeRequest(request, env, ctx) {
       // GET /api/admin/products — the catalogue, retired products and
       // options included (active = 0), never the image bytes.
       if (route === 'products' && request.method === 'GET') {
-        return done({ products: await readProducts(env), custom_products_enabled: customProductsEnabled(env) });
+        return done({ products: await readProducts(env, who.id), custom_products_enabled: customProductsEnabled(env) });
       }
 
       // GET /api/admin/platform-products — what the platform offers: active
@@ -4683,7 +4710,7 @@ async function routeRequest(request, env, ctx) {
                   (SELECT p.id FROM products p WHERE p.photographer_id = ? AND p.platform_product_id = pp.id
                     ORDER BY p.rowid LIMIT 1) AS adopted_product_id
              FROM platform_products pp WHERE pp.active = 1 ORDER BY pp.sort, pp.created_at, pp.rowid`
-        ).bind(DEFAULT_PHOTOGRAPHER_ID).all());
+        ).bind(who.id).all());
         const { results: options } = await env.DB.prepare(
           `SELECT po.id, po.platform_product_id, po.label, po.platform_price, po.sort
              FROM platform_product_options po JOIN platform_products pp ON pp.id = po.platform_product_id
@@ -4719,7 +4746,7 @@ async function routeRequest(request, env, ctx) {
         const opts = adoptedOptions(body.options, await platformOptionMap(env, pp.id));
         if (opts.bad) return orderBad(opts.bad);
         const adopted = () => env.DB.prepare('SELECT id FROM products WHERE photographer_id = ? AND platform_product_id = ? ORDER BY rowid LIMIT 1')
-          .bind(DEFAULT_PHOTOGRAPHER_ID, pp.id).first();
+          .bind(who.id, pp.id).first();
         const already = row => done({ error: '已加入這個平台商品', code: 'already_adopted', product_id: row ? row.id : null }, 409);
         const existing = await adopted();
         if (existing) return already(existing);
@@ -4731,15 +4758,15 @@ async function routeRequest(request, env, ctx) {
           env.DB.prepare(
             'INSERT INTO products (id, photographer_id, kind, name, description, photo_count, guest_visible, sort, platform_product_id, created_at, updated_at) ' +
             'SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM products WHERE photographer_id = ? AND platform_product_id = ?)'
-          ).bind(productId, DEFAULT_PHOTOGRAPHER_ID, pp.kind, pp.name, pp.description, pp.kind === 'album' ? pp.photo_count : null,
-            p.guest_visible, p.sort, pp.id, now, now, DEFAULT_PHOTOGRAPHER_ID, pp.id),
+          ).bind(productId, who.id, pp.kind, pp.name, pp.description, pp.kind === 'album' ? pp.photo_count : null,
+            p.guest_visible, p.sort, pp.id, now, now, who.id, pp.id),
           ...opts.options.map(o => env.DB.prepare(
             'INSERT INTO product_options (id, product_id, label, price, cost, sort, platform_option_id) ' +
-            'SELECT ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM products WHERE id = ?)'
-          ).bind(crypto.randomUUID(), productId, o.label, o.price, o.cost, o.sort, o.platform_option_id, productId)),
+            'SELECT ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM products WHERE id = ? AND photographer_id = ?)'
+          ).bind(crypto.randomUUID(), productId, o.label, o.price, o.cost, o.sort, o.platform_option_id, productId, who.id)),
         ]);
         if (!results[0].meta?.changes) return already(await adopted());
-        const [product] = await readProducts(env, productId);
+        const [product] = await readProducts(env, who.id, productId);
         return done({ product }, 201);
       }
 
@@ -4761,12 +4788,12 @@ async function routeRequest(request, env, ctx) {
         await env.DB.batch([
           env.DB.prepare(
             'INSERT INTO products (id, photographer_id, kind, name, description, photo_count, guest_visible, sort, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
-          ).bind(productId, DEFAULT_PHOTOGRAPHER_ID, p.kind, p.name, p.description, p.photo_count, p.guest_visible, p.sort, now, now),
+          ).bind(productId, who.id, p.kind, p.name, p.description, p.photo_count, p.guest_visible, p.sort, now, now),
           ...opts.options.map(o => env.DB.prepare(
             'INSERT INTO product_options (id, product_id, label, price, cost, sort) VALUES (?, ?, ?, ?, ?, ?)'
           ).bind(crypto.randomUUID(), productId, o.label, o.price, o.cost, o.sort)),
         ]);
-        const [product] = await readProducts(env, productId);
+        const [product] = await readProducts(env, who.id, productId);
         return done({ product }, 201);
       }
 
@@ -4779,7 +4806,7 @@ async function routeRequest(request, env, ctx) {
       // platform_managed. active is never read here: retire / restore.
       if (route === 'product') {
         const current = await env.DB.prepare('SELECT id, kind, platform_product_id FROM products WHERE id = ? AND photographer_id = ?')
-          .bind(id, DEFAULT_PHOTOGRAPHER_ID).first();
+          .bind(id, who.id).first();
         if (!current) return jsonErr('Not found', 404);
         let statements;
         if (current.platform_product_id) {
@@ -4795,7 +4822,7 @@ async function routeRequest(request, env, ctx) {
             const byPlatform = new Map(results.map(r => [r.platform_option_id, r.id]));
             opts = checked.options.map(o => ({ ...o, id: byPlatform.get(o.platform_option_id) }));
           }
-          statements = catalogueWrites(env, ADOPTED_TABLES, id, fields.set, opts, now);
+          statements = catalogueWrites(env, ADOPTED_TABLES, who.id, id, fields.set, opts, now);
         } else {
           if (!customProductsEnabled(env)) return done(CUSTOM_PRODUCTS_DISABLED, 403);
           const fields = productFields(body, true);
@@ -4809,10 +4836,10 @@ async function routeRequest(request, env, ctx) {
             opts = checked.options;
           }
           if ((fields.set.kind ?? current.kind) !== 'album') fields.set.photo_count = null;
-          statements = catalogueWrites(env, CUSTOM_TABLES, id, fields.set, opts, now);
+          statements = catalogueWrites(env, CUSTOM_TABLES, who.id, id, fields.set, opts, now);
         }
         await env.DB.batch(statements);
-        const [product] = await readProducts(env, id);
+        const [product] = await readProducts(env, who.id, id);
         return done({ product });
       }
 
@@ -4824,12 +4851,12 @@ async function routeRequest(request, env, ctx) {
         const active = action === 'restore' ? 1 : 0;
         if (active && !customProductsEnabled(env)) {
           const current = await env.DB.prepare('SELECT platform_product_id FROM products WHERE id = ? AND photographer_id = ?')
-            .bind(id, DEFAULT_PHOTOGRAPHER_ID).first();
+            .bind(id, who.id).first();
           // no row (unknown, or another photographer's) is the 404 below
           if (current && !current.platform_product_id) return done(CUSTOM_PRODUCTS_DISABLED, 403);
         }
         const result = await env.DB.prepare('UPDATE products SET active = ?, updated_at = ? WHERE id = ? AND photographer_id = ?')
-          .bind(active, now, id, DEFAULT_PHOTOGRAPHER_ID).run();
+          .bind(active, now, id, who.id).run();
         if (!result.meta?.changes) return jsonErr('Not found', 404);
         return done({ ok: true, active });
       }
@@ -4844,14 +4871,14 @@ async function routeRequest(request, env, ctx) {
         const binds = [];
         if (wanted) { where.push('o.status = ?'); binds.push(wanted); }
         if (params.get('unpaid') === '1') where.push(`${ORDER_OUTSTANDING_SQL} > 0`);
-        return done({ orders: await readOrders(env, where.join(' AND '), binds) });
+        return done({ orders: await readOrders(env, who.id, where.join(' AND '), binds) });
       }
 
       if (route === 'project-orders') {
         // SELECT *: the finals snapshot (final_folders) is one of the folders
         // a line's photo may be in (orderPhotoFolders)
         const project = await env.DB.prepare('SELECT * FROM projects WHERE id = ? AND photographer_id = ?')
-          .bind(id, DEFAULT_PHOTOGRAPHER_ID).first();
+          .bind(id, who.id).first();
         if (!project) return jsonErr('Not found', 404);
 
         // GET /api/admin/projects/:id/orders — the project's orders with
@@ -4860,7 +4887,7 @@ async function routeRequest(request, env, ctx) {
         // else the newest with an extra-pick line). `matches` compares the
         // photo counts, so a waived price is not a mismatch but 10 → 14 is.
         if (request.method === 'GET') {
-          const orders = await readOrders(env, 'o.project_id = ?', [id]);
+          const orders = await readOrders(env, who.id, 'o.project_id = ?', [id]);
           const fee = extraPickFee(await latestSubmission(env, id, project.photographer_id));
           const charged = orders.map(o => [o, o.items.find(i => i.kind === 'extra_pick')]).filter(([, line]) => line);
           const [order, line] = charged.find(([o]) => o.source === 'system') || charged[0] || [null, null];
@@ -4878,13 +4905,11 @@ async function routeRequest(request, env, ctx) {
         // POST /api/admin/projects/:id/orders — {lines: [{option_id, qty,
         // photo_keys?, unit_price?}], discount?, note?}. Confirmed at once;
         // archived projects too (a late sale is still a sale). photo_keys are
-        // R2 keys: this route stays default-only when 2b-2 opens the block.
-        // A no-op today (the block's requireDefault already let only the
-        // default photographer in); it starts refusing once 2b-2 turns that
-        // into requirePhotographer.
+        // R2 keys (unprefixed until batch 3), and every line may carry them:
+        // another photographer gets 404 here even on its own project.
         const keysRefused = defaultOnly(auth.who); // default-only until batch 3 (photo_keys)
         if (keysRefused) return keysRefused;
-        const checked = await orderLines(env, project, body.lines, null);
+        const checked = await orderLines(env, project, body.lines, null, { photographerId: who.id });
         if (checked.bad) return orderBad(checked.bad, checked.error);
         const discount = body.discount ?? 0;
         const discountBad = orderDiscount(discount, linesSubtotal(checked.lines));
@@ -4896,10 +4921,10 @@ async function routeRequest(request, env, ctx) {
           env.DB.prepare(
             "INSERT INTO orders (id, photographer_id, project_id, source, status, discount, note, created_at, updated_at, confirmed_at) " +
             "SELECT ?, ?, ?, 'admin', 'confirmed', ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM projects WHERE id = ? AND photographer_id = ?)"
-          ).bind(orderId, DEFAULT_PHOTOGRAPHER_ID, id, discount, note, now, now, now, id, DEFAULT_PHOTOGRAPHER_ID),
-          ...checked.lines.map(l => orderItemInsert(env, orderId, l, 'EXISTS (SELECT 1 FROM orders WHERE id = ?)', [orderId], late)),
+          ).bind(orderId, who.id, id, discount, note, now, now, now, id, who.id),
+          ...checked.lines.map(l => orderItemInsert(env, orderId, l, 'EXISTS (SELECT 1 FROM orders WHERE id = ? AND photographer_id = ?)', [orderId, who.id], late)),
         ]);
-        const order = await readOrder(env, orderId);
+        const order = await readOrder(env, who.id, orderId);
         if (!order) return jsonErr('Not found', 404);
         return done({ order }, 201);
       }
@@ -4907,7 +4932,7 @@ async function routeRequest(request, env, ctx) {
       // The three single-order routes. Each write is conditional on the
       // order being exactly as read (updated_at, or the status for a status
       // move), so two edits cannot interleave; the loser is a 409.
-      const order = await readOrder(env, id);
+      const order = await readOrder(env, who.id, id);
       if (!order) return jsonErr('Not found', 404);
       const conflict = () => done({ error: '訂單剛被修改，請重新整理', code: 'conflict' }, 409);
       const cancelled = () => done({ error: '訂單已取消', code: 'cancelled' }, 409);
@@ -4919,11 +4944,9 @@ async function routeRequest(request, env, ctx) {
       // order's money is frozen (409); its note is not. The total may not
       // drop below what was already paid (400 below_paid).
       if (route === 'order') {
-        // lines carry photo_keys (R2 keys): a body with lines stays
-        // default-only when 2b-2 opens the block (a note or a discount does
-        // not). A no-op today (the block's requireDefault already let only
-        // the default photographer in); it starts refusing once 2b-2 turns
-        // that into requirePhotographer.
+        // lines carry photo_keys (R2 keys, unprefixed until batch 3): a body
+        // with lines or photo_keys is the default photographer's only, even
+        // on another photographer's own order (a note or a discount is not).
         if (hasField(body, 'lines') || hasField(body, 'photo_keys')) {
           const keysRefused = defaultOnly(auth.who); // default-only until batch 3 (photo_keys)
           if (keysRefused) return keysRefused;
@@ -4933,8 +4956,8 @@ async function routeRequest(request, env, ctx) {
         let lines = null;
         if (hasField(body, 'lines')) {
           const project = await env.DB.prepare('SELECT * FROM projects WHERE id = ? AND photographer_id = ?')
-            .bind(order.project_id, DEFAULT_PHOTOGRAPHER_ID).first();
-          const checked = await orderLines(env, project, body.lines, new Map(order.items.map(i => [i.id, i])));
+            .bind(order.project_id, who.id).first();
+          const checked = await orderLines(env, project, body.lines, new Map(order.items.map(i => [i.id, i])), { photographerId: who.id });
           if (checked.bad) return orderBad(checked.bad, checked.error);
           lines = checked.lines;
         }
@@ -4945,8 +4968,10 @@ async function routeRequest(request, env, ctx) {
         const note = hasField(body, 'note') ? orderNote(body.note) : order.note;
         if (note === null) return orderBad('invalid_note');
         if (subtotal - discount < order.paid_amount) return orderBad('below_paid');
-        const same = 'EXISTS (SELECT 1 FROM orders WHERE id = ? AND updated_at = ?)';
-        const sameBinds = [id, order.updated_at];
+        // the owner too, so a line never changes on an order that is no
+        // longer the caller's (the last statement checks it again)
+        const same = 'EXISTS (SELECT 1 FROM orders WHERE id = ? AND photographer_id = ? AND updated_at = ?)';
+        const sameBinds = [id, who.id, order.updated_at];
         // the statements, with or without the S2 line columns (batchWithItems)
         const build = late => {
           const statements = [];
@@ -4966,12 +4991,12 @@ async function routeRequest(request, env, ctx) {
           // moves
           statements.push(env.DB.prepare(
             `UPDATE orders SET discount = ?, note = ?, ${takeOver}, updated_at = ? WHERE id = ? AND photographer_id = ? AND updated_at = ?`
-          ).bind(discount, note, now, id, DEFAULT_PHOTOGRAPHER_ID, order.updated_at));
+          ).bind(discount, note, now, id, who.id, order.updated_at));
           return statements;
         };
         const results = await batchWithItems(build);
         if (!results[results.length - 1].meta?.changes) return conflict();
-        return done({ order: await readOrder(env, id) });
+        return done({ order: await readOrder(env, who.id, id) });
       }
 
       // POST /api/admin/orders/:id/erase-contact (no body) — 清除聯絡資料
@@ -4986,9 +5011,9 @@ async function routeRequest(request, env, ctx) {
           await env.DB.prepare(
             'UPDATE orders SET contact_phone = NULL, contact_line = NULL, contact_erased_at = ?1, updated_at = ?1 ' +
             'WHERE id = ?2 AND photographer_id = ?3 AND contact_erased_at IS NULL'
-          ).bind(now, id, DEFAULT_PHOTOGRAPHER_ID).run();
+          ).bind(now, id, who.id).run();
         }
-        return done({ order: await readOrder(env, id) });
+        return done({ order: await readOrder(env, who.id, id) });
       }
 
       // POST /api/admin/orders/:id/payment — {paid_amount, paid_method,
@@ -5017,9 +5042,9 @@ async function routeRequest(request, env, ctx) {
         }
         const result = await env.DB.prepare(
           `UPDATE orders SET paid_amount = ?, paid_method = ?, paid_at = ?, ${takeOver}, updated_at = ? WHERE id = ? AND photographer_id = ? AND updated_at = ?`
-        ).bind(amount, method, paidAt, now, id, DEFAULT_PHOTOGRAPHER_ID, order.updated_at).run();
+        ).bind(amount, method, paidAt, now, id, who.id, order.updated_at).run();
         if (!result.meta?.changes) return conflict();
-        return done({ order: await readOrder(env, id) });
+        return done({ order: await readOrder(env, who.id, id) });
       }
 
       // POST /api/admin/orders/:id/status — {status} along ORDER_ARROWS only
@@ -5038,13 +5063,13 @@ async function routeRequest(request, env, ctx) {
       }[to];
       const result = await env.DB.prepare(
         `UPDATE orders SET status = ?2, ${stamp}, ${takeOver}, updated_at = ?1 WHERE id = ?3 AND photographer_id = ?4 AND status = ?5`
-      ).bind(now, to, id, DEFAULT_PHOTOGRAPHER_ID, order.status).run();
+      ).bind(now, to, id, who.id, order.status).run();
       if (!result.meta?.changes) {
-        const current = await readOrder(env, id);
+        const current = await readOrder(env, who.id, id);
         if (!current) return jsonErr('Not found', 404);
         return badArrow(current.status);
       }
-      return done({ order: await readOrder(env, id) });
+      return done({ order: await readOrder(env, who.id, id) });
     }
 
     // GET /api/admin/stats — the dashboard's counts, this photographer only.
@@ -5278,9 +5303,13 @@ async function routeRequest(request, env, ctx) {
       const auth = await requireDefault(request, env); // default-only until batch 3
       if (auth.refused) return auth.refused;
       if (!env.DB) return jsonErr('DB not configured', 500);
+      // a link of a project only while that project is the caller's (a
+      // project-less link — a book's, a studio one — has no owner to check
+      // until batch 3); anyone else's is a token that does not exist
       const result = await env.DB.prepare(
-        'UPDATE share_tokens SET revoked_at = ? WHERE token = ? AND revoked_at IS NULL'
-      ).bind(new Date().toISOString(), pathParts[2]).run();
+        'UPDATE share_tokens SET revoked_at = ? WHERE token = ? AND revoked_at IS NULL ' +
+        'AND (project_id IS NULL OR EXISTS (SELECT 1 FROM projects WHERE id = share_tokens.project_id AND photographer_id = ?))'
+      ).bind(new Date().toISOString(), pathParts[2], auth.who.id).run();
       if (!result.meta?.changes) return jsonErr('Not found', 404);
       return jsonOk({ ok: true });
     }
@@ -5314,7 +5343,7 @@ async function routeRequest(request, env, ctx) {
         // migration). Not a secret, the same for owner and viewers, and not a
         // promise that this caller may order (a viewer never may; the page
         // also needs is_owner and confirmed_at from /state).
-        const ordering = guestOrdersEnabled(env, project.id) && await guestOrdersReady(env) ? GUEST_ORDERING_INFO : null;
+        const ordering = guestOrdersEnabled(env, project) && await guestOrdersReady(env) ? GUEST_ORDERING_INFO : null;
         return jsonOk({ products, ordering }, 200, SHARED_LINK_HEADERS);
       }
 
@@ -5456,7 +5485,7 @@ async function routeRequest(request, env, ctx) {
         }
 
         // POST /api/pick/orders
-        if (!guestOrdersEnabled(env, project.id)) return out({ error: '目前尚未開放線上訂購', code: 'ordering_disabled' }, 403);
+        if (!guestOrdersEnabled(env, project)) return out({ error: '目前尚未開放線上訂購', code: 'ordering_disabled' }, 403);
         const scope = pickReadScope(s);
         const notConfirmed = () => out({ error: '確認完成後才能訂購', code: 'not_confirmed' }, 409);
         if (scope.mode !== 'delivered' || !project.client_confirmed_at) return notConfirmed();

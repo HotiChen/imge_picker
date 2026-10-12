@@ -816,8 +816,8 @@ admin 專案頁兩者並列（「客人興趣」區塊保留）。開關開後�
 
 全部 `/api/pick/` 下，`resolveShareToken` + `resolvePick`（401），`SHARED_LINK_HEADERS`（`Cache-Control: private, no-store`、`Vary`）。
 攝影師一律是 `project.photographer_id`（連結的專案），**不是** `DEFAULT_PHOTOGRAPHER_ID`、不是 request。
-（現況：`readGuestShop` 用 `project.photographer_id`，`orderLines` 用 `DEFAULT_PHOTOGRAPHER_ID`；今天兩者都是 `'default'`，
-客人路徑要統一用前者。）檢查順序固定：
+（多攝影師 2b-2 起：`orderLines` 沒有預設擁有者，客人路徑傳 `project.photographer_id`、admin 路由傳 `who.id`；
+另外非 default 攝影師的專案一律不開放客人下單，不論 `GUEST_ORDERS`。）檢查順序固定：
 
 **401 連結 → 405 方法 → 403 座位 → 403 開關 → 409 狀態（body 之前）→ 413/400 body → 500 migration → 400/404 目錄與照片 → 409 金額 → 200 重送 → 409 上限 → 寫入**；
 寫入沒落地時重讀專案說明原因（同 `/api/pick/interest`）。
@@ -1128,7 +1128,7 @@ Tim 要手動做的：合併前跑 migration（逐句）；決定運費預設與
 5. 本檔 Interplay：「`readOrders` 選 `o.*`」——**仍然成立**；新欄位會自動流進每個 admin 訂單回應，所以 WP1 必須改具名欄位。
 6. 本檔 2026-09-30 WP6「orders 頁加『確認訂單』」：**已經有了**（`js/orders-common.js` 對 `requested` 有「確認 / 取消訂單」，`orders.html` 有「待確認」篩選）。
 7. 本檔 Email 的 10 分鐘節流與 `notified`：與後來的要求修改信、興趣信的作法不同（它們不節流或 24h 一封）；本稿改為不節流 + 上限。
-8. `readGuestShop` 用 `project.photographer_id`，`orderLines` 與所有 admin 訂單查詢用 `DEFAULT_PHOTOGRAPHER_ID`——今天相同，多攝影師時會分岔。
+8. ~~`orderLines` 與所有 admin 訂單查詢用 `DEFAULT_PHOTOGRAPHER_ID`~~：多攝影師 2b-2 已改為呼叫端傳入擁有者（admin = `who.id`，客人 = `project.photographer_id`）。
 9. `privacy.html` 在舊稿多處被引用，**不存在**。
 10. 本檔「Album page range」寫「`albumExtraPagesCost` 回 null 時 S3 決定」；本稿把這個決定提前到 S2（`extra_pages_unpriced`，Q10）。
 
