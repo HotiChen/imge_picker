@@ -209,10 +209,12 @@ test('the migration file turns a deployed database into exactly what schema.sql 
     // (S2 guest ordering: only its studio_settings column — orders are not in this chain)
     '\n' + readFileSync(new URL('../migrations/2026-10-09-guest-orders.sql', import.meta.url), 'utf8').match(/ALTER TABLE studio_settings[^;]*;/)[0] +
     '\n' + readFileSync(new URL('../migrations/2026-10-10-pick-link-message.sql', import.meta.url), 'utf8') +
-    '\n' + readFileSync(new URL('../migrations/2026-10-16-link-messages.sql', import.meta.url), 'utf8');
-  // the live database: share_tokens without project_id, none of the new tables
+    '\n' + readFileSync(new URL('../migrations/2026-10-16-link-messages.sql', import.meta.url), 'utf8') +
+    '\n' + readFileSync(new URL('../migrations/2026-10-17-share-token-owner.sql', import.meta.url), 'utf8');
+  // the live database: share_tokens without project_id (nor the owner column
+  // appended after it), none of the new tables
   const deployed = fresh
-    .replace(/,\n(?:\s*--[^\n]*\n)*\s*project_id\s+TEXT\n\);/, '\n);')
+    .replace(/,\n(?:\s*--[^\n]*\n)*\s*project_id\s+TEXT,\n(?:\s*--[^\n]*\n)*\s*photographer_id\s+TEXT\n\);/, '\n);')
     .replace(/\n-- ─── Guest picking[\s\S]*$/, '\n');
   assert.doesNotMatch(deployed, /project_id|CREATE TABLE IF NOT EXISTS projects/, 'fixture still has the new schema');
   const migrated = fakeDB({ schema: deployed + '\n' + migration });

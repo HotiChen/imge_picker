@@ -78,7 +78,15 @@ CREATE TABLE IF NOT EXISTS share_tokens (
   -- for the same reason as the two above, from a hand-run
   --   ALTER TABLE share_tokens ADD COLUMN project_id TEXT;
   -- (worker/migrations/2026-09-27-guest-picking.sql has the whole paste).
-  project_id   TEXT
+  project_id   TEXT,
+  -- Whose files a project-less token reads (multi-photographer batch 3): a
+  -- 'studio' token's minter, NULL for the default photographer — and NULL on
+  -- every row from before the column (album links, client sessions, the
+  -- default's studio tokens). A 'pick' row's owner is its project's
+  -- photographer, never this. Appended for the same reason, from a hand-run
+  --   ALTER TABLE share_tokens ADD COLUMN photographer_id TEXT;
+  -- (worker/migrations/2026-10-17-share-token-owner.sql).
+  photographer_id TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_share_tokens_book ON share_tokens(book_id);
 CREATE INDEX IF NOT EXISTS idx_share_tokens_user ON share_tokens(user_id);

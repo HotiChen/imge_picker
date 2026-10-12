@@ -198,8 +198,35 @@ test('crawl: every non-public /api path refuses a caller without a photographer 
             assert.equal(text, await nobody.text(), `${method} ${path}: B tells A's project from none`);
             allowed.push(400);
           }
+          // scoped since batch 3: B's own files (any PUT that reaches the
+          // upload route lands under B's prefix, under the logical key it
+          // names), B's own studio token (one row, B's), B's own minted
+          // tokens (none), and a create with no folders (400, no id at all).
+          // Each is set aside before the "nothing written" check below.
+          const bOn = who === 'B' && flags.PHOTOGRAPHER_ROUTES;
+          const logical = decodeURIComponent(path.slice(1));
+          const upload = bOn && method === 'PUT' && res.status === 200 && env.imagepicker._store.has(`_t/${B.id}/${logical}`);
+          if (upload) {
+            assert.deepEqual(JSON.parse(text), { ok: true, key: logical }, path);
+            env.imagepicker._store.delete(`_t/${B.id}/${logical}`);
+            allowed.push(200);
+          }
+          if (bOn && method === 'POST' && path === '/api/auth/studio-token' && res.status === 200) {
+            assert.equal(env.DB._db.prepare("DELETE FROM share_tokens WHERE kind = 'studio' AND photographer_id = ?").run(B.id).changes, 1);
+            allowed.push(200);
+          }
+          if (bOn && method === 'GET' && path === '/api/shares/minted' && res.status === 200) {
+            assert.deepEqual(JSON.parse(text), []);
+            allowed.push(200);
+          }
+          if (bOn && method === 'POST' && path === '/api/shares/minted/revoke-all' && res.status === 200) {
+            assert.deepEqual(JSON.parse(text), { ok: true, revoked: 0 });
+            allowed.push(200);
+          }
+          if (bOn && method === 'POST' && path === '/api/admin/projects') allowed.push(400);
           assert.ok(allowed.includes(res.status), `${flags.PHOTOGRAPHER_ROUTES ?? 'off'} ${who} ${method} ${path} → ${res.status} ${text.slice(0, 120)}`);
-          assert.ok(!text.includes(project.project.id) && !text.includes('王先生'), `${who} ${method} ${path} leaked: ${text.slice(0, 200)}`);
+          // (B's own upload answers the key B itself sent, which may hold the id)
+          assert.ok((upload ||!text.includes(project.project.id)) && !text.includes('王先生'), `${who} ${method} ${path} leaked: ${text.slice(0, 200)}`);
           if (ownList) assert.deepEqual(JSON.parse(text), { projects: [] });
           if (own && res.status === 200 && path !== '/api/admin/stats') {
             const s = JSON.parse(text);

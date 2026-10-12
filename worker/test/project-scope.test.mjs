@@ -28,8 +28,8 @@ const NOPE = '00000000-0000-4000-8000-000000000000';   // a project id nobody ha
 
 // ─── fixtures ─────────────────────────────────────────────────────────────
 // A project in `stage`, made through the real routes by the default
-// photographer and then handed to `owner` (B cannot create a project yet: the
-// folders are R2 paths, default-only until batch 3). The extra-pick plan
+// photographer and then handed to `owner` (made before B could create its
+// own, batch 3; kept so A's and B's projects are built the same way). The extra-pick plan
 // (limit 1, NT$200, two picks) gives start-retouch a fee, so its order writes
 // (extraPickWrites) run too.
 const STAGES = ['fresh', 'claimed', 'submitted', 'retouching', 'delivered', 'archived'];
@@ -255,18 +255,25 @@ test('PUT / POST /api/admin/projects/:id: 405 for every photographer, whoever ow
   }
 });
 
-// ─── still default-only (batch 3): they touch R2 folders ──────────────────
-test('still default-only until batch 3: B cannot create a project, deliver or undeliver — even its own', async () => {
+// ─── scoped since batch 3 (R2 prefixes): create, deliver, undeliver ───────
+// (was: default-only until batch 3; r2-isolation.test.mjs has the
+// three-photographer cases, statements included)
+test('batch 3: B creates, delivers and undelivers its own project; the default token cannot deliver or undeliver B\'s', async () => {
   const w = await world('retouching');
   const before = snapshot(w.env);
-  const created = await call(w.env, '/api/admin/projects', { method: 'POST', token: w.B.token, body: { title: 'x', folders: ['shoot/毛片/'] } });
-  assert.equal(created.status, 404);
-  assert.equal((await deliver2(w.env, w.b.id, w.B.token)).status, 404);
-  assert.equal((await admin(w.env, w.b.id, 'undeliver', undefined, w.B.token)).status, 404);
-  assert.equal(snapshot(w.env), before);
-  // and the default token cannot deliver B's project either
   assert.equal((await deliver2(w.env, w.b.id, SECRET)).status, 404);
+  assert.equal((await admin(w.env, w.b.id, 'undeliver', undefined, SECRET)).status, 404);
+  assert.equal((await deliver2(w.env, w.a.id, w.B.token)).status, 404);
   assert.equal(snapshot(w.env), before);
+  const created = await call(w.env, '/api/admin/projects', { method: 'POST', token: w.B.token, body: { title: 'x', folders: ['shoot/毛片/'] } });
+  assert.equal(created.status, 201);
+  assert.equal(one(w.env, 'SELECT photographer_id FROM projects WHERE id = ?', (await created.json()).project.id).photographer_id, w.B.id);
+  const aRow = projectRows(w.env, w.a.id);
+  assert.equal((await deliver2(w.env, w.b.id, w.B.token)).status, 200);
+  assert.ok(one(w.env, 'SELECT delivered_at FROM projects WHERE id = ?', w.b.id).delivered_at);
+  assert.equal((await admin(w.env, w.b.id, 'undeliver', undefined, w.B.token)).status, 200);
+  assert.equal(one(w.env, 'SELECT delivered_at FROM projects WHERE id = ?', w.b.id).delivered_at, null);
+  assert.equal(projectRows(w.env, w.a.id), aRow, 'A\'s project untouched');
 });
 const deliver2 = (env, id, token) => admin(env, id, 'deliver', { final_folders: [FINAL] }, token);
 
@@ -389,7 +396,7 @@ test('guest side: no /api/pick route reads a photographer id from the request; e
 test('source: no `default-only until 2b-1` mark is left, and every project route asks requirePhotographer', () => {
   assert.equal((SRC.match(/default-only until 2b-1\b/g) || []).length, 0);
   const scoped = SRC.match(/requirePhotographer\(request, env\); \/\/ scoped to the caller/g) || [];
-  assert.equal(scoped.length, 9 + 1 + 3, 'list, detail, reset-seat, start-retouch/reopen, archive/unarchive, delete, links, confirm, patch; (2b-2) the products / orders block; (2b-3) stats, settings, settings/logo');
+  assert.equal(scoped.length, 9 + 1 + 3 + 7, 'list, detail, reset-seat, start-retouch/reopen, archive/unarchive, delete, links, confirm, patch; (2b-2) the products / orders block; (2b-3) stats, settings, settings/logo; (batch 3) studio-token, create, deliver/undeliver, minted, revoke-all, revoke, upload');
   const open405 = SRC.match(/requirePhotographer\(request, env\); \/\/ open to every photographer: a 405/g) || [];
   assert.equal(open405.length, 1);
 });
@@ -498,9 +505,10 @@ test('PATCH :id title on B\'s own project renames B\'s link label too, and not A
 });
 
 // ─── POST /api/shares/:token/revoke: a pick link only of the caller's own ─
-// Still default-only (batch 3), so today the caller is the default
-// photographer: a pick link of another photographer's project is a token
-// that does not exist (404, the same body, nothing written).
+// A pick link of another photographer's project is a token that does not
+// exist (404, the same body, nothing written). Scoped since batch 3, so B
+// revokes its own (r2-studio-token.test.mjs has the studio tokens and the
+// three-photographer cases).
 test('shares revoke: the default token cannot revoke another photographer\'s pick link (404 like an unknown token); its own still revokes', async () => {
   const w = await world('fresh');
   const before = snapshot(w.env);
@@ -511,10 +519,12 @@ test('shares revoke: the default token cannot revoke another photographer\'s pic
   const none = await call(w.env, '/api/shares/no-such-token/revoke', { method: 'POST', token: SECRET });
   assert.equal(none.status, 404);
   assert.equal(text, await none.text());
-  // B itself is refused (default-only until batch 3), even on its own link
-  assert.equal((await call(w.env, `/api/shares/${encodeURIComponent(w.b.token)}/revoke`, { method: 'POST', token: w.B.token })).status, 404);
+  // B cannot revoke A's link either; B's own it can (scoped since batch 3)
+  assert.equal((await call(w.env, `/api/shares/${encodeURIComponent(w.a.token)}/revoke`, { method: 'POST', token: w.B.token })).status, 404);
   assert.equal(snapshot(w.env), before);
   assert.equal((await pick(w.env, 'GET', 'state', w.b.token)).status, 200, 'B\'s link still works');
+  assert.equal((await call(w.env, `/api/shares/${encodeURIComponent(w.b.token)}/revoke`, { method: 'POST', token: w.B.token })).status, 200);
+  assert.equal((await pick(w.env, 'GET', 'state', w.b.token)).status, 401, 'B\'s link revoked by B');
   // positive control: the default photographer's own pick link, and a link with no project (a book link)
   assert.equal((await call(w.env, `/api/shares/${encodeURIComponent(w.a.token)}/revoke`, { method: 'POST', token: SECRET })).status, 200);
   assert.ok(one(w.env, 'SELECT revoked_at FROM share_tokens WHERE token = ?', w.a.token).revoked_at);

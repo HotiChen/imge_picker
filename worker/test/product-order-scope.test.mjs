@@ -10,8 +10,9 @@
 //   (every D1 table and every R2 object compared);
 // - each on its own resource: the route's normal answer, and the other
 //   photographer's rows untouched.
-// The list routes answer each photographer its own rows. The order routes
-// that carry photo_keys (R2 keys) stay default-only until batch 3. Guest
+// The list routes answer each photographer its own rows. Every order route
+// is paused (404) for every photographer but the default one; the photo_keys
+// gates they had until batch 3 are gone (the keys are logical). Guest
 // ordering is off for every project that is not the default photographer's,
 // whatever GUEST_ORDERS says (doc §4), and the guest shop / 我有興趣 read the
 // products of the link's project's photographer only.
@@ -20,7 +21,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { setup, guest, F1, SECRET, call, pick, rows, one } from './revision-helpers.mjs';
 import { confirmed } from './guest-order-helpers.mjs';
-import { twoTenants, snapshot, ROUTES_ON } from './tenant-helpers.mjs';
+import { twoTenants, seedPhotographer, snapshot, ROUTES_ON } from './tenant-helpers.mjs';
 
 const SRC = readFileSync(new URL('../worker.js', import.meta.url), 'utf8');
 const OP = 'operator-secret';
@@ -119,13 +120,13 @@ const TARGETED = [
   { name: 'restore (adopted)', method: 'POST', path: s => `${PR(s.adopted.id)}/restore`, ok: 200 },
   { name: 'restore (custom, custom products off: 403)', method: 'POST', path: s => `${PR(s.service.id)}/restore`, ok: 403, extra: { CUSTOM_PRODUCTS: 'off' } },
   { name: 'GET project orders', method: 'GET', path: s => PJ(s.project.id), ok: { A: 200, B: 404 } },
-  { name: 'POST project orders (photo_keys route: default only until batch 3)', method: 'POST', path: s => PJ(s.project.id),
+  { name: 'POST project orders (ordering paused for B)', method: 'POST', path: s => PJ(s.project.id),
     body: s => ({ lines: [{ option_id: s.adopted.options[0].id, qty: 2 }] }), ok: { A: 201, B: 404 } },
   { name: 'PUT order (note)', method: 'PUT', path: s => OR(s.adminOrder.id), body: () => ({ note: '新備註' }), ok: { A: 200, B: 404 } },
   { name: 'PUT order (discount)', method: 'PUT', path: s => OR(s.adminOrder.id), body: () => ({ discount: 100 }), ok: { A: 200, B: 404 } },
-  { name: 'PUT order (lines: default only until batch 3)', method: 'PUT', path: s => OR(s.adminOrder.id),
+  { name: 'PUT order (lines; ordering paused for B)', method: 'PUT', path: s => OR(s.adminOrder.id),
     body: s => ({ lines: [{ id: s.adminOrder.items[0].id, qty: 3 }] }), ok: { A: 200, B: 404 } },
-  { name: 'PUT order (photo_keys: default only until batch 3)', method: 'PUT', path: s => OR(s.adminOrder.id),
+  { name: 'PUT order (photo_keys; ordering paused for B)', method: 'PUT', path: s => OR(s.adminOrder.id),
     body: () => ({ note: 'x', photo_keys: [] }), ok: { A: 200, B: 404 } },
   { name: 'erase-contact', method: 'POST', path: s => `${OR(s.guestOrder.id)}/erase-contact`, ok: { A: 200, B: 404 } },
   { name: 'payment', method: 'POST', path: s => `${OR(s.adminOrder.id)}/payment`, body: () => ({ paid_amount: 1000, paid_method: 'cash' }), ok: { A: 200, B: 404 } },
@@ -389,18 +390,24 @@ test('PUT product options: a product handed to someone else between the read and
   const w = await world();
   const opts = () => JSON.stringify(rows(w.env, 'SELECT * FROM product_options WHERE product_id = ? ORDER BY rowid', w.b.service.id));
   const had = opts();
+  const product = () => { const r = { ...one(w.env, 'SELECT * FROM products WHERE id = ?', w.b.service.id) }; delete r.photographer_id; return JSON.stringify(r); };
+  const hadProduct = product();
   beforeStatement(w.env, /^UPDATE products SET/, () => w.env.DB._db.prepare('UPDATE products SET photographer_id = ? WHERE id = ?').run(w.A.id, w.b.service.id));
-  await call(w.env, PR(w.b.service.id), { method: 'PUT', token: w.B.token, body: { options: [{ id: w.b.service.options[0].id, label: '改', price: 9 }, { label: '新', price: 5 }] } });
+  await call(w.env, PR(w.b.service.id), { method: 'PUT', token: w.B.token, body: { name: '乙改名', options: [{ id: w.b.service.options[0].id, label: '改', price: 9 }, { label: '新', price: 5 }] } });
   assert.equal(opts(), had, 'the option writes landed on a product that is no longer B\'s');
+  assert.equal(product(), hadProduct, 'the product row itself (name, updated_at) changed though it is no longer B\'s');
 });
 
 test('PUT adopted product options: the same, for an adopted product', async () => {
   const w = await world();
   const opts = () => JSON.stringify(rows(w.env, 'SELECT * FROM product_options WHERE product_id = ? ORDER BY rowid', w.b.adopted.id));
   const had = opts();
+  const product = () => { const r = { ...one(w.env, 'SELECT * FROM products WHERE id = ?', w.b.adopted.id) }; delete r.photographer_id; return JSON.stringify(r); };
+  const hadProduct = product();
   beforeStatement(w.env, /^UPDATE products SET/, () => w.env.DB._db.prepare('UPDATE products SET photographer_id = ? WHERE id = ?').run(w.A.id, w.b.adopted.id));
-  await call(w.env, PR(w.b.adopted.id), { method: 'PUT', token: w.B.token, body: { options: [{ platform_option_id: w.pp.options[1].id, price: 9000 }] } });
+  await call(w.env, PR(w.b.adopted.id), { method: 'PUT', token: w.B.token, body: { guest_visible: false, options: [{ platform_option_id: w.pp.options[1].id, price: 9000 }] } });
   assert.equal(opts(), had);
+  assert.equal(product(), hadProduct, 'the product row itself (guest_visible, updated_at) changed though it is no longer B\'s');
 });
 
 test('adopt: the options land only on a product that is the caller\'s (in-statement owner gate)', async () => {
@@ -433,6 +440,74 @@ test('PUT order lines: an order handed to someone else between the read and the 
   assert.equal(res.status, 409);
   assert.equal(lines(), had, 'the line writes landed on an order that is no longer the caller\'s');
 });
+
+// The single-order UPDATEs (payment, erase-contact, status) carry the owner
+// in their WHERE: an order handed to someone else between the read and the
+// write is not written. Only the default photographer reaches them (ordering
+// is paused for the others), so the race is the default's.
+for (const [name, path, body, re, answer] of [
+  ['payment', s => `${OR(s.adminOrder.id)}/payment`, { paid_amount: 1000, paid_method: 'cash' }, /^UPDATE orders SET paid_amount/, [409, b => b.code === 'conflict']],
+  ['erase-contact', s => `${OR(s.guestOrder.id)}/erase-contact`, undefined, /^UPDATE orders SET contact_phone = NULL/, [200, b => b.order === null]],
+  ['status', s => `${OR(s.guestOrder.id)}/status`, { status: 'confirmed' }, /^UPDATE orders SET status/, [404, () => true]],
+]) {
+  test(`${name}: an order handed to someone else between the read and the UPDATE is not written (owner re-checked in the statement)`, async () => {
+    const w = await world();
+    const id = /orders\/([^/]+)\//.exec(path(w.a))[1];
+    const order = () => { const r = { ...one(w.env, 'SELECT * FROM orders WHERE id = ?', id) }; delete r.photographer_id; return JSON.stringify(r); };
+    const had = order();
+    let raced = false;
+    beforeStatement(w.env, re, () => { raced = true; w.env.DB._db.prepare('UPDATE orders SET photographer_id = ? WHERE id = ?').run(w.B.id, id); });
+    const res = await call(w.env, path(w.a), { method: 'POST', token: SECRET, body });
+    assert.ok(raced, 'the UPDATE was reached');
+    assert.equal(res.status, answer[0], await res.clone().text());
+    assert.ok(answer[1](await res.json()));
+    assert.equal(order(), had, `the ${name} landed on an order that is no longer the caller's`);
+    assert.equal(one(w.env, 'SELECT photographer_id FROM orders WHERE id = ?', id).photographer_id, w.B.id);
+  });
+}
+
+// ─── two non-default photographers against each other ─────────────────────
+// The same routes with B and C (both real accounts, neither the default):
+// the scoping is by who.id, not "default or not".
+async function worldBC() {
+  const env = setup({ extra: { ...ROUTES_ON, CUSTOM_PRODUCTS: 'on', OPERATOR_TOKEN: OP, GUEST_ORDERS: 'on' } });
+  const { B } = await twoTenants(env);
+  const C = await seedPhotographer(env);
+  const pp = await platformProduct(env);
+  const b = await tenantSet(env, B, pp, '乙林小姐');
+  const c = await tenantSet(env, C, pp, '丙陳先生');
+  env.NOTIFY_EMAIL.sent.length = 0;
+  return { env, B, C, b, c, pp };
+}
+for (const route of TARGETED) {
+  test(`${route.name}: B and C (two non-default photographers) — the other's resource is a nonexistent one; each on its own gets its answer`, async () => {
+    const w = await worldBC();
+    if (route.extra) Object.assign(w.env, route.extra);
+    for (const [caller, target] of [[w.B, w.c], [w.C, w.b]]) {
+      const before = snapshot(w.env);
+      const mark = w.env.DB._sql.length;
+      const res = await send(w, route, target, caller.token);
+      const text = await res.text();
+      const statements = w.env.DB._sql.slice(mark);
+      assert.equal(res.status, 404, `${res.status} ${text}`);
+      assert.equal(snapshot(w.env), before, 'something was written');
+      const mark2 = w.env.DB._sql.length;
+      const none = await send(w, route, target, caller.token, true);
+      assert.equal(none.status, 404);
+      assert.equal(text, await none.text());
+      assert.deepEqual(statements, w.env.DB._sql.slice(mark2));
+      for (const leak of [target.project.id, target.adopted.id, target.service.id, target.adminOrder.id, target.guestOrder.id, target.tag]) {
+        assert.ok(!text.includes(leak), `leaked ${leak}`);
+      }
+    }
+    for (const [mine, other] of [[w.b, w.c], [w.c, w.b]]) {
+      const theirs = ownedRows(w.env, other.owner.id);
+      const res = await send(w, route, mine, mine.owner.token);
+      assert.equal(res.status, okFor(route, 'B'), await res.clone().text());
+      assert.equal(ownedRows(w.env, other.owner.id), theirs, 'changed the other photographer\'s rows');
+    }
+  });
+}
 
 // ─── guest ordering: off for every project that is not the default's ──────
 const GUEST_ORDER = (s, over = {}) => ({
@@ -523,10 +598,10 @@ test('guest shop and 我有興趣: each project offers its own photographer\'s p
 });
 
 // ─── the source ───────────────────────────────────────────────────────────
-test('source: no `default-only until 2b-2` mark is left; the block asks requirePhotographer, the photo_keys gates stay', () => {
+test('source: no `default-only until 2b-2` mark is left; the block asks requirePhotographer; the photo_keys gates are gone (batch 3)', () => {
   assert.equal((SRC.match(/default-only until 2b-2\b/g) || []).length, 0);
   assert.equal((SRC.match(/requirePhotographer\(request, env\); \/\/ scoped to the caller \(who\.id\): products and orders/g) || []).length, 1);
-  assert.equal((SRC.match(/defaultOnly\(auth\.who\); \/\/ default-only until batch 3 \(photo_keys\)/g) || []).length, 2);
+  assert.equal((SRC.match(/default-only until batch 3 \(photo_keys\)/g) || []).length, 0);
 });
 
 test('source: the products / orders helpers take the owner from their caller, with no default', () => {

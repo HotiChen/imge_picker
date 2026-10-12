@@ -6,11 +6,13 @@
 // photographerRoutesOpen(env) says so (PHOTOGRAPHER_ROUTES = "on"; anything
 // else, unset included, is off). Off, a session gets exactly what an unknown
 // token gets today. On, every route that is not yet scoped to its caller
-// (until batch 3 lands) answers a non-default photographer 404 and writes
-// nothing; the scoped ones (2b-1: the project routes; 2b-2: products and
-// orders; 2b-3: settings, logo, dashboard) answer B's own data only, and A's
-// resource is 404 to B (project-scope.test.mjs, product-order-scope.test.mjs
-// and settings-scope.test.mjs have the per-route two-photographer tests).
+// (the books, the retired client accounts) answers a non-default photographer
+// 404 and writes nothing; the scoped ones (2b-1: the project routes; 2b-2:
+// products and orders; 2b-3: settings, logo, dashboard; batch 3: studio
+// tokens, minted / revoke, create / deliver / undeliver, upload, list,
+// objects) answer B's own data only, and A's resource is 404 to B
+// (project-scope, product-order-scope, settings-scope, r2-isolation and
+// r2-studio-token .test.mjs have the per-route multi-photographer tests).
 //
 // The route table below is checked against the source: every call site must
 // be reached by a table route (an instrumented copy of worker.js records which
@@ -34,11 +36,11 @@ const codeCount = needle => SRC.split('\n').reduce((n, line) => n + (line.split(
 // 'open': any photographer, no data. 'scoped': any photographer, its own data
 // only (who.id) — what 2b-1..3 turn their routes into. The rest: default only
 // until that batch.
-const UNTIL = ['open', 'scoped', 'batch 3', 'retired'];   // 2b-1, 2b-2 and 2b-3 are merged: their routes are 'scoped'
+const UNTIL = ['open', 'scoped', 'books', 'retired'];   // 2b-1..3 and batch 3 are merged: their routes are 'scoped'
 // which helper a mark requires at its call site
 const helperFor = until => (until === 'open' || until === 'scoped' ? 'requirePhotographer' : 'requireDefault');
 // the mark on a call-site line
-const markOf = line => /\/\/ default-only until (batch 3|retired)\b/.exec(line)?.[1]
+const markOf = line => /\/\/ default-only until (books|retired)\b/.exec(line)?.[1]
   ?? (/\/\/ open to every photographer\b/.test(line) ? 'open' : /\/\/ scoped to the caller\b/.test(line) ? 'scoped' : null);
 
 // ─── fixture: one of everything the default photographer owns ──────────────
@@ -64,12 +66,12 @@ const R = (until, method, path, body) => ({ until, method, path, body });
 const P = f => `/api/admin/projects/${f.projectId}`;
 const ROUTES = [
   R('open', 'GET', () => '/api/auth/verify-admin'),
-  R('batch 3', 'POST', () => '/api/auth/studio-token'),
+  R('scoped', 'POST', () => '/api/auth/studio-token'),
   R('retired', 'GET', () => '/api/admin/clients'),
   R('retired', 'PUT', f => `/api/admin/clients/${f.userId}/approve`),
   R('retired', 'PUT', f => `/api/admin/clients/${f.userId}/permissions`, { can_book: true }),
   R('retired', 'DELETE', f => `/api/admin/clients/${f.userId}`),
-  R('batch 3', 'POST', () => '/api/admin/projects', { title: '新案', folders: [MINE] }),
+  R('scoped', 'POST', () => '/api/admin/projects', { title: '新案', folders: ['new/'] }),
   R('scoped', 'GET', () => '/api/admin/projects'),
   R('scoped', 'GET', P),
   R('scoped', 'POST', f => `${P(f)}/reset-seat`),
@@ -79,8 +81,8 @@ const ROUTES = [
   R('scoped', 'POST', f => `${P(f)}/unarchive`),
   R('scoped', 'DELETE', P),
   R('scoped', 'POST', f => `${P(f)}/links`),
-  R('batch 3', 'POST', f => `${P(f)}/deliver`, { final_folders: [MINE] }),
-  R('batch 3', 'POST', f => `${P(f)}/undeliver`),
+  R('scoped', 'POST', f => `${P(f)}/deliver`, { final_folders: [MINE] }),
+  R('scoped', 'POST', f => `${P(f)}/undeliver`),
   R('scoped', 'POST', f => `${P(f)}/confirm`),
   R('scoped', 'PATCH', P, { title: '改名' }),
   R('open', 'PUT', P, {}),
@@ -105,17 +107,17 @@ const ROUTES = [
   R('scoped', 'GET', () => '/api/admin/settings/logo'),
   R('scoped', 'PUT', () => '/api/admin/settings/logo', 'not an image'),
   R('scoped', 'DELETE', () => '/api/admin/settings/logo'),
-  R('batch 3', 'GET', () => '/api/shares/minted'),
-  R('batch 3', 'POST', () => '/api/shares/minted/revoke-all'),
-  R('batch 3', 'POST', f => `/api/shares/${encodeURIComponent(f.pickToken)}/revoke`),
-  R('batch 3', 'POST', () => '/api/books/b1/share', {}),
-  R('batch 3', 'GET', () => '/api/books/b1/shares'),
-  R('batch 3', 'GET', () => '/api/books/b1'),
-  R('batch 3', 'PUT', () => '/api/books/b1', { name: '王先生 婚紗', clientFolders: [MINE], pages: [] }),
-  R('batch 3', 'PATCH', () => '/api/books/b1', { name: '新名' }),
-  R('batch 3', 'PUT', () => '/2026/new.jpg', 'bytes'),
-  R('batch 3', 'GET', () => `/?list=${encodeURIComponent(MINE)}`),
-  R('batch 3', 'GET', () => '/20260819/a.jpg'),
+  R('scoped', 'GET', () => '/api/shares/minted'),
+  R('scoped', 'POST', () => '/api/shares/minted/revoke-all'),
+  R('scoped', 'POST', f => `/api/shares/${encodeURIComponent(f.pickToken)}/revoke`),
+  R('books', 'POST', () => '/api/books/b1/share', {}),
+  R('books', 'GET', () => '/api/books/b1/shares'),
+  R('books', 'GET', () => '/api/books/b1'),
+  R('books', 'PUT', () => '/api/books/b1', { name: '王先生 婚紗', clientFolders: [MINE], pages: [] }),
+  R('books', 'PATCH', () => '/api/books/b1', { name: '新名' }),
+  R('scoped', 'PUT', () => '/2026/new.jpg', 'bytes'),
+  R('scoped', 'GET', () => `/?list=${encodeURIComponent(MINE)}`),
+  R('scoped', 'GET', () => '/20260819/a.jpg'),
 ];
 const label = r => `${r.method} ${r.path({ projectId: ':id', pickToken: ':token', userId: ':uid' })}`;
 const send = (mod, env, r, f, token) => mod.fetch(req(r.path(f), {
@@ -253,6 +255,18 @@ test('PHOTOGRAPHER_ROUTES=on: a non-default session is 404 on every default-only
     if (label(r) === 'PUT /api/admin/settings') {
       assert.equal(env.DB._db.prepare('DELETE FROM studio_settings WHERE photographer_id = ?').run(B.id).changes, 1, 'B\'s own row');
     }
+    // batch 3: B's studio token, B's new project (and its link), B's upload —
+    // B's own rows / objects, and only those
+    if (label(r) === 'POST /api/auth/studio-token') {
+      assert.equal(env.DB._db.prepare("DELETE FROM share_tokens WHERE kind = 'studio' AND photographer_id = ?").run(B.id).changes, 1, 'B\'s own token');
+    }
+    if (label(r) === 'POST /api/admin/projects') {
+      assert.equal(env.DB._db.prepare("DELETE FROM share_tokens WHERE project_id IN (SELECT id FROM projects WHERE photographer_id = ?)").run(B.id).changes, 1, 'B\'s new link');
+      assert.equal(env.DB._db.prepare('DELETE FROM projects WHERE photographer_id = ?').run(B.id).changes, 1, 'B\'s new project');
+    }
+    if (label(r) === 'PUT /2026/new.jpg') {
+      assert.ok(env.imagepicker._store.delete(`_t/${B.id}/2026/new.jpg`), 'B\'s upload, under B\'s prefix');
+    }
     assert.equal(snapshot(env), before, `${label(r)} wrote something`);
     // nothing of A's in any answer to B
     assert.ok(!text.includes(f.projectId) && !text.includes('王先生') && !text.includes(MINE), `${label(r)} leaked: ${text}`);
@@ -277,6 +291,13 @@ test('PHOTOGRAPHER_ROUTES=on: a non-default session is 404 on every default-only
       // B's own logo (a body that is no image: 415; delete: B has none)
       'GET /api/admin/stats': [200], 'GET /api/admin/settings': [200], 'PUT /api/admin/settings': [200],
       'PUT /api/admin/settings/logo': [415], 'DELETE /api/admin/settings/logo': [200, { ok: true, has_logo: false }],
+      // batch 3: B's own studio token and project (set aside above), B's own
+      // minted tokens (none), B's own files (an empty listing; the upload
+      // landed under B's prefix)
+      'POST /api/auth/studio-token': [200], 'POST /api/admin/projects': [201],
+      'GET /api/shares/minted': [200, []], 'POST /api/shares/minted/revoke-all': [200, { ok: true, revoked: 0 }],
+      'PUT /2026/new.jpg': [200, { ok: true, key: '2026/new.jpg' }],
+      [`GET /?list=${encodeURIComponent(MINE)}`]: [200, { status: 'success', data: [], folders: [] }],
     };
     if (hasOwn(notRefused, label(r))) {
       const [status, body] = notRefused[label(r)];
@@ -297,15 +318,16 @@ test('PHOTOGRAPHER_ROUTES=on: a non-default session is 404 on every default-only
     assert.equal(res.status, 404, `${label(r)}: ${res.status} ${text.slice(0, 200)}`);
     refused++;
   }
-  assert.equal(refused, ROUTES.length - 13);
+  assert.equal(refused, ROUTES.length - 19);
 });
 
-test('marks: scoped (2b-1 onwards) is requirePhotographer; a leftover 2b-1..3 default-only mark is unknown now', () => {
+test('marks: scoped (2b-1 onwards) is requirePhotographer; a leftover 2b-1..3 or batch 3 default-only mark is unknown now', () => {
   assert.equal(markOf("const auth = await requirePhotographer(request, env); // scoped to the caller (who.id)"), 'scoped');
   assert.equal(helperFor('scoped'), 'requirePhotographer');
   assert.equal(markOf('const auth = await requireDefault(request, env); // default-only until 2b-3'), null, '2b-3 is merged');
-  assert.equal(markOf('const auth = await requireDefault(request, env); // default-only until batch 3'), 'batch 3');
-  assert.equal(helperFor('batch 3'), 'requireDefault');
+  assert.equal(markOf('const auth = await requireDefault(request, env); // default-only until batch 3'), null, 'batch 3 is merged');
+  assert.equal(markOf('const auth = await requireDefault(request, env, { optional: true }); // default-only until books'), 'books');
+  assert.equal(helperFor('books'), 'requireDefault');
   assert.equal(markOf('const auth = await requireDefault(request, env); // default-only until 2b-1'), null, '2b-1 is merged');
   assert.equal(markOf('const auth = await requireDefault(request, env); // default-only until 2b-2'), null, '2b-2 is merged');
   assert.equal(markOf('const auth = await requirePhotographer(request, env); // open to every photographer: answers no data'), 'open');
@@ -313,12 +335,15 @@ test('marks: scoped (2b-1 onwards) is requirePhotographer; a leftover 2b-1..3 de
   assert.equal(markOf('const auth = await requireDefault(request, env); // default-only until later'), null, 'an unknown batch');
 });
 
-test('PHOTOGRAPHER_ROUTES=on: the photo_keys order routes stay default-only on their own (batch 3), not only through the block', () => {
-  const marks = SRC.match(/\/\/ default-only until batch 3 \(photo_keys\)/g) || [];
-  assert.equal(marks.length, 2, 'POST /api/admin/projects/:id/orders and PUT /api/admin/orders/:id');
-  for (const m of SRC.matchAll(/^.*\/\/ default-only until batch 3 \(photo_keys\).*$/gm)) {
-    assert.match(m[0], /defaultOnly\(auth\.who\)/, m[0]);
-  }
+test('batch 3: the photo_keys gates of the order routes are gone (the keys are logical, read through the caller\'s prefix); ordering itself stays paused for every photographer but the default', () => {
+  assert.equal((SRC.match(/default-only until batch 3/g) || []).length, 0);
+  // the one left is requireDefault's own (books, retired routes)
+  assert.equal((SRC.match(/defaultOnly\(auth\.who\)/g) || []).length, 1);
+  const gate = SRC.slice(SRC.indexOf('async function requireDefault('), SRC.indexOf('\n}\n', SRC.indexOf('async function requireDefault(')));
+  assert.match(gate, /defaultOnly\(auth\.who\)/);
+  // the pause (ORDER_ROUTES_PAUSED) is the one defaultOnly left in the block
+  assert.equal((SRC.match(/= defaultOnly\(who\)/g) || []).length, 1);
+  assert.match(SRC, /if \(ORDER_ROUTES_PAUSED\.has\(route\)\) \{\n\s*const paused = defaultOnly\(who\);/);
 });
 
 test('PHOTOGRAPHER_ROUTES=on: the default photographer still gets its data; the same request from B does not', async () => {
@@ -438,7 +463,12 @@ const DEFAULT_ID_USES = {
   identify: 2,               // PHOTOGRAPHER_TOKEN → 'default'; a session named 'default' is refused
   mailsDefaultInbox: 1,      // PHOTOGRAPHER_EMAIL is the default photographer's inbox only (until batch 4)
   guestOrdersEnabled: 1,     // guest ordering: the default photographer's projects only (doc §4)
-  routeRequest: 9,           // the routes themselves: batch 3's POST projects / deliver / undeliver, and the public /api/studio/logo (the default's, 2b-3)
+  shareOwner: 1,             // a project-less share row with no owner (NULL) is the default's (batch 3)
+  shareOwnerColumn: 1,       // the default photographer is NULL in share_tokens.photographer_id (batch 3)
+  tenantPrefix: 1,           // the default photographer has no R2 prefix: asked for one, it refuses (batch 3)
+  bucketFor: 1,              // the default photographer's keys are unprefixed (batch 3)
+  bookBucket: 1,             // books have no owner yet: the default's objects (default-only until books)
+  routeRequest: 1,           // the public /api/studio/logo (the default's, 2b-3)
 };
 test('DEFAULT_PHOTOGRAPHER_ID appears only in the allow-listed functions, with exact counts', () => {
   const counts = {};

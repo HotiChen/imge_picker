@@ -418,10 +418,10 @@ function defaultOnly(who) {
 // Paused for every photographer but the default one (see the block below).
 const ORDER_ROUTES_PAUSED = new Set(['orders', 'project-orders', 'order', 'order-payment', 'order-status', 'order-erase-contact']);
 
-// requirePhotographer, then default only: a route that still reads or writes
-// the default photographer's data (DEFAULT_PHOTOGRAPHER_ID), or R2 keys and
-// folders (unprefixed until batch 3). Each call is marked
-// `// default-only until <batch>`, and that batch replaces it with
+// requirePhotographer, then default only: a route whose data has no owner
+// but the default photographer yet — the books (`// default-only until
+// books`) and the retired client accounts (`// default-only until retired`).
+// The batch that gives them an owner replaces the call with
 // requirePhotographer and `who.id` (photographer-routes.test.mjs keeps the
 // table). {who: null} passes through for `optional` routes.
 async function requireDefault(request, env, options) {
@@ -531,6 +531,25 @@ function isMintedShare(share) {
 function isPickShare(share) {
   return share.kind === 'pick';
 }
+
+// Whose files a share link reads (batch 3): a pick link its project's
+// photographer's — whatever its own row says; any other row its own
+// photographer_id (a studio token: who minted it), where NULL, and a database
+// before that column, is the default photographer (album links, client
+// sessions and every row written before the column). Never the request.
+function shareOwner(share) {
+  if (isPickShare(share) && share.project) return share.project.photographer_id;
+  const owner = share.photographer_id;
+  return owner === null || owner === undefined ? DEFAULT_PHOTOGRAPHER_ID : owner;
+}
+
+// The value share_tokens.photographer_id holds for a photographer: NULL for
+// the default one (as on every row from before the column), the id otherwise.
+// Compared with `photographer_id IS ?`, which matches NULL to NULL.
+function shareOwnerColumn(photographerId) {
+  return photographerId === DEFAULT_PHOTOGRAPHER_ID ? null : photographerId;
+}
+const SHARE_OWNER_UNAVAILABLE = { error: '多攝影師連結功能尚未啟用', code: 'share_owner_unavailable' };
 
 function newShareToken() {
   const bytes = new Uint8Array(32);
@@ -716,6 +735,78 @@ function shareCovers(share, path) {
 // upload route strips `_assets/` — so refusing the namespace costs nothing.
 function isInternalKey(key) {
   return key.startsWith('_');
+}
+
+// ─── R2, one photographer at a time (docs/multi-photographer.md §3, batch 3) ─
+// One bucket. The default photographer's objects stay where they always were;
+// every other photographer's live under `_t/<id>/`. What clients, share links,
+// selections, orders and the pages store is the LOGICAL key, which never
+// carries the prefix: it is added here, on the way into R2, and stripped here
+// on the way out. `_t/` itself is reserved: no logical key may name it, for
+// anyone — the default's keys are not prefixed, so a default `_t/B/x` would
+// BE B's object. Checked on the logical key, before the prefix, inside the
+// helper, so no route can forget it.
+const TENANT_PREFIX = '_t/';
+function isTenantKey(key) {
+  return key === '_t' || key.startsWith(TENANT_PREFIX);
+}
+// what photographer ids really are (randomHex(8): 16 lowercase hex), with room:
+// lowercase letters, digits, `_` and `-`, at most 64, never starting with `_`
+// or `-`. Nothing that could end, climb out of or encode a path segment.
+const PHOTOGRAPHER_ID_SAFE = /^[0-9a-z][0-9a-z_-]{0,63}$/;
+function tenantPrefix(photographerId) {
+  const safe = typeof photographerId === 'string' && PHOTOGRAPHER_ID_SAFE.test(photographerId);
+  // the default photographer has no prefix (bucketFor never asks for one)
+  if (!safe || photographerId === DEFAULT_PHOTOGRAPHER_ID) throw new Error('R2: unsafe photographer id');
+  return `${TENANT_PREFIX}${photographerId}/`;
+}
+
+// The one way to R2: {get, head, put, list} over `photographerId`'s objects.
+// The id comes from the caller's identity (who.id), a link's project, or a
+// minted token's owner — never the request. An unsafe id throws before any
+// read or write. A reserved key reads as missing (get / head: null; list:
+// nothing) and is refused for a write (throws; the upload route answers 400
+// first). A list returns logical keys and only this photographer's objects.
+function bucketFor(env, photographerId) {
+  const bucket = env.imagepicker;
+  const prefix = photographerId === DEFAULT_PHOTOGRAPHER_ID ? '' : tenantPrefix(photographerId);
+  const reserved = key => typeof key !== 'string' || isTenantKey(key);
+  // R2 key → logical key, or null when it is not this photographer's
+  const logical = key => {
+    if (typeof key !== 'string' || !key.startsWith(prefix)) return null;
+    const rest = key.slice(prefix.length);
+    return isTenantKey(rest) ? null : rest;
+  };
+  return {
+    get: (key, options) => (reserved(key) ? Promise.resolve(null) : bucket.get(prefix + key, options)),
+    head: key => (reserved(key) ? Promise.resolve(null) : bucket.head(prefix + key)),
+    put(key, value, options) {
+      if (reserved(key)) throw new Error('R2: reserved key');
+      return bucket.put(prefix + key, value, options);
+    },
+    async list(options = {}) {
+      const wanted = options.prefix ?? '';
+      if (reserved(wanted)) return { objects: [], delimitedPrefixes: [], truncated: false, cursor: undefined };
+      const listed = await bucket.list({ ...options, prefix: prefix + wanted });
+      // the default's own objects pass through as R2 gave them; a tenant's
+      // are re-keyed (only the fields the routes read)
+      const objects = [];
+      for (const o of listed.objects || []) {
+        const key = logical(o.key);
+        if (key === null) continue;
+        objects.push(prefix ? { key, size: o.size, uploaded: o.uploaded, etag: o.etag, httpEtag: o.httpEtag } : o);
+      }
+      const delimitedPrefixes = (listed.delimitedPrefixes || []).map(logical).filter(p => p !== null);
+      return { ...listed, objects, delimitedPrefixes };
+    },
+  };
+}
+
+// Books have no owner yet (`_books/<id>.json` in R2, share links by book_id):
+// they are the default photographer's objects until a later batch gives them
+// one, and every book route is default-only until then.
+function bookBucket(env) {
+  return bucketFor(env, DEFAULT_PHOTOGRAPHER_ID);
 }
 
 // Thumbnails live under `_thumbs/<width>/<key>.thumb`, so permission on one is
@@ -2636,7 +2727,8 @@ async function guestOrderLines(env, project, finals, wanted) {
   }
   const prints = wanted.filter(l => l.photo_key !== undefined);
   if (prints.some(l => !pickKeyAllowed({ folders: finals }, l.photo_key))) return { fail: [403, 'not_in_finals'] };
-  const found = await Promise.all(prints.map(l => env.imagepicker.head(l.photo_key)));
+  const photos = bucketFor(env, owner);
+  const found = await Promise.all(prints.map(l => photos.head(l.photo_key)));
   if (found.some(o => !o)) return { fail: [404, 'photo_not_found'] };
   const extras = [];
   for (const l of wanted) {
@@ -3473,15 +3565,33 @@ async function routeRequest(request, env, ctx) {
     // POST /api/auth/studio-token — a read-only credential the photographer's
     // own pages can put in an <img> src
     if (request.method === 'POST' && url.pathname === '/api/auth/studio-token') {
-      const auth = await requireDefault(request, env); // default-only until batch 3
+      const auth = await requirePhotographer(request, env); // scoped to the caller (who.id)
       if (auth.refused) return auth.refused;
       if (!env.DB) return jsonErr('DB not configured', 500);
+      // the token reads its owner's files only (batch 3), so its row names
+      // the owner: share_tokens.photographer_id, NULL for the default
+      // photographer. Before that column's migration the default goes on
+      // exactly as before (every studio row is its own) and anyone else is
+      // refused, nothing written.
+      const owner = shareOwnerColumn(auth.who.id);
       const now = Date.now();
+      const reuseAfter = new Date(now + STUDIO_REUSE_MIN_MS).toISOString();
       // both sides are ISO-8601 UTC so this compares as text; a hand-edited
       // row in any other format simply is not reused
-      const live = await env.DB.prepare(
-        "SELECT token, expires_at FROM share_tokens WHERE kind = 'studio' AND revoked_at IS NULL AND expires_at > ? ORDER BY expires_at DESC LIMIT 1"
-      ).bind(new Date(now + STUDIO_REUSE_MIN_MS).toISOString()).first();
+      let live;
+      let owned = true;
+      try {
+        live = await env.DB.prepare(
+          "SELECT token, expires_at FROM share_tokens WHERE kind = 'studio' AND photographer_id IS ? AND revoked_at IS NULL AND expires_at > ? ORDER BY expires_at DESC LIMIT 1"
+        ).bind(owner, reuseAfter).first();
+      } catch (e) {
+        if (!isMissingColumn(e)) throw e;
+        if (owner !== null) return jsonOk(SHARE_OWNER_UNAVAILABLE, 500);
+        owned = false;
+        live = await env.DB.prepare(
+          "SELECT token, expires_at FROM share_tokens WHERE kind = 'studio' AND revoked_at IS NULL AND expires_at > ? ORDER BY expires_at DESC LIMIT 1"
+        ).bind(reuseAfter).first();
+      }
       const token = live ? live.token : newShareToken();
       const expiresAt = live ? live.expires_at : new Date(now + STUDIO_TTL_MS).toISOString();
       if (!live) {
@@ -3489,21 +3599,30 @@ async function routeRequest(request, env, ctx) {
         // it out of every book route and out of the per-book revoke list.
         // folders is empty so the kind check is not the only thing between
         // this row and the bucket.
-        await env.DB.prepare(
-          "INSERT INTO share_tokens (token, book_id, kind, folders, created_at, expires_at) VALUES (?, '', 'studio', '[]', ?, ?)"
-        ).bind(token, new Date(now).toISOString(), expiresAt).run();
+        await (owned
+          ? env.DB.prepare(
+            "INSERT INTO share_tokens (token, book_id, kind, folders, created_at, expires_at, photographer_id) VALUES (?, '', 'studio', '[]', ?, ?, ?)"
+          ).bind(token, new Date(now).toISOString(), expiresAt, owner)
+          : env.DB.prepare(
+            "INSERT INTO share_tokens (token, book_id, kind, folders, created_at, expires_at) VALUES (?, '', 'studio', '[]', ?, ?)"
+          ).bind(token, new Date(now).toISOString(), expiresAt)).run();
       }
-      // One live studio row at a time, whether we just issued it or handed
-      // back the one that was already there. Reuse is what keeps the picker
+      // One live studio row at a time PER PHOTOGRAPHER, whether we just
+      // issued it or handed back the one that was already there; another
+      // photographer's rows are never touched. Reuse is what keeps the picker
       // and the editor open side by side on the same token, so it is the
       // handed-back row that is spared here — superseding it instead would
       // have the two pages revoke each other's token in turn. What reuse
       // therefore cannot give is "a fresh login retires a leaked token": the
       // leaked one IS the live one. POST /api/shares/minted/revoke-all is the
       // control for that, and it does not wait on a page load.
-      await env.DB.prepare(
-        "UPDATE share_tokens SET revoked_at = ? WHERE kind = 'studio' AND revoked_at IS NULL AND token != ?"
-      ).bind(new Date(now).toISOString(), token).run();
+      await (owned
+        ? env.DB.prepare(
+          "UPDATE share_tokens SET revoked_at = ? WHERE kind = 'studio' AND photographer_id IS ? AND revoked_at IS NULL AND token != ?"
+        ).bind(new Date(now).toISOString(), owner, token)
+        : env.DB.prepare(
+          "UPDATE share_tokens SET revoked_at = ? WHERE kind = 'studio' AND revoked_at IS NULL AND token != ?"
+        ).bind(new Date(now).toISOString(), token)).run();
       return jsonOk({ token, expires_at: expiresAt });
     }
 
@@ -3779,10 +3898,14 @@ async function routeRequest(request, env, ctx) {
       return jsonOk({ success: true });
     }
 
-    // POST /api/admin/projects — a guest-picking project and its one link
+    // POST /api/admin/projects — a guest-picking project and its one link.
+    // The caller's own (who.id). Its folders are logical keys: the link reads
+    // them through the project's photographer's prefix (bucketFor), so naming
+    // a folder of someone else's opens nothing of theirs.
     if (request.method === 'POST' && url.pathname === '/api/admin/projects') {
-      const auth = await requireDefault(request, env); // default-only until batch 3
+      const auth = await requirePhotographer(request, env); // scoped to the caller (who.id)
       if (auth.refused) return auth.refused;
+      const who = auth.who;
       if (!env.DB) return jsonErr('DB not configured', 500);
       let body;
       try { body = await request.json(); } catch { return jsonErr('Invalid JSON'); }
@@ -3803,7 +3926,7 @@ async function routeRequest(request, env, ctx) {
         extra_max = body.extra_max;
         if (extra_max !== null && !isExtraMax(extra_max)) return jsonErr(`extra_max must be a whole number from 0 to ${EXTRA_MAX_MAX}`);
       } else {
-        extra_max = await studioDefaultExtraMax(env, DEFAULT_PHOTOGRAPHER_ID);
+        extra_max = await studioDefaultExtraMax(env, who.id);
       }
       // shoot_date: optional, 'YYYY-MM-DD'; '' or null = not set
       let shoot_date = null;
@@ -3836,10 +3959,10 @@ async function routeRequest(request, env, ctx) {
         inserted = await withoutMissingColumn(
           () => env.DB.prepare(
             `INSERT INTO projects (id, title, folders, pick_limit, extra_price, created_at, photographer_id, extra_max${shootCol}) VALUES (?, ?, ?, ?, ?, ?, ?, ?${shootVal.map(() => ', ?').join('')})`
-          ).bind(id, cleanTitle, foldersJson, pick_limit, extra_price, createdAt, DEFAULT_PHOTOGRAPHER_ID, extra_max, ...shootVal).run().then(() => extra_max),
+          ).bind(id, cleanTitle, foldersJson, pick_limit, extra_price, createdAt, who.id, extra_max, ...shootVal).run().then(() => extra_max),
           () => env.DB.prepare(
             `INSERT INTO projects (id, title, folders, pick_limit, extra_price, created_at, photographer_id${shootCol}) VALUES (?, ?, ?, ?, ?, ?, ?${shootVal.map(() => ', ?').join('')})`
-          ).bind(id, cleanTitle, foldersJson, pick_limit, extra_price, createdAt, DEFAULT_PHOTOGRAPHER_ID, ...shootVal).run().then(() => null),
+          ).bind(id, cleanTitle, foldersJson, pick_limit, extra_price, createdAt, who.id, ...shootVal).run().then(() => null),
         );
       } catch (e) {
         // the error names the column the database lacks
@@ -3853,7 +3976,7 @@ async function routeRequest(request, env, ctx) {
         "INSERT INTO share_tokens (token, book_id, label, kind, project_id, folders, created_at, expires_at) VALUES (?, '', ?, 'pick', ?, ?, ?, ?)"
       ).bind(token, cleanTitle, id, foldersJson, createdAt, expiresAt).run();
       return jsonOk({
-        project: { id, title: cleanTitle, folders: snapshot, pick_limit, extra_price, extra_max: inserted, shoot_date, project_type, photographer_id: DEFAULT_PHOTOGRAPHER_ID },
+        project: { id, title: cleanTitle, folders: snapshot, pick_limit, extra_price, extra_max: inserted, shoot_date, project_type, photographer_id: who.id },
         token, expires_at: expiresAt,
       }, 201);
     }
@@ -4212,14 +4335,15 @@ async function routeRequest(request, env, ctx) {
     // the delivery migration adds, so it works before that migration too.
     if (request.method === 'POST' && pathParts[0] === 'api' && pathParts[1] === 'admin' && pathParts[2] === 'projects' && pathParts[3] && !pathParts[5] &&
         (pathParts[4] === 'deliver' || pathParts[4] === 'undeliver')) {
-      const auth = await requireDefault(request, env); // default-only until batch 3
+      const auth = await requirePhotographer(request, env); // scoped to the caller (who.id)
       if (auth.refused) return auth.refused;
+      const who = auth.who;
       if (!env.DB) return jsonErr('DB not configured', 500);
       const id = pathParts[3];
       if (pathParts[4] === 'undeliver') {
         // the confirmation goes with the delivery, in the same statement
         const undeliver = confirm => env.DB.prepare(`UPDATE projects SET delivered_at = NULL${confirm} WHERE id = ? AND photographer_id = ?`)
-          .bind(id, DEFAULT_PHOTOGRAPHER_ID).run();
+          .bind(id, who.id).run();
         const result = await withoutMissingColumn(
           () => undeliver(', client_confirmed_at = NULL, client_confirmed_by = NULL'), () => undeliver(''));
         if (!result.meta?.changes) return jsonErr('Not found', 404);
@@ -4229,7 +4353,7 @@ async function routeRequest(request, env, ctx) {
         jsonOk({ error: '尚未開始修圖，無法標記為已交件', code: 'not_retouching', phase }, 409, ADMIN_ONLY_HEADERS);
       const invalid = (code, extra = {}, error = '交件資料夾不正確') => jsonOk({ error, code, ...extra }, 400, ADMIN_ONLY_HEADERS);
       const project = await env.DB.prepare('SELECT phase, folders FROM projects WHERE id = ? AND photographer_id = ?')
-        .bind(id, DEFAULT_PHOTOGRAPHER_ID).first();
+        .bind(id, who.id).first();
       if (!project) return jsonErr('Not found', 404);
       if (project.phase !== 'retouching') return notRetouching(project.phase);
       let body = null;
@@ -4261,7 +4385,7 @@ async function routeRequest(request, env, ctx) {
       // 要求修改 — so a refused deliver changes neither. Before the
       // client-confirm migration it is the one statement it always was.
       const gate = "id = ? AND photographer_id = ? AND phase = 'retouching' AND folders = ?";
-      const gateBinds = [id, DEFAULT_PHOTOGRAPHER_ID, project.folders];
+      const gateBinds = [id, who.id, project.folders];
       const stamp = confirm => env.DB.prepare(
         `UPDATE projects SET delivered_at = COALESCE(delivered_at, ?), final_folders = ?${confirm} WHERE ${gate}`
       ).bind(at, JSON.stringify(finals), ...gateBinds);
@@ -4275,7 +4399,7 @@ async function routeRequest(request, env, ctx) {
         () => stamp('').run(),
       );
       const row = await env.DB.prepare('SELECT phase, delivered_at FROM projects WHERE id = ? AND photographer_id = ?')
-        .bind(id, DEFAULT_PHOTOGRAPHER_ID).first();
+        .bind(id, who.id).first();
       if (!row) return jsonErr('Not found', 404);
       // No change, or a reopen landed between the write and this read and
       // cleared the stamp (the snapshot just written stays, as the last
@@ -4942,10 +5066,9 @@ async function routeRequest(request, env, ctx) {
         // POST /api/admin/projects/:id/orders — {lines: [{option_id, qty,
         // photo_keys?, unit_price?}], discount?, note?}. Confirmed at once;
         // archived projects too (a late sale is still a sale). photo_keys are
-        // R2 keys (unprefixed until batch 3), and every line may carry them:
-        // another photographer gets 404 here even on its own project.
-        const keysRefused = defaultOnly(auth.who); // default-only until batch 3 (photo_keys)
-        if (keysRefused) return keysRefused;
+        // logical keys inside the caller's own project's folders (orderLines
+        // checks them against the project); any R2 read of one goes through
+        // the caller's prefix (bucketFor, batch 3).
         const checked = await orderLines(env, project, body.lines, null, { photographerId: who.id });
         if (checked.bad) return orderBad(checked.bad, checked.error);
         const discount = body.discount ?? 0;
@@ -4981,13 +5104,8 @@ async function routeRequest(request, env, ctx) {
       // order's money is frozen (409); its note is not. The total may not
       // drop below what was already paid (400 below_paid).
       if (route === 'order') {
-        // lines carry photo_keys (R2 keys, unprefixed until batch 3): a body
-        // with lines or photo_keys is the default photographer's only, even
-        // on another photographer's own order (a note or a discount is not).
-        if (hasField(body, 'lines') || hasField(body, 'photo_keys')) {
-          const keysRefused = defaultOnly(auth.who); // default-only until batch 3 (photo_keys)
-          if (keysRefused) return keysRefused;
-        }
+        // lines carry photo_keys: logical keys inside the caller's own
+        // project's folders, as for a new order (batch 3)
         const money = hasField(body, 'lines') || hasField(body, 'discount');
         if (order.status === 'cancelled' && money) return cancelled();
         let lines = null;
@@ -5328,15 +5446,27 @@ async function routeRequest(request, env, ctx) {
     // GET /api/shares/minted — the studio and client-session tokens that are
     // live right now. Neither kind carries a book_id, so the per-album list
     // below cannot show them and until this route nothing could: a photographer
-    // could not answer "what is out there holding my bucket open".
+    // could not answer "what is out there holding my bucket open". The
+    // caller's own only (batch 3): its studio tokens, and for the default
+    // photographer the legacy client sessions too (they have no other owner).
     if (request.method === 'GET' && pathParts[0] === 'api' && pathParts[1] === 'shares' && pathParts[2] === 'minted' && !pathParts[3]) {
-      const auth = await requireDefault(request, env); // default-only until batch 3
+      const auth = await requirePhotographer(request, env); // scoped to the caller (who.id)
       if (auth.refused) return auth.refused;
       if (!env.DB) return jsonErr('DB not configured', 500);
-      const { results } = await env.DB.prepare(
-        "SELECT token, kind, user_id, folders, created_at, expires_at FROM share_tokens WHERE kind IN ('studio', 'session') AND revoked_at IS NULL AND expires_at > ? ORDER BY created_at DESC"
-      ).bind(new Date().toISOString()).all();
-      return jsonOk(results);
+      const owner = shareOwnerColumn(auth.who.id);
+      const cols = 'SELECT token, kind, user_id, folders, created_at, expires_at FROM share_tokens';
+      const now = new Date().toISOString();
+      // before the owner column: the default's as before, anyone else refused
+      const listed = await withoutMissingColumn(
+        () => env.DB.prepare(
+          `${cols} WHERE kind IN ('studio', 'session') AND photographer_id IS ? AND revoked_at IS NULL AND expires_at > ? ORDER BY created_at DESC`
+        ).bind(owner, now).all(),
+        () => (owner !== null ? null : env.DB.prepare(
+          `${cols} WHERE kind IN ('studio', 'session') AND revoked_at IS NULL AND expires_at > ? ORDER BY created_at DESC`
+        ).bind(now).all()),
+      );
+      if (!listed) return jsonOk(SHARE_OWNER_UNAVAILABLE, 500);
+      return jsonOk(listed.results);
     }
 
     // POST /api/shares/minted/revoke-all — what a photographer reaches for when
@@ -5344,29 +5474,48 @@ async function routeRequest(request, env, ctx) {
     // not reach an already-minted token, and no other route could name one.
     // The two minted kinds are named positively, so the album links sitting in
     // clients' chats — which are the expensive thing to kill by accident — are
-    // spared, including every row that predates the kind column.
+    // spared, including every row that predates the kind column. The caller's
+    // own only (batch 3), as listed above.
     if (request.method === 'POST' && pathParts[0] === 'api' && pathParts[1] === 'shares' && pathParts[2] === 'minted' && pathParts[3] === 'revoke-all') {
-      const auth = await requireDefault(request, env); // default-only until batch 3
+      const auth = await requirePhotographer(request, env); // scoped to the caller (who.id)
       if (auth.refused) return auth.refused;
       if (!env.DB) return jsonErr('DB not configured', 500);
-      const result = await env.DB.prepare(
-        "UPDATE share_tokens SET revoked_at = ? WHERE kind IN ('studio', 'session') AND revoked_at IS NULL"
-      ).bind(new Date().toISOString()).run();
+      const owner = shareOwnerColumn(auth.who.id);
+      const now = new Date().toISOString();
+      const result = await withoutMissingColumn(
+        () => env.DB.prepare(
+          "UPDATE share_tokens SET revoked_at = ? WHERE kind IN ('studio', 'session') AND photographer_id IS ? AND revoked_at IS NULL"
+        ).bind(now, owner).run(),
+        () => (owner !== null ? null : env.DB.prepare(
+          "UPDATE share_tokens SET revoked_at = ? WHERE kind IN ('studio', 'session') AND revoked_at IS NULL"
+        ).bind(now).run()),
+      );
+      if (!result) return jsonOk(SHARE_OWNER_UNAVAILABLE, 500);
       return jsonOk({ ok: true, revoked: result.meta?.changes ?? 0 });
     }
 
-    // POST /api/shares/:token/revoke — kill a link that went to the wrong chat
+    // POST /api/shares/:token/revoke — kill a link that went to the wrong chat.
+    // Only a token that is the caller's (batch 3): a link of a project goes by
+    // that project's photographer, whatever its own row says; any other token
+    // (a studio one, an album link, a client session) by its photographer_id,
+    // NULL being the default photographer's. Checked inside the UPDATE itself,
+    // so a project handed over mid-request is not revoked either. Anyone
+    // else's is a token that does not exist: the same 404, the same statement.
+    // Before the owner column: a project's link as above, and a project-less
+    // token for the default photographer only (nobody else can have one yet).
     if (request.method === 'POST' && pathParts[0] === 'api' && pathParts[1] === 'shares' && pathParts[2] && pathParts[3] === 'revoke') {
-      const auth = await requireDefault(request, env); // default-only until batch 3
+      const auth = await requirePhotographer(request, env); // scoped to the caller (who.id)
       if (auth.refused) return auth.refused;
       if (!env.DB) return jsonErr('DB not configured', 500);
-      // a link of a project only while that project is the caller's (a
-      // project-less link — a book's, a studio one — has no owner to check
-      // until batch 3); anyone else's is a token that does not exist
-      const result = await env.DB.prepare(
+      const who = auth.who;
+      const owner = shareOwnerColumn(who.id);
+      const now = new Date().toISOString();
+      const theirProject = 'EXISTS (SELECT 1 FROM projects WHERE id = share_tokens.project_id AND photographer_id = ?)';
+      const revokeIf = ownerless => env.DB.prepare(
         'UPDATE share_tokens SET revoked_at = ? WHERE token = ? AND revoked_at IS NULL ' +
-        'AND (project_id IS NULL OR EXISTS (SELECT 1 FROM projects WHERE id = share_tokens.project_id AND photographer_id = ?))'
-      ).bind(new Date().toISOString(), pathParts[2], auth.who.id).run();
+        `AND (CASE WHEN project_id IS NULL THEN ${ownerless} ELSE ${theirProject} END)`
+      ).bind(now, pathParts[2], owner, who.id).run();
+      const result = await withoutMissingColumn(() => revokeIf('share_tokens.photographer_id IS ?'), () => revokeIf('? IS NULL'));
       if (!result.meta?.changes) return jsonErr('Not found', 404);
       return jsonOk({ ok: true });
     }
@@ -6843,7 +6992,8 @@ async function routeRequest(request, env, ctx) {
         if (index >= found.keys.length) return notFound();
         const key = found.keys[index];
         if (!pickKeyValid(key) || !pickKeyAllowed({ folders: found.folders }, key)) return notFound();
-        const object = await env.imagepicker.get(`${THUMB_PREFIX}${params.get('w')}/${key}.thumb`);
+        // in the project's photographer's files (batch 3), never the request's
+        const object = await bucketFor(env, project.photographer_id).get(`${THUMB_PREFIX}${params.get('w')}/${key}.thumb`);
         if (!object || !('body' in object)) return out({ error: '縮圖不存在', code: 'no_thumbnail' }, 404);
         // the stored type only when it is a raster image (an SVG is a
         // script); nothing else the object's metadata says is passed on
@@ -6870,15 +7020,19 @@ async function routeRequest(request, env, ctx) {
 
     if (pathParts[0] === 'api' && pathParts[1] === 'books' && pathParts[2]) {
       const bookId = pathParts[2];
-      const auth = await requireDefault(request, env, { optional: true }); // default-only until batch 3
+      // books (and their share links) have no owner yet: the default
+      // photographer's, and every other photographer gets the 404 of a path
+      // that is not theirs
+      const auth = await requireDefault(request, env, { optional: true }); // default-only until books
       if (auth.refused) return auth.refused;
       const admin = auth.who !== null;
+      const books = bookBucket(env);
 
       // POST /api/books/:id/share — mint a link for this album
       if (request.method === 'POST' && pathParts[3] === 'share') {
         if (!admin) return jsonErr('Unauthorized', 401);
         if (!env.DB) return jsonErr('DB not configured', 500);
-        const obj = await env.imagepicker.get(`_books/${bookId}.json`);
+        const obj = await books.get(`_books/${bookId}.json`);
         if (!obj) return new Response('Not found', { status: 404, headers: corsHeaders });
         let book;
         try { book = JSON.parse(await obj.text()); }
@@ -6926,7 +7080,7 @@ async function routeRequest(request, env, ctx) {
       }
 
       if (request.method === 'GET' && !pathParts[3]) {
-        const obj = await env.imagepicker.get(`_books/${bookId}.json`);
+        const obj = await books.get(`_books/${bookId}.json`);
         if (!obj) return new Response('Not found', { status: 404, headers: corsHeaders });
         const text = await obj.text();
         if (!bookShare) {
@@ -6973,14 +7127,14 @@ async function routeRequest(request, env, ctx) {
         try { book = JSON.parse(text); } catch { return bookContentRefusal('invalid_book'); }
         const problem = bookContentProblem(book);
         if (problem) return bookContentRefusal(problem);
-        await env.imagepicker.put(`_books/${bookId}.json`, text, {
+        await books.put(`_books/${bookId}.json`, text, {
           httpMetadata: { contentType: 'application/json' }
         });
         return jsonOk({ ok: true, id: bookId });
       }
 
       if (request.method === 'PATCH' && !pathParts[3]) {
-        const obj = await env.imagepicker.get(`_books/${bookId}.json`);
+        const obj = await books.get(`_books/${bookId}.json`);
         if (!obj) return new Response('Not found', { status: 404, headers: corsHeaders });
         let book;
         try { book = JSON.parse(await obj.text()); }
@@ -7033,14 +7187,14 @@ async function routeRequest(request, env, ctx) {
             if (newSlot.crop !== undefined) page.slots[idx].crop = newSlot.crop;
           });
         }
-        await env.imagepicker.put(`_books/${bookId}.json`, JSON.stringify(book), {
+        await books.put(`_books/${bookId}.json`, JSON.stringify(book), {
           httpMetadata: { contentType: 'application/json' }
         });
         return jsonOk({ ok: true });
       }
 
       if (request.method === 'GET' && pathParts[3] === 'status') {
-        const obj = await env.imagepicker.get(`_books/${bookId}_status.json`);
+        const obj = await books.get(`_books/${bookId}_status.json`);
         const data = obj ? await obj.text() : JSON.stringify({ approved: false });
         return new Response(data, {
           headers: {
@@ -7055,7 +7209,7 @@ async function routeRequest(request, env, ctx) {
         // the false→true transition is worth a message in the photographer's
         // chat — and a repeat is not an error, the viewer shows its success
         // state off this response.
-        const prev = await env.imagepicker.get(`_books/${bookId}_status.json`);
+        const prev = await books.get(`_books/${bookId}_status.json`);
         if (prev) {
           let already = false;
           // an unreadable status file fails toward notifying: a duplicate
@@ -7066,10 +7220,10 @@ async function routeRequest(request, env, ctx) {
           if (already) return jsonOk({ ok: true });
         }
         const status = { approved: true, timestamp: new Date().toISOString() };
-        await env.imagepicker.put(`_books/${bookId}_status.json`, JSON.stringify(status), {
+        await books.put(`_books/${bookId}_status.json`, JSON.stringify(status), {
           httpMetadata: { contentType: 'application/json' }
         });
-        const bookObj = await env.imagepicker.get(`_books/${bookId}.json`);
+        const bookObj = await books.get(`_books/${bookId}.json`);
         if (bookObj) {
           try {
             const book = JSON.parse(await bookObj.text());
@@ -7096,30 +7250,42 @@ async function routeRequest(request, env, ctx) {
       return new Response('Not found', { status: 404, headers: corsHeaders });
     }
 
-    // PUT (upload) — admin only
+    // PUT (upload) — a photographer only, into its own files (batch 3: the
+    // key is logical; bucketFor puts a non-default photographer's under its
+    // prefix). The reserved `_t/` namespace is refused for everyone (400),
+    // checked on the key as it will be stored, after `_assets/` comes off.
     if (request.method === 'PUT') {
-      const auth = await requireDefault(request, env); // default-only until batch 3
+      const auth = await requirePhotographer(request, env); // scoped to the caller (who.id)
       if (auth.refused) return auth.refused;
+      const photos = bucketFor(env, auth.who.id);
       let key = decodeURIComponent(url.pathname.slice(1));
       if (key.startsWith('_assets/')) key = key.slice('_assets/'.length);
+      if (isTenantKey(key)) return jsonOk({ error: 'Invalid key', code: 'invalid_key' }, 400);
       const contentType = request.headers.get('Content-Type') || 'image/jpeg';
-      await env.imagepicker.put(key, request.body, { httpMetadata: { contentType } });
+      await photos.put(key, request.body, { httpMetadata: { contentType } });
       return jsonOk({ ok: true, key });
     }
 
-    // GET list
+    // GET list — the caller's own files, or a link's: a pick link its
+    // project's photographer's, a studio token its minter's (shareOwner).
+    // Logical keys in, logical keys out (bucketFor); a reserved prefix lists
+    // nothing.
     const listPrefix = params.get('list');
     if (listPrefix !== null) {
       let listShare = null;
-      const auth = await requireDefault(request, env, { optional: true }); // default-only until batch 3
+      const auth = await requirePhotographer(request, env, { optional: true }); // scoped to the caller (who.id)
       if (auth.refused) return auth.refused;
-      if (!auth.who) {
+      let photos;
+      if (auth.who) {
+        photos = bucketFor(env, auth.who.id);
+      } else {
         listShare = await share();
         // a pick link lists what it may preview now (pickReadScope)
         const covered = listShare && (isPickShare(listShare)
           ? pickKeyAllowed({ folders: pickReadScope(listShare).preview }, listPrefix)
           : isStudioShare(listShare) || shareCovers(listShare, listPrefix));
         if (!covered) return jsonErr('Unauthorized', 401);
+        photos = bucketFor(env, shareOwner(listShare));
         await touchShareToken(listShare, request, env);
       }
       try {
@@ -7130,7 +7296,7 @@ async function routeRequest(request, env, ctx) {
         let cursor;
         let truncated = true;
         while (truncated) {
-          const listed = await env.imagepicker.list({
+          const listed = await photos.list({
             prefix: listPrefix, delimiter: '/', cursor
           });
           objects.push(...listed.objects);
@@ -7166,8 +7332,11 @@ async function routeRequest(request, env, ctx) {
       // ?download=1: the original as an attachment. Never a thumbnail.
       const download = params.get('download') === '1';
       if (download && isThumb) return jsonErr('Invalid Request', 400);
-      const auth = await requireDefault(request, env, { optional: true }); // default-only until batch 3
+      const auth = await requirePhotographer(request, env, { optional: true }); // scoped to the caller (who.id)
       if (auth.refused) return auth.refused;
+      // whose files: the caller's own, or the link's owner's (shareOwner);
+      // a `_t/...` key reads as missing (bucketFor)
+      let photos = auth.who ? bucketFor(env, auth.who.id) : null;
       if (!auth.who) {
         const s = await share();
         // checked on the source key, so a thumbnail of a book is a book, and
@@ -7182,6 +7351,7 @@ async function routeRequest(request, env, ctx) {
         } else if (!(isStudioShare(s) || shareCovers(s, source))) {
           return jsonErr('Unauthorized', 401);
         }
+        photos = bucketFor(env, shareOwner(s));
         await touchShareToken(s, request, env);
         viaShare = true;
       }
@@ -7201,7 +7371,7 @@ async function routeRequest(request, env, ctx) {
 
       for (const candidate of candidates) {
         const isLast = candidate === candidates[candidates.length - 1];
-        const object = await env.imagepicker.get(candidate, {
+        const object = await photos.get(candidate, {
           onlyIf: request.headers,
           range: request.headers
         });
