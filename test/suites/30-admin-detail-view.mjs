@@ -28,7 +28,7 @@ const see = (page, sel) => page.evaluate(SEE, sel);
 const isShown = async (page, sel) => (await see(page, sel)).shown;
 // hidden = in the DOM and takes no space on screen — not merely "absent"
 const isHidden = async (page, sel) => { const s = await see(page, sel); return s.exists && s.boxes === 0 && !s.shown; };
-const LIST_PARTS = ['#proj-new-btn', '#project-create-panel', '#proj-title', '#proj-create-btn', '#proj-show-archived-toggle', '#proj-recent-list', '[data-open-project]'];
+const LIST_PARTS = ['#proj-new-btn', '#project-create-panel', '#proj-title', '#proj-create-btn', '#proj-show-archived-toggle', '#proj-recent-list', '[data-project-row]'];
 const listState = async page => {
   const o = {};
   for (const s of LIST_PARTS) o[s] = (await see(page, s)).shown;
@@ -42,7 +42,7 @@ const listAllHidden = async page => {
 const hashOf = page => page.evaluate(() => location.hash);
 const waitDetail = page => page.waitForSelector('#pd-sec-settings', { timeout: 5000 });
 // the create form is behind 「＋ 新增專案」: open it here so the list/detail show-hide checks below cover the form parts for real
-const waitList = async page => { await page.waitForSelector('[data-open-project]', { state: 'visible', timeout: 5000 }); await openCreateForm(page); };
+const waitList = async page => { await page.waitForSelector('[data-project-row]', { state: 'visible', timeout: 5000 }); await openCreateForm(page); };
 // An entry for Back to land on that is not about:blank (the suite's init script cannot touch
 // sessionStorage there): a page of the same origin, then admin.html on top of it.
 const leaveBehind = async page => {
@@ -252,9 +252,9 @@ const lines = () => {
       const overflowList = await page.evaluate(() => document.documentElement.scrollWidth);
       await page.evaluate(() => { document.getElementById('proj-recent-list').style.marginBottom = '2500px'; scrollTo(0, 300); });
       // the 開啟 button must already be on screen at 300, or tap() scrolls it into view first and the position to come back to is not 300 (the create form is taller since 攝影類別)
-      await page.evaluate(() => { const b = document.querySelector('[data-open-project]'); const r = b.getBoundingClientRect(); if (r.top < 0 || r.bottom > innerHeight - 150) scrollTo(0, scrollY + r.top - 400); });
+      await page.evaluate(() => { const b = document.querySelector('[data-project-row] .proj-row-name'); const r = b.getBoundingClientRect(); if (r.top < 0 || r.bottom > innerHeight - 150) scrollTo(0, scrollY + r.top - 400); });
       const y0 = await page.evaluate(() => scrollY);
-      await page.locator('[data-open-project]').tap();
+      await page.locator('[data-project-row] .proj-row-name').tap();
       await waitDetail(page);
       ok('detail shown, list/create form hidden', await isShown(page, '#project-detail-panel') && await listAllHidden(page), JSON.stringify(await listState(page)));
       const pos = await page.evaluate(() => ({ y: scrollY, h: Math.round(document.getElementById('pd-back-btn').getBoundingClientRect().top), title: Math.round(document.querySelector('.pd-head h3').getBoundingClientRect().top), vh: innerHeight, vw: innerWidth }));
@@ -360,7 +360,7 @@ const lines = () => {
       ok('the create POST was sent', m.requests.some(r => r.method === 'POST' && r.path === '/api/admin/projects'));
       ok('the 連結已建立 box is shown with a link in it', await isShown(page, '#proj-create-result') && /t=PICK-TOKEN/.test(await page.inputValue('#proj-link-output')));
       const ls = await listState(page);
-      ok('the list, its rows and the ＋ 新增專案 button are shown; the create form itself has closed after the create', ls['#proj-new-btn'] && ls['#proj-recent-list'] && ls['[data-open-project]'] && ls['#proj-show-archived-toggle'] && !ls['#project-create-panel'] && !ls['#proj-title'] && !ls['#proj-create-btn'], JSON.stringify(ls));
+      ok('the list, its rows and the ＋ 新增專案 button are shown; the create form itself has closed after the create', ls['#proj-new-btn'] && ls['#proj-recent-list'] && ls['[data-project-row]'] && ls['#proj-show-archived-toggle'] && !ls['#project-create-panel'] && !ls['#proj-title'] && !ls['#proj-create-btn'], JSON.stringify(ls));
       ok('no detail opened: the panel is hidden and there is no #project hash', await isHidden(page, '#project-detail-panel') && !/project=/.test(await hashOf(page)), await hashOf(page));
       return out;
     },
