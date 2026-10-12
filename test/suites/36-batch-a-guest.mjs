@@ -38,7 +38,7 @@ const only400 = (page, k, fn) => page.route(`**/${W}/**`, async route => {
 });
 
 await heroCase('first portrait, second landscape -> the second', [P, L, L, P], 2);
-await heroCase('all portrait -> three portraits side by side, the first is the #cpCover (test/suites/72)', [P, P, SQ, P], 1, { heroes: 3 });
+await heroCase('all portrait -> three portraits side by side, the first is the #cpCover (test/suites/73)', [P, P, SQ, P], 1, { heroes: 3 });
 await heroCase('first landscape -> the first', [L, L, P], 1);
 await heroCase('threshold: 1.19 is not landscape, 1.2 is', [[500, 420], [600, 500], L], 2);
 await heroCase('a landscape beyond the first 12 is not looked for -> the first three portraits', [...Array(12).fill(P), L, L], 1, { n: 14, heroes: 3 });
