@@ -198,6 +198,20 @@
   .pl-filter { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px; }
   .pl-filter .field { width: auto; padding: 7px 10px; font-size: 13px; }
   .pl-filter #pl-q { flex: 1; min-width: 160px; }
+  .pl-archived { font-size: 13px; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+  @media (max-width: 768px) {
+    /* two lines: search + 顯示已封存, then 狀態 / 類別 / 排序; a row is the title block and 複製連結 side by side
+       (the whole row opens the project, so 開啟 is hidden here and a › shows the row is a way in) */
+    .pl-filter { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px 8px; }
+    .pl-filter #pl-q { grid-column: span 2; min-width: 0; }
+    .pl-filter .pl-archived { grid-column: span 1; font-size: 12px; justify-self: end; }
+    .pl-filter select.field { min-width: 0; text-overflow: ellipsis; }
+    .proj-recent-row { flex-direction: row; align-items: center; gap: 8px; }
+    .proj-recent-row .actions { flex: 0 0 auto; }
+    .proj-recent-row .actions .btn { flex: 0 0 auto; padding-left: 12px; padding-right: 12px; }
+    .proj-recent-row .actions [data-open-project] { display: none; }
+    .proj-recent-row[data-project-row]::after { content: '›'; flex: 0 0 auto; color: var(--ink-55); font-size: 22px; line-height: 1; }
+  }
   .pl-tabs { display: flex; gap: 4px; padding: 4px; margin-bottom: 10px; background: var(--card); border: 1px solid var(--rule); border-radius: 12px; }
   .pl-tab { flex: 1 1 0; min-width: 0; min-height: 44px; padding: 8px 10px; border: 0; border-radius: 9px; background: transparent; color: var(--ink-70); font: inherit; font-size: 14px; font-weight: 600; cursor: pointer; white-space: nowrap; }
   .pl-tab[aria-selected="true"] { background: var(--surface); color: var(--accent-ink); box-shadow: 0 1px 3px rgba(35,27,18,.15); }
@@ -452,11 +466,9 @@
       <button type="button" class="pl-tab" role="tab" data-pl-tab="active" aria-selected="true">進行中 <span class="pl-tab-n" data-pl-tab-n="active"></span></button>
       <button type="button" class="pl-tab" role="tab" data-pl-tab="done" aria-selected="false">已完成 <span class="pl-tab-n" data-pl-tab-n="done"></span></button>
     </div>
-    <label style="font-size:13px;display:inline-flex;align-items:center;gap:6px;margin-bottom:8px;">
-      <input type="checkbox" id="proj-show-archived-toggle"> 顯示已封存
-    </label>
     <div class="pl-filter" id="pl-filter">
       <input id="pl-q" class="field" type="search" placeholder="搜尋專案名稱或客戶" aria-label="搜尋專案名稱或客戶" autocomplete="off">
+      <label class="pl-archived"><input type="checkbox" id="proj-show-archived-toggle"> 顯示已封存</label>
       <select id="pl-status" class="field" aria-label="狀態"></select>
       <select id="pl-type" class="field" aria-label="攝影類別"></select>
       <select id="pl-sort" class="field" aria-label="排序">
