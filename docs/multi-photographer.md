@@ -279,6 +279,9 @@ CREATE TABLE photographer_sessions (
   `photographer_id`；其他連結 = 該列的 `photographer_id`）是否為 `active` 帳號（熱路徑不多一次 D1 來回）。default（NULL 或 `'default'`）永遠算有效，
   不看帳號表。停用、待審核、帳號被刪掉的擁有者 → 連結解析為 null，回應和不存在的連結**完全相同**；連結列本身沒被撤，所以 unsuspend 後立刻恢復。
   封存／專案不存在的行為不變。帳號表或擁有者欄位不存在時（migration 前）退回舊語句：default 照常，其他擁有者一律失效。
+- **上傳 PUT 是最後的 fall-through，只收得到照片鍵**：`PUT /`、`/_assets/`、只有斜線的鍵 → 400 `invalid_key`；鍵（去掉 `_assets/` 之後）
+  第一段是 `api`（含 `%61pi`、`//api/…`）→ 404；不是合法 percent-encoding → 400（原本 500）。都不寫。先驗身分，匿名仍是 401。
+  `2026/api/x.jpg`、`apiary/…` 這類照常。測試：`worker/test/upload-paths.test.mjs`。
 - 測試：`worker/test/photographer-suspend-links.test.mjs`。三個舊測試把專案直接改成 `'other'`（沒有帳號）來證明「看專案擁有者」，
   現在要先建一個 active 的 `'other'` 帳號；`guest-shop-read` 的「專案沒有攝影師」從空商店改成 401（連結根本不解析，更嚴）。
 

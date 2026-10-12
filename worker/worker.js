@@ -7329,13 +7329,21 @@ async function routeRequest(request, env, ctx) {
     // key is logical; bucketFor puts a non-default photographer's under its
     // prefix). The reserved `_t/` namespace is refused for everyone (400),
     // checked on the key as it will be stored, after `_assets/` comes off.
+    // It is the PUT fall-through, so it claims only what can be a photo key
+    // (security review of batch 3): an empty key (`PUT /`, `/_assets/`) or one
+    // that is not valid percent-encoding is 400, and anything under `api/` —
+    // a route that does not exist, never a file — is 404; nothing written.
     if (request.method === 'PUT') {
       const auth = await requirePhotographer(request, env); // scoped to the caller (who.id)
       if (auth.refused) return auth.refused;
       const photos = bucketFor(env, auth.who.id);
-      let key = decodeURIComponent(url.pathname.slice(1));
+      const invalidKey = () => jsonOk({ error: 'Invalid key', code: 'invalid_key' }, 400);
+      let key;
+      try { key = decodeURIComponent(url.pathname.slice(1)); } catch { return invalidKey(); }
       if (key.startsWith('_assets/')) key = key.slice('_assets/'.length);
-      if (isTenantKey(key)) return jsonOk({ error: 'Invalid key', code: 'invalid_key' }, 400);
+      if (key.split('/').find(Boolean) === 'api') return jsonErr('Not found', 404);
+      // nothing but slashes names no file either
+      if (!key.replace(/\//g, '') || isTenantKey(key)) return invalidKey();
       const contentType = request.headers.get('Content-Type') || 'image/jpeg';
       await photos.put(key, request.body, { httpMetadata: { contentType } });
       return jsonOk({ ok: true, key });
