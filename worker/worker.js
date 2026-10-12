@@ -3727,13 +3727,26 @@ async function routeRequest(request, env, ctx) {
         // it out of every book route and out of the per-book revoke list.
         // folders is empty so the kind check is not the only thing between
         // this row and the bucket.
-        await (owned
+        // A photographer session's row is written only while that session
+        // still exists, unexpired, for an active account (review of
+        // r2-hardening): a suspend / reset / logout landing after the check
+        // above has already revoked the account's studio tokens, and a row
+        // written after it would outlive them. Not written → the same 401 as
+        // an expired session, and nothing else is written. The default
+        // (PHOTOGRAPHER_TOKEN) has no session row.
+        const createdAt = new Date(now).toISOString();
+        const inserted = await (!owned
           ? env.DB.prepare(
-            "INSERT INTO share_tokens (token, book_id, kind, folders, created_at, expires_at, photographer_id) VALUES (?, '', 'studio', '[]', ?, ?, ?)"
-          ).bind(token, new Date(now).toISOString(), expiresAt, owner)
-          : env.DB.prepare(
             "INSERT INTO share_tokens (token, book_id, kind, folders, created_at, expires_at) VALUES (?, '', 'studio', '[]', ?, ?)"
-          ).bind(token, new Date(now).toISOString(), expiresAt)).run();
+          ).bind(token, createdAt, expiresAt)
+          : owner === null
+            ? env.DB.prepare(
+              "INSERT INTO share_tokens (token, book_id, kind, folders, created_at, expires_at, photographer_id) VALUES (?, '', 'studio', '[]', ?, ?, ?)"
+            ).bind(token, createdAt, expiresAt, owner)
+            : env.DB.prepare(
+              "INSERT INTO share_tokens (token, book_id, kind, folders, created_at, expires_at, photographer_id) SELECT ?, '', 'studio', '[]', ?, ?, ? WHERE EXISTS (SELECT 1 FROM photographer_sessions s JOIN photographers p ON p.id = s.photographer_id WHERE s.token_hash = ? AND s.photographer_id = ? AND s.expires_at > ? AND p.status = 'active')"
+            ).bind(token, createdAt, expiresAt, owner, await sha256Hex(bearerToken(request)), owner, createdAt)).run();
+        if (!inserted.meta?.changes) return UNAUTHORIZED();
       }
       // One live studio row at a time PER PHOTOGRAPHER, whether we just
       // issued it or handed back the one that was already there; another
