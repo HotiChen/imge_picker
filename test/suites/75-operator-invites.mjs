@@ -135,6 +135,18 @@ const state = (page, id) => page.getAttribute(`${row(id)} .inv-state`, 'data-sta
       await page.click(`${row('i-ghost')} button[data-action="revoke"]`);
       await waitText(page, '#inv-err', t => t.length > 0);
       ok('a failed revoke shows a sentence in #inv-err', (await T(page, '#inv-err')).length > 0);
+
+      // the operator token stopped working: the page signs out and leaves no old message behind
+      f.st.invites.push({ id: 'i-late', email: 'late@example.com', created_at: past(0.1), expires_at: future(0.9) });
+      f.st.inject = null;
+      await page.click('#inv-refresh');
+      await page.waitForSelector(row('i-late'), { timeout: 4000 });
+      f.st.inject = (m, p) => (p.endsWith('/i-late/revoke') ? { status: 401, body: { error: 'Unauthorized' } } : null);
+      await page.click(`${row('i-late')} button[data-action="revoke"]`);
+      await page.waitForSelector('#op-login:not([hidden])', { timeout: 4000 });
+      await page.waitForTimeout(250);   // the handler runs on after the sign-out; give a wrong write time to land
+      ok('a 401 on revoke signs out: the login box shows, the list is gone and no error text is left in the hidden panel',
+        (await disp(page, '#op-login')) !== 'none' && (await page.$('#inv-list .inv-row')) === null && (await T(page, '#inv-err')) === '', await T(page, '#inv-err'));
       return out;
     },
     { before: both(o, f), initScript: CLIP });

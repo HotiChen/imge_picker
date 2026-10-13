@@ -390,7 +390,7 @@ await suite('設定 — 沒有 studio_token 時跳轉回 home.html',
       await page.waitForFunction(() => document.querySelector('.logo-name')?.textContent === '海邊影像工作室', null, { timeout: 5000 });
       ok('logo-name replaced with the studio name', true);
       const img = await page.$eval('.logo-mark-img', el => ({ src: el.src, alt: el.alt })).catch(() => null);
-      ok('the text mark is replaced by an <img> for the logo', !!img && img.src.includes('/api/studio/logo'), JSON.stringify(img));
+      ok('the text mark is replaced by an <img> for the logo', !!img && img.src.includes('/api/pick/logo?t=PICK-TOKEN') && !img.src.includes('/api/studio/logo'), JSON.stringify(img));
       ok('no 預約拍攝 button exists on the guest page at all (removed, not hidden), booking_url or not',
         (await page.$('#studioBookingLink')) === null && !(await page.evaluate(() => document.body.innerText.includes('預約拍攝'))));
       return out;

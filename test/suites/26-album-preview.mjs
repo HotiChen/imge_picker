@@ -71,8 +71,8 @@ for (const [label, co, init] of [['owner 1280px', ALB_DESK, ALB_OWNER], ['viewer
       ok('before the press: no layouts.js / spread_templates.js / auto_layout.js requested, no globals', albEngineLoads(w).length === 0 && pre.layouts === 'undefined' && pre.auto === 'undefined' && pre.fn === 'undefined' && pre.tpl === 'undefined', JSON.stringify([albEngineLoads(w), pre]));
       ok('control: the page did ask for its own scripts (the request log works)', w.assets.some(p => /\/js\/pick\.js/.test(p)) && w.assets.some(p => /\/js\/album-preview\.js/.test(p)), w.assets.slice(0, 4).join());
       ok('before the press: only the gallery\'s own reads — the final folder listing and the cover / tile thumbnails (400 / 1200 / 1600 buckets, never an original)',
-        w.log.every(r => r.method === 'GET' && (r.path === '/api/pick/state' || r.path === '/api/studio/logo' || r.list === 'shoot/精修/' || (['400', '1200', '1600'].includes(r.w) && r.key.startsWith('shoot/精修/') && !r.download))),
-        JSON.stringify(w.log.filter(r => !(r.path === '/api/pick/state' || r.path === '/api/studio/logo' || r.list === 'shoot/精修/' || ['400', '1200', '1600'].includes(r.w)))));
+        w.log.every(r => r.method === 'GET' && (r.path === '/api/pick/state' || r.path === '/api/pick/logo' || r.list === 'shoot/精修/' || (['400', '1200', '1600'].includes(r.w) && r.key.startsWith('shoot/精修/') && !r.download))),
+        JSON.stringify(w.log.filter(r => !(r.path === '/api/pick/state' || r.path === '/api/pick/logo' || r.list === 'shoot/精修/' || ['400', '1200', '1600'].includes(r.w)))));
       await albShot(page, `entry-${label.replace(' ', '-')}`);
 
       // the proofs view is not the finals: the entry goes, and comes back with them

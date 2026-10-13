@@ -115,6 +115,10 @@
             try { localStorage.setItem(this._keyName(), k); } catch (e) { /* best effort */ }
         },
 
+        // The studio logo of THIS link's photographer (the link says whose; /api/studio/logo is only the default
+        // photographer's). An <img> cannot send headers, so the link rides in the query, like the other reads here.
+        logoUrl() { return `${CONFIG.WORKER_URL}/api/pick/logo?t=${encodeURIComponent(this.token)}`; },
+
         headers(extra) {
             const h = Object.assign({}, extra || {});
             h['X-Share-Token'] = this.token;
@@ -378,7 +382,7 @@
             const studio = this.studio || {};
             FinalsGallery.mount(content, {
                 title: this.projectTitle,
-                studio: { name: studio.name || '', hasLogo: !!studio.has_logo, logoUrl: `${CONFIG.WORKER_URL}/api/studio/logo` },
+                studio: { name: studio.name || '', hasLogo: !!studio.has_logo, logoUrl: this.logoUrl() },
                 drive: driveManager,
                 onShare: () => this.shareLink(),
                 onDownload: (e, photo) => this.download(e, photo),
@@ -413,7 +417,7 @@
             const when = this._fmtDate(this.confirmedAt);
             const cfg = {
                 title: this.projectTitle,
-                studio: { name: studio.name || '', hasLogo: !!studio.has_logo, logoUrl: `${CONFIG.WORKER_URL}/api/studio/logo`, bookingUrl: studio.booking_url || null },
+                studio: { name: studio.name || '', hasLogo: !!studio.has_logo, logoUrl: this.logoUrl(), bookingUrl: studio.booking_url || null },
                 confirmedText: `已確認完成${when ? `（${when}）` : ''}`,
                 shootDate: this.shootDate,
                 workerUrl: CONFIG.WORKER_URL,
@@ -1099,7 +1103,7 @@
                     const img = document.createElement('img');
                     img.className = 'logo-mark-img';
                     img.alt = studio.name || 'Studio logo';
-                    img.src = `${CONFIG.WORKER_URL}/api/studio/logo`;
+                    img.src = this.logoUrl();
                     markEl.replaceWith(img);
                 }
             }
