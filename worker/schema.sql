@@ -671,3 +671,20 @@ CREATE TABLE IF NOT EXISTS pick_join_failures (
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_pick_join_failures ON pick_join_failures(project_id, bucket, created_at);
+
+-- ─── Photographer invite codes (docs/multi-photographer.md, 邀請碼) ─────────
+-- A new table, from the hand-run worker/migrations/2026-10-18-photographer-invites.sql
+-- (the column comments are there). Registering with a live code creates an
+-- active account and spends the code in one batch.
+CREATE TABLE IF NOT EXISTS photographer_invites (
+  id         TEXT PRIMARY KEY,
+  code_hash  TEXT NOT NULL,           -- HMAC-SHA256(PHOTOGRAPHER_INVITE_SECRET, 'photographer-invite:' + code), hex; never the code
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL,           -- created_at + 1 hour
+  used_at    TEXT,
+  used_by    TEXT,                    -- the photographers.id it created
+  revoked_at TEXT,
+  note       TEXT                     -- the operator's own reminder, ≤ 200 characters
+);
+CREATE INDEX IF NOT EXISTS idx_photographer_invites_code ON photographer_invites(code_hash);
+CREATE INDEX IF NOT EXISTS idx_photographer_invites_used_by ON photographer_invites(used_by);
