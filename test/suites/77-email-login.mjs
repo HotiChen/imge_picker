@@ -236,6 +236,8 @@ export default async function register() {
         const out = [];
         const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
         await page.waitForURL('**/home.html', { timeout: 5000 }).catch(() => {});
+        // polled inside the page, so it survives the second hop home that a second 401 starts
+        await page.waitForFunction(() => /home\.html$/.test(location.pathname) && !sessionStorage.getItem('studio_token'), null, { timeout: 5000 });
         ok('bounced to home.html', /home\.html$/.test(page.url()), page.url());
         ok('the dead token was dropped', (await store(page)).t === null);
         return out;

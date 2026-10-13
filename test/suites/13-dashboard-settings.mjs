@@ -298,7 +298,7 @@ await suite('設定 — 沒有 studio_token 時跳轉回 home.html',
         document.getElementById('logo-remove-btn').style.display !== 'none', null, { timeout: 3000 });
       const put = m.seen.find(r => r.method === 'PUT' && r.path === '/api/admin/settings/logo');
       ok('the good file reached the Worker', !!put, JSON.stringify(m.seen));
-      ok('and a preview <img> is shown', await page.$('#logo-preview-box img') !== null);
+      ok('and a preview <img> is shown (fetched with the token, so it appears just after the button)', await page.waitForSelector('#logo-preview-box img', { timeout: 3000 }).then(() => true, () => false));
 
       await page.click('#logo-remove-btn');
       await page.waitForFunction(() => document.getElementById('logo-remove-btn').style.display === 'none', null, { timeout: 3000 });
