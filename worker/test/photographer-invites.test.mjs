@@ -105,6 +105,23 @@ test('operator invite routes: no PHOTOGRAPHER_INVITE_SECRET (or one under 32 cha
   assert.equal((await createInvite(envOn({ PHOTOGRAPHER_INVITE_SECRET: 'y'.repeat(32) }))).status, 201);
 });
 
+test('the pre-review table shape (no email column, as if the first 3-statement migration had run): create, list, revoke and register are 500 invites_unavailable, no throttle row, nothing written', async () => {
+  const env = envOn({ DB: fakeDB({ schema: withoutInvitesTable() }) });
+  env.DB._db.exec('CREATE TABLE photographer_invites (id TEXT PRIMARY KEY, code_hash TEXT NOT NULL, created_at TEXT NOT NULL, expires_at TEXT NOT NULL, used_at TEXT, used_by TEXT, revoked_at TEXT, note TEXT);');
+  env.DB._db.prepare("INSERT INTO photographer_invites (id, code_hash, created_at, expires_at) VALUES ('old', 'h', ?, ?)").run(past(), new Date(Date.now() + 3600000).toISOString());
+  const before = snapshot(env);
+  const register = await call(env, '/api/photographer/register-invite', {
+    method: 'POST', headers: { 'CF-Connecting-IP': '203.0.113.9' },
+    body: { email: 'ann@example.com', password: 'correct horse battery', display_name: '安', invite_code: '12345678' },
+  });
+  for (const res of [await createInvite(env, { email: 'ann@example.com' }), await listInvites(env), await revokeInvite(env, 'old'), register]) {
+    assert.equal(res.status, 500, res.url);
+    assert.deepEqual(await res.json(), { error: '邀請碼功能尚未啟用', code: 'invites_unavailable' });
+  }
+  assert.equal(rows(env, 'SELECT * FROM photographer_login_failures').length, 0, 'no throttle row');
+  assert.equal(snapshot(env), before);
+});
+
 test('operator invite routes before the migration: 500 invites_unavailable, nothing written; the photographer list still works', async () => {
   const env = envOn({ DB: fakeDB({ schema: withoutInvitesTable() }) });
   const before = snapshot(env);
