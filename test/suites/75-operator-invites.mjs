@@ -80,8 +80,8 @@ const past = h => new Date(Date.now() - h * 3600e3).toISOString();
 const future = h => new Date(Date.now() + h * 3600e3).toISOString();
 const SEEDED = () => [
   { id: 'i-live', email: 'live@example.com', note: '婚攝朋友', created_at: past(0.2), expires_at: future(0.8) },
-  { id: 'i-used', email: 'used@example.com', note: null, created_at: past(5), expires_at: past(4), used_at: past(4.5), used_by: 'ph-9', used_by_email: 'used@example.com', used_by_name: '小晴' },
-  { id: 'i-rev', email: 'rev@example.com', note: null, created_at: past(6), expires_at: future(0.5), revoked_at: past(5.9) },
+  { id: 'i-used', email: 'used@example.com', note: null, created_at: past(5), expires_at: past(4), used_at: past(4.5), used_by: 'ph-9', used_by_email: '<b id="evil">u</b>used@example.com', used_by_name: '<img src=x onerror="window.__xss2=1">小晴' },
+  { id: 'i-rev', email: 'rev<i id="evil2">x</i>@example.com', note: null, created_at: past(6), expires_at: future(0.5), revoked_at: past(5.9) },
   { id: 'i-exp', email: 'exp@example.com', note: '<img src=x onerror="window.__xss=1">', created_at: past(9), expires_at: past(8) },
 ];
 const state = (page, id) => page.getAttribute(`${row(id)} .inv-state`, 'data-state').catch(() => null);
@@ -105,6 +105,9 @@ const state = (page, id) => page.getAttribute(`${row(id)} .inv-state`, 'data-sta
       const label = id => page.textContent(`${row(id)} .inv-state`);
       ok('the badges read in Chinese: 可使用 / 已使用 / 已撤銷 / 已過期', [await label('i-live'), await label('i-used'), await label('i-rev'), await label('i-exp')].join() === '可使用,已使用,已撤銷,已過期');
       ok('a used invite says who registered with it', (await page.textContent(row('i-used'))).includes('小晴') && (await page.textContent(row('i-used'))).includes('used@example.com'));
+      ok('markup in who-registered (name and email) is text: no element created, no script ran',
+        (await page.$(`${row('i-used')} img`)) === null && (await page.$('#evil')) === null && (await page.$('#evil2')) === null && (await page.evaluate(() => window.__xss2)) === undefined &&
+        (await page.textContent(row('i-used'))).includes('<img src=x') && (await page.textContent(row('i-used'))).includes('<b id="evil">'));
       ok('email and note are shown', (await page.textContent(row('i-live'))).includes('live@example.com') && (await page.textContent(row('i-live'))).includes('婚攝朋友'));
       ok('撤銷 exists on the live row only', (await page.$(`${row('i-live')} button[data-action="revoke"]`)) !== null &&
         (await page.$$eval('#inv-list button[data-action="revoke"]', bs => bs.length)) === 1);

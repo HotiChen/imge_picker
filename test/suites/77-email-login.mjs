@@ -4,14 +4,14 @@
 // Registered by test/run.mjs in file-name order; see test/README.md.
 import { base, suite } from '../lib/harness.mjs';
 import { MOBILE } from '../lib/env.mjs';
-import { photographerFake } from '../lib/photographer-fake.mjs';
+import { photographerFake, stubFabric } from '../lib/photographer-fake.mjs';
 import { dashSettingsMock } from '../lib/dashboard-mocks.mjs';
 
 export default async function register() {
   const ACCT = { id: 'ph-1', email: 'ann@example.com', password: 'ann-password-1', display_name: '小安', must_change: false };
   const FLAGGED = { id: 'ph-2', email: 'tmp@example.com', password: 'temp-password-1', display_name: '小暫', must_change: true };
   const NEWPW = 'a-brand-new-pass-9';
-  const both = (...fakes) => async page => { for (const f of fakes) await f.attach(page); };
+  const both = (...fakes) => async page => { await stubFabric(page); for (const f of fakes) await f.attach(page); };
   const store = page => page.evaluate(() => ({ t: sessionStorage.getItem('studio_token'), s: JSON.parse(sessionStorage.getItem('studio_session') || 'null'), all: JSON.stringify(sessionStorage), ls: JSON.stringify(localStorage) }));
   // a seed that runs once per tab (addInitScript re-runs on every navigation: a known false-pass shape)
   const seed = (token, must) => `if (!sessionStorage.getItem('__seeded')) { sessionStorage.setItem('__seeded', '1'); sessionStorage.setItem('studio_token', ${JSON.stringify(token)}); ${must === undefined ? '' : `sessionStorage.setItem('studio_session', JSON.stringify({ t: ${JSON.stringify(token)}, must: ${must} }));`} }`;
@@ -113,7 +113,7 @@ export default async function register() {
         const me = f.st.calls.find(c => c.path === '/api/photographer/me');
         ok('settings asked /api/photographer/me with the session token', !!me && me.auth === `Bearer ${s0.t}`);
 
-        for (const dest of ['dashboard.html', 'admin.html', 'orders.html', 'upload.html', 'index.html?project=p1']) {
+        for (const dest of ['dashboard.html', 'admin.html', 'orders.html', 'upload.html', 'index.html?project=p1', 'book_editor/index.html', 'r2_designer/index.html']) {
           await page.goto(`${base}/${dest}`, { waitUntil: 'load' });
           await page.waitForURL('**/settings.html', { timeout: 4000 }).catch(() => {});
           ok(`${dest} sends a flagged session back to settings.html`, /\/settings\.html$/.test(new URL(page.url()).pathname), page.url());

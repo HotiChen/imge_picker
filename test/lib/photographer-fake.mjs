@@ -129,3 +129,7 @@ export function photographerFake({
   };
   return { st, attach, gate, accountOf };
 }
+
+// r2_designer/index.html needs fabric.js only to boot, and it comes from a CDN the sandbox cannot reach (suite 25 does the same).
+export const stubFabric = page => page.route('**/fabric.min.js', r => r.fulfill({ contentType: 'text/javascript',
+  body: 'const P = () => new Proxy(function () {}, { get: (t, k) => (k === Symbol.toPrimitive ? () => 0 : P()), apply: () => P(), construct: () => P() }); window.fabric = P();' }));
