@@ -62,7 +62,7 @@ async function fixture(env) {
 
 // until: which batch scopes the route to its caller (until then: default
 // only). 'open': answers every photographer, and carries no data.
-const R = (until, method, path, body) => ({ until, method, path, body });
+const R = (until, method, path, body, headers) => ({ until, method, path, body, headers });
 const P = f => `/api/admin/projects/${f.projectId}`;
 const ROUTES = [
   R('open', 'GET', () => '/api/auth/verify-admin'),
@@ -115,14 +115,15 @@ const ROUTES = [
   R('books', 'GET', () => '/api/books/b1'),
   R('books', 'PUT', () => '/api/books/b1', { name: '王先生 婚紗', clientFolders: [MINE], pages: [] }),
   R('books', 'PATCH', () => '/api/books/b1', { name: '新名' }),
-  R('scoped', 'PUT', () => '/2026/new.jpg', 'bytes'),
+  // a photo, as upload.html sends it (since the security review of batch 3 a text/plain body is 415)
+  R('scoped', 'PUT', () => '/2026/new.jpg', 'bytes', { 'Content-Type': 'image/jpeg' }),
   R('scoped', 'GET', () => `/?list=${encodeURIComponent(MINE)}`),
   R('scoped', 'GET', () => '/20260819/a.jpg'),
 ];
 const label = r => `${r.method} ${r.path({ projectId: ':id', pickToken: ':token', userId: ':uid' })}`;
 const send = (mod, env, r, f, token) => mod.fetch(req(r.path(f), {
   method: r.method, token,
-  headers: r.body !== undefined && typeof r.body !== 'string' ? { 'Content-Type': 'application/json' } : {},
+  headers: r.headers ?? (r.body !== undefined && typeof r.body !== 'string' ? { 'Content-Type': 'application/json' } : {}),
   body: r.body === undefined ? undefined : typeof r.body === 'string' ? r.body : JSON.stringify(r.body),
 }), env, ctx);
 
@@ -465,9 +466,12 @@ const DEFAULT_ID_USES = {
   guestOrdersEnabled: 1,     // guest ordering: the default photographer's projects only (doc §4)
   shareOwner: 1,             // a project-less share row with no owner (NULL) is the default's (batch 3)
   shareOwnerColumn: 1,       // the default photographer is NULL in share_tokens.photographer_id (batch 3)
+  shareOwnedBy: 1,           // ...and owns NULL and literal 'default' rows alike when listing / revoking (security review of batch 3)
   tenantPrefix: 1,           // the default photographer has no R2 prefix: asked for one, it refuses (batch 3)
   bucketFor: 1,              // the default photographer's keys are unprefixed (batch 3)
   bookBucket: 1,             // books have no owner yet: the default's objects (default-only until books)
+  isDefaultOwner: 1,         // a link owned by the default (NULL or its id) is never dark; never suspended (security review of batch 3)
+  ownerLiveSql: 1,           // the same, as the WHERE condition of the statement that loads a link (security review of batch 3)
   routeRequest: 1,           // the public /api/studio/logo (the default's, 2b-3)
 };
 test('DEFAULT_PHOTOGRAPHER_ID appears only in the allow-listed functions, with exact counts', () => {

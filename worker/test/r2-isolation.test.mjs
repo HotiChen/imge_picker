@@ -112,12 +112,12 @@ test('upload: each photographer\'s PUT lands under its own prefix (the default\'
 test('upload: thumbnails and `_assets/` follow the same prefix (the upload page writes `_thumbs/<w>/<key>.thumb`)', async () => {
   const w = await world();
   const B = w.B;
-  assert.equal((await call(w.env, '/shoot/new/n.jpg', { method: 'PUT', token: B.token, body: 'B-NEW' })).status, 200);
-  assert.equal((await call(w.env, '/_thumbs/400/shoot/new/n.jpg.thumb', { method: 'PUT', token: B.token, body: 'B-NEW-T400' })).status, 200);
+  assert.equal((await call(w.env, '/shoot/new/n.jpg', { method: 'PUT', token: B.token, body: 'B-NEW', headers: { 'Content-Type': 'image/jpeg' } })).status, 200);
+  assert.equal((await call(w.env, '/_thumbs/400/shoot/new/n.jpg.thumb', { method: 'PUT', token: B.token, body: 'B-NEW-T400', headers: { 'Content-Type': 'image/webp' } })).status, 200);
   assert.equal(stored(w.env, `_t/${B.id}/_thumbs/400/shoot/new/n.jpg.thumb`), 'B-NEW-T400');
   assert.equal(stored(w.env, '_thumbs/400/shoot/new/n.jpg.thumb'), undefined, 'not in the default\'s thumbnails');
   assert.equal((await read(w.env, '/shoot/new/n.jpg?w=400', B.token)).text, 'B-NEW-T400');
-  const res = await call(w.env, '/_assets/logo.png', { method: 'PUT', token: B.token, body: 'LOGO' });
+  const res = await call(w.env, '/_assets/logo.png', { method: 'PUT', token: B.token, body: 'LOGO', headers: { 'Content-Type': 'image/png' } });
   assert.deepEqual(await res.json(), { ok: true, key: 'logo.png' });
   assert.equal(stored(w.env, `_t/${B.id}/logo.png`), 'LOGO');
   assert.equal(stored(w.env, 'logo.png'), undefined);
@@ -156,7 +156,7 @@ test('upload: keys that only look like escaping stay literal, inside the writer\
   const had = stored(w.env, victim);
   for (const path of [`/..%2F_t%2F${C.id}%2F${encodeURIComponent(PA)}`, `/..%2F${C.id}%2F${encodeURIComponent(PA)}`, `//_t/${C.id}/${PA}`]) {
     const before = new Set(keysOf(w.env));
-    const res = await call(w.env, path, { method: 'PUT', token: B.token, body: 'B-EVIL' });
+    const res = await call(w.env, path, { method: 'PUT', token: B.token, body: 'B-EVIL', headers: { 'Content-Type': 'image/jpeg' } });
     assert.equal(res.status, 200, path);
     const added = keysOf(w.env).filter(k => !before.has(k));
     assert.equal(added.length, 1, path);
@@ -164,7 +164,7 @@ test('upload: keys that only look like escaping stay literal, inside the writer\
   }
   assert.equal(stored(w.env, victim), had, 'C\'s object was overwritten');
   // the default's literal `/_t/...` (a leading slash) is not the reserved namespace and not C's key
-  const res = await call(w.env, `//_t/${C.id}/${PA}`, { method: 'PUT', token: SECRET, body: 'A-SLASH' });
+  const res = await call(w.env, `//_t/${C.id}/${PA}`, { method: 'PUT', token: SECRET, body: 'A-SLASH', headers: { 'Content-Type': 'image/jpeg' } });
   assert.equal(res.status, 200);
   assert.equal(stored(w.env, `/_t/${C.id}/${PA}`), 'A-SLASH');
   assert.equal(stored(w.env, victim), had);
@@ -243,6 +243,27 @@ test('?list= follows R2\'s cursor through pages and still returns only the calle
   assert.ok(r.body.data.every(f => f.name && f.size === 2));
   const a = await list(w.env, folder, SECRET);
   assert.deepEqual(a.body.data.map(f => f.id).sort(), [0, 1, 2, 3, 4].map(i => `${folder}${i}a.jpg`));
+});
+
+// Security review of batch 3 (test gap): a tenant's list entries are rebuilt
+// from R2's (to strip the prefix), so a field dropped there vanishes from
+// the JSON for everyone but the default. The same object under the same
+// logical key must list identically for the default, a tenant and a link.
+test('?list=: a tenant\'s entries carry the same id, name, size and uploaded as the default\'s for the same object', async () => {
+  const w = await world();
+  const key = `${PROOF}same.jpg`;
+  const uploaded = new Date('2026-03-04T05:06:07.890Z');
+  for (const k of [key, `_t/${w.B.id}/${key}`]) {
+    w.env.imagepicker._store.set(k, { key: k, body: 'SAME-BYTES-1234', contentType: 'image/jpeg', uploaded });
+  }
+  const entry = r => r.body.data.find(f => f.id === key);
+  const a = entry(await list(w.env, PROOF, SECRET));
+  assert.deepEqual(a, { id: key, name: 'same.jpg', size: 15, uploaded: uploaded.toISOString() });
+  const b = entry(await list(w.env, PROOF, w.B.token));
+  assert.deepEqual(b, a, 'B lists the same entry');
+  // and through B's studio token (a link's listing goes through the same rebuild)
+  const tk = await studio(w.env, w.B);
+  assert.deepEqual(entry(await list(w.env, PROOF, undefined, tk)), a, 'B\'s studio token');
 });
 
 // ─── object reads ──────────────────────────────────────────────────────────

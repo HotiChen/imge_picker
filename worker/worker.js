@@ -11,6 +11,79 @@ const corsHeaders = {
 const THUMB_PREFIX = '_thumbs/';
 const THUMB_BUCKETS = [400, 1200, 1600];
 
+// ─── What the upload PUT may store, and how objects go out ──────────────────
+// (security review of multi-photographer batch 3, finding 2.) The object route
+// serves an object with its stored type, on the Worker's origin, so an upload
+// that stored text/html or an SVG would be a page running script there.
+//
+// The types the object route serves inline (as the task and the rounds
+// thumbnail route already do). Anything else stored goes out, under a key the
+// picker lists (.jpg/.jpeg/.png/.webp/.avif), as that extension's own image
+// type (a legacy photo stored as text/html, octet-stream or an alias), and
+// otherwise — a legacy SVG or HTML upload, a HEIC / TIFF / GIF / BMP original
+// — as application/octet-stream, as an attachment. Uploads keep the photos the
+// picker shows on this list: the listing (`?list=`) only ever shows
+// .jpg/.jpeg/.png/.webp/.avif keys, and a key with one of those extensions
+// is only ever stored as one of these four types (below), so nothing the
+// grid, a thumbnail fallback or the lightbox can ask for turns into a
+// download. The other formats upload.html takes are never listed: they are
+// kept as files, served as downloads.
+const INLINE_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/avif'];
+const OCTET_STREAM = 'application/octet-stream';
+// What upload.html takes (its IMAGE_EXTS) and the album editor's backgrounds
+// are, by the key's extension (lowercased):
+// - own: what is stored when the request names no type of its own — no
+//   Content-Type, an empty one, or one listed in `asOwn`;
+// - keep: the types stored as sent;
+// - asOwn: accepted, but stored as `own`: application/octet-stream (what
+//   upload.html sends when the browser knows no type) and, for the listed
+//   extensions, the legacy aliases image/jpg, image/pjpeg, image/x-png —
+//   never stored as such, so a listed photo is always served inline.
+// HEIC / HEIF / TIFF / BMP keep octet-stream as sent (served as downloads
+// anyway). Never HTML, SVG, XML or script, whatever the extension.
+const LEGACY_IMAGE_ALIASES = ['image/jpg', 'image/pjpeg', 'image/x-png'];
+const listedPhoto = own => ({ own, keep: INLINE_IMAGE_TYPES, asOwn: [...LEGACY_IMAGE_ALIASES, OCTET_STREAM] });
+const UPLOAD_TYPES = Object.assign(Object.create(null), {
+  jpg: listedPhoto('image/jpeg'),
+  jpeg: listedPhoto('image/jpeg'),
+  png: listedPhoto('image/png'),
+  webp: listedPhoto('image/webp'),
+  avif: listedPhoto('image/avif'),
+  gif: { own: 'image/gif', keep: ['image/gif'], asOwn: [OCTET_STREAM] },
+  heic: { own: 'image/heic', keep: ['image/heic', 'image/heic-sequence', OCTET_STREAM], asOwn: [] },
+  heif: { own: 'image/heif', keep: ['image/heif', 'image/heif-sequence', OCTET_STREAM], asOwn: [] },
+  tif: { own: 'image/tiff', keep: ['image/tiff', OCTET_STREAM], asOwn: [] },
+  tiff: { own: 'image/tiff', keep: ['image/tiff', OCTET_STREAM], asOwn: [] },
+  bmp: { own: 'image/bmp', keep: ['image/bmp', 'image/x-ms-bmp', OCTET_STREAM], asOwn: [] },
+});
+// upload.html's thumbnails: webp, or jpeg where the browser cannot encode webp
+const THUMB_TYPES = { own: 'image/jpeg', keep: INLINE_IMAGE_TYPES, asOwn: [] };
+const THUMB_KEY = /^_thumbs\/\d+\/(.+)\.thumb$/;
+// A type as sent: lowercased, parameters off. '' when there is none.
+const bareType = value => String(value ?? '').split(';')[0].trim().toLowerCase();
+// The extension of a key's file name ('' for none, or a name that is only one).
+function keyExtension(key) {
+  const name = key.slice(key.lastIndexOf('/') + 1);
+  const dot = name.lastIndexOf('.');
+  return dot > 0 ? name.slice(dot + 1).toLowerCase() : '';
+}
+// The Content-Type to store for an upload of `key` sent as `sent` (the
+// request's Content-Type header, null when there is none), or null to refuse
+// it (415). A photo key goes by its extension (UPLOAD_TYPES); a thumbnail
+// `_thumbs/<w>/<photo key>.thumb` needs a photo key and one of the inline
+// types (none: jpeg, as the route always defaulted to).
+function uploadContentType(key, sent) {
+  const thumb = THUMB_KEY.exec(key);
+  const byExtension = UPLOAD_TYPES[keyExtension(thumb ? thumb[1] : key)];
+  if (!byExtension) return null;
+  const rule = thumb ? THUMB_TYPES : byExtension;
+  const type = bareType(sent);
+  // an empty Content-Type counts as none for a photo; a thumbnail keeps the
+  // old rule (only a missing header defaults)
+  if (sent === null || (!thumb && !type) || rule.asOwn.includes(type)) return rule.own;
+  return rule.keep.includes(type) ? type : null;
+}
+
 // Every bucket at least as large as the requested width, smallest first, then
 // the original last. Falling straight back to the original would mean that
 // introducing a new bucket makes every already-uploaded photo load at full
@@ -545,9 +618,17 @@ function shareOwner(share) {
 
 // The value share_tokens.photographer_id holds for a photographer: NULL for
 // the default one (as on every row from before the column), the id otherwise.
-// Compared with `photographer_id IS ?`, which matches NULL to NULL.
+// What it writes; reads compare with shareOwnedBy (NULL and 'default' alike).
 function shareOwnerColumn(photographerId) {
   return photographerId === DEFAULT_PHOTOGRAPHER_ID ? null : photographerId;
+}
+// The rows of `col` that `photographerId` owns, as an SQL condition and its
+// two bound values: NULL and the literal 'default' alike for the default
+// photographer (shareOwner reads both as the default's, so it must be able to
+// list and revoke both — security review of batch 3); only its own id for
+// anyone else, never NULL or 'default'.
+function shareOwnedBy(col, photographerId) {
+  return { sql: `COALESCE(${col}, ?) = ?`, args: [DEFAULT_PHOTOGRAPHER_ID, photographerId] };
 }
 const SHARE_OWNER_UNAVAILABLE = { error: '多攝影師連結功能尚未啟用', code: 'share_owner_unavailable' };
 
@@ -825,15 +906,51 @@ function shareCeiling(row) {
   return created + SHARE_MAX_LIFE_MS;
 }
 
+// Whether a link's owner may still hand out its files (security review of
+// batch 3): the default photographer always (it has no photographers row, and
+// a row that names it changes nothing); anyone else only while their account
+// is active — suspended (until un-suspended), pending or deleted is dark.
+// A WHERE condition on `col` (the owner column, NULL meaning the default)
+// with its bound values, so the check rides in the statement that already
+// loads the row (no extra round trip on a hot read) and the row the routes
+// get is exactly the table's columns. A dark owner reads as no row at all.
+function ownerLiveSql(col) {
+  const def = DEFAULT_PHOTOGRAPHER_ID;
+  return {
+    sql: `(COALESCE(${col}, ?) = ? OR EXISTS (SELECT 1 FROM photographers WHERE id = ${col} AND status = 'active'))`,
+    args: [def, def],
+  };
+}
+// The default photographer as a link owner: NULL (every row from before the
+// owner column, album links, client sessions) or its id written out. What
+// the fallback reads below go by: without the photographers table or the
+// share-token owner column only the default can own anything, so any other
+// owner fails closed there.
+function isDefaultOwner(owner) {
+  return owner === null || owner === undefined || owner === DEFAULT_PHOTOGRAPHER_ID;
+}
+// A pick link's owner is its project's photographer (shareOwner), checked on
+// the project; its own row's photographer_id is not looked at. SQL and JS
+// say the same thing (a project_id of NULL or '' is no project).
+const PICK_WITH_PROJECT_SQL = "(s.kind = 'pick' AND COALESCE(s.project_id, '') != '')";
+
 // Returns the token row (folders already parsed) or null. Revoked, expired,
-// unknown and "no D1 bound at all" are all deliberately the same answer.
+// unknown, an owner that is not live (ownerLiveSql) and "no D1 bound at all"
+// are all deliberately the same answer.
 async function resolveShareToken(request, url, env) {
   if (!env.DB) return null;
   const value = url.searchParams.get('t') || request.headers.get('X-Share-Token') || '';
   if (!value) return null;
   let row;
   try {
-    row = await env.DB.prepare('SELECT * FROM share_tokens WHERE token = ?').bind(value).first();
+    const live = ownerLiveSql('s.photographer_id');
+    let checked = true;
+    row = await withoutMissingSchema(
+      () => env.DB.prepare(`SELECT s.* FROM share_tokens s WHERE s.token = ? AND (${PICK_WITH_PROJECT_SQL} OR ${live.sql})`)
+        .bind(value, ...live.args).first(),
+      () => { checked = false; return env.DB.prepare('SELECT * FROM share_tokens WHERE token = ?').bind(value).first(); },
+    );
+    if (row && !checked && !(isPickShare(row) && row.project_id) && !isDefaultOwner(row.photographer_id)) return null;
   } catch { return null; }
   if (!row || row.revoked_at) return null;
   const expiry = Date.parse(row.expires_at);
@@ -851,10 +968,20 @@ async function resolveShareToken(request, url, env) {
   // is named in the WHERE so a database the archive migration has not reached
   // refuses pick links (the query throws) instead of ignoring the archive;
   // album links never get here. The row is kept for resolvePick.
+  // Its owner is the project's photographer (shareOwner), checked in the
+  // same statement: a suspended / deleted photographer's links are dark, and
+  // come back on un-suspend (the link rows are untouched).
   if (isPickShare(row) && row.project_id) {
     let project;
     try {
-      project = await env.DB.prepare('SELECT * FROM projects WHERE id = ? AND archived_at IS NULL').bind(row.project_id).first();
+      const live = ownerLiveSql('p.photographer_id');
+      let checked = true;
+      project = await withoutMissingSchema(
+        () => env.DB.prepare(`SELECT p.* FROM projects p WHERE p.id = ? AND p.archived_at IS NULL AND ${live.sql}`)
+          .bind(row.project_id, ...live.args).first(),
+        () => { checked = false; return env.DB.prepare('SELECT * FROM projects WHERE id = ? AND archived_at IS NULL').bind(row.project_id).first(); },
+      );
+      if (project && !checked && !isDefaultOwner(project.photographer_id)) return null;
     } catch { return null; }
     if (!project) return null;
     return { ...row, folders, project };
@@ -3574,6 +3701,7 @@ async function routeRequest(request, env, ctx) {
       // exactly as before (every studio row is its own) and anyone else is
       // refused, nothing written.
       const owner = shareOwnerColumn(auth.who.id);
+      const mine = shareOwnedBy('photographer_id', auth.who.id);
       const now = Date.now();
       const reuseAfter = new Date(now + STUDIO_REUSE_MIN_MS).toISOString();
       // both sides are ISO-8601 UTC so this compares as text; a hand-edited
@@ -3582,8 +3710,8 @@ async function routeRequest(request, env, ctx) {
       let owned = true;
       try {
         live = await env.DB.prepare(
-          "SELECT token, expires_at FROM share_tokens WHERE kind = 'studio' AND photographer_id IS ? AND revoked_at IS NULL AND expires_at > ? ORDER BY expires_at DESC LIMIT 1"
-        ).bind(owner, reuseAfter).first();
+          `SELECT token, expires_at FROM share_tokens WHERE kind = 'studio' AND ${mine.sql} AND revoked_at IS NULL AND expires_at > ? ORDER BY expires_at DESC LIMIT 1`
+        ).bind(...mine.args, reuseAfter).first();
       } catch (e) {
         if (!isMissingColumn(e)) throw e;
         if (owner !== null) return jsonOk(SHARE_OWNER_UNAVAILABLE, 500);
@@ -3599,13 +3727,26 @@ async function routeRequest(request, env, ctx) {
         // it out of every book route and out of the per-book revoke list.
         // folders is empty so the kind check is not the only thing between
         // this row and the bucket.
-        await (owned
+        // A photographer session's row is written only while that session
+        // still exists, unexpired, for an active account (review of
+        // r2-hardening): a suspend / reset / reject landing after the check
+        // above has already revoked the account's studio tokens, and a row
+        // written after it would outlive them. Not written → the same 401 as
+        // an expired session, and nothing else is written. The default
+        // (PHOTOGRAPHER_TOKEN) has no session row.
+        const createdAt = new Date(now).toISOString();
+        const inserted = await (!owned
           ? env.DB.prepare(
-            "INSERT INTO share_tokens (token, book_id, kind, folders, created_at, expires_at, photographer_id) VALUES (?, '', 'studio', '[]', ?, ?, ?)"
-          ).bind(token, new Date(now).toISOString(), expiresAt, owner)
-          : env.DB.prepare(
             "INSERT INTO share_tokens (token, book_id, kind, folders, created_at, expires_at) VALUES (?, '', 'studio', '[]', ?, ?)"
-          ).bind(token, new Date(now).toISOString(), expiresAt)).run();
+          ).bind(token, createdAt, expiresAt)
+          : owner === null
+            ? env.DB.prepare(
+              "INSERT INTO share_tokens (token, book_id, kind, folders, created_at, expires_at, photographer_id) VALUES (?, '', 'studio', '[]', ?, ?, ?)"
+            ).bind(token, createdAt, expiresAt, owner)
+            : env.DB.prepare(
+              "INSERT INTO share_tokens (token, book_id, kind, folders, created_at, expires_at, photographer_id) SELECT ?, '', 'studio', '[]', ?, ?, ? WHERE EXISTS (SELECT 1 FROM photographer_sessions s JOIN photographers p ON p.id = s.photographer_id WHERE s.token_hash = ? AND s.photographer_id = ? AND s.expires_at > ? AND p.status = 'active')"
+            ).bind(token, createdAt, expiresAt, owner, await sha256Hex(bearerToken(request)), owner, createdAt)).run();
+        if (!inserted.meta?.changes) return UNAUTHORIZED();
       }
       // One live studio row at a time PER PHOTOGRAPHER, whether we just
       // issued it or handed back the one that was already there; another
@@ -3618,8 +3759,8 @@ async function routeRequest(request, env, ctx) {
       // control for that, and it does not wait on a page load.
       await (owned
         ? env.DB.prepare(
-          "UPDATE share_tokens SET revoked_at = ? WHERE kind = 'studio' AND photographer_id IS ? AND revoked_at IS NULL AND token != ?"
-        ).bind(new Date(now).toISOString(), owner, token)
+          `UPDATE share_tokens SET revoked_at = ? WHERE kind = 'studio' AND ${mine.sql} AND revoked_at IS NULL AND token != ?`
+        ).bind(new Date(now).toISOString(), ...mine.args, token)
         : env.DB.prepare(
           "UPDATE share_tokens SET revoked_at = ? WHERE kind = 'studio' AND revoked_at IS NULL AND token != ?"
         ).bind(new Date(now).toISOString(), token)).run();
@@ -4579,20 +4720,45 @@ async function routeRequest(request, env, ctx) {
           let tempPassword = null;
           let statements;
           let resetResult = null;
+          // Suspend, reset-password and reject (the delete) also revoke the
+          // account's live studio tokens (a 12-hour read credential for its
+          // own files), in the same batch, after the account write. The
+          // condition is the account's state once that write has run, not
+          // whether this write changed it: suspended, still there, or gone,
+          // respectively. So an account that is not active (a pending one
+          // asked to suspend, an active one asked to reject: 409) keeps its
+          // tokens, while suspending an already suspended account (409) or
+          // rejecting an id that is not there (404) also runs the revoke —
+          // harmless, neither can hold a usable token. (`changes()` inside
+          // the batch would be the session DELETE's, so it cannot tell.)
+          // The default photographer's tokens (NULL,
+          // or a literal 'default') are never touched: it has no row to act on.
+          // Before the share-token owner migration there is no column and no
+          // owned studio row can exist yet, so the batch runs without it.
+          // Pick links are not revoked: resolveShareToken checks the owner's
+          // status, so they go dark while suspended and come back after.
+          const revokeTokens = landed => (isDefaultOwner(id) ? [] : [env.DB.prepare(
+            `UPDATE share_tokens SET revoked_at = ? WHERE kind = 'studio' AND photographer_id = ? AND revoked_at IS NULL AND ${landed}`
+          ).bind(now, id, id)]);
+          const withTokens = (writes, landed) => withoutMissingColumn(
+            () => env.DB.batch([...writes, ...revokeTokens(landed)]),
+            () => env.DB.batch(writes),
+          );
           if (action === 'reject') {
             statements = [env.DB.prepare("DELETE FROM photographers WHERE id = ? AND status = 'pending'").bind(id)];
           } else if (action === 'reset-password') {
             tempPassword = tempPhotographerPassword();
             const tempHash = await hashPhotographerPassword(tempPassword);
             // the new hash and must_change_password = 1 in one statement, every
-            // session gone in the same batch. Before the 2026-10-15 migration
-            // the flag cannot be written, and a temporary password nobody has
-            // to change is worse than none: 500, and the batch (one
-            // transaction) wrote nothing — no new hash, no session ended.
-            resetResult = await withoutMissingColumn(() => env.DB.batch([
+            // session and studio token gone in the same batch. Before the
+            // 2026-10-15 migration the flag cannot be written, and a temporary
+            // password nobody has to change is worse than none: 500, and the
+            // batch (one transaction) wrote nothing — no new hash, no session
+            // ended.
+            resetResult = await withoutMissingColumn(() => withTokens([
               env.DB.prepare('UPDATE photographers SET password_hash = ?, must_change_password = 1 WHERE id = ?').bind(tempHash, id),
               env.DB.prepare('DELETE FROM photographer_sessions WHERE photographer_id = ?').bind(id),
-            ]), () => null);
+            ], 'EXISTS (SELECT 1 FROM photographers WHERE id = ?)'), () => null);
             if (!resetResult) return done({ error: '請先執行 must_change_password migration 再重設密碼', code: 'must_change_unavailable' }, 500);
           } else {
             statements = [env.DB.prepare(
@@ -4601,7 +4767,11 @@ async function routeRequest(request, env, ctx) {
             // suspend ends every session in the same batch
             if (action === 'suspend') statements.push(env.DB.prepare('DELETE FROM photographer_sessions WHERE photographer_id = ?').bind(id));
           }
-          const [first] = resetResult ?? await env.DB.batch(statements);
+          const landedIf = {
+            reject: 'NOT EXISTS (SELECT 1 FROM photographers WHERE id = ?)',
+            suspend: "EXISTS (SELECT 1 FROM photographers WHERE id = ? AND status = 'suspended')",
+          }[action];
+          const [first] = resetResult ?? await (landedIf ? withTokens(statements, landedIf) : env.DB.batch(statements));
           if (!first.meta.changes) {
             const current = await env.DB.prepare('SELECT status FROM photographers WHERE id = ?').bind(id).first();
             if (!current) return jsonErr('Not found', 404);
@@ -5454,13 +5624,14 @@ async function routeRequest(request, env, ctx) {
       if (auth.refused) return auth.refused;
       if (!env.DB) return jsonErr('DB not configured', 500);
       const owner = shareOwnerColumn(auth.who.id);
+      const mine = shareOwnedBy('photographer_id', auth.who.id);
       const cols = 'SELECT token, kind, user_id, folders, created_at, expires_at FROM share_tokens';
       const now = new Date().toISOString();
       // before the owner column: the default's as before, anyone else refused
       const listed = await withoutMissingColumn(
         () => env.DB.prepare(
-          `${cols} WHERE kind IN ('studio', 'session') AND photographer_id IS ? AND revoked_at IS NULL AND expires_at > ? ORDER BY created_at DESC`
-        ).bind(owner, now).all(),
+          `${cols} WHERE kind IN ('studio', 'session') AND ${mine.sql} AND revoked_at IS NULL AND expires_at > ? ORDER BY created_at DESC`
+        ).bind(...mine.args, now).all(),
         () => (owner !== null ? null : env.DB.prepare(
           `${cols} WHERE kind IN ('studio', 'session') AND revoked_at IS NULL AND expires_at > ? ORDER BY created_at DESC`
         ).bind(now).all()),
@@ -5481,11 +5652,12 @@ async function routeRequest(request, env, ctx) {
       if (auth.refused) return auth.refused;
       if (!env.DB) return jsonErr('DB not configured', 500);
       const owner = shareOwnerColumn(auth.who.id);
+      const mine = shareOwnedBy('photographer_id', auth.who.id);
       const now = new Date().toISOString();
       const result = await withoutMissingColumn(
         () => env.DB.prepare(
-          "UPDATE share_tokens SET revoked_at = ? WHERE kind IN ('studio', 'session') AND photographer_id IS ? AND revoked_at IS NULL"
-        ).bind(now, owner).run(),
+          `UPDATE share_tokens SET revoked_at = ? WHERE kind IN ('studio', 'session') AND ${mine.sql} AND revoked_at IS NULL`
+        ).bind(now, ...mine.args).run(),
         () => (owner !== null ? null : env.DB.prepare(
           "UPDATE share_tokens SET revoked_at = ? WHERE kind IN ('studio', 'session') AND revoked_at IS NULL"
         ).bind(now).run()),
@@ -5498,7 +5670,8 @@ async function routeRequest(request, env, ctx) {
     // Only a token that is the caller's (batch 3): a link of a project goes by
     // that project's photographer, whatever its own row says; any other token
     // (a studio one, an album link, a client session) by its photographer_id,
-    // NULL being the default photographer's. Checked inside the UPDATE itself,
+    // NULL or 'default' being the default photographer's (shareOwnedBy).
+    // Checked inside the UPDATE itself,
     // so a project handed over mid-request is not revoked either. Anyone
     // else's is a token that does not exist: the same 404, the same statement.
     // Before the owner column: a project's link as above, and a project-less
@@ -5513,9 +5686,12 @@ async function routeRequest(request, env, ctx) {
       const theirProject = 'EXISTS (SELECT 1 FROM projects WHERE id = share_tokens.project_id AND photographer_id = ?)';
       const revokeIf = ownerless => env.DB.prepare(
         'UPDATE share_tokens SET revoked_at = ? WHERE token = ? AND revoked_at IS NULL ' +
-        `AND (CASE WHEN project_id IS NULL THEN ${ownerless} ELSE ${theirProject} END)`
-      ).bind(now, pathParts[2], owner, who.id).run();
-      const result = await withoutMissingColumn(() => revokeIf('share_tokens.photographer_id IS ?'), () => revokeIf('? IS NULL'));
+        `AND (CASE WHEN project_id IS NULL THEN ${ownerless.sql} ELSE ${theirProject} END)`
+      ).bind(now, pathParts[2], ...ownerless.args, who.id).run();
+      const result = await withoutMissingColumn(
+        () => revokeIf(shareOwnedBy('share_tokens.photographer_id', who.id)),
+        () => revokeIf({ sql: '? IS NULL', args: [owner] }),
+      );
       if (!result.meta?.changes) return jsonErr('Not found', 404);
       return jsonOk({ ok: true });
     }
@@ -7254,14 +7430,26 @@ async function routeRequest(request, env, ctx) {
     // key is logical; bucketFor puts a non-default photographer's under its
     // prefix). The reserved `_t/` namespace is refused for everyone (400),
     // checked on the key as it will be stored, after `_assets/` comes off.
+    // It is the PUT fall-through, so it claims only what can be a photo key
+    // (security review of batch 3): an empty key (`PUT /`, `/_assets/`) or one
+    // that is not valid percent-encoding is 400, and anything under `api/` —
+    // a route that does not exist, never a file — is 404; nothing written.
     if (request.method === 'PUT') {
       const auth = await requirePhotographer(request, env); // scoped to the caller (who.id)
       if (auth.refused) return auth.refused;
       const photos = bucketFor(env, auth.who.id);
-      let key = decodeURIComponent(url.pathname.slice(1));
+      const invalidKey = () => jsonOk({ error: 'Invalid key', code: 'invalid_key' }, 400);
+      let key;
+      try { key = decodeURIComponent(url.pathname.slice(1)); } catch { return invalidKey(); }
       if (key.startsWith('_assets/')) key = key.slice('_assets/'.length);
-      if (isTenantKey(key)) return jsonOk({ error: 'Invalid key', code: 'invalid_key' }, 400);
-      const contentType = request.headers.get('Content-Type') || 'image/jpeg';
+      if (key.split('/').find(Boolean) === 'api') return jsonErr('Not found', 404);
+      // nothing but slashes names no file either
+      if (!key.replace(/\//g, '') || isTenantKey(key)) return invalidKey();
+      // a photo the app uploads, by extension and type, or 415 (uploadContentType)
+      const contentType = uploadContentType(key, request.headers.get('Content-Type'));
+      if (!contentType) {
+        return jsonOk({ error: '只能上傳照片檔（JPG、PNG、WEBP、AVIF、HEIC、TIFF、GIF、BMP）', code: 'unsupported_type' }, 415);
+      }
       await photos.put(key, request.body, { httpMetadata: { contentType } });
       return jsonOk({ ok: true, key });
     }
@@ -7382,6 +7570,26 @@ async function routeRequest(request, env, ctx) {
 
         const headers = new Headers();
         object.writeHttpMetadata(headers);
+        // Never a page (security review of batch 3): no sniffing, a CSP that
+        // runs nothing if opened directly, and anything not stored as an
+        // inline image type (a legacy text/html or SVG upload, a HEIC or
+        // TIFF original) as an opaque download. On every response below:
+        // 200, 206 and 304, original, thumbnail and ?download=1.
+        // A legacy object under a key the picker lists (.jpg/.jpeg/.png/.webp/
+        // .avif — of the original, for a thumbnail) goes out as that
+        // extension's own image type: with nosniff the browser renders it as
+        // that image or not at all, and the grid keeps working.
+        if (!INLINE_IMAGE_TYPES.includes(bareType(headers.get('Content-Type')))) {
+          const listed = UPLOAD_TYPES[keyExtension(sourceKey(candidate))];
+          if (listed && INLINE_IMAGE_TYPES.includes(listed.own)) {
+            headers.set('Content-Type', listed.own);
+          } else {
+            headers.set('Content-Type', OCTET_STREAM);
+            headers.set('Content-Disposition', attachmentDisposition(key));
+          }
+        }
+        headers.set('X-Content-Type-Options', 'nosniff');
+        headers.set('Content-Security-Policy', "default-src 'none'; sandbox");
         headers.set('etag', object.httpEtag);
         headers.set('Access-Control-Allow-Origin', '*');
         headers.set('Accept-Ranges', 'bytes');

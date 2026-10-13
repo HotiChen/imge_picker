@@ -16,7 +16,8 @@ test('uploading is refused without the photographer token', async () => {
 
 test('uploading with the right token stores the object', async () => {
   const bucket = fakeBucket();
-  const res = await call(bucket, '/2026/a.jpg', { method: 'PUT', body: 'bytes', token: 'secret' },
+  // a photo type, as upload.html sends (a bare string body would be text/plain: 415)
+  const res = await call(bucket, '/2026/a.jpg', { method: 'PUT', body: 'bytes', token: 'secret', headers: { 'Content-Type': 'image/jpeg' } },
     { PHOTOGRAPHER_TOKEN: 'secret' });
   assert.equal(res.status, 200);
   assert.equal(bucket._store.get('2026/a.jpg').body, 'bytes');
