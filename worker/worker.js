@@ -554,16 +554,17 @@ async function reservePasswordAttempt(request, env, emailText) {
 const TOO_MANY_ATTEMPTS = { error: '嘗試次數太多，請 15 分鐘後再試', code: 'too_many_attempts' };
 
 // ─── Photographer invite codes (docs/multi-photographer.md, 邀請碼) ─────────
-// The operator makes a one-use 8-digit code, valid one hour, shown once; the
-// photographer registers with it and the account is active at once (no
-// review, no Turnstile). Like the co-picking codes: stored only as an HMAC
-// keyed with its own wrangler secret, PHOTOGRAPHER_INVITE_SECRET (32+
-// characters); without it, or before the 2026-10-18 migration, every invite
-// route is 500 invites_unavailable and writes nothing. Change the limits here.
+// The operator makes a one-use 8-digit code for ONE email, valid one hour,
+// shown once; the photographer registers with that email and that code and
+// the account is active at once (no review, no Turnstile). Like the
+// co-picking codes: stored only as an HMAC keyed with its own wrangler
+// secret, PHOTOGRAPHER_INVITE_SECRET (32+ characters), here over the email
+// and the code together, so a guesser needs an invited email AND its code;
+// without the secret, or before the 2026-10-18 migration, every invite route
+// is 500 invites_unavailable and writes nothing. Change the limits here.
 const PHOTOGRAPHER_INVITE_SECRET_MIN = 32;
 const PHOTOGRAPHER_INVITE_MS = 60 * 60 * 1000;
-// unspent, unrevoked, unexpired codes at once: with the guess limits below
-// this bounds the chance a guesser hits any live code
+// unspent, unrevoked, unexpired codes at once (at most one per email)
 const PHOTOGRAPHER_INVITES_LIVE_MAX = 10;
 const PHOTOGRAPHER_INVITE_NOTE_MAX = 200;
 const PHOTOGRAPHER_INVITE_LIST_MAX = 200;
@@ -574,7 +575,7 @@ function photographerInviteSecretOk(env) {
 // Whether the migration has run (every column named).
 async function photographerInvitesReady(env) {
   try {
-    await env.DB.prepare('SELECT id, code_hash, created_at, expires_at, used_at, used_by, revoked_at, note FROM photographer_invites WHERE 0').first();
+    await env.DB.prepare('SELECT id, email, code_hash, created_at, expires_at, used_at, used_by, revoked_at, note FROM photographer_invites WHERE 0').first();
     return true;
   } catch (e) {
     if (isMissingSchema(e)) return false;
@@ -582,55 +583,62 @@ async function photographerInvitesReady(env) {
   }
 }
 // What is stored for a code: HMAC-SHA256 keyed with
-// PHOTOGRAPHER_INVITE_SECRET over 'photographer-invite:' + code, hex. A
-// leaked table alone reveals no live code; the lookup compares this hash in
-// SQL, never the code, so its time says nothing about how close a guess was.
-async function photographerInviteHash(env, code) {
+// PHOTOGRAPHER_INVITE_SECRET over 'photographer-invite\n' + email + '\n' +
+// code, hex (the email in photographerEmail's normalised form, which holds
+// no newline; the code 8 digits). A leaked table alone reveals no live code,
+// and a code is bound to its email. The lookup compares this hash in SQL,
+// never the code, so its time says nothing about how close a guess was.
+async function photographerInviteHash(env, email, code) {
   const enc = new TextEncoder();
   const key = await crypto.subtle.importKey('raw', enc.encode(env.PHOTOGRAPHER_INVITE_SECRET), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
-  return bytesHex(new Uint8Array(await crypto.subtle.sign('HMAC', key, enc.encode(`photographer-invite:${code}`))));
+  return bytesHex(new Uint8Array(await crypto.subtle.sign('HMAC', key, enc.encode(`photographer-invite\n${email}\n${code}`))));
 }
 // Refused registrations with a code (wrong, used, expired, revoked,
-// malformed, or an email already taken) per window, per network (IPv6 by
-// /64) and for everyone together, then 429 before the code is looked at.
-// Worst case a guesser gets ALL guesses per window against at most
-// PHOTOGRAPHER_INVITES_LIVE_MAX live codes in 10^8: 240 an hour × 10 / 10^8,
-// ≈ 1 in 40,000 per hour of a full live set. The price: anyone can hold
-// invite registration shut for everyone by sending 60 bad codes per window.
+// malformed, another email than the invited one, or an email already taken)
+// per window, per network (IPv6 by /64) and per email, then 429 before the
+// code is looked at. A guesser must know an invited email, and each email
+// gets 20 guesses an hour at its one code in 10^8, from however many
+// networks (at most PHOTOGRAPHER_INVITES_LIVE_MAX emails have a live code).
+// No count shared by everyone, not even a high circuit breaker: any shared
+// count is one an attacker with enough IPv6 /64s can fill to shut invite
+// registration for all. What is left: someone who knows an invited email can
+// hold that one email's registration shut for a window by sending bad codes.
 const PHOTOGRAPHER_INVITE_WINDOW_MS = 15 * 60 * 1000;
 const PHOTOGRAPHER_INVITE_FAILURES_NETWORK = 5;
-const PHOTOGRAPHER_INVITE_FAILURES_ALL = 60;
+const PHOTOGRAPHER_INVITE_FAILURES_EMAIL = 5;
 const INVALID_INVITE = { error: '邀請碼不正確或已失效，或此 Email 無法使用', code: 'invalid_invite' };
 // The login throttle's pattern, in its table (photographer_login_failures)
 // under keys of its own, so invite guesses and password guesses never share a
 // count: this attempt reserves one row per key in one conditional insert, so
-// parallel guesses cannot pass either cap; a registration that lands deletes
-// its own rows in its batch, so what stays are refusals. Keys are SHA-256
-// peppered with the invite secret, never the address. The attempt id, or
-// null at either cap.
-async function reserveInviteAttempt(request, env) {
+// parallel guesses cannot pass any cap; a registration that lands deletes its
+// own rows in its batch, so what stays are refusals. Keys are SHA-256 of a
+// prefix, the invite secret and the value, never the bare address or email.
+// `email`: the normalised email. The attempt id, or null at any cap.
+async function reserveInviteAttempt(request, env, email) {
   const now = Date.now();
   const pepper = env.PHOTOGRAPHER_INVITE_SECRET;
   const netKey = await sha256Hex(`photographer-invite-ip:${pepper}:${clientNetwork(request)}`);
-  const allKey = await sha256Hex(`photographer-invite-all:${pepper}`);
+  const emailKey = await sha256Hex(`photographer-invite-email:${pepper}:${email}`);
   const attempt = randomHex(16);
   const since = new Date(now - PHOTOGRAPHER_INVITE_WINDOW_MS).toISOString();
+  const count = 'SELECT COUNT(*) FROM photographer_login_failures WHERE key_hash = ? AND created_at > ?';
   await env.DB.prepare('DELETE FROM photographer_login_failures WHERE created_at < ?').bind(new Date(now - 24 * 60 * 60 * 1000).toISOString()).run();
   const reserved = await env.DB.prepare(
     `INSERT INTO photographer_login_failures (key_hash, attempt, created_at)
      SELECT k, ?, ? FROM (SELECT ? AS k UNION ALL SELECT ?)
-      WHERE (SELECT COUNT(*) FROM photographer_login_failures WHERE key_hash = ? AND created_at > ?) < ?
-        AND (SELECT COUNT(*) FROM photographer_login_failures WHERE key_hash = ? AND created_at > ?) < ?`
-  ).bind(attempt, new Date(now).toISOString(), netKey, allKey, netKey, since, PHOTOGRAPHER_INVITE_FAILURES_NETWORK, allKey, since, PHOTOGRAPHER_INVITE_FAILURES_ALL).run();
+      WHERE (${count}) < ? AND (${count}) < ?`
+  ).bind(attempt, new Date(now).toISOString(), netKey, emailKey,
+    netKey, since, PHOTOGRAPHER_INVITE_FAILURES_NETWORK, emailKey, since, PHOTOGRAPHER_INVITE_FAILURES_EMAIL).run();
   return reserved.meta.changes ? attempt : null;
 }
-// An invite as the operator sees it (never code_hash), with who used it.
-const PHOTOGRAPHER_INVITE_VIEW_SQL = 'SELECT i.id, i.note, i.created_at, i.expires_at, i.used_at, i.used_by, i.revoked_at, ' +
+// An invite as the operator sees it (never code_hash): the invited email,
+// and who used it.
+const PHOTOGRAPHER_INVITE_VIEW_SQL = 'SELECT i.id, i.email, i.note, i.created_at, i.expires_at, i.used_at, i.used_by, i.revoked_at, ' +
   'p.email AS used_by_email, p.display_name AS used_by_name FROM photographer_invites i LEFT JOIN photographers p ON p.id = i.used_by';
 function photographerInviteView(row, nowIso) {
   const state = row.used_at ? 'used' : row.revoked_at ? 'revoked' : row.expires_at > nowIso ? 'live' : 'expired';
-  const { id, note, created_at, expires_at, used_at, used_by, revoked_at, used_by_email, used_by_name } = row;
-  return { id, note, state, created_at, expires_at, used_at, used_by, used_by_email, used_by_name, revoked_at };
+  const { id, email, note, created_at, expires_at, used_at, used_by, revoked_at, used_by_email, used_by_name } = row;
+  return { id, email, note, state, created_at, expires_at, used_at, used_by, used_by_email, used_by_name, revoked_at };
 }
 
 // ─── Client share tokens ─────────────────────────────────────────────────────
@@ -3740,9 +3748,11 @@ async function routeRequest(request, env, ctx) {
         // display_name, studio_note?, invite_code} → 201 {token, photographer,
         // must_change_password} (login's answer). Fields (400, as /register),
         // the guess throttle (429, before the code is looked at), then the
-        // code. Every refusal after the throttle — a wrong, used, expired,
-        // revoked or malformed code, or an email that already has an account
-        // — is the one 400 invalid_invite. One batch: the code is spent (live,
+        // code, which is looked up by its HMAC over this email and the code,
+        // so a code made for another email is simply not found. Every refusal
+        // after the throttle — a wrong, used, expired, revoked or malformed
+        // code, another email than the invited one, or an email that already
+        // has an account — is the one 400 invalid_invite. One batch: the code is spent (live,
         // and only if the email is free), and only its spender's account
         // (active, approved now), session and release of its throttle rows
         // land after it; so of two racing registrations exactly one makes an
@@ -3750,14 +3760,14 @@ async function routeRequest(request, env, ctx) {
         if (route === 'register-invite') {
           const fields = photographerSignupFields(body);
           if (fields.refused) return reply(fields.refused, 400);
-          const attempt = await reserveInviteAttempt(request, env);
+          const attempt = await reserveInviteAttempt(request, env, fields.email);
           if (!attempt) return reply(TOO_MANY_ATTEMPTS, 429);
           const invalid = () => reply(INVALID_INVITE, 400);
           const code = body.invite_code;
           if (typeof code !== 'string' || !/^\d{8}$/.test(code)) return invalid();
           const found = await env.DB.prepare(
             'SELECT id FROM photographer_invites WHERE code_hash = ? AND used_at IS NULL AND revoked_at IS NULL AND expires_at > ? ORDER BY created_at, rowid LIMIT 1'
-          ).bind(await photographerInviteHash(env, code), new Date().toISOString()).first();
+          ).bind(await photographerInviteHash(env, fields.email, code), new Date().toISOString()).first();
           if (!found) return invalid();
           const id = randomHex(8);
           const passwordHash = await hashPhotographerPassword(fields.password);
@@ -4879,6 +4889,9 @@ async function routeRequest(request, env, ctx) {
               try { body = JSON.parse(new TextDecoder().decode(bytes)); } catch { return jsonErr('Invalid JSON'); }
             }
             if (!isPlainObject(body)) return done({ error: 'Invalid body', code: 'invalid_body' }, 400);
+            // the invitee: normalised exactly as registration normalises it
+            const email = photographerEmail(body.email);
+            if (!email) return done({ error: 'Email 格式不正確', code: 'invalid_email' }, 400);
             const rawNote = body.note ?? '';
             if (typeof rawNote !== 'string' || overChars(rawNote.trim(), PHOTOGRAPHER_INVITE_NOTE_MAX) || ACCOUNT_CONTROL.test(rawNote)) {
               return done({ error: `備註最多 ${PHOTOGRAPHER_INVITE_NOTE_MAX} 字，且只能一行`, code: 'invalid_note' }, 400);
@@ -4887,14 +4900,27 @@ async function routeRequest(request, env, ctx) {
             const code = pickInviteCode();
             const id = randomHex(8);
             const expiresAt = new Date(Date.parse(now) + PHOTOGRAPHER_INVITE_MS).toISOString();
-            const made = await env.DB.prepare(
-              'INSERT INTO photographer_invites (id, code_hash, created_at, expires_at, note) SELECT ?1, ?2, ?3, ?4, ?5 ' +
-              'WHERE (SELECT COUNT(*) FROM photographer_invites WHERE used_at IS NULL AND revoked_at IS NULL AND expires_at > ?3) < ?6'
-            ).bind(id, await photographerInviteHash(env, code), now, expiresAt, note, PHOTOGRAPHER_INVITES_LIVE_MAX).run();
+            // One batch: this email's live code (if any) is revoked — one live
+            // code per email — and the new one inserted, both only while the
+            // email has no account; the insert also only under the live cap
+            // (counted after the revoke, so replacing never trips it).
+            const free = 'NOT EXISTS (SELECT 1 FROM photographers WHERE email = ?2)';
+            const [replaced, made] = await env.DB.batch([
+              env.DB.prepare(
+                `UPDATE photographer_invites SET revoked_at = ?1 WHERE email = ?2 AND used_at IS NULL AND revoked_at IS NULL AND expires_at > ?1 AND ${free}`
+              ).bind(now, email),
+              env.DB.prepare(
+                'INSERT INTO photographer_invites (id, email, code_hash, created_at, expires_at, note) SELECT ?1, ?2, ?3, ?4, ?5, ?6 ' +
+                `WHERE (SELECT COUNT(*) FROM photographer_invites WHERE used_at IS NULL AND revoked_at IS NULL AND expires_at > ?4) < ?7 AND ${free}`
+              ).bind(id, email, await photographerInviteHash(env, email, code), now, expiresAt, note, PHOTOGRAPHER_INVITES_LIVE_MAX),
+            ]);
             if (!made.meta.changes) {
+              if (await env.DB.prepare('SELECT 1 FROM photographers WHERE email = ?').bind(email).first()) {
+                return done({ error: '這個 Email 已經有帳號', code: 'email_taken' }, 409);
+              }
               return done({ error: `尚未使用的邀請碼最多 ${PHOTOGRAPHER_INVITES_LIVE_MAX} 組，請先撤銷不用的`, code: 'invite_limit', max: PHOTOGRAPHER_INVITES_LIVE_MAX }, 409);
             }
-            return done({ id, code, expires_at: expiresAt, note }, 201);
+            return done({ id, email, code, expires_at: expiresAt, note, replaced: replaced.meta.changes }, 201);
           }
           await env.DB.prepare('UPDATE photographer_invites SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL AND used_at IS NULL').bind(now, id).run();
           const row = await env.DB.prepare(`${PHOTOGRAPHER_INVITE_VIEW_SQL} WHERE i.id = ?`).bind(id).first();

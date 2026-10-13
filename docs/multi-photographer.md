@@ -113,17 +113,21 @@ CREATE TABLE photographer_sessions (
 Tim 的決定：除了「自助註冊 → 待審核」，operator 可以發**邀請碼**；用有效邀請碼註冊的帳號**直接 active**（不審核、不需 Turnstile、
 不需 `PHOTOGRAPHER_SIGNUP`）。沒有邀請碼的自助註冊（`/register`、pending、Turnstile）完全不變。做法照抄協作者邀請碼
 （`docs/co-picking.md`）：8 位數字、1 小時、一次性、可撤銷、只存 HMAC、限速。
+**審查後改成綁 email**（獨立審查：原本的全體上限讓任何人每 15 分鐘送 60 個錯碼就能讓所有人都無法註冊）：每組碼只給一個 email，
+猜的人必須同時知道受邀的 email 和碼，所以限速改成「每網路 + 每 email」，拿掉全體上限。
 
-- **Migration** `worker/migrations/2026-10-18-photographer-invites.sql`（3 句：一張新表 `photographer_invites` + 兩個 index，可重跑）。
-  欄位：`id`、`code_hash`、`created_at`、`expires_at`、`used_at`、`used_by`（建立的 `photographers.id`）、`revoked_at`、`note`。
+- **Migration** `worker/migrations/2026-10-18-photographer-invites.sql`（4 句：一張新表 `photographer_invites` + 三個 index，可重跑；Tim 還沒跑過，審查後原地修改）。
+  欄位：`id`、`email`（受邀者，正規化後的小寫）、`code_hash`、`created_at`、`expires_at`、`used_at`、`used_by`（建立的 `photographers.id`）、`revoked_at`、`note`。
   需要先跑過 `2026-10-11-photographers.sql`（限速借用它的 `photographer_login_failures`）。
-- **Secret** `PHOTOGRAPHER_INVITE_SECRET`（至少 32 字元，和 `PICK_INVITE_SECRET` 分開）。`code_hash` = HMAC-SHA256(secret, `'photographer-invite:' + code`)；
-  邀請碼本身只在建立時回一次，D1、log、清單裡都沒有。換 secret = 所有未用的碼失效。
+- **Secret** `PHOTOGRAPHER_INVITE_SECRET`（至少 32 字元，和 `PICK_INVITE_SECRET` 分開）。`code_hash` = HMAC-SHA256(secret, `'photographer-invite' + LF + email + LF + code`)
+  （email 是 `photographerEmail` 正規化後的，不含換行）；邀請碼本身只在建立時回一次，D1、log、清單裡都沒有。換 secret = 所有未用的碼失效。
 - **operator 路由**（`OPERATOR_TOKEN`，其他一律 401）：
-  - `POST /api/operator/photographer-invites {note?}` → 201 `{id, code, expires_at, note}`。備註選填，≤ 200 字、單行。
-    同時最多 **10** 組「未用、未撤銷、未過期」的碼（條件式 INSERT，並行也過不了），超過 409 `invite_limit`。
-  - `GET /api/operator/photographer-invites` → `{invites:[{id, note, state, created_at, expires_at, used_at, used_by, used_by_email, used_by_name, revoked_at}]}`，
-    新的在前，最多 200 筆；`state` = `live | used | revoked | expired`。**沒有碼、沒有 hash**。
+  - `POST /api/operator/photographer-invites {email, note?}` → 201 `{id, email, code, expires_at, note, replaced}`。`email` 必填，和註冊同樣的規則正規化
+    （不合格 400 `invalid_email`）；這個 email **已經有帳號**（任何狀態、大小寫不同也算）→ 409 `email_taken`、什麼都不寫。
+    **每個 email 同時只有一組活碼**：再發一次會在同一個 batch 撤銷舊的活碼（`replaced: 1`；用過、撤銷、過期的不動），所以 Tim 重發不必先撤銷；並行重發也只留一組。
+    備註選填，≤ 200 字、單行。同時最多 **10** 組「未用、未撤銷、未過期」的碼（條件式 INSERT，算在撤銷舊碼之後，並行也過不了），超過 409 `invite_limit`。
+  - `GET /api/operator/photographer-invites` → `{invites:[{id, email, note, state, created_at, expires_at, used_at, used_by, used_by_email, used_by_name, revoked_at}]}`，
+    新的在前，最多 200 筆；`state` = `live | used | revoked | expired`；`email` 是受邀的 email（只有 operator 看得到）。**沒有碼、沒有 hash**。
   - `POST /api/operator/photographer-invites/:id/revoke` → 200 `{ok, invite}`；重按一樣 200、`revoked_at` 不變；已用過的碼不動（仍是 used）；不存在 404。
   - 這三條**不受** `PHOTOGRAPHER_ROUTES` 影響（只是 operator 管碼，不給任何攝影師能力）。
   - `GET /api/operator/photographers` 每列多 `created_via`（`invite` / `signup`）與 `invite_id`；migration 前全部是 `signup`、`null`。
@@ -135,16 +139,20 @@ Tim 的決定：除了「自助註冊 → 待審核」，operator 可以發**邀
      開關關著時沒有意義；碼不會被用掉。
   2. 沒有 secret → 500 `invites_unavailable`；migration 前 → 500 `invites_unavailable`。都什麼都不寫（限速也不記）。
   3. 欄位（同 `/register`：`invalid_email` / `invalid_password` / `invalid_display_name` / `invalid_studio_note`，400，不記次數）。
-  4. **限速**（在看碼之前，每次先預留、成功才刪掉）：同一網路（IPv4，或 IPv6 的 /64）15 分鐘 **5** 次、全體 15 分鐘 **60** 次失敗就 429 `too_many_attempts`。
-     存在 `photographer_login_failures`，key 是加了邀請 secret 的 SHA-256，和登入的計數**互不相干**。格式不對、email 已被用也算失敗。
-     猜中機率上限：每小時最多 240 次 × 最多 10 組活碼 ÷ 10^8 ≈ 每小時 1/40,000（活碼全滿時）。**代價**：任何人每 15 分鐘送 60 個錯碼，就能讓所有人暫時無法用邀請碼註冊（等 15 分鐘或 Tim 改用審核制）。
-  5. 碼：錯的、用過的、過期的、撤銷的、格式不對的、**或 email 已經有帳號**（任何狀態、大小寫／空白不同也算）→ **同一個** 400
-     `{error:'邀請碼不正確或已失效，或此 Email 無法使用', code:'invalid_invite'}`。訊息刻意涵蓋兩種情況：沒有碼的人分不出差別；
-     **剩下的洩漏**：手上有有效碼的人，可以先試某個 email（得到 400、碼沒用掉），再用別的 email 成功，推知前一個 email 已註冊。只有拿到 Tim 發的碼才做得到，且每次都算限速。
+  4. **限速**（在看碼之前，每次先預留、成功才刪掉）：同一網路（IPv4，或 IPv6 的 /64）15 分鐘 **5** 次、同一 email（正規化後）15 分鐘 **5** 次失敗就 429 `too_many_attempts`。
+     **沒有全體共用的計數，連高門檻的斷路器也沒有**：任何共用計數，攻擊者用夠多的 IPv6 /64（一台 VPS 常有 /56 = 256 個、/48 = 65536 個）都能填滿，讓所有人無法註冊。
+     存在 `photographer_login_failures`，key 是「前綴 + 邀請 secret + 值」的 SHA-256（不是 IP / email 的單純雜湊），和登入的計數**互不相干**。
+     格式不對、email 不對、email 已被用也算失敗。
+     猜中機率：猜的人必須知道受邀的 email；每個 email 每小時最多 20 次 ÷ 10^8（不管換多少網路），同時最多 10 個 email 有活碼。
+     **剩下的代價**：知道某個受邀 email 的人，可以送錯碼讓**那個 email** 暫時（15 分鐘）無法註冊；其他受邀者不受影響。Tim 可以等 15 分鐘再請對方註冊。
+  5. 碼：用「這個 email + 碼」的 HMAC 去查，所以別的 email 的碼查不到。錯的、用過的、過期的、撤銷的、格式不對的、**email 不是受邀的那個**、
+     **或 email 已經有帳號**（邀請發出後才出現的帳號；任何狀態、大小寫／空白不同也算）→ **同一個** 400
+     `{error:'邀請碼不正確或已失效，或此 Email 無法使用', code:'invalid_invite'}`。訊息刻意涵蓋這些情況。
+     **剩下的洩漏**：只有受邀者本人（手上有碼、也知道自己的 email）才能看出「我的 email 已經有帳號」，而 operator 發碼時就已經擋掉有帳號的 email。
   6. 一個 batch（D1 = 一個 transaction）：先「用掉碼」（`UPDATE … WHERE 未用 AND 未撤銷 AND 未過期 AND email 不存在`），之後的帳號 INSERT（`active`、
      `approved_at = created_at`、PBKDF2、`must_change_password` 不寫 → 預設 0）、session INSERT、釋放限速列都以「這個碼的 `used_by` 是我這個新 id」為條件。
-     所以兩個人同時用同一個碼只會建立一個帳號；email 衝突時碼不會被用掉、既有帳號（含 suspended、id 為 `default` 的列）完全不變。
-     8 位數字久了會撞號：查碼時排除用過／撤銷／過期的列並取最早的活碼，所以舊的同號碼不會擋住新的。
+     所以兩個人同時用同一個碼只會建立一個帳號；email 衝突時碼不會被用掉、既有帳號（含 suspended、id 為 `default` 的列）完全不變；
+     若衝突的是 pending 申請、被 reject 後，同一組碼還能用。查碼時排除用過／撤銷／過期的列並取最早的活碼，所以同 email 同碼的舊列不會擋住新的。
 - **must_change_password migration 還沒跑時（prod 現況）**：註冊照常 201，回應的 `must_change_password` 是 `null`（和登入一致）。但守門會把
   `null` 當「未知」：這個 session 除了 `/me`、`/logout` 以外都 500 `password_change_unavailable`。所以**開放邀請之前要先跑 2026-10-15 的 migration**。
 - 停用：邀請建立的帳號就是普通 active 帳號，operator 的停用／重設密碼照舊（立即踢掉 session）。

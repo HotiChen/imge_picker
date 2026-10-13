@@ -1,10 +1,12 @@
 // Photographer invite codes (docs/multi-photographer.md, 邀請碼): the
 // photographer_invites table, from its hand-run migration, and the
 // operator's routes — POST / GET /api/operator/photographer-invites and
-// POST …/:id/revoke. A code is 8 digits, one hour, shown once at creation
-// and stored only as an HMAC keyed with PHOTOGRAPHER_INVITE_SECRET; without
-// that secret (32+ characters) or before the migration every invite route is
-// 500 invites_unavailable and writes nothing.
+// POST …/:id/revoke. A code is for one email (required; none that already
+// has an account; a new code for the same email replaces its live one), 8
+// digits, one hour, shown once at creation and stored only as an HMAC over
+// the email and the code keyed with PHOTOGRAPHER_INVITE_SECRET; without that
+// secret (32+ characters) or before the migration every invite route is 500
+// invites_unavailable and writes nothing.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -29,7 +31,9 @@ function withoutInvitesTable() {
 }
 
 const op = (env, method, path, body, token = OP) => call(env, path, { method, token: token ?? undefined, body });
-const createInvite = (env, body = {}, token = OP) => op(env, 'POST', '/api/operator/photographer-invites', body, token);
+// a fresh invitee each time unless the body names one
+let seq = 0;
+const createInvite = (env, body = {}, token = OP) => op(env, 'POST', '/api/operator/photographer-invites', { email: `invitee${++seq}@example.com`, ...body }, token);
 const listInvites = (env, token = OP) => op(env, 'GET', '/api/operator/photographer-invites', undefined, token);
 const revokeInvite = (env, id, token = OP) => op(env, 'POST', `/api/operator/photographer-invites/${id}/revoke`, undefined, token);
 async function newCode(env, body = {}) {
@@ -52,6 +56,7 @@ test('migration: one CREATE TABLE IF NOT EXISTS and its indexes, one statement p
   assert.deepEqual(statements.map(s => s.split('(')[0].trim()), [
     'CREATE TABLE IF NOT EXISTS photographer_invites',
     'CREATE INDEX IF NOT EXISTS idx_photographer_invites_code ON photographer_invites',
+    'CREATE INDEX IF NOT EXISTS idx_photographer_invites_email ON photographer_invites',
     'CREATE INDEX IF NOT EXISTS idx_photographer_invites_used_by ON photographer_invites',
   ]);
   for (const s of statements) assert.ok(s.trim().endsWith(';'), s);
@@ -62,10 +67,10 @@ test('migration: one CREATE TABLE IF NOT EXISTS and its indexes, one statement p
   const fresh = setup().DB._db;
   const shape = db => db.prepare('PRAGMA table_info(photographer_invites)').all().map(c => [c.name, c.type, c.notnull, c.pk]);
   assert.deepEqual(shape(migrated), shape(fresh));
-  assert.deepEqual(shape(fresh).map(c => c[0]), ['id', 'code_hash', 'created_at', 'expires_at', 'used_at', 'used_by', 'revoked_at', 'note']);
+  assert.deepEqual(shape(fresh).map(c => c[0]), ['id', 'email', 'code_hash', 'created_at', 'expires_at', 'used_at', 'used_by', 'revoked_at', 'note']);
   const idx = db => db.prepare("SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name = 'photographer_invites' AND sql IS NOT NULL ORDER BY name").all().map(r => [r.name, r.sql]);
   assert.deepEqual(idx(migrated), idx(fresh));
-  assert.equal(idx(fresh).length, 2);
+  assert.equal(idx(fresh).length, 3);
   assert.match(SCHEMA, /2026-10-18-photographer-invites\.sql/, 'schema.sql names the hand-run migration');
 });
 
@@ -88,7 +93,7 @@ test('operator invite routes: only the operator token; the photographer token, a
 test('operator invite routes: no PHOTOGRAPHER_INVITE_SECRET (or one under 32 characters) is 500 invites_unavailable on every route, nothing written', async () => {
   for (const secret of [undefined, '', 'x'.repeat(31), 12345678901234567890123456789012345]) {
     const env = envOn({ PHOTOGRAPHER_INVITE_SECRET: secret });
-    env.DB._db.prepare("INSERT INTO photographer_invites (id, code_hash, created_at, expires_at) VALUES ('i1', 'h', ?, ?)").run(past(), new Date(Date.now() + 3600000).toISOString());
+    env.DB._db.prepare("INSERT INTO photographer_invites (id, email, code_hash, created_at, expires_at) VALUES ('i1', 'i1@example.com', 'h', ?, ?)").run(past(), new Date(Date.now() + 3600000).toISOString());
     const before = snapshot(env);
     for (const res of [await createInvite(env), await listInvites(env), await revokeInvite(env, 'i1')]) {
       assert.equal(res.status, 500, String(secret));
@@ -143,21 +148,27 @@ test('operator invite routes: wrong method 405, other paths 404, nothing written
 
 // ─── operator: create ──────────────────────────────────────────────────────
 
-test('create: 201 {id, code, expires_at, note}; the code is 8 digits, valid one hour, stored only as its HMAC (never in plain text), no-store', async () => {
+test('create: 201 {id, email, code, expires_at, note, replaced}; the code is 8 digits, valid one hour, stored only as an HMAC over the email and the code (never in plain text), no-store', async () => {
   const env = envOn();
   const t0 = Date.now();
-  const res = await createInvite(env, { note: '  給 王小明 ' });
+  const res = await createInvite(env, { email: '  Ming@Example.COM ', note: '  給 王小明 ' });
   assert.equal(res.status, 201);
   assert.equal(res.headers.get('Cache-Control'), 'private, no-store');
   const body = await res.json();
-  assert.deepEqual(Object.keys(body).sort(), ['code', 'expires_at', 'id', 'note']);
+  assert.deepEqual(Object.keys(body).sort(), ['code', 'email', 'expires_at', 'id', 'note', 'replaced']);
+  assert.equal(body.email, 'ming@example.com', 'normalised as registration normalises it');
+  assert.equal(body.replaced, 0);
   assert.match(body.code, /^\d{8}$/);
   assert.equal(body.note, '給 王小明');
   const life = Date.parse(body.expires_at) - t0;
   assert.ok(life >= 3600000 - 50 && life <= 3600000 + 2000, String(life));
   const [row] = invites(env);
   assert.equal(row.id, body.id);
-  assert.equal(row.code_hash, await hmacHex(INVITE_KEY, `photographer-invite:${body.code}`));
+  assert.equal(row.email, 'ming@example.com');
+  assert.equal(row.code_hash, await hmacHex(INVITE_KEY, `photographer-invite\nming@example.com\n${body.code}`));
+  // bound to the email: the code alone, or with another email, is another hash
+  assert.notEqual(row.code_hash, await hmacHex(INVITE_KEY, `photographer-invite\nother@example.com\n${body.code}`));
+  assert.notEqual(row.code_hash, await hmacHex(INVITE_KEY, `photographer-invite:${body.code}`));
   assert.equal(row.expires_at, body.expires_at);
   assert.equal(row.note, '給 王小明');
   assert.equal(row.used_at, null);
@@ -165,14 +176,62 @@ test('create: 201 {id, code, expires_at, note}; the code is 8 digits, valid one 
   assert.equal(row.revoked_at, null);
   assert.ok(!snapshot(env).includes(body.code), 'the code is nowhere in D1');
   // a different secret gives a different hash: the table alone opens nothing
-  assert.notEqual(row.code_hash, await hmacHex('another-secret-0123456789abcdefghijk', `photographer-invite:${body.code}`));
+  assert.notEqual(row.code_hash, await hmacHex('another-secret-0123456789abcdefghijk', `photographer-invite\nming@example.com\n${body.code}`));
 });
 
-test('create: no body, an empty object or a blank note is note null; a bad note is 400 invalid_note and writes nothing', async () => {
+test('create: the email is required and checked as registration checks it (400 invalid_email, nothing written)', async () => {
   const env = envOn();
+  const before = snapshot(env);
   const bare = await call(env, '/api/operator/photographer-invites', { method: 'POST', token: OP });
-  assert.equal(bare.status, 201);
-  assert.equal((await bare.json()).note, null);
+  assert.equal(bare.status, 400);
+  assert.equal((await bare.json()).code, 'invalid_email');
+  for (const email of [undefined, null, '', 'not-an-email', 'ａnn@example.com', 'a"b@example.com', 42, ['a@example.com'], 'x'.repeat(250) + '@e.com']) {
+    const res = await call(env, '/api/operator/photographer-invites', { method: 'POST', token: OP, body: email === undefined ? {} : { email } });
+    assert.equal(res.status, 400, JSON.stringify(email));
+    assert.deepEqual(await res.json(), { error: 'Email 格式不正確', code: 'invalid_email' }, JSON.stringify(email));
+  }
+  assert.equal(snapshot(env), before);
+});
+
+test('create: an email that already has an account (any status, any spelling) is 409 email_taken, nothing written', async () => {
+  const env = envOn();
+  // a live code made before the account appeared: a refused re-create does not revoke it either
+  await newCode(env, { email: 'active@example.com' });
+  for (const status of ['active', 'pending', 'suspended']) await seedPhotographer(env, { email: `${status}@example.com`, status });
+  const before = snapshot(env);
+  for (const email of ['active@example.com', 'PENDING@example.com', ' suspended@Example.com ']) {
+    const res = await createInvite(env, { email });
+    assert.equal(res.status, 409, email);
+    assert.deepEqual(await res.json(), { error: '這個 Email 已經有帳號', code: 'email_taken' });
+  }
+  assert.equal(snapshot(env), before);
+});
+
+test('create: one live code per email — a new one revokes the live one (replaced: 1); used, revoked and expired ones stay as they are', async () => {
+  const env = envOn();
+  const first = await newCode(env, { email: 'ming@example.com' });
+  const second = await newCode(env, { email: 'MING@example.com' });
+  assert.equal(second.replaced, 1);
+  assert.ok(one(env, 'SELECT revoked_at FROM photographer_invites WHERE id = ?', first.id).revoked_at);
+  assert.equal(one(env, 'SELECT revoked_at FROM photographer_invites WHERE id = ?', second.id).revoked_at, null);
+  const live = () => rows(env, "SELECT id FROM photographer_invites WHERE email = 'ming@example.com' AND used_at IS NULL AND revoked_at IS NULL AND expires_at > ?", new Date().toISOString()).map(r => r.id);
+  assert.deepEqual(live(), [second.id]);
+  // an expired one is not "replaced" (nothing to revoke), and keeps revoked_at NULL
+  setInvite(env, second.id, 'expires_at', past());
+  const third = await newCode(env, { email: 'ming@example.com' });
+  assert.equal(third.replaced, 0);
+  assert.equal(one(env, 'SELECT revoked_at FROM photographer_invites WHERE id = ?', second.id).revoked_at, null);
+  // another email is not touched
+  const other = await newCode(env, { email: 'other@example.com' });
+  await newCode(env, { email: 'ming@example.com' });
+  assert.equal(one(env, 'SELECT revoked_at FROM photographer_invites WHERE id = ?', other.id).revoked_at, null);
+  // parallel creates for one email leave exactly one live code
+  await Promise.all(Array.from({ length: 5 }, () => createInvite(env, { email: 'race@example.com' })));
+  assert.equal(rows(env, "SELECT id FROM photographer_invites WHERE email = 'race@example.com' AND revoked_at IS NULL").length, 1);
+});
+
+test('create: an empty object or a blank note is note null; a bad note is 400 invalid_note and writes nothing', async () => {
+  const env = envOn();
   assert.equal((await newCode(env, {})).note, null);
   assert.equal((await newCode(env, { note: '   ' })).note, null);
   assert.equal((await newCode(env, { note: null })).note, null);
@@ -207,6 +266,10 @@ test('create: at most 10 live codes; an expired, revoked or used one frees its p
   setInvite(env, made[2].id, 'used_at', past());
   await newCode(env);
   assert.equal((await createInvite(env)).status, 409);
+  // a new code for an email that has a live one replaces it, so it fits under the cap
+  const made10 = rows(env, 'SELECT email FROM photographer_invites WHERE used_at IS NULL AND revoked_at IS NULL AND expires_at > ? ORDER BY rowid DESC LIMIT 1', new Date().toISOString())[0].email;
+  const again = await newCode(env, { email: made10 });
+  assert.equal(again.replaced, 1);
 });
 
 test('create: parallel creates never pass the cap of 10', async () => {
@@ -242,8 +305,10 @@ test('list: newest first, each with its state and who used it; never the code or
   const { invites: list } = JSON.parse(text);
   assert.deepEqual(list.map(i => i.note), ['D', 'C', 'B', 'A']);
   for (const i of list) {
-    assert.deepEqual(Object.keys(i).sort(), ['created_at', 'expires_at', 'id', 'note', 'revoked_at', 'state', 'used_at', 'used_by', 'used_by_email', 'used_by_name']);
+    assert.deepEqual(Object.keys(i).sort(), ['created_at', 'email', 'expires_at', 'id', 'note', 'revoked_at', 'state', 'used_at', 'used_by', 'used_by_email', 'used_by_name']);
   }
+  // the invited email (operator only)
+  assert.deepEqual(list.map(i => i.email), [d, c, b, a].map(m => m.email));
   const by = Object.fromEntries(list.map(i => [i.note, i]));
   assert.equal(by.D.state, 'live');
   assert.equal(by.C.state, 'expired');
@@ -257,8 +322,8 @@ test('list: newest first, each with its state and who used it; never the code or
 test('list: an empty table is {invites: []}; at most 200 rows', async () => {
   const env = envOn();
   assert.deepEqual(await (await listInvites(env)).json(), { invites: [] });
-  const ins = env.DB._db.prepare('INSERT INTO photographer_invites (id, code_hash, created_at, expires_at, revoked_at) VALUES (?, ?, ?, ?, ?)');
-  for (let i = 0; i < 205; i++) ins.run(`i${i}`, `h${i}`, new Date(Date.now() - i * 1000).toISOString(), past(), past());
+  const ins = env.DB._db.prepare('INSERT INTO photographer_invites (id, email, code_hash, created_at, expires_at, revoked_at) VALUES (?, ?, ?, ?, ?, ?)');
+  for (let i = 0; i < 205; i++) ins.run(`i${i}`, `i${i}@example.com`, `h${i}`, new Date(Date.now() - i * 1000).toISOString(), past(), past());
   const { invites: list } = await (await listInvites(env)).json();
   assert.equal(list.length, 200);
   assert.equal(list[0].id, 'i0');

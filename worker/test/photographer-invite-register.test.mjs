@@ -1,19 +1,21 @@
 // Registering with a photographer invite code (docs/multi-photographer.md,
 // 邀請碼): POST /api/photographer/register-invite {email, password,
-// display_name, studio_note?, invite_code}. A live code creates an ACTIVE
-// account at once and spends the code in the same D1 batch (no review, no
-// Turnstile, PHOTOGRAPHER_SIGNUP not needed), answering a session like login
-// does. Every bad code — wrong, used, expired, revoked, malformed — and an
-// email that already has an account get one identical 400, and the code is
+// display_name, studio_note?, invite_code}. A live code, with the email it
+// was made for, creates an ACTIVE account at once and spends the code in the
+// same D1 batch (no review, no Turnstile, PHOTOGRAPHER_SIGNUP not needed),
+// answering a session like login does. Every bad code — wrong, used,
+// expired, revoked, malformed, or another email than the invited one — and
+// an email that already has an account get one identical 400, and the code is
 // spent only when the account lands. Guesses are throttled per network and
-// for everyone together before the code is looked at. Closed (403) unless
+// per email before the code is looked at (no count shared by everyone).
+// Closed (403) unless
 // PHOTOGRAPHER_ROUTES is exactly "on"; no secret or no migration is 500
 // invites_unavailable. The open sign-up (/register) is untouched.
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fakeDB } from './fakes.mjs';
-import { SECRET, setup, call, one, rows } from './pick-helpers.mjs';
+import { SECRET, setup, call, one, rows, sha256Hex } from './pick-helpers.mjs';
 import { seedPhotographer, snapshot } from './tenant-helpers.mjs';
 
 const OP = 'operator-secret';
@@ -35,7 +37,7 @@ function withoutMustChange(schema = SCHEMA) {
 }
 
 async function newCode(env, body = {}) {
-  const res = await call(env, '/api/operator/photographer-invites', { method: 'POST', token: OP, body });
+  const res = await call(env, '/api/operator/photographer-invites', { method: 'POST', token: OP, body: { email: 'ann@example.com', ...body } });
   assert.equal(res.status, 201, await res.clone().text());
   return res.json();
 }
@@ -135,29 +137,38 @@ test('a code works once: a replay (another email, the same IP or another) is the
   assert.equal(rows(env, 'SELECT * FROM photographers').length, 1);
 });
 
-test('wrong, used, expired, revoked and malformed codes all answer the same status and body (no oracle), and write nothing but the throttle row', async () => {
+test('wrong, used, expired, revoked, malformed codes and another email than the invited one all answer the same status and body (no oracle), and write nothing but the throttle row', async () => {
   const env = envOn();
-  const used = await newCode(env);
-  assert.equal((await registerInvite(env, { invite_code: used.code, email: 'first@example.com' }, '198.51.100.1')).status, 201);
-  const expired = await newCode(env);
+  const used = await newCode(env, { email: 'used@example.com' });
+  assert.equal((await registerInvite(env, { invite_code: used.code, email: 'used@example.com' }, '198.51.100.1')).status, 201);
+  const expired = await newCode(env, { email: 'expired@example.com' });
   setInvite(env, expired.id, 'expires_at', past());
-  const revoked = await newCode(env);
+  const revoked = await newCode(env, { email: 'revoked@example.com' });
   assert.equal((await call(env, `/api/operator/photographer-invites/${revoked.id}/revoke`, { method: 'POST', token: OP })).status, 200);
-  const live = await newCode(env);
+  const live = await newCode(env, { email: 'live@example.com' });
+  const other = await newCode(env, { email: 'other@example.com' });
   const wrong = String((Number(live.code) + 1) % 100000000).padStart(8, '0');
-  const cases = [used.code, expired.code, revoked.code, wrong, '00000000', live.code.slice(0, 7), live.code + '0', ` ${live.code}`, `${live.code.slice(0, 4)}-${live.code.slice(4)}`,
-    Number(live.code), null, undefined, [live.code], { code: live.code }, '１２３４５６７８', '1234567a', ''];
+  const L = 'live@example.com';
+  const cases = [['used@example.com', used.code], ['expired@example.com', expired.code], ['revoked@example.com', revoked.code],
+    [L, wrong], [L, '00000000'], [L, live.code.slice(0, 7)], [L, live.code + '0'], [L, ` ${live.code}`], [L, `${live.code.slice(0, 4)}-${live.code.slice(4)}`],
+    [L, Number(live.code)], [L, null], [L, undefined], [L, [live.code]], [L, { code: live.code }], [L, '１２３４５６７８'], [L, '1234567a'], [L, ''],
+    // a live code with an email it was not made for (another invitee's, or nobody's)
+    ['other@example.com', live.code], ['stranger@example.com', live.code], [L, other.code], [L, expired.code]];
   const answers = new Set();
-  for (const [i, invite_code] of cases.entries()) {
+  for (const [i, [email, invite_code]] of cases.entries()) {
     const before = snapshotWithoutThrottle(env);
-    // a fresh network each time, so the per-network limit is not what answers
-    const res = await registerInvite(env, { invite_code, email: `x${i}@example.com` }, `192.0.2.${i + 1}`);
+    // a fresh network each time, so the per-network limit is not what answers;
+    // the per-email one is cleared, so it is not what answers either
+    env.DB._db.prepare('DELETE FROM photographer_login_failures').run();
+    const res = await registerInvite(env, { invite_code, email }, `192.0.2.${i + 1}`);
     answers.add(`${res.status} ${await res.text()}`);
     assert.equal(snapshotWithoutThrottle(env), before, `case ${i} wrote`);
   }
   assert.deepEqual([...answers], [`400 ${JSON.stringify(INVALID)}`]);
-  // the live one still works afterwards
-  assert.equal((await registerInvite(env, { invite_code: live.code }, '192.0.2.200')).status, 201);
+  // the live ones still work afterwards, each with its own email
+  env.DB._db.prepare('DELETE FROM photographer_login_failures').run();
+  assert.equal((await registerInvite(env, { invite_code: live.code, email: 'LIVE@example.com' }, '192.0.2.200')).status, 201);
+  assert.equal((await registerInvite(env, { invite_code: other.code, email: 'other@example.com' }, '192.0.2.201')).status, 201);
 });
 
 test('an expired code fails at the edge: one whose expiry is now is already expired', async () => {
@@ -174,7 +185,7 @@ test('an expired code fails at the edge: one whose expiry is now is already expi
 test('race: two registrations with the same code at once make exactly one account; the code names it', async () => {
   for (const sameEmail of [false, true]) {
     const env = envOn();
-    const { id, code } = await newCode(env);
+    const { id, code } = await newCode(env, { email: 'one@example.com' });
     const res = await Promise.all([
       registerInvite(env, { invite_code: code, email: 'one@example.com' }, '198.51.100.1'),
       registerInvite(env, { invite_code: code, email: sameEmail ? 'one@example.com' : 'two@example.com' }, '198.51.100.2'),
@@ -229,31 +240,37 @@ test('a code revoked or expired after it was looked up (between the read and the
 
 // ─── emails that are taken ─────────────────────────────────────────────────
 
-test('an email that already has an account (any status, any spelling) is the same 400 as a bad code, changes nothing, and does not burn the code', async () => {
+test('an email that got an account after its invite was made (any status, any spelling) is the same 400 as a bad code, changes nothing, and does not burn the code', async () => {
   const env = envOn();
-  const existing = {
-    'active@example.com': await seedPhotographer(env, { email: 'active@example.com' }),
-    'pending@example.com': await seedPhotographer(env, { email: 'pending@example.com', status: 'pending' }),
-    'suspended@example.com': await seedPhotographer(env, { email: 'suspended@example.com', status: 'suspended' }),
-    'squat@example.com': await seedPhotographer(env, { id: 'default', email: 'squat@example.com' }),
-  };
-  const { id, code } = await newCode(env);
+  const emails = ['active@example.com', 'pending@example.com', 'suspended@example.com', 'squat@example.com'];
+  const codes = {};
+  for (const email of emails) codes[email] = await newCode(env, { email });
+  // the accounts appear only now (open sign-up, or a hand-made row)
+  await seedPhotographer(env, { email: 'active@example.com' });
+  const pending = await seedPhotographer(env, { email: 'pending@example.com', status: 'pending' });
+  await seedPhotographer(env, { email: 'suspended@example.com', status: 'suspended' });
+  await seedPhotographer(env, { id: 'default', email: 'squat@example.com' });
   let n = 0;
-  for (const email of Object.keys(existing)) {
+  for (const email of emails) {
     for (const spelling of [email, email.toUpperCase(), `  ${email} `]) {
       const before = snapshotWithoutThrottle(env);
       // a fresh network each time, so the per-network limit is not what answers
-      const res = await registerInvite(env, { invite_code: code, email: spelling }, `192.0.2.${++n}`);
+      const res = await registerInvite(env, { invite_code: codes[email].code, email: spelling }, `192.0.2.${++n}`);
       assert.equal(res.status, 400, spelling);
       assert.deepEqual(await res.json(), INVALID, spelling);
       assert.equal(snapshotWithoutThrottle(env), before, `${spelling} wrote`);
     }
   }
   assert.equal(one(env, "SELECT status FROM photographers WHERE email = 'suspended@example.com'").status, 'suspended');
-  assert.equal(invite(env, id).used_at, null, 'the code is still live');
-  const res = await registerInvite(env, { invite_code: code, email: 'fresh@example.com' }, '198.51.100.77');
+  assert.equal(one(env, "SELECT id FROM photographers WHERE email = 'squat@example.com'").id, 'default');
+  for (const email of emails) assert.equal(invite(env, codes[email].id).used_at, null, `${email}: the code is still live`);
+  // the pending sign-up is rejected (deleted): the invite now works for that email
+  assert.equal((await call(env, `/api/operator/photographers/${pending.id}/reject`, { method: 'POST', token: OP })).status, 200);
+  const res = await registerInvite(env, { invite_code: codes['pending@example.com'].code, email: 'pending@example.com' }, '198.51.100.77');
   assert.equal(res.status, 201);
-  assert.notEqual((await res.json()).photographer.id, 'default');
+  const made = await res.json();
+  assert.notEqual(made.photographer.id, 'default');
+  assert.equal(account(env, 'pending@example.com').status, 'active');
 });
 
 // ─── the input ─────────────────────────────────────────────────────────────
@@ -312,7 +329,7 @@ test('no PHOTOGRAPHER_INVITE_SECRET (or under 32 characters): 500 invites_unavai
   for (const secret of [undefined, '', 'x'.repeat(31)]) {
     const env = envOn({ PHOTOGRAPHER_INVITE_SECRET: secret });
     // a row as if a code had been made with some other key
-    env.DB._db.prepare("INSERT INTO photographer_invites (id, code_hash, created_at, expires_at) VALUES ('i1', 'h', ?, ?)").run(past(), new Date(Date.now() + 3600000).toISOString());
+    env.DB._db.prepare("INSERT INTO photographer_invites (id, email, code_hash, created_at, expires_at) VALUES ('i1', 'ann@example.com', 'h', ?, ?)").run(past(), new Date(Date.now() + 3600000).toISOString());
     const before = snapshot(env);
     const res = await registerInvite(env, { invite_code: '12345678' });
     assert.equal(res.status, 500, String(secret));
@@ -373,20 +390,42 @@ test('throttle: 5 refused codes per network (IPv6 by /64) in 15 minutes, then 42
   assert.ok(!snapshot(env).includes('2001:db8'));
   // the window: failures older than 15 minutes no longer count
   env.DB._db.prepare('UPDATE photographer_login_failures SET created_at = ?').run(new Date(Date.now() - 16 * 60 * 1000).toISOString());
-  const again = await newCode(env);
+  const again = await newCode(env, { email: 'late@example.com' });
   assert.equal((await registerInvite(env, { invite_code: again.code, email: 'late@example.com' }, '2001:db8:1:2::a')).status, 201);
 });
 
-test('throttle: 60 refused codes in 15 minutes from anywhere, then 429 for everyone (a guesser rotating networks gets no further)', async () => {
+test('throttle: 5 refused codes per email in 15 minutes from any number of networks, then 429 for that email only — its live code stays live', async () => {
+  const env = envOn();
+  const { id, code } = await newCode(env);
+  const bob = await newCode(env, { email: 'bob@example.com' });
+  for (let i = 0; i < 5; i++) {
+    assert.equal((await registerInvite(env, { invite_code: '00000000', email: i % 2 ? 'ANN@example.com' : 'ann@example.com' }, `10.0.0.${i + 1}`)).status, 400);
+  }
+  const before = snapshot(env);
+  const refused = await registerInvite(env, { invite_code: code }, '10.0.1.1');
+  assert.equal(refused.status, 429);
+  assert.deepEqual(await refused.json(), TOO_MANY);
+  assert.equal(snapshot(env), before);
+  assert.equal(invite(env, id).used_at, null);
+  // another invitee is not held up, nor are those networks
+  assert.equal((await registerInvite(env, { invite_code: bob.code, email: 'bob@example.com' }, '10.0.0.1')).status, 201);
+});
+
+test('throttle: no count shared by everyone — 100 refusals from 100 networks with 100 emails hold no other invitee up', async () => {
   const env = envOn();
   const { code } = await newCode(env);
-  for (let i = 0; i < 60; i++) {
+  for (let i = 0; i < 100; i++) {
     const res = await registerInvite(env, { invite_code: '00000000', email: `g${i}@example.com` }, `10.0.${Math.floor(i / 4)}.${i % 4}`);
     assert.equal(res.status, 400, `guess ${i}`);
   }
-  const res = await registerInvite(env, { invite_code: code }, '198.51.100.250');
-  assert.equal(res.status, 429);
-  assert.deepEqual(await res.json(), TOO_MANY);
+  // each refusal leaves exactly two rows, its network's and its email's: no third, shared key
+  const left = rows(env, 'SELECT key_hash, COUNT(*) AS n FROM photographer_login_failures GROUP BY key_hash');
+  assert.equal(left.reduce((t, r) => t + r.n, 0), 200);
+  assert.ok(left.every(r => r.n === 1), 'no key counts across networks and emails');
+  // the old shared key, filled to any level, holds nothing up
+  const ins = env.DB._db.prepare('INSERT INTO photographer_login_failures (key_hash, attempt, created_at) VALUES (?, ?, ?)');
+  for (const k of [await sha256Hex(`photographer-invite-all:${INVITE_KEY}`)]) for (let i = 0; i < 2000; i++) ins.run(k, `seed${i}`, new Date().toISOString());
+  assert.equal((await registerInvite(env, { invite_code: code }, '198.51.100.250')).status, 201);
 });
 
 test('throttle: a malformed code (or none) counts like a wrong one', async () => {
@@ -398,13 +437,14 @@ test('throttle: a malformed code (or none) counts like a wrong one', async () =>
   assert.equal((await registerInvite(env, { invite_code: code })).status, 429);
 });
 
-test('two codes that happen to be equal (8 digits collide over time): a used, revoked or expired older one does not hide the live newer one', async () => {
+test('an older row with the same email and code (a replaced, used or expired one) does not hide the live newer one', async () => {
   for (const col of ['used_at', 'revoked_at', 'expires_at']) {
     const env = envOn();
     const older = await newCode(env);
     const newer = await newCode(env);
-    const hash = invite(env, newer.id).code_hash;
-    setInvite(env, older.id, 'code_hash', hash);
+    // the newer one replaced the older (revoked it); leave only `col` set on it
+    setInvite(env, older.id, 'revoked_at', null);
+    setInvite(env, older.id, 'code_hash', invite(env, newer.id).code_hash);
     setInvite(env, older.id, col, past());
     // the older one is first by created_at (and by rowid)
     setInvite(env, older.id, 'created_at', new Date(Date.now() - 60000).toISOString());
@@ -413,16 +453,6 @@ test('two codes that happen to be equal (8 digits collide over time): a used, re
     assert.equal(invite(env, newer.id).used_by, account(env).id, col);
     assert.equal(invite(env, older.id).used_by, null, col);
   }
-  // both live: the older is spent first, then the newer by the next person
-  const env = envOn();
-  const a = await newCode(env);
-  const b = await newCode(env);
-  setInvite(env, a.id, 'code_hash', invite(env, b.id).code_hash);
-  assert.equal((await registerInvite(env, { invite_code: b.code, email: 'first@example.com' })).status, 201);
-  assert.equal(invite(env, a.id).used_by, account(env, 'first@example.com').id);
-  assert.equal((await registerInvite(env, { invite_code: b.code, email: 'second@example.com' })).status, 201);
-  assert.equal(invite(env, b.id).used_by, account(env, 'second@example.com').id);
-  assert.equal((await registerInvite(env, { invite_code: b.code, email: 'third@example.com' })).status, 400);
 });
 
 test('throttle: parallel guesses cannot pass the per-network cap', async () => {
@@ -432,14 +462,13 @@ test('throttle: parallel guesses cannot pass the per-network cap', async () => {
   assert.equal(res.filter(r => r.status === 429).length, 7);
 });
 
-test('throttle: a taken email counts as a refused attempt; a success removes its own rows only', async () => {
+test('throttle: another email than the invited one counts as a refused attempt; a success removes its own rows only', async () => {
   const env = envOn();
-  await seedPhotographer(env, { email: 'taken@example.com' });
   const { code } = await newCode(env);
-  for (let i = 0; i < 4; i++) assert.equal((await registerInvite(env, { invite_code: code, email: 'taken@example.com' })).status, 400);
+  for (let i = 0; i < 4; i++) assert.equal((await registerInvite(env, { invite_code: code, email: `wrong${i}@example.com` })).status, 400);
   assert.equal((await registerInvite(env, { invite_code: code })).status, 201);
-  // the four failures stay: one more refused attempt, then 429
-  const other = await newCode(env);
+  // the four failures stay: one more refused attempt from this network, then 429
+  const other = await newCode(env, { email: 'y@example.com' });
   assert.equal((await registerInvite(env, { invite_code: '00000000', email: 'z@example.com' })).status, 400);
   assert.equal((await registerInvite(env, { invite_code: other.code, email: 'y@example.com' })).status, 429);
 });
