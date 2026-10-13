@@ -39,24 +39,24 @@
   <div class="brand">STUDIO</div>
   <h1>註冊攝影師帳號</h1>
   <p class="lead">請填入邀請你的人給你的邀請碼。邀請碼只能用在被邀請的那個 Email，1 小時內有效。</p>
-  <form class="card" id="reg-form" novalidate autocomplete="on">
+  <form class="card" id="reg-form" method="post" action="register.html" novalidate autocomplete="on">
     <div class="field-group">
       <label for="reg-email">Email（要和邀請時填的相同）</label>
-      <input id="reg-email" class="field" type="email" name="email" autocomplete="username" autocapitalize="none" spellcheck="false" inputmode="email">
+      <input id="reg-email" class="field" type="email" autocomplete="username" autocapitalize="none" spellcheck="false" inputmode="email">
     </div>
     <div class="field-group">
       <label for="reg-name">顯示名稱</label>
-      <input id="reg-name" class="field" type="text" name="display_name" autocomplete="name" maxlength="50">
+      <input id="reg-name" class="field" type="text" autocomplete="name" maxlength="50">
       <div class="hint">最多 50 個字，客人會看到這個名稱。</div>
     </div>
     <div class="field-group">
       <label for="reg-password">密碼</label>
-      <input id="reg-password" class="field" type="password" name="password" autocomplete="new-password" maxlength="200">
+      <input id="reg-password" class="field" type="password" autocomplete="new-password" maxlength="200">
       <div class="hint">10–200 個字元。</div>
     </div>
     <div class="field-group">
       <label for="reg-code">邀請碼（8 位數字）</label>
-      <input id="reg-code" class="field code" type="text" name="invite_code" inputmode="numeric" pattern="[0-9]*" maxlength="8" autocomplete="off">
+      <input id="reg-code" class="field code" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="8" autocomplete="off">
     </div>
     <div class="notice">照片 180 天後自動刪除，請自行保留原檔</div>
     <button id="reg-submit" class="btn" type="submit">建立帳號</button>
@@ -71,7 +71,6 @@
   const form = document.getElementById('reg-form');
   const $ = id => document.getElementById(id);
   const errEl = $('reg-err'), btn = $('reg-submit');
-  PasswordToggle.attach($('reg-password'));
 
   // One sentence for every way a code can fail: nothing says which part was wrong.
   const INVALID_INVITE = '邀請碼不正確或已失效。請確認 Email 和邀請碼，或請對方重新產生一組。';
@@ -122,6 +121,9 @@
     btn.disabled = false;
     btn.textContent = label;
   });
+
+  // After the handler is attached, so a failed load of the toggle script can never leave a form that submits natively.
+  if (window.PasswordToggle) PasswordToggle.attach($('reg-password'));
 })();
 </script>
 </body>
