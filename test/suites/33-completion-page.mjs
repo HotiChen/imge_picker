@@ -130,7 +130,7 @@ for (const [who, init, co] of [['owner 390px', OWNER, MOBILE], ['viewer 390px', 
           h1: document.querySelectorAll('#completionPage h1').length };
       });
       ok('the title is the project title (one h1)', d.title === '婚禮精修' && d.h1 === 1, JSON.stringify(d));
-      ok('studio name, and the logo through the existing logo URL', d.studio === '光影工作室' && d.logo === `${WORKER}/api/studio/logo`, JSON.stringify(d));
+      ok('studio name, and the logo through the link’s own logo URL (/api/pick/logo?t=)', d.studio === '光影工作室' && d.logo === `${WORKER}/api/pick/logo?t=TOK`, JSON.stringify(d));
       ok('a one-line thank-you', typeof d.thanks === 'string' && d.thanks.length >= 6, JSON.stringify(d));
       ok('已確認完成（2026/9/21）', d.confirmed === '已確認完成（2026/9/21）', JSON.stringify(d));
       const cu = new URL(d.cover);

@@ -131,7 +131,7 @@ const fgRowsOk = (g, tol = 1.5) => g.rows.slice(0, -1).every(r => Math.abs(r.spa
         heroH: document.getElementById('fgHero').getBoundingClientRect().height,
         galleries: document.querySelectorAll('#finalsGallery').length,
       }));
-      ok('one gallery with a hero: the project title and the studio name + logo', dom.galleries === 1 && dom.hero && dom.title === '婚禮精修' && dom.studio === '光影工作室' && /\/api\/studio\/logo$/.test(dom.logo || ''), JSON.stringify(dom));
+      ok('one gallery with a hero: the project title and the studio name + logo', dom.galleries === 1 && dom.hero && dom.title === '婚禮精修' && dom.studio === '光影工作室' && /\/api\/pick\/logo\?t=TOK$/.test(dom.logo || ''), JSON.stringify(dom));
       ok('the cover is the first final in gallery order, as a ?w= bucket through the token', dom.coverKey === files[0] && /\?w=(1200|1600)&t=TOK$/.test(dom.cover || '') && dom.cover.includes(encodeURI(files[0])), dom.cover);
       ok('the old card grid was never built (no .photo-card) and is not shown; no sidebar', dom.oldCards === 0 && dom.oldGrid === 'none' && dom.sidebar === 'none' && dom.bodyCls, JSON.stringify(dom));
       ok('a share button; no folder chips for one folder', dom.share && !dom.chips);

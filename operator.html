@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@600;900&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/side-nav.css?v=20261012r">
+<link rel="stylesheet" href="css/side-nav.css?v=20261013b">
 <style>
   :root {
     --bg: #fff8ee; --surface: #ffffff; --card: #fff3df; --accent: #f5a13b; --accent-dim: #ffd9a8;
@@ -98,6 +98,15 @@
   .ph-dup { margin-top: 6px; }
   .ph-verify { font-size: 12px; color: var(--danger); margin-bottom: 4px; }
   .ph-actions { display: flex; gap: 6px; flex-wrap: wrap; flex-shrink: 0; }
+  .inv-state { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 11px; font-weight: 600; margin-right: 6px; background: var(--rule); color: var(--ink-55); }
+  .inv-state[data-state="live"] { background: var(--mint); color: var(--success); }
+  .inv-state[data-state="used"] { background: var(--accent-dim); color: var(--ink-90); }
+  .inv-result { border: 1px solid var(--accent); background: var(--card); border-radius: 12px; padding: 14px 16px; margin-top: 14px; }
+  .inv-code { font-family: 'IBM Plex Mono', monospace; font-size: 28px; letter-spacing: .25em; margin: 6px 0 10px; user-select: all; }
+  .inv-result textarea { font-size: 14px; line-height: 1.6; min-height: 150px; resize: vertical; margin-top: 8px; }
+  .inv-btns { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+  .inv-list-head { display: flex; align-items: center; justify-content: space-between; margin: 18px 0 4px; }
+  .inv-list-head h3 { font-size: 13px; color: var(--ink-70); }
   .ph-temp { border: 1px solid var(--accent); background: var(--card); border-radius: 12px; padding: 14px 16px; margin-top: 14px; }
   .ph-temp .ph-temp-row { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
   .ph-temp input { font-family: 'IBM Plex Mono', monospace; font-size: 16px; flex: 1; min-width: 180px; }
@@ -105,7 +114,8 @@
     main { padding: 16px; } .prod-row { flex-wrap: wrap; }
     .ph-row { flex-wrap: wrap; }
     .ph-actions { width: 100%; }
-    .ph-actions .btn, .ph-temp .btn, .ph-temp input { min-height: 44px; }
+    .ph-actions .btn, .ph-temp .btn, .ph-temp input, .inv-btns .btn, #inv-create, #inv-refresh, .inv-list-head .btn { min-height: 44px; }
+    .inv-btns .btn { flex: 1; }
     .ph-actions .btn { flex: 1; }
   }
 </style>
@@ -140,7 +150,7 @@
       <div class="panel-body">
         <div id="ph-list"><div class="hint">載入中…</div></div>
         <div id="ph-temp" class="ph-temp" hidden>
-          <div><strong>臨時密碼</strong>（只顯示這一次，請私下告訴 <span id="ph-temp-who"></span>。目前還沒有自己改密碼的功能，請對方妥善保管這組密碼）</div>
+          <div><strong>臨時密碼</strong>（只顯示這一次，請私下告訴 <span id="ph-temp-who"></span>。對方登入後會被要求先改成自己的密碼）</div>
           <div class="ph-temp-row">
             <input id="ph-temp-pw" class="field" type="text" readonly autocomplete="off" aria-label="臨時密碼">
             <button id="ph-temp-copy" class="btn btn-accent" type="button">複製</button>
@@ -149,6 +159,40 @@
         </div>
         <div id="ph-err" class="err"></div>
         <div id="ph-ok" class="ok-msg"></div>
+      </div>
+    </div>
+
+    <h2>邀請攝影師</h2>
+    <div class="panel" id="inv-panel">
+      <div class="panel-body">
+        <div class="field-row">
+          <div class="field-group">
+            <label for="inv-email">朋友的 Email（必填）</label>
+            <input id="inv-email" class="field" type="email" autocomplete="off" autocapitalize="none" spellcheck="false" inputmode="email" placeholder="friend@example.com">
+          </div>
+          <div class="field-group">
+            <label for="inv-note">備註（選填）</label>
+            <input id="inv-note" class="field" type="text" maxlength="200" autocomplete="off" placeholder="只有你看得到，例如：婚攝朋友">
+          </div>
+        </div>
+        <button id="inv-create" class="btn btn-accent" type="button">產生邀請碼</button>
+        <div class="hint">邀請碼 1 小時內有效，只能用在上面這個 Email；同一個 Email 再產生一組，前一組就失效。</div>
+        <div id="inv-result" class="inv-result" hidden>
+          <div><strong>邀請碼</strong>（只顯示這一次，關閉後就看不到了；請先複製）</div>
+          <div id="inv-code" class="inv-code"></div>
+          <div id="inv-replaced" class="hint" hidden></div>
+          <label for="inv-message" class="hint">傳給朋友的訊息</label>
+          <textarea id="inv-message" class="field" readonly></textarea>
+          <div class="inv-btns">
+            <button id="inv-copy-msg" class="btn btn-accent" type="button">複製邀請訊息</button>
+            <button id="inv-copy-code" class="btn btn-outline" type="button">複製邀請碼</button>
+            <button id="inv-close" class="btn btn-outline" type="button">關閉</button>
+          </div>
+        </div>
+        <div class="inv-list-head"><h3>邀請紀錄</h3><button id="inv-refresh" class="btn btn-outline btn-sm" type="button">重新整理</button></div>
+        <div id="inv-list"><div class="hint">載入中…</div></div>
+        <div id="inv-err" class="err"></div>
+        <div id="inv-ok" class="ok-msg"></div>
       </div>
     </div>
 
@@ -173,10 +217,10 @@
   </div>
 </main>
 
-<script src="js/build-version.js?v=20261012r"></script>
-<script src="js/password-toggle.js?v=20261012r"></script>
-<script src="js/util.js?v=20261012r"></script>
-<script src="js/orders-common.js?v=20261012r"></script>
+<script src="js/build-version.js?v=20261013b"></script>
+<script src="js/password-toggle.js?v=20261013b"></script>
+<script src="js/util.js?v=20261013b"></script>
+<script src="js/orders-common.js?v=20261013b"></script>
 <script>
 (function () {
   const WORKER_URL = 'https://imagepicker.hotichen.workers.dev';
@@ -205,7 +249,7 @@
     $('op-token').value = '';
   }
   function showApp() { loginBox.hidden = true; appBox.hidden = false; logoutBtn.hidden = false; }
-  function signOut(msg) { saveToken(''); products = []; formBox.innerHTML = ''; clearPhotographers(); showLogin(msg); }
+  function signOut(msg) { saveToken(''); products = []; formBox.innerHTML = ''; clearPhotographers(); clearInvites(); showLogin(msg); }
 
   const api = O.client({
     workerUrl: WORKER_URL, getToken: () => token,
@@ -231,6 +275,7 @@
     renderList();
     loadStats();                                // not awaited: the list shows now, sales fill their own box
     loadPhotographers();                        // likewise
+    loadInvites();                              // likewise
   }
   $('op-login-btn').addEventListener('click', async () => {
     const t = $('op-token').value.trim();
@@ -769,6 +814,156 @@
     phSay(copied, copied ? '已複製臨時密碼' : '無法自動複製，請手動選取複製');
   });
   $('ph-temp-close').addEventListener('click', hideTemp);
+
+  // ── invite a photographer ──────────────────────────────────────────────────
+  // The 8-digit code leaves the Worker once, in the answer to the create call. It is shown in #inv-code and inside
+  // the message, and only there: never in the list, never in any storage, and removed from the DOM (text, textarea
+  // value) when the box is closed, on sign-out, when the next code is made and when the page is hidden for good.
+  const invEmail = $('inv-email'), invNote = $('inv-note'), invCreate = $('inv-create');
+  const invResult = $('inv-result'), invCode = $('inv-code'), invMessage = $('inv-message'), invReplaced = $('inv-replaced');
+  const invList = $('inv-list'), invErr = $('inv-err'), invOk = $('inv-ok');
+  const INV_STATE = { live: '可使用', used: '已使用', revoked: '已撤銷', expired: '已過期' };
+  const INV_ERRORS = {
+    invalid_email: 'Email 格式不正確',
+    invalid_note: '備註最多 200 字，且只能一行',
+    email_taken: '這個 Email 已經有帳號，不需要邀請碼',
+    invite_limit: '尚未使用的邀請碼已達上限（10 組），請先撤銷不用的',
+    invites_unavailable: '邀請碼功能尚未啟用（伺服器還沒設定或還沒執行 migration），請先處理後端',
+    too_large: '資料太大，請縮短備註',
+  };
+  const invText = (data, status) => INV_ERRORS[data && data.code] || (data && data.error) || `失敗（${status}）`;
+  let invites = [];
+
+  function invSay(ok, text) {
+    invErr.textContent = ok ? '' : text;
+    invOk.textContent = ok ? text : '';
+    if (ok && text) setTimeout(() => { if (invOk.textContent === text) invOk.textContent = ''; }, 2500);
+  }
+  // the code out of the page: the text, the message box and its value
+  function hideInviteCode() {
+    invCode.textContent = '';
+    invMessage.value = '';
+    invReplaced.textContent = ''; invReplaced.hidden = true;
+    invResult.hidden = true;
+  }
+  function clearInvites() {
+    hideInviteCode();
+    invites = [];
+    invList.textContent = '';
+    invEmail.value = ''; invNote.value = '';
+    invErr.textContent = ''; invOk.textContent = '';
+  }
+  window.addEventListener('pagehide', hideInviteCode);
+
+  function inviteMessage(email, code) {
+    const url = new URL('register.html', location.href).href;
+    return [
+      '你好，邀請你註冊「選圖工作室」的攝影師帳號：',
+      `1. 開啟註冊頁：${url}`,
+      `2. Email 請填：${email}`,
+      `3. 邀請碼：${code}`,
+      '',
+      '邀請碼 1 小時內有效，只能用在這個 Email（用過就失效）。',
+    ].join('\n');
+  }
+
+  function inviteRow(i) {
+    const r = el('div', 'ph-row inv-row');
+    r.dataset.inviteId = i.id;
+    const main = el('div', 'ph-main');
+    const badge = el('span', 'inv-state', INV_STATE[i.state] || i.state);
+    badge.dataset.state = i.state;
+    main.append(badge, el('strong', 'ph-name', i.email));
+    const dates = [`建立 ${String(i.created_at || '').replace('T', ' ').slice(0, 16)}`];
+    if (i.state === 'live') dates.push(`到期 ${String(i.expires_at || '').replace('T', ' ').slice(0, 16)}`);
+    main.append(el('div', 'hint', dates.join(' · ')));
+    if (i.state === 'used') main.append(el('div', 'hint', `已由 ${i.used_by_name || '（未知）'}（${i.used_by_email || i.email}）註冊`));
+    if (i.note) main.append(el('div', 'ph-note', i.note));
+    r.append(main);
+    if (i.state === 'live') {
+      const box = el('div', 'ph-actions');
+      const b = el('button', 'btn btn-sm btn-danger', '撤銷');
+      b.type = 'button'; b.dataset.action = 'revoke';
+      box.append(b);
+      r.append(box);
+    }
+    return r;
+  }
+  function renderInvites() {
+    invList.textContent = '';
+    if (!invites.length) { invList.append(el('div', 'hint', '還沒有邀請紀錄。')); return; }
+    for (const i of invites) invList.append(inviteRow(i));
+  }
+  async function loadInvites() {
+    const r = await api('/api/operator/photographer-invites');
+    if (!r.ok) {
+      if (r.status !== 401) { invList.textContent = ''; invList.append(el('div', 'err', `讀取邀請紀錄失敗：${invText(r.data, r.status)}`)); }
+      return false;
+    }
+    invites = Array.isArray(r.data.invites) ? r.data.invites : [];
+    renderInvites();
+    return true;
+  }
+  $('inv-refresh').addEventListener('click', async () => { invSay(true, ''); await loadInvites(); });
+
+  invCreate.addEventListener('click', async () => {
+    if (invCreate.disabled) return;
+    invSay(true, '');
+    const email = invEmail.value.trim();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { invSay(false, INV_ERRORS.invalid_email + '，請填朋友的 Email'); invEmail.focus(); return; }
+    hideInviteCode();
+    invCreate.disabled = true;
+    const r = await api('/api/operator/photographer-invites', 'POST', { email, note: invNote.value.trim() });
+    invCreate.disabled = false;
+    if (!r.ok) {
+      if (r.status === 401) return;
+      invSay(false, invText(r.data, r.status));
+      await loadInvites();
+      return;
+    }
+    const d = r.data || {};
+    if (typeof d.code !== 'string' || !d.code) { invSay(false, '伺服器沒有回傳邀請碼，請重新產生'); await loadInvites(); return; }
+    invCode.textContent = d.code;
+    invMessage.value = inviteMessage(d.email || email, d.code);
+    if (Number(d.replaced) > 0) { invReplaced.textContent = '這個 Email 先前尚未使用的邀請碼已經失效。'; invReplaced.hidden = false; }
+    invResult.hidden = false;
+    invEmail.value = ''; invNote.value = '';
+    await loadInvites();
+  });
+
+  async function copyText(text, okMsg, field) {
+    let copied = false;
+    try { await navigator.clipboard.writeText(text); copied = true; } catch (e) { /* fall back below */ }
+    if (!copied && field) {
+      field.focus(); field.select();
+      try { copied = document.execCommand('copy'); } catch (e) { copied = false; }
+    }
+    invSay(copied, copied ? okMsg : '無法自動複製，請手動選取複製');
+  }
+  $('inv-copy-code').addEventListener('click', () => { if (invCode.textContent) copyText(invCode.textContent, '已複製邀請碼'); });
+  $('inv-copy-msg').addEventListener('click', () => { if (invMessage.value) copyText(invMessage.value, '已複製邀請訊息', invMessage); });
+  $('inv-close').addEventListener('click', hideInviteCode);
+
+  invList.addEventListener('click', async e => {
+    const btn = e.target.closest('button[data-action="revoke"]');
+    const row = btn && btn.closest('.inv-row');
+    if (!row) return;
+    const inv = invites.find(x => x.id === row.dataset.inviteId);
+    if (!inv) return;
+    if (!window.confirm(`撤銷寄給 ${inv.email} 的邀請碼？對方就不能再用它註冊。`)) return;
+    invSay(true, '');
+    btn.disabled = true;
+    const r = await api(`/api/operator/photographer-invites/${encodeURIComponent(inv.id)}/revoke`, 'POST');
+    btn.disabled = false;
+    if (!r.ok) {
+      if (r.status === 401) return;
+      invSay(false, r.status === 404 ? '找不到這筆邀請，請重新整理' : invText(r.data, r.status));
+      await loadInvites();
+      return;
+    }
+    await loadInvites();
+    invSay(true, '已撤銷');
+  });
 
   // a stored token: check it before showing anything
   if (token) enter(token); else showLogin('');

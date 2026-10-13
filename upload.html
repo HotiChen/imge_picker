@@ -397,6 +397,7 @@ button[hidden] { display: none !important; }
     .qi-retry { grid-column: 3; min-height: 44px; min-width: 64px; }
 }
 </style>
+<script src="js/photographer-session.js?v=20261013b"></script>
 </head>
 <body>
 
@@ -484,11 +485,11 @@ button[hidden] { display: none !important; }
     </div><!-- /.main -->
 </div><!-- /.layout -->
 
-<script src="js/build-version.js?v=20261012r"></script>
-<script src="js/config.js?v=20261012r"></script>
-<script src="js/password-toggle.js?v=20261012r"></script>
-<script src="js/auth.js?v=20261012r"></script>
-<script src="js/util.js?v=20261012r"></script>
+<script src="js/build-version.js?v=20261013b"></script>
+<script src="js/config.js?v=20261013b"></script>
+<script src="js/password-toggle.js?v=20261013b"></script>
+<script src="js/auth.js?v=20261013b"></script>
+<script src="js/util.js?v=20261013b"></script>
 <script>
 const CONCURRENCY = 4;
 // Auto retry: only network errors, timeouts, HTTP 5xx and 429; waits 2 s then 5 s. Anything else (401/403/413/other 4xx)
@@ -1042,6 +1043,7 @@ function uploadWithProgress(item, key) {
         xhr.addEventListener('load', () => {
             if (xhr.status >= 200 && xhr.status < 300) return resolve();
             if (xhr.status === 401) {
+                if (window.PhotographerSession) window.PhotographerSession.logout();   // ends an account session on the Worker too
                 sessionStorage.removeItem('studio_token');
                 CONFIG.PHOTOGRAPHER_TOKEN = '';
             }

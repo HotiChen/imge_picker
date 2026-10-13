@@ -253,7 +253,7 @@ let failed = 0;   // the asset-versions block below counts into this; folded int
   console.log('\n# asset versions — every local asset on a page moves together');
   const PAGES = ['index.html', 'upload.html', 'tutorial.html', 'admin.html', 'client-login.html',
                  'home.html', 'dashboard.html', 'settings.html', 'orders.html', 'operator.html',
-                 'book_editor/index.html', 'book_editor/view.html', 'r2_designer/index.html'];
+                 'book_editor/index.html', 'book_editor/view.html', 'r2_designer/index.html', 'register.html'];
   const lines = [];
   const seenVersions = new Set();
   for (const rel of PAGES) {

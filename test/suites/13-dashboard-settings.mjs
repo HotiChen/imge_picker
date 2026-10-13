@@ -298,7 +298,7 @@ await suite('設定 — 沒有 studio_token 時跳轉回 home.html',
         document.getElementById('logo-remove-btn').style.display !== 'none', null, { timeout: 3000 });
       const put = m.seen.find(r => r.method === 'PUT' && r.path === '/api/admin/settings/logo');
       ok('the good file reached the Worker', !!put, JSON.stringify(m.seen));
-      ok('and a preview <img> is shown', await page.$('#logo-preview-box img') !== null);
+      ok('and a preview <img> is shown (fetched with the token, so it appears just after the button)', await page.waitForSelector('#logo-preview-box img', { timeout: 3000 }).then(() => true, () => false));
 
       await page.click('#logo-remove-btn');
       await page.waitForFunction(() => document.getElementById('logo-remove-btn').style.display === 'none', null, { timeout: 3000 });
@@ -390,7 +390,7 @@ await suite('設定 — 沒有 studio_token 時跳轉回 home.html',
       await page.waitForFunction(() => document.querySelector('.logo-name')?.textContent === '海邊影像工作室', null, { timeout: 5000 });
       ok('logo-name replaced with the studio name', true);
       const img = await page.$eval('.logo-mark-img', el => ({ src: el.src, alt: el.alt })).catch(() => null);
-      ok('the text mark is replaced by an <img> for the logo', !!img && img.src.includes('/api/studio/logo'), JSON.stringify(img));
+      ok('the text mark is replaced by an <img> for the logo', !!img && img.src.includes('/api/pick/logo?t=PICK-TOKEN') && !img.src.includes('/api/studio/logo'), JSON.stringify(img));
       ok('no 預約拍攝 button exists on the guest page at all (removed, not hidden), booking_url or not',
         (await page.$('#studioBookingLink')) === null && !(await page.evaluate(() => document.body.innerText.includes('預約拍攝'))));
       return out;

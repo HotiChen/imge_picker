@@ -11,7 +11,10 @@ import { isExtraMaxFake, settingsShapeFake } from './pick-fake.mjs';
 // ═══════════════════════════════════════════════════════════════════════════
 
 export function dashSettingsMock(opts = {}) {
+  // opts.token: the one bearer token this mock accepts, or a function (the Authorization header) -> bool for a page that
+  // swaps its token (a photographer session after change-password)
   const token = opts.token ?? 'adm';
+  const tokenOk = auth => (typeof token === 'function' ? !!token(auth) : auth === `Bearer ${token}`);
   const state = {
     settings: Object.assign({
       studio_name: null, booking_url: null, default_pick_limit: null, default_extra_price: null,
@@ -46,7 +49,13 @@ export function dashSettingsMock(opts = {}) {
 
       if (u.pathname === '/api/studio/logo') // public — no auth required
         return route.fulfill({ status: 200, contentType: 'image/png', body: PIXEL });
-      if (auth !== `Bearer ${token}`) return json({ error: 'Unauthorized' }, 401);
+      // GET /api/pick/logo?t=<link> — the guest page's logo, by its link (no Authorization)
+      if (u.pathname === '/api/pick/logo' && method === 'GET')
+        return route.fulfill({ status: 200, contentType: 'image/png', body: PIXEL });
+      if (!tokenOk(auth)) return json({ error: 'Unauthorized' }, 401);
+      // opts.gate(path, auth) -> {status, body} | null: the Worker's must_change_password refusal, after the 401 like the real order
+      const gated = opts.gate && opts.gate(u.pathname, auth);
+      if (gated) return json(gated.body, gated.status);
 
       if (u.pathname === '/api/admin/settings' && method === 'GET') return json({ transfer_info: null, ...settingsShapeFake(state.settings) });
       if (u.pathname === '/api/admin/settings' && method === 'PUT') {
@@ -86,6 +95,9 @@ export function dashSettingsMock(opts = {}) {
         Object.assign(state.settings, body);
         return json(settingsShapeFake(state.settings));
       }
+      // GET: the caller's own logo, with the Authorization header (worker.js imageResponse: 404 when there is none)
+      if (u.pathname === '/api/admin/settings/logo' && method === 'GET')
+        return state.settings.has_logo ? route.fulfill({ status: 200, contentType: 'image/png', body: PIXEL }) : json({ error: 'Not found' }, 404);
       if (u.pathname === '/api/admin/settings/logo' && method === 'PUT') {
         if (state.logoPutStatus !== 200) return json(state.logoPutBody || { error: 'bad' }, state.logoPutStatus);
         state.settings.has_logo = true;

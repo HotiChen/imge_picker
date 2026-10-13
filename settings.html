@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@600;900&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/side-nav.css?v=20261012r">
+<link rel="stylesheet" href="css/side-nav.css?v=20261013b">
 <style>
   /* Bright design, approved by Tim (design-canvas spec: /tmp/claude-0/light-design.html) —
      cream ground, white cards, dark ink text, warm accent, soft pastel pills. */
@@ -115,8 +115,17 @@
   .pick-link-preview { margin-top: 8px; padding: 10px 12px; border: 1px dashed var(--rule); border-radius: 10px; background: var(--bg);
     color: var(--ink-90); font-size: 13px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
   .pick-link-preview-label { color: var(--ink-55); font-size: 12px; margin-top: 8px; }
+  /* 帳號與密碼 (an account session only; hidden for the studio token) */
+  #account-section[hidden] { display: none; }
+  .acct-banner { background: #fde4e0; color: var(--danger); border-radius: 10px; padding: 10px 12px; font-size: 13px; font-weight: 600; margin-bottom: 14px; }
+  .acct-banner[hidden] { display: none; }
+  /* a flagged account may only change its password: the rest of the page (and its menu) is not shown */
+  body.must-change main > :not(#account-section) { display: none; }
+  body.must-change .side-nav { display: none; }
+  @media (max-width: 768px) { #account-section .field, #account-section .btn { min-height: 44px; font-size: 16px; } }
   #set-link-messages .btn-ghost { min-height: 44px; min-width: 44px; margin-top: 8px; background: transparent; border: 1px solid var(--border); color: var(--ink-90); }
 </style>
+<script src="js/photographer-session.js?v=20261013b"></script>
 </head>
 <body>
 
@@ -131,6 +140,33 @@
 <div class="app-shell">
   <aside id="sideNav" class="side-nav"></aside>
   <main>
+    <section id="account-section" hidden>
+      <h2>帳號與密碼</h2>
+      <div class="panel">
+        <div class="panel-body">
+          <div id="acct-must" class="acct-banner" role="alert" hidden>請先修改密碼，才能繼續使用其他功能。</div>
+          <div id="acct-who" class="panel-note"></div>
+          <form id="acct-form" novalidate>
+            <div class="field-group">
+              <label for="acct-current">目前的密碼</label>
+              <input id="acct-current" class="field" type="password" autocomplete="current-password">
+            </div>
+            <div class="field-group">
+              <label for="acct-new">新密碼（10–200 個字元）</label>
+              <input id="acct-new" class="field" type="password" autocomplete="new-password" maxlength="200">
+            </div>
+            <div class="field-group">
+              <label for="acct-new2">再輸入一次新密碼</label>
+              <input id="acct-new2" class="field" type="password" autocomplete="new-password" maxlength="200">
+            </div>
+            <button id="acct-submit" class="btn btn-accent" type="submit">修改密碼</button>
+            <div class="hint">改完後其他裝置上的登入會被登出，這個裝置繼續使用。</div>
+            <div id="acct-err" class="err" role="alert"></div>
+            <div id="acct-ok" class="ok-msg"></div>
+          </form>
+        </div>
+      </div>
+    </section>
     <h2>工作室資訊</h2>
     <div class="panel">
       <div class="panel-body">
@@ -259,17 +295,100 @@
   </main>
 </div>
 
-<script src="js/build-version.js?v=20261012r"></script>
-<script src="js/util.js?v=20261012r"></script>
-<script src="js/side-nav.js?v=20261012r"></script>
-<script src="js/orders-common.js?v=20261012r"></script>
+<script src="js/build-version.js?v=20261013b"></script>
+<script src="js/util.js?v=20261013b"></script>
+<script src="js/password-toggle.js?v=20261013b"></script>
+<script src="js/side-nav.js?v=20261013b"></script>
+<script src="js/orders-common.js?v=20261013b"></script>
 <script>
 (function () {
   const WORKER_URL = 'https://imagepicker.hotichen.workers.dev';
   const LOGO_MAX_BYTES = 204800; // 200 KB — mirrors the server limit (docs/dashboard-settings.md)
+  const PS = window.PhotographerSession;
 
-  const token = SideNav.requireToken();
-  if (token) {
+  // `let`: changing the password swaps it for the new one, and every request after that must carry the new one
+  let token = SideNav.requireToken();
+  // An account that must change its password first sees this form and nothing else: the Worker answers 403
+  // must_change_password on every other route, so the rest of the page does not even start.
+  const mustChange = !!token && PS.mustChange();
+  if (mustChange) document.body.classList.add('must-change');
+
+  // ── 帳號與密碼 ────────────────────────────────────────────────────────────
+  // Only for an account session (email + password login / invited registration); Tim's own token has no account,
+  // so for him this section stays hidden and nothing here makes a request.
+  if (token && PS.isSession()) {
+    const sec = document.getElementById('account-section');
+    const $a = id => document.getElementById(id);
+    const errA = $a('acct-err'), okA = $a('acct-ok'), btnA = $a('acct-submit');
+    ['acct-current', 'acct-new', 'acct-new2'].forEach(id => PasswordToggle.attach($a(id)));
+    if (mustChange) {
+      $a('acct-must').hidden = false;
+      document.getElementById('logout-btn').addEventListener('click', SideNav.logoutToHome);
+    }
+    sec.hidden = false;
+
+    // who this session is (and whether the Worker agrees that a password change is due)
+    (async () => {
+      try {
+        const r = await fetch(`${WORKER_URL}/api/photographer/me`, { headers: { 'Authorization': `Bearer ${token}` } });
+        if (r.status === 401) { SideNav.logoutToHome(); return; }
+        if (!r.ok) return;
+        const me = await r.json();
+        const p = me.photographer || {};
+        $a('acct-who').textContent = `${p.display_name || ''}（${p.email || ''}）`;
+        if (me.must_change_password === true && !mustChange) { PS.setMust(true); location.reload(); }
+        else if (me.must_change_password === false && mustChange) { PS.setMust(false); location.reload(); }
+      } catch (e) { /* offline: the form still works, the Worker has the last word */ }
+    })();
+
+    const ACCT_ERRORS = {
+      wrong_password: '目前的密碼不正確',
+      invalid_current_password: '請輸入目前的密碼',
+      invalid_password: '新密碼需 10–200 個字元',
+      same_password: '新密碼不能和目前的密碼相同',
+      too_many_attempts: '嘗試次數太多，請 15 分鐘後再試',
+      password_change_conflict: '密碼或登入狀態已改變，請重新登入再試',
+      password_change_unavailable: '修改密碼功能尚未啟用',
+    };
+    $a('acct-form').addEventListener('submit', async e => {
+      e.preventDefault();
+      if (btnA.disabled) return;
+      errA.textContent = ''; okA.textContent = '';
+      const cur = $a('acct-current').value, n1 = $a('acct-new').value, n2 = $a('acct-new2').value;
+      if (!cur) { errA.textContent = ACCT_ERRORS.invalid_current_password; return; }
+      if ([...n1].length < 10 || [...n1].length > 200) { errA.textContent = ACCT_ERRORS.invalid_password; return; }
+      if (n1 !== n2) { errA.textContent = '兩次輸入的新密碼不一致'; return; }
+      if (n1 === cur) { errA.textContent = ACCT_ERRORS.same_password; return; }
+      btnA.disabled = true;
+      try {
+        const r = await fetch(`${WORKER_URL}/api/photographer/change-password`, {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ current_password: cur, new_password: n1 }),
+        });
+        const data = await r.json().catch(() => ({}));
+        if (r.status === 401) { SideNav.logoutToHome(); return; }
+        if (!r.ok || typeof data.token !== 'string' || !data.token) {
+          errA.textContent = ACCT_ERRORS[data && data.code] || (r.status === 429 ? ACCT_ERRORS.too_many_attempts : `修改失敗（${r.status}）`);
+          if (data && data.code === 'password_change_conflict') setTimeout(SideNav.logoutToHome, 1500);
+          return;
+        }
+        // The Worker ended every session of this account, this one too, and answered with ONE new token: from here
+        // on only that one works, so it replaces the stored token and the one this page sends.
+        PS.store(data.token, { mustChange: false });
+        token = data.token;
+        ['acct-current', 'acct-new', 'acct-new2'].forEach(id => { $a(id).value = ''; });
+        if (mustChange) { location.href = 'dashboard.html'; return; }
+        okA.textContent = '密碼已更新。其他裝置上的登入已被登出。';
+      } catch (err) {
+        errA.textContent = '無法連線到 Worker';
+      } finally {
+        btnA.disabled = false;
+      }
+    });
+  }
+
+  if (token && !mustChange) {
     SideNav.render(document.getElementById('sideNav'), 'settings', SideNav.logoutToHome);
     document.getElementById('logout-btn').addEventListener('click', SideNav.logoutToHome);
 
@@ -388,11 +507,39 @@
       });
     }
 
+    // The preview is the caller's OWN logo, fetched with the Authorization header and shown from a blob URL: the
+    // public /api/studio/logo is only the default photographer's, so it would show someone else's (or none).
+    let logoBlobUrl = '';
+    let logoSeq = 0;
+    function dropLogoBlob() {
+      if (logoBlobUrl) { try { URL.revokeObjectURL(logoBlobUrl); } catch (e) { /* ignore */ } }
+      logoBlobUrl = '';
+    }
+    async function showLogoPreview(seq) {
+      try {
+        const r = await authedFetch('/api/admin/settings/logo', { cache: 'no-store' });
+        if (seq !== logoSeq) return;
+        if (!r.ok) { previewBox.innerHTML = '<span class="none">預覽載入失敗</span>'; return; }
+        const url = URL.createObjectURL(await r.blob());
+        if (seq !== logoSeq) { URL.revokeObjectURL(url); return; }
+        dropLogoBlob();
+        logoBlobUrl = url;
+        const img = document.createElement('img');
+        img.alt = 'Logo';
+        img.src = url;
+        previewBox.textContent = '';
+        previewBox.appendChild(img);
+      } catch (e) {
+        if (seq === logoSeq && e.message !== '401') previewBox.innerHTML = '<span class="none">預覽載入失敗</span>';
+      }
+    }
     function renderLogo(has_logo) {
+      const seq = ++logoSeq;
       if (has_logo) {
-        previewBox.innerHTML = `<img src="${WORKER_URL}/api/studio/logo?ts=${Date.now()}" alt="Logo">`;
         removeBtn.style.display = '';
+        showLogoPreview(seq);
       } else {
+        dropLogoBlob();
         previewBox.innerHTML = '<span class="none">尚未上傳</span>';
         removeBtn.style.display = 'none';
       }
