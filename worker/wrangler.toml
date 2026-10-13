@@ -50,3 +50,8 @@ PHOTOGRAPHER_ROUTES = "off"
 
 # Turnstile（攝影師註冊防機器人）的 secret key：
 # wrangler secret put TURNSTILE_SECRET
+
+# 攝影師邀請碼的 HMAC key（至少 32 字元，和 PICK_INVITE_SECRET 分開，不要重用）：
+# wrangler secret put PHOTOGRAPHER_INVITE_SECRET
+# 沒設或太短：所有邀請碼路由 500 invites_unavailable。用邀請碼註冊另外要 PHOTOGRAPHER_ROUTES = "on"。
+# 換這把 key 會讓所有尚未使用的邀請碼失效（存的是 HMAC）。

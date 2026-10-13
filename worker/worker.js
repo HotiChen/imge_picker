@@ -510,6 +510,24 @@ function photographerPasswordOk(password) {
 }
 const INVALID_PHOTOGRAPHER_PASSWORD = { error: `密碼需 ${PHOTOGRAPHER_PASSWORD_MIN}–${PHOTOGRAPHER_PASSWORD_MAX} 個字元`, code: 'invalid_password' };
 
+// The account fields of a registration, open sign-up and invite alike:
+// {email, password, name, note} or {refused: body} (the 400 to answer).
+function photographerSignupFields(body) {
+  const email = photographerEmail(body.email);
+  if (!email) return { refused: { error: 'Email 格式不正確', code: 'invalid_email' } };
+  const password = body.password;
+  if (!photographerPasswordOk(password)) return { refused: INVALID_PHOTOGRAPHER_PASSWORD };
+  const name = typeof body.display_name === 'string' ? body.display_name.trim() : '';
+  if (!name || overChars(name, PHOTOGRAPHER_NAME_MAX) || ACCOUNT_CONTROL.test(name)) {
+    return { refused: { error: `顯示名稱需 1–${PHOTOGRAPHER_NAME_MAX} 個字`, code: 'invalid_display_name' } };
+  }
+  const rawNote = body.studio_note ?? '';
+  if (typeof rawNote !== 'string' || overChars(rawNote.trim(), PHOTOGRAPHER_NOTE_MAX) || ACCOUNT_NOTE_CONTROL.test(rawNote)) {
+    return { refused: { error: `工作室說明最多 ${PHOTOGRAPHER_NOTE_MAX} 字`, code: 'invalid_studio_note' } };
+  }
+  return { email, password, name, note: rawNote.trim() || null };
+}
+
 // The password throttle, shared by login and change-password: this attempt
 // reserves one row per key (the client's network and the email) in one
 // conditional insert, before any PBKDF2, so parallel guesses cannot pass the
@@ -534,6 +552,94 @@ async function reservePasswordAttempt(request, env, emailText) {
   return reserved.meta.changes ? attempt : null;
 }
 const TOO_MANY_ATTEMPTS = { error: '嘗試次數太多，請 15 分鐘後再試', code: 'too_many_attempts' };
+
+// ─── Photographer invite codes (docs/multi-photographer.md, 邀請碼) ─────────
+// The operator makes a one-use 8-digit code for ONE email, valid one hour,
+// shown once; the photographer registers with that email and that code and
+// the account is active at once (no review, no Turnstile). Like the
+// co-picking codes: stored only as an HMAC keyed with its own wrangler
+// secret, PHOTOGRAPHER_INVITE_SECRET (32+ characters), here over the email
+// and the code together, so a guesser needs an invited email AND its code;
+// without the secret, or before the 2026-10-18 migration, every invite route
+// is 500 invites_unavailable and writes nothing. Change the limits here.
+const PHOTOGRAPHER_INVITE_SECRET_MIN = 32;
+const PHOTOGRAPHER_INVITE_MS = 60 * 60 * 1000;
+// unspent, unrevoked, unexpired codes at once (at most one per email)
+const PHOTOGRAPHER_INVITES_LIVE_MAX = 10;
+const PHOTOGRAPHER_INVITE_NOTE_MAX = 200;
+const PHOTOGRAPHER_INVITE_LIST_MAX = 200;
+const INVITES_UNAVAILABLE = { error: '邀請碼功能尚未啟用', code: 'invites_unavailable' };
+function photographerInviteSecretOk(env) {
+  return typeof env.PHOTOGRAPHER_INVITE_SECRET === 'string' && env.PHOTOGRAPHER_INVITE_SECRET.length >= PHOTOGRAPHER_INVITE_SECRET_MIN;
+}
+// Whether the migration has run (every column named).
+async function photographerInvitesReady(env) {
+  try {
+    await env.DB.prepare('SELECT id, email, code_hash, created_at, expires_at, used_at, used_by, revoked_at, note FROM photographer_invites WHERE 0').first();
+    return true;
+  } catch (e) {
+    if (isMissingSchema(e)) return false;
+    throw e;
+  }
+}
+// What is stored for a code: HMAC-SHA256 keyed with
+// PHOTOGRAPHER_INVITE_SECRET over 'photographer-invite\n' + email + '\n' +
+// code, hex (the email in photographerEmail's normalised form, which holds
+// no newline; the code 8 digits). A leaked table alone reveals no live code,
+// and a code is bound to its email. The lookup compares this hash in SQL,
+// never the code, so its time says nothing about how close a guess was.
+async function photographerInviteHash(env, email, code) {
+  const enc = new TextEncoder();
+  const key = await crypto.subtle.importKey('raw', enc.encode(env.PHOTOGRAPHER_INVITE_SECRET), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  return bytesHex(new Uint8Array(await crypto.subtle.sign('HMAC', key, enc.encode(`photographer-invite\n${email}\n${code}`))));
+}
+// Refused registrations with a code (wrong, used, expired, revoked,
+// malformed, another email than the invited one, or an email already taken)
+// per window, per network (IPv6 by /64) and per email, then 429 before the
+// code is looked at. A guesser must know an invited email, and each email
+// gets 20 guesses an hour at its one code in 10^8, from however many
+// networks (at most PHOTOGRAPHER_INVITES_LIVE_MAX emails have a live code).
+// No count shared by everyone, not even a high circuit breaker: any shared
+// count is one an attacker with enough IPv6 /64s can fill to shut invite
+// registration for all. What is left: someone who knows an invited email can
+// hold that one email's registration shut for a window by sending bad codes.
+const PHOTOGRAPHER_INVITE_WINDOW_MS = 15 * 60 * 1000;
+const PHOTOGRAPHER_INVITE_FAILURES_NETWORK = 5;
+const PHOTOGRAPHER_INVITE_FAILURES_EMAIL = 5;
+const INVALID_INVITE = { error: '邀請碼不正確或已失效，或此 Email 無法使用', code: 'invalid_invite' };
+// The login throttle's pattern, in its table (photographer_login_failures)
+// under keys of its own, so invite guesses and password guesses never share a
+// count: this attempt reserves one row per key in one conditional insert, so
+// parallel guesses cannot pass any cap; a registration that lands deletes its
+// own rows in its batch, so what stays are refusals. Keys are SHA-256 of a
+// prefix, the invite secret and the value, never the bare address or email.
+// `email`: the normalised email. The attempt id, or null at any cap.
+async function reserveInviteAttempt(request, env, email) {
+  const now = Date.now();
+  const pepper = env.PHOTOGRAPHER_INVITE_SECRET;
+  const netKey = await sha256Hex(`photographer-invite-ip:${pepper}:${clientNetwork(request)}`);
+  const emailKey = await sha256Hex(`photographer-invite-email:${pepper}:${email}`);
+  const attempt = randomHex(16);
+  const since = new Date(now - PHOTOGRAPHER_INVITE_WINDOW_MS).toISOString();
+  const count = 'SELECT COUNT(*) FROM photographer_login_failures WHERE key_hash = ? AND created_at > ?';
+  await env.DB.prepare('DELETE FROM photographer_login_failures WHERE created_at < ?').bind(new Date(now - 24 * 60 * 60 * 1000).toISOString()).run();
+  const reserved = await env.DB.prepare(
+    `INSERT INTO photographer_login_failures (key_hash, attempt, created_at)
+     SELECT k, ?, ? FROM (SELECT ? AS k UNION ALL SELECT ?)
+      WHERE (${count}) < ? AND (${count}) < ?`
+  ).bind(attempt, new Date(now).toISOString(), netKey, emailKey,
+    netKey, since, PHOTOGRAPHER_INVITE_FAILURES_NETWORK, emailKey, since, PHOTOGRAPHER_INVITE_FAILURES_EMAIL).run();
+  return reserved.meta.changes ? attempt : null;
+}
+// An invite as the operator sees it (never code_hash): the invited email,
+// and who used it.
+const PHOTOGRAPHER_INVITE_VIEW_SQL = 'SELECT i.id, i.email, i.note, i.created_at, i.expires_at, i.used_at, i.used_by, i.revoked_at, ' +
+  'p.email AS used_by_email, p.display_name AS used_by_name FROM photographer_invites i LEFT JOIN photographers p ON p.id = i.used_by';
+function photographerInviteView(row, nowIso) {
+  const state = row.used_at ? 'used' : row.revoked_at ? 'revoked' : row.expires_at > nowIso ? 'live' : 'expired';
+  const { id, email, note, created_at, expires_at, used_at, used_by, revoked_at, used_by_email, used_by_name } = row;
+  return { id, email, note, state, created_at, expires_at, used_at, used_by, used_by_email, used_by_name, revoked_at };
+}
 
 // ─── Client share tokens ─────────────────────────────────────────────────────
 // Clients get an album link over LINE. Two things follow. LINE's crawler
@@ -3492,7 +3598,7 @@ async function routeRequest(request, env, ctx) {
     // 404/405 here, so nothing falls through to the upload route.
     if (pathParts[0] === 'api' && pathParts[1] === 'photographer') {
       const route = pathParts.length === 3 ? pathParts[2] : null;
-      const method = Object.assign(Object.create(null), { register: 'POST', login: 'POST', logout: 'POST', 'change-password': 'POST', me: 'GET' })[route];
+      const method = Object.assign(Object.create(null), { register: 'POST', 'register-invite': 'POST', login: 'POST', logout: 'POST', 'change-password': 'POST', me: 'GET' })[route];
       if (!method) return jsonErr('Not found', 404);
       if (request.method !== method) return jsonErr('Method not allowed', 405);
       const reply = (data, status = 200) => jsonOk(data, status, PHOTOGRAPHER_NO_STORE);
@@ -3510,6 +3616,13 @@ async function routeRequest(request, env, ctx) {
       // closed before anything is read: a typo in the switch, or no secret
       if (route === 'register' && (env.PHOTOGRAPHER_SIGNUP !== 'on' || !env.TURNSTILE_SECRET)) {
         return reply({ error: '目前未開放註冊', code: 'registration_closed' }, 403);
+      }
+      // registering with an invite code gives an account that opens every
+      // photographer route at once, so it is closed while they are
+      // (PHOTOGRAPHER_ROUTES, before anything is read), then needs the secret
+      if (route === 'register-invite') {
+        if (!photographerRoutesOpen(env)) return reply({ error: '目前未開放註冊', code: 'registration_closed' }, 403);
+        if (!photographerInviteSecretOk(env)) return reply(INVITES_UNAVAILABLE, 500);
       }
       if (!env.DB) return jsonErr('DB not configured', 500);
 
@@ -3533,6 +3646,8 @@ async function routeRequest(request, env, ctx) {
           who = session.who;
           if (who.must_change_password === null) return reply(PASSWORD_CHANGE_UNAVAILABLE, 500);
         }
+        // before the invite migration: nothing read, nothing written
+        if (route === 'register-invite' && !await photographerInvitesReady(env)) return reply(INVITES_UNAVAILABLE, 500);
 
         const parsed = await readJsonCapped(request, PHOTOGRAPHER_BODY_MAX);
         if (parsed.refused) return parsed.refused;
@@ -3629,25 +3744,75 @@ async function routeRequest(request, env, ctx) {
           return reply({ ok: true, token: newToken });
         }
 
+        // POST /api/photographer/register-invite — {email, password,
+        // display_name, studio_note?, invite_code} → 201 {token, photographer,
+        // must_change_password} (login's answer). Fields (400, as /register),
+        // the guess throttle (429, before the code is looked at), then the
+        // code, which is looked up by its HMAC over this email and the code,
+        // so a code made for another email is simply not found. Every refusal
+        // after the throttle — a wrong, used, expired, revoked or malformed
+        // code, another email than the invited one, or an email that already
+        // has an account — is the one 400 invalid_invite. One batch: the code is spent (live,
+        // and only if the email is free), and only its spender's account
+        // (active, approved now), session and release of its throttle rows
+        // land after it; so of two racing registrations exactly one makes an
+        // account, and a taken email never burns the code.
+        if (route === 'register-invite') {
+          const fields = photographerSignupFields(body);
+          if (fields.refused) return reply(fields.refused, 400);
+          const attempt = await reserveInviteAttempt(request, env, fields.email);
+          if (!attempt) return reply(TOO_MANY_ATTEMPTS, 429);
+          // the password hash (one PBKDF2, the slow step) before anything
+          // about the code is known: every attempt past the throttle pays it,
+          // so a refusal takes as long as a success and the time says
+          // nothing about which check refused it
+          const passwordHash = await hashPhotographerPassword(fields.password);
+          const invalid = () => reply(INVALID_INVITE, 400);
+          const code = body.invite_code;
+          if (typeof code !== 'string' || !/^\d{8}$/.test(code)) return invalid();
+          const found = await env.DB.prepare(
+            'SELECT id FROM photographer_invites WHERE code_hash = ? AND used_at IS NULL AND revoked_at IS NULL AND expires_at > ? ORDER BY created_at, rowid LIMIT 1'
+          ).bind(await photographerInviteHash(env, fields.email, code), new Date().toISOString()).first();
+          if (!found) return invalid();
+          const id = randomHex(8);
+          const token = randomHex(32);
+          const now = Date.now();
+          const nowIso = new Date(now).toISOString();
+          const spentBy = 'EXISTS (SELECT 1 FROM photographer_invites WHERE id = ? AND used_by = ?)';
+          const [spent] = await env.DB.batch([
+            env.DB.prepare(
+              'UPDATE photographer_invites SET used_at = ?1, used_by = ?2 WHERE id = ?3 AND used_at IS NULL AND revoked_at IS NULL AND expires_at > ?1 ' +
+              'AND NOT EXISTS (SELECT 1 FROM photographers WHERE email = ?4)'
+            ).bind(nowIso, id, found.id, fields.email),
+            // must_change_password is not named: its default 0 where the
+            // column exists, and the insert runs before that migration too
+            env.DB.prepare(
+              `INSERT INTO photographers (id, email, password_hash, display_name, studio_note, status, created_at, approved_at) SELECT ?, ?, ?, ?, ?, 'active', ?, ? WHERE ${spentBy}`
+            ).bind(id, fields.email, passwordHash, fields.name, fields.note, nowIso, nowIso, found.id, id),
+            env.DB.prepare(
+              `INSERT INTO photographer_sessions (token_hash, photographer_id, created_at, expires_at) SELECT ?, ?, ?, ? WHERE ${spentBy}`
+            ).bind(await sha256Hex(token), id, nowIso, new Date(now + PHOTOGRAPHER_SESSION_MS).toISOString(), found.id, id),
+            env.DB.prepare(`DELETE FROM photographer_login_failures WHERE attempt = ? AND ${spentBy}`).bind(attempt, found.id, id),
+          ]);
+          // spent by someone faster, revoked or expired in between, or the email taken
+          if (!spent.meta.changes) return invalid();
+          // must_change_password as login says it: null before its migration
+          const flag = await withoutMissingColumn(
+            () => env.DB.prepare('SELECT must_change_password FROM photographers WHERE id = ?').bind(id).first(),
+            () => ({ must_change_password: null }),
+          );
+          return reply({ token, photographer: { id, display_name: fields.name }, must_change_password: mustChangeFlag(flag?.must_change_password) }, 201);
+        }
+
         // POST /api/photographer/register — {email, password, display_name,
         // studio_note?, turnstileToken}. Fields (400), too many pending
         // (429 registration_busy), Turnstile (403), the per-network hour
         // (429 rate_limited), then one pending row — or, when the email is
         // taken, only that row's dup_attempts / last_dup_at bumped (the
         // operator sees a squatting signal), with the identical answer.
-        const email = photographerEmail(body.email);
-        if (!email) return reply({ error: 'Email 格式不正確', code: 'invalid_email' }, 400);
-        const password = body.password;
-        if (!photographerPasswordOk(password)) return reply(INVALID_PHOTOGRAPHER_PASSWORD, 400);
-        const name = typeof body.display_name === 'string' ? body.display_name.trim() : '';
-        if (!name || overChars(name, PHOTOGRAPHER_NAME_MAX) || ACCOUNT_CONTROL.test(name)) {
-          return reply({ error: `顯示名稱需 1–${PHOTOGRAPHER_NAME_MAX} 個字`, code: 'invalid_display_name' }, 400);
-        }
-        const rawNote = body.studio_note ?? '';
-        if (typeof rawNote !== 'string' || overChars(rawNote.trim(), PHOTOGRAPHER_NOTE_MAX) || ACCOUNT_NOTE_CONTROL.test(rawNote)) {
-          return reply({ error: `工作室說明最多 ${PHOTOGRAPHER_NOTE_MAX} 字`, code: 'invalid_studio_note' }, 400);
-        }
-        const note = rawNote.trim() || null;
+        const fields = photographerSignupFields(body);
+        if (fields.refused) return reply(fields.refused, 400);
+        const { email, password, name, note } = fields;
         // a flood of sign-ups waits for the operator to catch up (before
         // Turnstile, which costs a call)
         const pending = await env.DB.prepare("SELECT COUNT(*) AS n FROM photographers WHERE status = 'pending'").first();
@@ -4686,16 +4851,90 @@ async function routeRequest(request, env, ctx) {
       } else if (area === 'stats') route = !id ? 'stats' : null;
       else if (area === 'photographers') {
         route = !id ? 'photographers' : PHOTOGRAPHER_ACTIONS[action] ? 'photographer-action' : null;
+      } else if (area === 'photographer-invites') {
+        route = !id ? 'invites' : action === 'revoke' ? 'invite-revoke' : null;
       }
       const methods = {
         products: ['GET', 'POST'], product: ['PUT'], 'product-active': ['POST'], 'product-image': ['PUT', 'DELETE'], stats: ['GET'],
-        photographers: ['GET'], 'photographer-action': ['POST'],
+        photographers: ['GET'], 'photographer-action': ['POST'], invites: ['GET', 'POST'], 'invite-revoke': ['POST'],
       }[route];
       if (!methods) return jsonErr('Not found', 404);
       if (!methods.includes(request.method)) return jsonErr('Method not allowed', 405);
       if (!env.DB) return jsonErr('DB not configured', 500);
       const now = new Date().toISOString();
       const done = (data, status = 200) => jsonOk(data, status, ADMIN_ONLY_HEADERS);
+
+      // Photographer invite codes. The secret, then the migration (500
+      // invites_unavailable, nothing written), then the route. Not behind
+      // PHOTOGRAPHER_ROUTES: only registering with a code is.
+      // GET /api/operator/photographer-invites — newest first, ≤ 200, each
+      //   with its state and who used it; never a code or its hash.
+      // POST /api/operator/photographer-invites {note?} → 201 {id, code,
+      //   expires_at, note}: the only time the code leaves the Worker. One
+      //   conditional insert, so parallel creates never pass the live cap.
+      // POST /api/operator/photographer-invites/:id/revoke — an unspent code
+      //   stops working; a repeat (or a used code) changes nothing, 200; 404
+      //   for an id that is not there.
+      if (route === 'invites' || route === 'invite-revoke') {
+        if (!photographerInviteSecretOk(env)) return done(INVITES_UNAVAILABLE, 500);
+        try {
+          if (!await photographerInvitesReady(env)) return done(INVITES_UNAVAILABLE, 500);
+          if (route === 'invites' && request.method === 'GET') {
+            const { results } = await env.DB.prepare(
+              `${PHOTOGRAPHER_INVITE_VIEW_SQL} ORDER BY i.created_at DESC, i.rowid DESC LIMIT ${PHOTOGRAPHER_INVITE_LIST_MAX}`
+            ).all();
+            return done({ invites: results.map(r => photographerInviteView(r, now)) });
+          }
+          if (route === 'invites') {
+            const bytes = await readBodyCapped(request, PHOTOGRAPHER_BODY_MAX);
+            if (!bytes) return done({ error: '資料太大', code: 'too_large', max: PHOTOGRAPHER_BODY_MAX }, 413);
+            let body = {};
+            if (bytes.length) {
+              try { body = JSON.parse(new TextDecoder().decode(bytes)); } catch { return jsonErr('Invalid JSON'); }
+            }
+            if (!isPlainObject(body)) return done({ error: 'Invalid body', code: 'invalid_body' }, 400);
+            // the invitee: normalised exactly as registration normalises it
+            const email = photographerEmail(body.email);
+            if (!email) return done({ error: 'Email 格式不正確', code: 'invalid_email' }, 400);
+            const rawNote = body.note ?? '';
+            if (typeof rawNote !== 'string' || overChars(rawNote.trim(), PHOTOGRAPHER_INVITE_NOTE_MAX) || ACCOUNT_CONTROL.test(rawNote)) {
+              return done({ error: `備註最多 ${PHOTOGRAPHER_INVITE_NOTE_MAX} 字，且只能一行`, code: 'invalid_note' }, 400);
+            }
+            const note = rawNote.trim() || null;
+            const code = pickInviteCode();
+            const id = randomHex(8);
+            const expiresAt = new Date(Date.parse(now) + PHOTOGRAPHER_INVITE_MS).toISOString();
+            // One batch: this email's live code (if any) is revoked — one live
+            // code per email — and the new one inserted, both only while the
+            // email has no account; the insert also only under the live cap
+            // (counted after the revoke, so replacing never trips it).
+            const free = 'NOT EXISTS (SELECT 1 FROM photographers WHERE email = ?2)';
+            const [replaced, made] = await env.DB.batch([
+              env.DB.prepare(
+                `UPDATE photographer_invites SET revoked_at = ?1 WHERE email = ?2 AND used_at IS NULL AND revoked_at IS NULL AND expires_at > ?1 AND ${free}`
+              ).bind(now, email),
+              env.DB.prepare(
+                'INSERT INTO photographer_invites (id, email, code_hash, created_at, expires_at, note) SELECT ?1, ?2, ?3, ?4, ?5, ?6 ' +
+                `WHERE (SELECT COUNT(*) FROM photographer_invites WHERE used_at IS NULL AND revoked_at IS NULL AND expires_at > ?4) < ?7 AND ${free}`
+              ).bind(id, email, await photographerInviteHash(env, email, code), now, expiresAt, note, PHOTOGRAPHER_INVITES_LIVE_MAX),
+            ]);
+            if (!made.meta.changes) {
+              if (await env.DB.prepare('SELECT 1 FROM photographers WHERE email = ?').bind(email).first()) {
+                return done({ error: '這個 Email 已經有帳號', code: 'email_taken' }, 409);
+              }
+              return done({ error: `尚未使用的邀請碼最多 ${PHOTOGRAPHER_INVITES_LIVE_MAX} 組，請先撤銷不用的`, code: 'invite_limit', max: PHOTOGRAPHER_INVITES_LIVE_MAX }, 409);
+            }
+            return done({ id, email, code, expires_at: expiresAt, note, replaced: replaced.meta.changes }, 201);
+          }
+          await env.DB.prepare('UPDATE photographer_invites SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL AND used_at IS NULL').bind(now, id).run();
+          const row = await env.DB.prepare(`${PHOTOGRAPHER_INVITE_VIEW_SQL} WHERE i.id = ?`).bind(id).first();
+          if (!row) return jsonErr('Not found', 404);
+          return done({ ok: true, invite: photographerInviteView(row, now) });
+        } catch (e) {
+          if (isMissingSchema(e)) return done(INVITES_UNAVAILABLE, 500);
+          throw e;
+        }
+      }
 
       // GET /api/operator/photographers — pending accounts first (so the cap
       // of 500 never hides one waiting for approval; at most 200 can wait),
@@ -4707,14 +4946,25 @@ async function routeRequest(request, env, ctx) {
       if (route === 'photographers' || route === 'photographer-action') {
         try {
           if (route === 'photographers') {
-            // must_change_password: true / false, null before its migration
-            const listSql = flag => `SELECT ${PHOTOGRAPHER_PUBLIC_COLUMNS}, ${flag} AS must_change_password FROM photographers ORDER BY status = 'pending' DESC, created_at DESC, rowid DESC LIMIT ${PHOTOGRAPHER_LIST_MAX}`;
-            const { results } = await withoutMissingColumn(
-              () => env.DB.prepare(listSql('must_change_password')).all(),
-              () => env.DB.prepare(listSql('NULL')).all(),
+            // must_change_password: true / false, null before its migration;
+            // invite_id: the invite code that made the account (created_via
+            // 'invite'), null for open sign-up — and for everyone before the
+            // invites migration, when no code can have made one. Two late
+            // pieces, each retried without on its own.
+            const listSql = (flag, invite) => `SELECT ${PHOTOGRAPHER_PUBLIC_COLUMNS}, ${flag} AS must_change_password, ${invite} AS invite_id FROM photographers ORDER BY status = 'pending' DESC, created_at DESC, rowid DESC LIMIT ${PHOTOGRAPHER_LIST_MAX}`;
+            const list = invite => withoutMissingColumn(
+              () => env.DB.prepare(listSql('must_change_password', invite)).all(),
+              () => env.DB.prepare(listSql('NULL', invite)).all(),
+            );
+            const { results } = await withoutMissingSchema(
+              () => list('(SELECT i.id FROM photographer_invites i WHERE i.used_by = photographers.id ORDER BY i.used_at LIMIT 1)'),
+              () => list('NULL'),
             );
             const pending = await env.DB.prepare("SELECT COUNT(*) AS n FROM photographers WHERE status = 'pending'").first();
-            return done({ photographers: results.map(r => ({ ...r, must_change_password: mustChangeFlag(r.must_change_password) })), pending_count: pending.n });
+            return done({
+              photographers: results.map(r => ({ ...r, must_change_password: mustChangeFlag(r.must_change_password), created_via: r.invite_id ? 'invite' : 'signup' })),
+              pending_count: pending.n,
+            });
           }
           const { from, to } = PHOTOGRAPHER_ACTIONS[action];
           let tempPassword = null;

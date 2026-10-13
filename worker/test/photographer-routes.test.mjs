@@ -431,7 +431,7 @@ test('without PHOTOGRAPHER_TOKEN configured nothing is the default photographer 
 test('the switch is one function, and wrangler.toml ships it off', () => {
   const fn = SRC.slice(SRC.indexOf('function photographerRoutesOpen('), SRC.indexOf('\n}\n', SRC.indexOf('function photographerRoutesOpen(')));
   assert.match(fn, /return env\.PHOTOGRAPHER_ROUTES === 'on';/);
-  assert.equal(codeCount('photographerRoutesOpen('), 2, 'its definition and identify');
+  assert.equal(codeCount('photographerRoutesOpen('), 3, 'its definition, identify and register-invite (closed while the switch is)');
   assert.equal(codeCount('PHOTOGRAPHER_ROUTES'), 1, 'read nowhere else');
   const toml = readFileSync(new URL('../wrangler.toml', import.meta.url), 'utf8');
   assert.match(toml, /^PHOTOGRAPHER_ROUTES = "off"$/m);
