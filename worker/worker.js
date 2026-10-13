@@ -535,6 +535,52 @@ async function reservePasswordAttempt(request, env, emailText) {
 }
 const TOO_MANY_ATTEMPTS = { error: '嘗試次數太多，請 15 分鐘後再試', code: 'too_many_attempts' };
 
+// ─── Photographer invite codes (docs/multi-photographer.md, 邀請碼) ─────────
+// The operator makes a one-use 8-digit code, valid one hour, shown once; the
+// photographer registers with it and the account is active at once (no
+// review, no Turnstile). Like the co-picking codes: stored only as an HMAC
+// keyed with its own wrangler secret, PHOTOGRAPHER_INVITE_SECRET (32+
+// characters); without it, or before the 2026-10-18 migration, every invite
+// route is 500 invites_unavailable and writes nothing. Change the limits here.
+const PHOTOGRAPHER_INVITE_SECRET_MIN = 32;
+const PHOTOGRAPHER_INVITE_MS = 60 * 60 * 1000;
+// unspent, unrevoked, unexpired codes at once: with the guess limits below
+// this bounds the chance a guesser hits any live code
+const PHOTOGRAPHER_INVITES_LIVE_MAX = 10;
+const PHOTOGRAPHER_INVITE_NOTE_MAX = 200;
+const PHOTOGRAPHER_INVITE_LIST_MAX = 200;
+const INVITES_UNAVAILABLE = { error: '邀請碼功能尚未啟用', code: 'invites_unavailable' };
+function photographerInviteSecretOk(env) {
+  return typeof env.PHOTOGRAPHER_INVITE_SECRET === 'string' && env.PHOTOGRAPHER_INVITE_SECRET.length >= PHOTOGRAPHER_INVITE_SECRET_MIN;
+}
+// Whether the migration has run (every column named).
+async function photographerInvitesReady(env) {
+  try {
+    await env.DB.prepare('SELECT id, code_hash, created_at, expires_at, used_at, used_by, revoked_at, note FROM photographer_invites WHERE 0').first();
+    return true;
+  } catch (e) {
+    if (isMissingSchema(e)) return false;
+    throw e;
+  }
+}
+// What is stored for a code: HMAC-SHA256 keyed with
+// PHOTOGRAPHER_INVITE_SECRET over 'photographer-invite:' + code, hex. A
+// leaked table alone reveals no live code; the lookup compares this hash in
+// SQL, never the code, so its time says nothing about how close a guess was.
+async function photographerInviteHash(env, code) {
+  const enc = new TextEncoder();
+  const key = await crypto.subtle.importKey('raw', enc.encode(env.PHOTOGRAPHER_INVITE_SECRET), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  return bytesHex(new Uint8Array(await crypto.subtle.sign('HMAC', key, enc.encode(`photographer-invite:${code}`))));
+}
+// An invite as the operator sees it (never code_hash), with who used it.
+const PHOTOGRAPHER_INVITE_VIEW_SQL = 'SELECT i.id, i.note, i.created_at, i.expires_at, i.used_at, i.used_by, i.revoked_at, ' +
+  'p.email AS used_by_email, p.display_name AS used_by_name FROM photographer_invites i LEFT JOIN photographers p ON p.id = i.used_by';
+function photographerInviteView(row, nowIso) {
+  const state = row.used_at ? 'used' : row.revoked_at ? 'revoked' : row.expires_at > nowIso ? 'live' : 'expired';
+  const { id, note, created_at, expires_at, used_at, used_by, revoked_at, used_by_email, used_by_name } = row;
+  return { id, note, state, created_at, expires_at, used_at, used_by, used_by_email, used_by_name, revoked_at };
+}
+
 // ─── Client share tokens ─────────────────────────────────────────────────────
 // Clients get an album link over LINE. Two things follow. LINE's crawler
 // pre-fetches the URL to build the preview card before anyone taps it, so a
@@ -4686,16 +4732,74 @@ async function routeRequest(request, env, ctx) {
       } else if (area === 'stats') route = !id ? 'stats' : null;
       else if (area === 'photographers') {
         route = !id ? 'photographers' : PHOTOGRAPHER_ACTIONS[action] ? 'photographer-action' : null;
+      } else if (area === 'photographer-invites') {
+        route = !id ? 'invites' : action === 'revoke' ? 'invite-revoke' : null;
       }
       const methods = {
         products: ['GET', 'POST'], product: ['PUT'], 'product-active': ['POST'], 'product-image': ['PUT', 'DELETE'], stats: ['GET'],
-        photographers: ['GET'], 'photographer-action': ['POST'],
+        photographers: ['GET'], 'photographer-action': ['POST'], invites: ['GET', 'POST'], 'invite-revoke': ['POST'],
       }[route];
       if (!methods) return jsonErr('Not found', 404);
       if (!methods.includes(request.method)) return jsonErr('Method not allowed', 405);
       if (!env.DB) return jsonErr('DB not configured', 500);
       const now = new Date().toISOString();
       const done = (data, status = 200) => jsonOk(data, status, ADMIN_ONLY_HEADERS);
+
+      // Photographer invite codes. The secret, then the migration (500
+      // invites_unavailable, nothing written), then the route. Not behind
+      // PHOTOGRAPHER_ROUTES: only registering with a code is.
+      // GET /api/operator/photographer-invites — newest first, ≤ 200, each
+      //   with its state and who used it; never a code or its hash.
+      // POST /api/operator/photographer-invites {note?} → 201 {id, code,
+      //   expires_at, note}: the only time the code leaves the Worker. One
+      //   conditional insert, so parallel creates never pass the live cap.
+      // POST /api/operator/photographer-invites/:id/revoke — an unspent code
+      //   stops working; a repeat (or a used code) changes nothing, 200; 404
+      //   for an id that is not there.
+      if (route === 'invites' || route === 'invite-revoke') {
+        if (!photographerInviteSecretOk(env)) return done(INVITES_UNAVAILABLE, 500);
+        try {
+          if (!await photographerInvitesReady(env)) return done(INVITES_UNAVAILABLE, 500);
+          if (route === 'invites' && request.method === 'GET') {
+            const { results } = await env.DB.prepare(
+              `${PHOTOGRAPHER_INVITE_VIEW_SQL} ORDER BY i.created_at DESC, i.rowid DESC LIMIT ${PHOTOGRAPHER_INVITE_LIST_MAX}`
+            ).all();
+            return done({ invites: results.map(r => photographerInviteView(r, now)) });
+          }
+          if (route === 'invites') {
+            const bytes = await readBodyCapped(request, PHOTOGRAPHER_BODY_MAX);
+            if (!bytes) return done({ error: '資料太大', code: 'too_large', max: PHOTOGRAPHER_BODY_MAX }, 413);
+            let body = {};
+            if (bytes.length) {
+              try { body = JSON.parse(new TextDecoder().decode(bytes)); } catch { return jsonErr('Invalid JSON'); }
+            }
+            if (!isPlainObject(body)) return done({ error: 'Invalid body', code: 'invalid_body' }, 400);
+            const rawNote = body.note ?? '';
+            if (typeof rawNote !== 'string' || overChars(rawNote.trim(), PHOTOGRAPHER_INVITE_NOTE_MAX) || ACCOUNT_CONTROL.test(rawNote)) {
+              return done({ error: `備註最多 ${PHOTOGRAPHER_INVITE_NOTE_MAX} 字，且只能一行`, code: 'invalid_note' }, 400);
+            }
+            const note = rawNote.trim() || null;
+            const code = pickInviteCode();
+            const id = randomHex(8);
+            const expiresAt = new Date(Date.parse(now) + PHOTOGRAPHER_INVITE_MS).toISOString();
+            const made = await env.DB.prepare(
+              'INSERT INTO photographer_invites (id, code_hash, created_at, expires_at, note) SELECT ?1, ?2, ?3, ?4, ?5 ' +
+              'WHERE (SELECT COUNT(*) FROM photographer_invites WHERE used_at IS NULL AND revoked_at IS NULL AND expires_at > ?3) < ?6'
+            ).bind(id, await photographerInviteHash(env, code), now, expiresAt, note, PHOTOGRAPHER_INVITES_LIVE_MAX).run();
+            if (!made.meta.changes) {
+              return done({ error: `尚未使用的邀請碼最多 ${PHOTOGRAPHER_INVITES_LIVE_MAX} 組，請先撤銷不用的`, code: 'invite_limit', max: PHOTOGRAPHER_INVITES_LIVE_MAX }, 409);
+            }
+            return done({ id, code, expires_at: expiresAt, note }, 201);
+          }
+          await env.DB.prepare('UPDATE photographer_invites SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL AND used_at IS NULL').bind(now, id).run();
+          const row = await env.DB.prepare(`${PHOTOGRAPHER_INVITE_VIEW_SQL} WHERE i.id = ?`).bind(id).first();
+          if (!row) return jsonErr('Not found', 404);
+          return done({ ok: true, invite: photographerInviteView(row, now) });
+        } catch (e) {
+          if (isMissingSchema(e)) return done(INVITES_UNAVAILABLE, 500);
+          throw e;
+        }
+      }
 
       // GET /api/operator/photographers — pending accounts first (so the cap
       // of 500 never hides one waiting for approval; at most 200 can wait),
