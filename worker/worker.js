@@ -4916,14 +4916,25 @@ async function routeRequest(request, env, ctx) {
       if (route === 'photographers' || route === 'photographer-action') {
         try {
           if (route === 'photographers') {
-            // must_change_password: true / false, null before its migration
-            const listSql = flag => `SELECT ${PHOTOGRAPHER_PUBLIC_COLUMNS}, ${flag} AS must_change_password FROM photographers ORDER BY status = 'pending' DESC, created_at DESC, rowid DESC LIMIT ${PHOTOGRAPHER_LIST_MAX}`;
-            const { results } = await withoutMissingColumn(
-              () => env.DB.prepare(listSql('must_change_password')).all(),
-              () => env.DB.prepare(listSql('NULL')).all(),
+            // must_change_password: true / false, null before its migration;
+            // invite_id: the invite code that made the account (created_via
+            // 'invite'), null for open sign-up — and for everyone before the
+            // invites migration, when no code can have made one. Two late
+            // pieces, each retried without on its own.
+            const listSql = (flag, invite) => `SELECT ${PHOTOGRAPHER_PUBLIC_COLUMNS}, ${flag} AS must_change_password, ${invite} AS invite_id FROM photographers ORDER BY status = 'pending' DESC, created_at DESC, rowid DESC LIMIT ${PHOTOGRAPHER_LIST_MAX}`;
+            const list = invite => withoutMissingColumn(
+              () => env.DB.prepare(listSql('must_change_password', invite)).all(),
+              () => env.DB.prepare(listSql('NULL', invite)).all(),
+            );
+            const { results } = await withoutMissingSchema(
+              () => list('(SELECT i.id FROM photographer_invites i WHERE i.used_by = photographers.id ORDER BY i.used_at LIMIT 1)'),
+              () => list('NULL'),
             );
             const pending = await env.DB.prepare("SELECT COUNT(*) AS n FROM photographers WHERE status = 'pending'").first();
-            return done({ photographers: results.map(r => ({ ...r, must_change_password: mustChangeFlag(r.must_change_password) })), pending_count: pending.n });
+            return done({
+              photographers: results.map(r => ({ ...r, must_change_password: mustChangeFlag(r.must_change_password), created_via: r.invite_id ? 'invite' : 'signup' })),
+              pending_count: pending.n,
+            });
           }
           const { from, to } = PHOTOGRAPHER_ACTIONS[action];
           let tempPassword = null;

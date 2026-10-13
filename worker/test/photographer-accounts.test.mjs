@@ -464,7 +464,9 @@ test('the operator list: pending first then newest first, a pending count, never
   assert.deepEqual(body.photographers.map(p => p.email), ['c@example.com', 'a@example.com', 'b@example.com']);
   assert.equal(body.pending_count, 2);
   assert.deepEqual(Object.keys(body.photographers[0]).sort(),
-    ['approved_at', 'created_at', 'display_name', 'dup_attempts', 'email', 'id', 'last_dup_at', 'last_login_at', 'must_change_password', 'status', 'studio_note']);
+    ['approved_at', 'created_at', 'created_via', 'display_name', 'dup_attempts', 'email', 'id', 'invite_id', 'last_dup_at', 'last_login_at', 'must_change_password', 'status', 'studio_note']);
+  // invite codes: how the account was made joined the list (photographer-invite-register.test.mjs)
+  assert.deepEqual(body.photographers.map(p => [p.created_via, p.invite_id]), [['signup', null], ['signup', null], ['signup', null]]);
   // 2b-0: must_change_password (a flag, not a secret) joined the list
   assert.ok(!text.includes('pbkdf2$') && !text.replaceAll('"must_change_password"', '').includes('password'), 'no hash');
   assert.ok(!text.includes(token) && !text.includes(await sha256Hex(token)), 'no token');

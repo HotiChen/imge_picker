@@ -507,3 +507,47 @@ test('a token minted by registering opens what a login token opens, and only whi
   assert.equal((await call(env, '/api/admin/projects', { token })).status, 401);
   assert.notEqual(token, SECRET);
 });
+
+// ─── the operator's account list ───────────────────────────────────────────
+
+const operatorList = async env => {
+  const res = await call(env, '/api/operator/photographers', { token: OP });
+  assert.equal(res.status, 200, await res.clone().text());
+  return res.json();
+};
+
+test('the operator list says how each account was made: created_via invite (with the invite id) or signup', async () => {
+  const env = envOn();
+  const signedUp = await seedPhotographer(env, { email: 'signup@example.com', status: 'pending' });
+  const { id: inviteId, code } = await newCode(env);
+  const { photographer } = await (await registerInvite(env, { invite_code: code })).json();
+  const { photographers } = await operatorList(env);
+  const by = Object.fromEntries(photographers.map(p => [p.id, p]));
+  assert.equal(by[photographer.id].created_via, 'invite');
+  assert.equal(by[photographer.id].invite_id, inviteId);
+  assert.equal(by[photographer.id].status, 'active');
+  assert.equal(by[signedUp.id].created_via, 'signup');
+  assert.equal(by[signedUp.id].invite_id, null);
+  // still never a hash, a code or a session
+  const text = JSON.stringify(photographers);
+  assert.ok(!text.includes('pbkdf2') && !text.includes(code) && !text.includes(invite(env, inviteId).code_hash));
+});
+
+test('the operator list before either migration: every account reads as signup; must_change_password as before', async () => {
+  for (const [schema, flag] of [[withoutInvitesTable(), false], [withoutInvitesTable(withoutMustChange()), null], [withoutMustChange(), null]]) {
+    const env = envOn({ DB: fakeDB({ schema }) });
+    const p = await seedPhotographer(env);
+    const { photographers } = await operatorList(env);
+    assert.equal(photographers.length, 1);
+    assert.equal(photographers[0].id, p.id);
+    assert.equal(photographers[0].created_via, 'signup');
+    assert.equal(photographers[0].invite_id, null);
+    assert.equal(photographers[0].must_change_password, flag);
+  }
+  // no must_change_password column, but the invites table: an invited account still says so
+  const env = envOn({ DB: fakeDB({ schema: withoutMustChange() }) });
+  const { id, code } = await newCode(env);
+  const { photographer } = await (await registerInvite(env, { invite_code: code })).json();
+  const [row] = (await operatorList(env)).photographers;
+  assert.deepEqual([row.id, row.created_via, row.invite_id, row.must_change_password], [photographer.id, 'invite', id, null]);
+});
