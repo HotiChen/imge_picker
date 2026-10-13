@@ -510,6 +510,24 @@ function photographerPasswordOk(password) {
 }
 const INVALID_PHOTOGRAPHER_PASSWORD = { error: `密碼需 ${PHOTOGRAPHER_PASSWORD_MIN}–${PHOTOGRAPHER_PASSWORD_MAX} 個字元`, code: 'invalid_password' };
 
+// The account fields of a registration, open sign-up and invite alike:
+// {email, password, name, note} or {refused: body} (the 400 to answer).
+function photographerSignupFields(body) {
+  const email = photographerEmail(body.email);
+  if (!email) return { refused: { error: 'Email 格式不正確', code: 'invalid_email' } };
+  const password = body.password;
+  if (!photographerPasswordOk(password)) return { refused: INVALID_PHOTOGRAPHER_PASSWORD };
+  const name = typeof body.display_name === 'string' ? body.display_name.trim() : '';
+  if (!name || overChars(name, PHOTOGRAPHER_NAME_MAX) || ACCOUNT_CONTROL.test(name)) {
+    return { refused: { error: `顯示名稱需 1–${PHOTOGRAPHER_NAME_MAX} 個字`, code: 'invalid_display_name' } };
+  }
+  const rawNote = body.studio_note ?? '';
+  if (typeof rawNote !== 'string' || overChars(rawNote.trim(), PHOTOGRAPHER_NOTE_MAX) || ACCOUNT_NOTE_CONTROL.test(rawNote)) {
+    return { refused: { error: `工作室說明最多 ${PHOTOGRAPHER_NOTE_MAX} 字`, code: 'invalid_studio_note' } };
+  }
+  return { email, password, name, note: rawNote.trim() || null };
+}
+
 // The password throttle, shared by login and change-password: this attempt
 // reserves one row per key (the client's network and the email) in one
 // conditional insert, before any PBKDF2, so parallel guesses cannot pass the
@@ -571,6 +589,40 @@ async function photographerInviteHash(env, code) {
   const enc = new TextEncoder();
   const key = await crypto.subtle.importKey('raw', enc.encode(env.PHOTOGRAPHER_INVITE_SECRET), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
   return bytesHex(new Uint8Array(await crypto.subtle.sign('HMAC', key, enc.encode(`photographer-invite:${code}`))));
+}
+// Refused registrations with a code (wrong, used, expired, revoked,
+// malformed, or an email already taken) per window, per network (IPv6 by
+// /64) and for everyone together, then 429 before the code is looked at.
+// Worst case a guesser gets ALL guesses per window against at most
+// PHOTOGRAPHER_INVITES_LIVE_MAX live codes in 10^8: 240 an hour × 10 / 10^8,
+// ≈ 1 in 40,000 per hour of a full live set. The price: anyone can hold
+// invite registration shut for everyone by sending 60 bad codes per window.
+const PHOTOGRAPHER_INVITE_WINDOW_MS = 15 * 60 * 1000;
+const PHOTOGRAPHER_INVITE_FAILURES_NETWORK = 5;
+const PHOTOGRAPHER_INVITE_FAILURES_ALL = 60;
+const INVALID_INVITE = { error: '邀請碼不正確或已失效，或此 Email 無法使用', code: 'invalid_invite' };
+// The login throttle's pattern, in its table (photographer_login_failures)
+// under keys of its own, so invite guesses and password guesses never share a
+// count: this attempt reserves one row per key in one conditional insert, so
+// parallel guesses cannot pass either cap; a registration that lands deletes
+// its own rows in its batch, so what stays are refusals. Keys are SHA-256
+// peppered with the invite secret, never the address. The attempt id, or
+// null at either cap.
+async function reserveInviteAttempt(request, env) {
+  const now = Date.now();
+  const pepper = env.PHOTOGRAPHER_INVITE_SECRET;
+  const netKey = await sha256Hex(`photographer-invite-ip:${pepper}:${clientNetwork(request)}`);
+  const allKey = await sha256Hex(`photographer-invite-all:${pepper}`);
+  const attempt = randomHex(16);
+  const since = new Date(now - PHOTOGRAPHER_INVITE_WINDOW_MS).toISOString();
+  await env.DB.prepare('DELETE FROM photographer_login_failures WHERE created_at < ?').bind(new Date(now - 24 * 60 * 60 * 1000).toISOString()).run();
+  const reserved = await env.DB.prepare(
+    `INSERT INTO photographer_login_failures (key_hash, attempt, created_at)
+     SELECT k, ?, ? FROM (SELECT ? AS k UNION ALL SELECT ?)
+      WHERE (SELECT COUNT(*) FROM photographer_login_failures WHERE key_hash = ? AND created_at > ?) < ?
+        AND (SELECT COUNT(*) FROM photographer_login_failures WHERE key_hash = ? AND created_at > ?) < ?`
+  ).bind(attempt, new Date(now).toISOString(), netKey, allKey, netKey, since, PHOTOGRAPHER_INVITE_FAILURES_NETWORK, allKey, since, PHOTOGRAPHER_INVITE_FAILURES_ALL).run();
+  return reserved.meta.changes ? attempt : null;
 }
 // An invite as the operator sees it (never code_hash), with who used it.
 const PHOTOGRAPHER_INVITE_VIEW_SQL = 'SELECT i.id, i.note, i.created_at, i.expires_at, i.used_at, i.used_by, i.revoked_at, ' +
@@ -3538,7 +3590,7 @@ async function routeRequest(request, env, ctx) {
     // 404/405 here, so nothing falls through to the upload route.
     if (pathParts[0] === 'api' && pathParts[1] === 'photographer') {
       const route = pathParts.length === 3 ? pathParts[2] : null;
-      const method = Object.assign(Object.create(null), { register: 'POST', login: 'POST', logout: 'POST', 'change-password': 'POST', me: 'GET' })[route];
+      const method = Object.assign(Object.create(null), { register: 'POST', 'register-invite': 'POST', login: 'POST', logout: 'POST', 'change-password': 'POST', me: 'GET' })[route];
       if (!method) return jsonErr('Not found', 404);
       if (request.method !== method) return jsonErr('Method not allowed', 405);
       const reply = (data, status = 200) => jsonOk(data, status, PHOTOGRAPHER_NO_STORE);
@@ -3556,6 +3608,13 @@ async function routeRequest(request, env, ctx) {
       // closed before anything is read: a typo in the switch, or no secret
       if (route === 'register' && (env.PHOTOGRAPHER_SIGNUP !== 'on' || !env.TURNSTILE_SECRET)) {
         return reply({ error: '目前未開放註冊', code: 'registration_closed' }, 403);
+      }
+      // registering with an invite code gives an account that opens every
+      // photographer route at once, so it is closed while they are
+      // (PHOTOGRAPHER_ROUTES, before anything is read), then needs the secret
+      if (route === 'register-invite') {
+        if (!photographerRoutesOpen(env)) return reply({ error: '目前未開放註冊', code: 'registration_closed' }, 403);
+        if (!photographerInviteSecretOk(env)) return reply(INVITES_UNAVAILABLE, 500);
       }
       if (!env.DB) return jsonErr('DB not configured', 500);
 
@@ -3579,6 +3638,8 @@ async function routeRequest(request, env, ctx) {
           who = session.who;
           if (who.must_change_password === null) return reply(PASSWORD_CHANGE_UNAVAILABLE, 500);
         }
+        // before the invite migration: nothing read, nothing written
+        if (route === 'register-invite' && !await photographerInvitesReady(env)) return reply(INVITES_UNAVAILABLE, 500);
 
         const parsed = await readJsonCapped(request, PHOTOGRAPHER_BODY_MAX);
         if (parsed.refused) return parsed.refused;
@@ -3675,25 +3736,69 @@ async function routeRequest(request, env, ctx) {
           return reply({ ok: true, token: newToken });
         }
 
+        // POST /api/photographer/register-invite — {email, password,
+        // display_name, studio_note?, invite_code} → 201 {token, photographer,
+        // must_change_password} (login's answer). Fields (400, as /register),
+        // the guess throttle (429, before the code is looked at), then the
+        // code. Every refusal after the throttle — a wrong, used, expired,
+        // revoked or malformed code, or an email that already has an account
+        // — is the one 400 invalid_invite. One batch: the code is spent (live,
+        // and only if the email is free), and only its spender's account
+        // (active, approved now), session and release of its throttle rows
+        // land after it; so of two racing registrations exactly one makes an
+        // account, and a taken email never burns the code.
+        if (route === 'register-invite') {
+          const fields = photographerSignupFields(body);
+          if (fields.refused) return reply(fields.refused, 400);
+          const attempt = await reserveInviteAttempt(request, env);
+          if (!attempt) return reply(TOO_MANY_ATTEMPTS, 429);
+          const invalid = () => reply(INVALID_INVITE, 400);
+          const code = body.invite_code;
+          if (typeof code !== 'string' || !/^\d{8}$/.test(code)) return invalid();
+          const found = await env.DB.prepare(
+            'SELECT id FROM photographer_invites WHERE code_hash = ? AND used_at IS NULL AND revoked_at IS NULL AND expires_at > ? ORDER BY created_at, rowid LIMIT 1'
+          ).bind(await photographerInviteHash(env, code), new Date().toISOString()).first();
+          if (!found) return invalid();
+          const id = randomHex(8);
+          const passwordHash = await hashPhotographerPassword(fields.password);
+          const token = randomHex(32);
+          const now = Date.now();
+          const nowIso = new Date(now).toISOString();
+          const spentBy = 'EXISTS (SELECT 1 FROM photographer_invites WHERE id = ? AND used_by = ?)';
+          const [spent] = await env.DB.batch([
+            env.DB.prepare(
+              'UPDATE photographer_invites SET used_at = ?1, used_by = ?2 WHERE id = ?3 AND used_at IS NULL AND revoked_at IS NULL AND expires_at > ?1 ' +
+              'AND NOT EXISTS (SELECT 1 FROM photographers WHERE email = ?4)'
+            ).bind(nowIso, id, found.id, fields.email),
+            // must_change_password is not named: its default 0 where the
+            // column exists, and the insert runs before that migration too
+            env.DB.prepare(
+              `INSERT INTO photographers (id, email, password_hash, display_name, studio_note, status, created_at, approved_at) SELECT ?, ?, ?, ?, ?, 'active', ?, ? WHERE ${spentBy}`
+            ).bind(id, fields.email, passwordHash, fields.name, fields.note, nowIso, nowIso, found.id, id),
+            env.DB.prepare(
+              `INSERT INTO photographer_sessions (token_hash, photographer_id, created_at, expires_at) SELECT ?, ?, ?, ? WHERE ${spentBy}`
+            ).bind(await sha256Hex(token), id, nowIso, new Date(now + PHOTOGRAPHER_SESSION_MS).toISOString(), found.id, id),
+            env.DB.prepare(`DELETE FROM photographer_login_failures WHERE attempt = ? AND ${spentBy}`).bind(attempt, found.id, id),
+          ]);
+          // spent by someone faster, revoked or expired in between, or the email taken
+          if (!spent.meta.changes) return invalid();
+          // must_change_password as login says it: null before its migration
+          const flag = await withoutMissingColumn(
+            () => env.DB.prepare('SELECT must_change_password FROM photographers WHERE id = ?').bind(id).first(),
+            () => ({ must_change_password: null }),
+          );
+          return reply({ token, photographer: { id, display_name: fields.name }, must_change_password: mustChangeFlag(flag?.must_change_password) }, 201);
+        }
+
         // POST /api/photographer/register — {email, password, display_name,
         // studio_note?, turnstileToken}. Fields (400), too many pending
         // (429 registration_busy), Turnstile (403), the per-network hour
         // (429 rate_limited), then one pending row — or, when the email is
         // taken, only that row's dup_attempts / last_dup_at bumped (the
         // operator sees a squatting signal), with the identical answer.
-        const email = photographerEmail(body.email);
-        if (!email) return reply({ error: 'Email 格式不正確', code: 'invalid_email' }, 400);
-        const password = body.password;
-        if (!photographerPasswordOk(password)) return reply(INVALID_PHOTOGRAPHER_PASSWORD, 400);
-        const name = typeof body.display_name === 'string' ? body.display_name.trim() : '';
-        if (!name || overChars(name, PHOTOGRAPHER_NAME_MAX) || ACCOUNT_CONTROL.test(name)) {
-          return reply({ error: `顯示名稱需 1–${PHOTOGRAPHER_NAME_MAX} 個字`, code: 'invalid_display_name' }, 400);
-        }
-        const rawNote = body.studio_note ?? '';
-        if (typeof rawNote !== 'string' || overChars(rawNote.trim(), PHOTOGRAPHER_NOTE_MAX) || ACCOUNT_NOTE_CONTROL.test(rawNote)) {
-          return reply({ error: `工作室說明最多 ${PHOTOGRAPHER_NOTE_MAX} 字`, code: 'invalid_studio_note' }, 400);
-        }
-        const note = rawNote.trim() || null;
+        const fields = photographerSignupFields(body);
+        if (fields.refused) return reply(fields.refused, 400);
+        const { email, password, name, note } = fields;
         // a flood of sign-ups waits for the operator to catch up (before
         // Turnstile, which costs a call)
         const pending = await env.DB.prepare("SELECT COUNT(*) AS n FROM photographers WHERE status = 'pending'").first();

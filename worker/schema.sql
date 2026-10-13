@@ -633,6 +633,9 @@ CREATE INDEX IF NOT EXISTS idx_photographer_signups_ip ON photographer_signups(i
 -- guesses cannot pass the cap) and deleted when that attempt succeeds: what
 -- stays are failures. Two keys per attempt, the IP (/64 for IPv6) and the
 -- email, each SHA-256; 10 per key per 15 minutes, then 429 before PBKDF2.
+-- Registering with a photographer invite code throttles here too, under keys
+-- of its own (the network, and one shared by everyone), so the two never
+-- share a count.
 CREATE TABLE IF NOT EXISTS photographer_login_failures (
   key_hash   TEXT NOT NULL,
   attempt    TEXT NOT NULL,     -- random per attempt, so a success removes only its own rows
