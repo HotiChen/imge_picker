@@ -157,11 +157,20 @@ Tim 的決定：除了「自助註冊 → 待審核」，operator 可以發**邀
      若衝突的是 pending 申請、被 reject 後，同一組碼還能用。查碼時排除用過／撤銷／過期的列並取最早的活碼，所以同 email 同碼的舊列不會擋住新的。
 - **must_change_password migration 還沒跑時（prod 現況）**：註冊照常 201，回應的 `must_change_password` 是 `null`（和登入一致）。但守門會把
   `null` 當「未知」：這個 session 除了 `/me`、`/logout` 以外都 500 `password_change_unavailable`。所以**開放邀請之前要先跑 2026-10-15 的 migration**。
+- **接受的取捨**（審查後確認，不再修）：
+  - **鎖住單一受邀者**：知道某位受邀者 email 的人，每送 5 次錯碼就能讓**那個 email** 15 分鐘無法用邀請碼註冊（其他人不受影響）。
+    限速 key 綁 email，不綁邀請碼，所以 **operator 重發新碼不會重置**；遇到時請受邀者等 15 分鐘再試。若真的發生、變成常態，
+    解法是把碼改成更長的 base32（猜的空間大到可以放寬每 email 的次數），不是加回全體共用的計數。
+  - **每次過了限速都跑 PBKDF2**（為了消除計時 oracle）：攻擊者每個網路每 15 分鐘能讓 Worker 跑 5 次 PBKDF2，換網路就能再多跑。
+    建議在 Cloudflare 後台（WAF → Rate limiting rules，dashboard 設定、不在 repo 裡）對 `/api/photographer/login` 與
+    `/api/photographer/register-invite` 加一條「每個 IP」的限速規則，在請求到 Worker 之前就擋掉暴量。
 - 停用：邀請建立的帳號就是普通 active 帳號，operator 的停用／重設密碼照舊（立即踢掉 session）。
 - 測試：`worker/test/photographer-invites.test.mjs`（migration、operator 三條路由）、`worker/test/photographer-invite-register.test.mjs`（註冊、無 oracle、
   重放、競態含「查完碼到 batch 之間被撤銷／過期」、email 衝突、限速、開關、secret、兩個 migration 前、不進 log、停用、operator 清單）。
 - **Tim 要做**（開放前）：(1) D1 Console 依序跑 `2026-10-15-photographer-must-change-password.sql`（若還沒跑）與 `2026-10-18-photographer-invites.sql`，
-  再用 `SELECT id FROM photographer_invites LIMIT 1` 確認表在；(2) `wrangler secret put PHOTOGRAPHER_INVITE_SECRET`（32 字元以上的隨機字串，例如
+  再用 `SELECT id, email FROM photographer_invites LIMIT 1` 確認表在、而且有 `email` 欄。**如果曾經跑過審查前的 3 句版本**（沒有 `email` 欄；
+  `CREATE TABLE IF NOT EXISTS` 不會補欄位，Worker 會一律回 500 `invites_unavailable`），先 `DROP TABLE photographer_invites`（那時不可能有任何有效的碼），
+  再跑現在的 4 句檔案；(2) `wrangler secret put PHOTOGRAPHER_INVITE_SECRET`（32 字元以上的隨機字串，例如
   `openssl rand -hex 32`）；(3) 註冊頁與 operator 頁的邀請碼 UI（前端，尚未做）；(4) 要真的開放時才把 `PHOTOGRAPHER_ROUTES` 改成 `"on"`（這個開關同時開放所有攝影師路由，先安全審查）。
 - 沒驗證到的：真 D1 batch 的交易語意（測試用 node:sqlite 模擬「batch 之間不會交錯」）、真 Workers 上 PBKDF2 的耗時、`CF-Connecting-IP` 在正式環境的值。
 
