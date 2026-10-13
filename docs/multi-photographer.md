@@ -145,11 +145,13 @@ Tim 的決定：除了「自助註冊 → 待審核」，operator 可以發**邀
      格式不對、email 不對、email 已被用也算失敗。
      猜中機率：猜的人必須知道受邀的 email；每個 email 每小時最多 20 次 ÷ 10^8（不管換多少網路），同時最多 10 個 email 有活碼。
      **剩下的代價**：知道某個受邀 email 的人，可以送錯碼讓**那個 email** 暫時（15 分鐘）無法註冊；其他受邀者不受影響。Tim 可以等 15 分鐘再請對方註冊。
-  5. 碼：用「這個 email + 碼」的 HMAC 去查，所以別的 email 的碼查不到。錯的、用過的、過期的、撤銷的、格式不對的、**email 不是受邀的那個**、
+  5. **先算密碼雜湊**（一次 PBKDF2，最慢的一步），再看碼：過了限速的每一次嘗試都付同樣的代價，所以「拒絕」和「成功」花的時間一樣，
+     也看不出是哪一關拒絕的（審查後改；原本只有碼有效時才跑 PBKDF2，時間會洩漏碼是否有效）。限速之前的拒絕（欄位錯、429）不跑 PBKDF2。
+  6. 碼：用「這個 email + 碼」的 HMAC 去查，所以別的 email 的碼查不到。錯的、用過的、過期的、撤銷的、格式不對的、**email 不是受邀的那個**、
      **或 email 已經有帳號**（邀請發出後才出現的帳號；任何狀態、大小寫／空白不同也算）→ **同一個** 400
      `{error:'邀請碼不正確或已失效，或此 Email 無法使用', code:'invalid_invite'}`。訊息刻意涵蓋這些情況。
      **剩下的洩漏**：只有受邀者本人（手上有碼、也知道自己的 email）才能看出「我的 email 已經有帳號」，而 operator 發碼時就已經擋掉有帳號的 email。
-  6. 一個 batch（D1 = 一個 transaction）：先「用掉碼」（`UPDATE … WHERE 未用 AND 未撤銷 AND 未過期 AND email 不存在`），之後的帳號 INSERT（`active`、
+  7. 一個 batch（D1 = 一個 transaction）：先「用掉碼」（`UPDATE … WHERE 未用 AND 未撤銷 AND 未過期 AND email 不存在`），之後的帳號 INSERT（`active`、
      `approved_at = created_at`、PBKDF2、`must_change_password` 不寫 → 預設 0）、session INSERT、釋放限速列都以「這個碼的 `used_by` 是我這個新 id」為條件。
      所以兩個人同時用同一個碼只會建立一個帳號；email 衝突時碼不會被用掉、既有帳號（含 suspended、id 為 `default` 的列）完全不變；
      若衝突的是 pending 申請、被 reject 後，同一組碼還能用。查碼時排除用過／撤銷／過期的列並取最早的活碼，所以同 email 同碼的舊列不會擋住新的。

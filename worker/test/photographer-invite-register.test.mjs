@@ -487,6 +487,50 @@ test('throttle: invite guesses and logins keep separate counts', async () => {
   assert.equal((await registerInvite(env2, { invite_code: fresh.code })).status, 201, 'failed logins do not lock invites');
 });
 
+// ─── no timing oracle ──────────────────────────────────────────────────────
+
+test('every attempt past the throttle runs exactly one PBKDF2 (the password hash) before the code is looked at, so a refusal takes as long as a success; refused before the throttle, none', async () => {
+  const env = envOn();
+  const live = await newCode(env, { email: 'live@example.com' });
+  const expired = await newCode(env, { email: 'expired@example.com' });
+  setInvite(env, expired.id, 'expires_at', past());
+  const taken = await newCode(env, { email: 'taken@example.com' });
+  await seedPhotographer(env, { email: 'taken@example.com' });
+  const subtle = globalThis.crypto.subtle;
+  const real = subtle.deriveBits;
+  let runs = 0;
+  let order = [];
+  subtle.deriveBits = function (...a) { runs++; order.push('pbkdf2'); return real.apply(this, a); };
+  const realPrepare = env.DB.prepare.bind(env.DB);
+  env.DB.prepare = sql => { if (/FROM photographer_invites WHERE code_hash/.test(sql)) order.push('lookup'); return realPrepare(sql); };
+  try {
+    let n = 0;
+    for (const [email, invite_code, status] of [
+      ['live@example.com', '00000000', 400], ['live@example.com', 'abc', 400], ['live@example.com', undefined, 400],
+      ['expired@example.com', expired.code, 400], ['stranger@example.com', live.code, 400], ['taken@example.com', taken.code, 400],
+      ['live@example.com', live.code, 201],
+    ]) {
+      env.DB._db.prepare('DELETE FROM photographer_login_failures').run();
+      runs = 0;
+      order = [];
+      const res = await registerInvite(env, { invite_code, email }, `192.0.2.${++n}`);
+      assert.equal(res.status, status, `${email} ${invite_code}`);
+      assert.equal(runs, 1, `${email} ${invite_code}: one PBKDF2`);
+      if (order.includes('lookup')) assert.deepEqual(order.slice(0, 2), ['pbkdf2', 'lookup'], `${email} ${invite_code}: the hash before the lookup`);
+    }
+    // before the throttle (a bad field, or 429): no PBKDF2 at all
+    runs = 0;
+    assert.equal((await registerInvite(env, { invite_code: live.code, password: 'short' })).status, 400);
+    assert.equal(runs, 0, 'a bad field: no PBKDF2');
+    for (let i = 0; i < 5; i++) await registerInvite(env, { invite_code: '00000000', email: `x${i}@example.com` }, '198.51.100.9');
+    runs = 0;
+    assert.equal((await registerInvite(env, { invite_code: '00000000', email: 'y@example.com' }, '198.51.100.9')).status, 429);
+    assert.equal(runs, 0);
+  } finally {
+    subtle.deriveBits = real;
+  }
+});
+
 // ─── never logged ──────────────────────────────────────────────────────────
 
 test('the code, the password and the token never reach the log', async () => {

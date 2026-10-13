@@ -3762,6 +3762,11 @@ async function routeRequest(request, env, ctx) {
           if (fields.refused) return reply(fields.refused, 400);
           const attempt = await reserveInviteAttempt(request, env, fields.email);
           if (!attempt) return reply(TOO_MANY_ATTEMPTS, 429);
+          // the password hash (one PBKDF2, the slow step) before anything
+          // about the code is known: every attempt past the throttle pays it,
+          // so a refusal takes as long as a success and the time says
+          // nothing about which check refused it
+          const passwordHash = await hashPhotographerPassword(fields.password);
           const invalid = () => reply(INVALID_INVITE, 400);
           const code = body.invite_code;
           if (typeof code !== 'string' || !/^\d{8}$/.test(code)) return invalid();
@@ -3770,7 +3775,6 @@ async function routeRequest(request, env, ctx) {
           ).bind(await photographerInviteHash(env, fields.email, code), new Date().toISOString()).first();
           if (!found) return invalid();
           const id = randomHex(8);
-          const passwordHash = await hashPhotographerPassword(fields.password);
           const token = randomHex(32);
           const now = Date.now();
           const nowIso = new Date(now).toISOString();
