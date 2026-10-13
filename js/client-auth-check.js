@@ -32,6 +32,8 @@
     btn.className = 'btn btn-outline';
     btn.textContent = '登出';
     btn.addEventListener('click', function () {
+      // an account session is ended on the Worker too (js/photographer-session.js); Tim's own token has nothing to end
+      if (window.PhotographerSession) window.PhotographerSession.logout();
       store.remove('studio_token');
       if (typeof CONFIG !== 'undefined') CONFIG.PHOTOGRAPHER_TOKEN = '';
       location.reload();

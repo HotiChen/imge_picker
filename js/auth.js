@@ -136,7 +136,7 @@
                 }
                 const must = data.must_change_password === true;
                 PhotographerSession.store(data.token, { mustChange: must });
-                if (must) { window.location.href = 'settings.html'; return; }
+                if (must) { window.location.href = PhotographerSession.settingsUrl(); return; }
                 CONFIG.PHOTOGRAPHER_TOKEN = data.token;
                 overlay.remove();
             } catch (e) {

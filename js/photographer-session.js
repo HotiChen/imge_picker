@@ -48,14 +48,18 @@
     clear();
   }
 
+  // settings.html resolved from this script's own address (js/ is beside it), so it is right from book_editor/ and
+  // r2_designer/ too, where a bare 'settings.html' would be a 404.
+  const me = document.currentScript && document.currentScript.src;
+  const settingsUrl = () => (me ? new URL('../settings.html', me).href : 'settings.html');
+
   // Where a flagged account may be: settings.html only.
   function guard() {
     if (!mustChange()) return;
     if (/\/settings\.html$/.test(location.pathname)) return;
-    const me = document.currentScript && document.currentScript.src;
-    location.replace(me ? new URL('../settings.html', me).href : 'settings.html');
+    location.replace(settingsUrl());
   }
 
-  window.PhotographerSession = { WORKER_URL, isSession, mustChange, store, setMust, clear, logout };
+  window.PhotographerSession = { WORKER_URL, isSession, mustChange, store, setMust, clear, logout, settingsUrl };
   guard();
 })();

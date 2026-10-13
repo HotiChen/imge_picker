@@ -1043,6 +1043,7 @@ function uploadWithProgress(item, key) {
         xhr.addEventListener('load', () => {
             if (xhr.status >= 200 && xhr.status < 300) return resolve();
             if (xhr.status === 401) {
+                if (window.PhotographerSession) window.PhotographerSession.logout();   // ends an account session on the Worker too
                 sessionStorage.removeItem('studio_token');
                 CONFIG.PHOTOGRAPHER_TOKEN = '';
             }
