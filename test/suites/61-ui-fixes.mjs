@@ -73,7 +73,7 @@ export default async function register() {
 // U11: a focused text field shows a ring, not only an orange border (client-login, settings)
 for (const [name, url, sel, mk] of [
   ['client-login', `${base}/client-login.html`, '.field', () => ({})],
-  ['settings', `${base}/settings.html`, '.field', () => { const m = adminMock(); return { before: m.attach, initScript: ADMIN }; }],
+  ['settings', `${base}/settings.html`, '.field >> visible=true', () => { const m = adminMock(); return { before: m.attach, initScript: ADMIN }; }],
 ]) {
   await suite(`focus ring — a focused ${name} field gets a visible ring`,
     url,
