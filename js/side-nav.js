@@ -54,6 +54,8 @@
   // to flip back to here, so leaving the token behind just means home.html's
   // login overlay asks again.
   function logoutToHome() {
+    // an account session is ended on the Worker too (js/photographer-session.js); Tim's own token just goes
+    if (window.PhotographerSession) window.PhotographerSession.logout();
     try { sessionStorage.removeItem('studio_token'); } catch (e) { /* best effort */ }
     window.location.href = 'home.html';
   }

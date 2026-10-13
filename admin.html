@@ -372,6 +372,7 @@
   .ord-editor-foot { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end; margin-top: 8px; }
   .ord-editor-foot .field { padding: 6px 8px; font-size: 13px; }
 </style>
+<script src="js/photographer-session.js?v=20261012r"></script>
 </head>
 <body>
 
@@ -725,6 +726,7 @@
   PasswordToggle.attach(document.getElementById('admin-token-input'));
   document.getElementById('admin-token-input').addEventListener('keydown', e => { if (e.key === 'Enter') tryAdminLogin(); });
   function doLogout() {
+    if (window.PhotographerSession) PhotographerSession.logout();   // an account session is ended on the Worker too
     sessionStorage.removeItem(TOKEN_KEY);
     clearInterval(autoRefreshTimer);
     adminView.style.display = 'none';

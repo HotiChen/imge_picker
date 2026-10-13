@@ -193,6 +193,9 @@
   }
   .field:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-dim); }
   .err { color: var(--danger); font-size: 12px; margin-top: 8px; min-height: 16px; }
+  .login-switch { background: none; border: none; color: var(--ink-55); font-size: 12px; font-family: inherit; text-decoration: underline; cursor: pointer; margin-top: 14px; padding: 12px 8px; min-height: 44px; }
+  .login-switch:hover { color: var(--ink-90); }
+  #loginEmailPane[hidden], #loginTokenPane[hidden] { display: none; }
 
   @media (max-width: 780px) {
     .hero { grid-template-columns: 1fr; padding: 40px 16px 32px; gap: 40px; }
@@ -210,6 +213,7 @@
     .hero h1 { font-size: 32px; }
   }
 </style>
+<script src="js/photographer-session.js?v=20261012r"></script>
 </head>
 <body>
 
@@ -285,16 +289,26 @@
 
 <footer>選圖工作室 · imhoti</footer>
 
-<!-- Login overlay — reuses the admin-token login already used on admin.html:
-     verified against GET /api/admin/settings, token kept in
-     sessionStorage.studio_token, never anywhere new. -->
+<!-- Login overlay — two ways in, one place for the result (sessionStorage.studio_token):
+     the studio password (verified against GET /api/admin/settings, as admin.html does) or a
+     photographer account's email + password (POST /api/photographer/login, js/photographer-session.js). -->
 <div class="login-overlay" id="loginOverlay">
   <div class="login-card">
     <button class="close-btn" id="loginCloseBtn" type="button" aria-label="關閉">×</button>
     <div class="brand-mono">STUDIO</div>
-    <div class="subtitle">輸入攝影師密碼以繼續</div>
-    <input id="loginTokenInput" type="password" placeholder="攝影師密碼" class="field">
-    <button id="loginSubmitBtn" class="btn btn-accent" style="width:100%;justify-content:center;" type="button">進入管理後台</button>
+    <div id="loginTokenPane">
+      <div class="subtitle">輸入攝影師密碼以繼續</div>
+      <input id="loginTokenInput" type="password" placeholder="攝影師密碼" class="field">
+      <button id="loginSubmitBtn" class="btn btn-accent" style="width:100%;justify-content:center;" type="button">進入管理後台</button>
+      <button id="loginModeEmail" class="login-switch" type="button">改用 Email 登入</button>
+    </div>
+    <div id="loginEmailPane" hidden>
+      <div class="subtitle">用 Email 和密碼登入</div>
+      <input id="loginEmailInput" type="email" placeholder="Email" class="field" autocomplete="username" autocapitalize="none" spellcheck="false" inputmode="email">
+      <input id="loginPwInput" type="password" placeholder="密碼" class="field" autocomplete="current-password">
+      <button id="loginEmailSubmit" class="btn btn-accent" style="width:100%;justify-content:center;" type="button">登入</button>
+      <button id="loginModeToken" class="login-switch" type="button">改用攝影師密碼</button>
+    </div>
     <div id="loginErr" class="err"></div>
   </div>
 </div>
@@ -306,9 +320,10 @@
   const WORKER_URL = 'https://imagepicker.hotichen.workers.dev';
   const TOKEN_KEY = 'studio_token';
 
-  // Already signed in from an earlier visit — go straight to the dashboard.
+  // Already signed in from an earlier visit — go straight to the dashboard (an account that must change its
+  // password first goes to settings.html: js/photographer-session.js has sent it there already).
   if (sessionStorage.getItem(TOKEN_KEY)) {
-    window.location.href = 'dashboard.html';
+    window.location.href = PhotographerSession.mustChange() ? 'settings.html' : 'dashboard.html';
     return;
   }
 
@@ -318,10 +333,26 @@
   const errEl = document.getElementById('loginErr');
   const submitBtn = document.getElementById('loginSubmitBtn');
 
+  const tokenPane = document.getElementById('loginTokenPane');
+  const emailPane = document.getElementById('loginEmailPane');
+  const emailInput = document.getElementById('loginEmailInput');
+  const pwInput = document.getElementById('loginPwInput');
+  const pwEye = PasswordToggle.attach(pwInput);
+  const emailBtn = document.getElementById('loginEmailSubmit');
+
+  function showMode(email) {
+    tokenPane.hidden = email;
+    emailPane.hidden = !email;
+    errEl.textContent = '';
+    (email ? emailInput : input).focus();
+  }
   function openOverlay() {
     errEl.textContent = '';
     input.value = '';
+    emailInput.value = ''; pwInput.value = '';
     eye.hide();   // a reopened login starts hidden
+    pwEye.hide();
+    tokenPane.hidden = false; emailPane.hidden = true;
     overlay.classList.add('open');
     input.focus();
   }
@@ -354,6 +385,43 @@
 
   submitBtn.addEventListener('click', tryLogin);
   input.addEventListener('keydown', e => { if (e.key === 'Enter') tryLogin(); });
+
+  // ── email + password (a photographer account) ─────────────────────────────
+  const LOGIN_ERRORS = {
+    login_failed: '帳號或密碼不正確，或帳號尚未開通',
+    too_many_attempts: '嘗試次數太多，請 15 分鐘後再試',
+    photographers_unavailable: '帳號登入功能尚未啟用',
+  };
+  async function tryEmailLogin() {
+    const email = emailInput.value.trim();
+    const password = pwInput.value;
+    if (!email || !password) { errEl.textContent = '請輸入 Email 和密碼'; return; }
+    errEl.textContent = '';
+    emailBtn.disabled = true;
+    try {
+      const r = await fetch(`${WORKER_URL}/api/photographer/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password }),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok || typeof data.token !== 'string' || !data.token) {
+        errEl.textContent = LOGIN_ERRORS[data && data.code] || (r.status === 429 ? LOGIN_ERRORS.too_many_attempts : `登入失敗（${r.status}）`);
+        return;
+      }
+      const must = data.must_change_password === true;
+      PhotographerSession.store(data.token, { mustChange: must });
+      window.location.href = must ? 'settings.html' : 'dashboard.html';
+    } catch (e) {
+      errEl.textContent = '無法連線到 Worker';
+    } finally {
+      emailBtn.disabled = false;
+    }
+  }
+  document.getElementById('loginModeEmail').addEventListener('click', () => showMode(true));
+  document.getElementById('loginModeToken').addEventListener('click', () => showMode(false));
+  emailBtn.addEventListener('click', tryEmailLogin);
+  [emailInput, pwInput].forEach(el => el.addEventListener('keydown', e => { if (e.key === 'Enter') tryEmailLogin(); }));
 })();
 </script>
 </body>

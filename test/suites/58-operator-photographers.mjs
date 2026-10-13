@@ -153,8 +153,8 @@ const buttons = (page, id) => page.$$eval(`${row(id)} button[data-action]`, bs =
       const temp = f.st.temps[0];
       ok('重設密碼 (confirmed) shows the temp password in the box (computed display), naming whose it is',
         (await disp(page, '#ph-temp')) !== 'none' && (await page.inputValue('#ph-temp-pw')) === temp && (await T(page, '#ph-temp-who')).includes('d@example.com'), temp);
-      ok('the box does not promise the photographer can change it themselves (no such route yet)',
-        !(await T(page, '#ph-temp')).includes('請對方改密碼') && (await T(page, '#ph-temp')).includes('還沒有自己改密碼的功能'));
+      ok('the box says the person must change the temp password at the next login (settings has a change-password form now)',
+        (await T(page, '#ph-temp')).includes('會被要求先改成自己的密碼') && !(await T(page, '#ph-temp')).includes('還沒有自己改密碼的功能'));
       ok('the box is read-only', (await page.getAttribute('#ph-temp-pw', 'readonly')) !== null);
       ok('the temp password is nowhere but the box: not in the list, not in storage',
         !(await page.textContent('#ph-list')).includes(temp) &&
