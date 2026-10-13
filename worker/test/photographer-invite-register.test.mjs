@@ -473,6 +473,49 @@ test('throttle: another email than the invited one counts as a refused attempt; 
   assert.equal((await registerInvite(env, { invite_code: other.code, email: 'y@example.com' })).status, 429);
 });
 
+test('throttle window: refusals newer than 15 minutes count, older ones do not — for the network key and the email key alike', async () => {
+  const ago = ms => new Date(Date.now() - ms).toISOString();
+  for (const which of ['network', 'email']) {
+    const env = envOn();
+    const { code } = await newCode(env);
+    // five refusals: same network (other emails), or same email (other networks)
+    for (let i = 0; i < 5; i++) {
+      const res = which === 'network'
+        ? await registerInvite(env, { invite_code: '00000000', email: `g${i}@example.com` })
+        : await registerInvite(env, { invite_code: '00000000' }, `10.9.0.${i + 1}`);
+      assert.equal(res.status, 400);
+    }
+    const attempt = () => registerInvite(env, { invite_code: code }, which === 'network' ? IP : '10.9.1.1');
+    // just inside the window: they still count
+    env.DB._db.prepare('UPDATE photographer_login_failures SET created_at = ?').run(ago(15 * 60 * 1000 - 5000));
+    assert.equal((await attempt()).status, 429, `${which}: 14m55s ago still counts`);
+    // just outside it: they no longer do
+    env.DB._db.prepare('UPDATE photographer_login_failures SET created_at = ?').run(ago(15 * 60 * 1000 + 5000));
+    assert.equal((await attempt()).status, 201, `${which}: 15m05s ago no longer counts`);
+  }
+});
+
+test('throttle keys are SHA-256 of a prefix, the invite secret and the value — never a bare hash of the address or the email, never the login\'s keys', async () => {
+  const env = envOn({ TURNSTILE_SECRET: 'ts' });
+  assert.equal((await registerInvite(env, { invite_code: '00000000' })).status, 400);
+  const keys = rows(env, 'SELECT key_hash FROM photographer_login_failures').map(r => r.key_hash).sort();
+  const expected = [
+    await sha256Hex(`photographer-invite-ip:${INVITE_KEY}:${IP}`),
+    await sha256Hex(`photographer-invite-email:${INVITE_KEY}:ann@example.com`),
+  ].sort();
+  assert.deepEqual(keys, expected);
+  for (const bare of [IP, 'ann@example.com', 'Ann@Example.com', `photographer-invite-ip::${IP}`, `photographer-invite-email::ann@example.com`,
+    `photographer-login-ip:ts:${IP}`, 'photographer-login-email:ts:ann@example.com']) {
+    assert.ok(!keys.includes(await sha256Hex(bare)), `a key is sha256(${bare})`);
+  }
+  // another secret, other keys: the pepper is in them
+  const env2 = envOn({ PHOTOGRAPHER_INVITE_SECRET: 'z'.repeat(40) });
+  await registerInvite(env2, { invite_code: '00000000' });
+  const keys2 = rows(env2, 'SELECT key_hash FROM photographer_login_failures').map(r => r.key_hash);
+  assert.equal(keys2.length, 2);
+  assert.ok(keys2.every(k => !keys.includes(k)));
+});
+
 test('throttle: invite guesses and logins keep separate counts', async () => {
   const env = envOn();
   const { code } = await newCode(env);
