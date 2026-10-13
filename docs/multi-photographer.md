@@ -108,6 +108,53 @@ CREATE TABLE photographer_sessions (
 - Migration 前：登入、`/me` 照常（旗標 null）；改密碼 500 `password_change_unavailable` 不寫入；operator 重設密碼
   **500 `must_change_unavailable`、什麼都不寫**（2b-0 改：原本會換密碼但不強制更換，臨時密碼可能永遠不換，比不重設更糟）。
 
+### 1b. 邀請碼（`claude/photographer-invites`，只有 Worker）
+
+Tim 的決定：除了「自助註冊 → 待審核」，operator 可以發**邀請碼**；用有效邀請碼註冊的帳號**直接 active**（不審核、不需 Turnstile、
+不需 `PHOTOGRAPHER_SIGNUP`）。沒有邀請碼的自助註冊（`/register`、pending、Turnstile）完全不變。做法照抄協作者邀請碼
+（`docs/co-picking.md`）：8 位數字、1 小時、一次性、可撤銷、只存 HMAC、限速。
+
+- **Migration** `worker/migrations/2026-10-18-photographer-invites.sql`（3 句：一張新表 `photographer_invites` + 兩個 index，可重跑）。
+  欄位：`id`、`code_hash`、`created_at`、`expires_at`、`used_at`、`used_by`（建立的 `photographers.id`）、`revoked_at`、`note`。
+  需要先跑過 `2026-10-11-photographers.sql`（限速借用它的 `photographer_login_failures`）。
+- **Secret** `PHOTOGRAPHER_INVITE_SECRET`（至少 32 字元，和 `PICK_INVITE_SECRET` 分開）。`code_hash` = HMAC-SHA256(secret, `'photographer-invite:' + code`)；
+  邀請碼本身只在建立時回一次，D1、log、清單裡都沒有。換 secret = 所有未用的碼失效。
+- **operator 路由**（`OPERATOR_TOKEN`，其他一律 401）：
+  - `POST /api/operator/photographer-invites {note?}` → 201 `{id, code, expires_at, note}`。備註選填，≤ 200 字、單行。
+    同時最多 **10** 組「未用、未撤銷、未過期」的碼（條件式 INSERT，並行也過不了），超過 409 `invite_limit`。
+  - `GET /api/operator/photographer-invites` → `{invites:[{id, note, state, created_at, expires_at, used_at, used_by, used_by_email, used_by_name, revoked_at}]}`，
+    新的在前，最多 200 筆；`state` = `live | used | revoked | expired`。**沒有碼、沒有 hash**。
+  - `POST /api/operator/photographer-invites/:id/revoke` → 200 `{ok, invite}`；重按一樣 200、`revoked_at` 不變；已用過的碼不動（仍是 used）；不存在 404。
+  - 這三條**不受** `PHOTOGRAPHER_ROUTES` 影響（只是 operator 管碼，不給任何攝影師能力）。
+  - `GET /api/operator/photographers` 每列多 `created_via`（`invite` / `signup`）與 `invite_id`；migration 前全部是 `signup`、`null`。
+- **註冊** `POST /api/photographer/register-invite {email, password, display_name, studio_note?, invite_code}` → 201 `{token, photographer:{id, display_name}, must_change_password}`
+  （和登入同樣的回應，頁面可以直接登入）。**另開一條路由而不是擴充 `/register`**：兩者的開關不同（`PHOTOGRAPHER_ROUTES` + 邀請 secret vs.
+  `PHOTOGRAPHER_SIGNUP` + Turnstile），回應也不同（session vs. 一律 202），分開才能讓 `/register` 一個字都不改。
+  檢查順序：
+  1. `PHOTOGRAPHER_ROUTES` 不是 `"on"` → 403 `registration_closed`（還沒讀 body）。**開關關著時不能用邀請碼註冊**：這種帳號一建立就能打所有攝影師路由，
+     開關關著時沒有意義；碼不會被用掉。
+  2. 沒有 secret → 500 `invites_unavailable`；migration 前 → 500 `invites_unavailable`。都什麼都不寫（限速也不記）。
+  3. 欄位（同 `/register`：`invalid_email` / `invalid_password` / `invalid_display_name` / `invalid_studio_note`，400，不記次數）。
+  4. **限速**（在看碼之前，每次先預留、成功才刪掉）：同一網路（IPv4，或 IPv6 的 /64）15 分鐘 **5** 次、全體 15 分鐘 **60** 次失敗就 429 `too_many_attempts`。
+     存在 `photographer_login_failures`，key 是加了邀請 secret 的 SHA-256，和登入的計數**互不相干**。格式不對、email 已被用也算失敗。
+     猜中機率上限：每小時最多 240 次 × 最多 10 組活碼 ÷ 10^8 ≈ 每小時 1/40,000（活碼全滿時）。**代價**：任何人每 15 分鐘送 60 個錯碼，就能讓所有人暫時無法用邀請碼註冊（等 15 分鐘或 Tim 改用審核制）。
+  5. 碼：錯的、用過的、過期的、撤銷的、格式不對的、**或 email 已經有帳號**（任何狀態、大小寫／空白不同也算）→ **同一個** 400
+     `{error:'邀請碼不正確或已失效，或此 Email 無法使用', code:'invalid_invite'}`。訊息刻意涵蓋兩種情況：沒有碼的人分不出差別；
+     **剩下的洩漏**：手上有有效碼的人，可以先試某個 email（得到 400、碼沒用掉），再用別的 email 成功，推知前一個 email 已註冊。只有拿到 Tim 發的碼才做得到，且每次都算限速。
+  6. 一個 batch（D1 = 一個 transaction）：先「用掉碼」（`UPDATE … WHERE 未用 AND 未撤銷 AND 未過期 AND email 不存在`），之後的帳號 INSERT（`active`、
+     `approved_at = created_at`、PBKDF2、`must_change_password` 不寫 → 預設 0）、session INSERT、釋放限速列都以「這個碼的 `used_by` 是我這個新 id」為條件。
+     所以兩個人同時用同一個碼只會建立一個帳號；email 衝突時碼不會被用掉、既有帳號（含 suspended、id 為 `default` 的列）完全不變。
+     8 位數字久了會撞號：查碼時排除用過／撤銷／過期的列並取最早的活碼，所以舊的同號碼不會擋住新的。
+- **must_change_password migration 還沒跑時（prod 現況）**：註冊照常 201，回應的 `must_change_password` 是 `null`（和登入一致）。但守門會把
+  `null` 當「未知」：這個 session 除了 `/me`、`/logout` 以外都 500 `password_change_unavailable`。所以**開放邀請之前要先跑 2026-10-15 的 migration**。
+- 停用：邀請建立的帳號就是普通 active 帳號，operator 的停用／重設密碼照舊（立即踢掉 session）。
+- 測試：`worker/test/photographer-invites.test.mjs`（migration、operator 三條路由）、`worker/test/photographer-invite-register.test.mjs`（註冊、無 oracle、
+  重放、競態含「查完碼到 batch 之間被撤銷／過期」、email 衝突、限速、開關、secret、兩個 migration 前、不進 log、停用、operator 清單）。
+- **Tim 要做**（開放前）：(1) D1 Console 依序跑 `2026-10-15-photographer-must-change-password.sql`（若還沒跑）與 `2026-10-18-photographer-invites.sql`，
+  再用 `SELECT id FROM photographer_invites LIMIT 1` 確認表在；(2) `wrangler secret put PHOTOGRAPHER_INVITE_SECRET`（32 字元以上的隨機字串，例如
+  `openssl rand -hex 32`）；(3) 註冊頁與 operator 頁的邀請碼 UI（前端，尚未做）；(4) 要真的開放時才把 `PHOTOGRAPHER_ROUTES` 改成 `"on"`（這個開關同時開放所有攝影師路由，先安全審查）。
+- 沒驗證到的：真 D1 batch 的交易語意（測試用 node:sqlite 模擬「batch 之間不會交錯」）、真 Workers 上 PBKDF2 的耗時、`CF-Connecting-IP` 在正式環境的值。
+
 ### 2. 資料隔離（第 2 批）
 
 **第 2b-0 批（身分入口與總開關，只有 Worker，無 migration）**：
