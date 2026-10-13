@@ -602,7 +602,7 @@ test('no response ever carries a password hash', async () => {
 });
 
 // ─── HARD SAFETY RULE: a photographer session opens no existing route ──────
-// (while PHOTOGRAPHER_ROUTES is off, which is the shipped value)
+// (while PHOTOGRAPHER_ROUTES is off or unset; these tests build their own env and never read wrangler.toml)
 
 test('switch off: an active photographer session gets 401 on every existing admin, upload, operator and client route', async () => {
   const env = envOpen();
