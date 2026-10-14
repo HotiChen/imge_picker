@@ -295,7 +295,7 @@ Tim 的決定：除了「自助註冊 → 待審核」，operator 可以發**邀
 **第 3 批實作（2026-10-12，只有 Worker）— 3 notes**：migration `worker/migrations/2026-10-17-share-token-owner.sql`
 （1 句 `ALTER TABLE share_tokens ADD COLUMN photographer_id TEXT`，**合併前**由 Tim 在 D1 Console 手跑；重跑出現
 「duplicate column name」代表已經跑過）。`PHOTOGRAPHER_ROUTES` 仍是 `"off"`。
-- **單一入口 `bucketFor(env, photographerId)`**（回 `{get, head, put, list}`）：`default` 鍵不變，其他人加 `_t/<id>/`。
+- **單一入口 `bucketFor(env, photographerId)`**（回 `{get, head, put, list}`；之後加了 `delete`，見下面「刪除照片」）：`default` 鍵不變，其他人加 `_t/<id>/`。
   `env.imagepicker` 只准出現在它裡面（`r2-isolation.test.mjs` 掃描）。id 必須符合 `^[0-9a-z][0-9a-z_-]{0,63}$`
   （實際的 id 是 16 個小寫 hex），否則在任何讀寫之前丟錯（Worker 500），不會拼出路徑。
   - **`_t/` 對所有人保留**，在邏輯鍵上、加前綴之前、在 helper 裡檢查（`isTenantKey`：`_t` 或 `_t/…`）：get / head 當作不存在
@@ -369,6 +369,16 @@ Tim 的決定：除了「自助註冊 → 待審核」，operator 可以發**邀
   Worker 自己寫入仍是 NULL。migration 前的退路不變。測試：`worker/test/share-owner-default.test.mjs`。
 - 測試：`worker/test/photographer-suspend-links.test.mjs`。三個舊測試把專案直接改成 `'other'`（沒有帳號）來證明「看專案擁有者」，
   現在要先建一個 active 的 `'other'` 帳號；`guest-shop-read` 的「專案沒有攝影師」從空商店改成 401（連結根本不解析，更嚴）。
+
+**刪除照片（`claude/delete-photo`，只有 Worker，無 migration）**：
+- `bucketFor` 多了 `delete(key)`：和 `put` 同樣的鍵處理（邏輯鍵、`_t…` 保留鍵丟錯、加呼叫者前綴），一次只收**一個字串鍵**
+  （真 R2 也收陣列；helper 不收，所以沒有路由能一次掃過一串鍵繞過檢查）。`env.imagepicker` 仍只在 helper 裡（掃描測試不變）。
+  fake R2 補上 `delete(key | key[])`（和真 R2 一樣，刪不存在的鍵不算錯）與 `_deletes` 紀錄。
+- `DELETE /api/admin/photo?key=` 與 `GET /api/admin/photo/lock?key=`（標 `// scoped to the caller (who.id)`，非 default 攝影師也可用，
+  只刪自己前綴裡的物件）。別人的鍵 = 不存在的鍵：先在**自己的前綴**裡 `head`，沒有就 404，在任何 D1 語句之前，
+  所以回應與語句序列完全相同；B 刪同一個邏輯鍵只會刪到 `_t/B/…`，default 與 C 的同名物件不動。`_` 開頭（`_t/`、`_thumbs/`、`_books/`、`_assets/`）一律 400。
+  鎖只看**呼叫者自己**的專案（`WHERE photographer_id = who.id`）；相本鎖只對 default（相本還沒有擁有者）。
+  合約與鎖的規則見 `docs/delivery.md`「Deleting a photo」。測試：`worker/test/photo-delete.test.mjs`、`worker/test/r2-delete-helper.test.mjs`。
 
 ### 4. 每人設定與通知（第 4 批）
 
