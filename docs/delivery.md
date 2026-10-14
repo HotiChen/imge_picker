@@ -587,8 +587,19 @@ removed anything from R2. Worker only (the button comes later); no migration.
      (`order_items.photo_keys` of an order with `orders.photographer_id = who.id`),
      **every status, a cancelled order too** (conservative). Same match as the
      albums (contains the key, as is or URL-encoded; a value that does not
-     parse locks a key its text contains). One D1 statement, no R2, so it is
-     checked before the albums: an order lock answers without reading a book.
+     parse locks a key its text contains). **Guest album lines** store
+     `photo_keys '[]'` and `layout {source:'all_finals'}` — every photo under
+     the order's project's finals goes into the album — so an album line with
+     any layout (one that does not parse too) locks every photo its project's
+     `final_folders` cover (the order's own project, joined on
+     `projects.photographer_id = orders.photographer_id`; an order naming
+     another photographer's project id takes nothing). Same code
+     `photo_in_order` (one thing for the photographer to know: it is on an
+     order). An album line without a layout (an admin album) locks only the
+     keys it lists. Before the guest-order migration there is no `layout`
+     column and so no such line: the statement is retried without it (listed
+     keys still lock; no 500). One D1 statement, no R2, so it is checked
+     before the albums: an order lock answers without reading a book.
   6. `photo_in_album`: the default photographer only (books have no other owner
      yet): any string anywhere in any `_books/*.json` containing the key, as
      is or URL-encoded (slots, backgrounds, the editor's `_photoCache`, a field

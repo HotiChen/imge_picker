@@ -1128,7 +1128,9 @@ async function photoInAlbum(env, key) {
 //   delivered nor archived locks nothing: that is the retouched file
 //   uploaded by mistake, the case this exists for.
 // - on any order line of an order of `ownerId`'s (order_items.photo_keys,
-//   every status, a cancelled order too) → photo_in_order. One D1 statement;
+//   every status, a cancelled order too), or under the final_folders of the
+//   order's project when the line is an album with a layout (a guest album
+//   of all the finals) → photo_in_order. One D1 statement;
 //   checked before the albums, which cost an R2 read per book.
 // - frozen in a round the old-round thumbnail route serves (GET
 //   /api/pick/rounds/:id/photo): the pins of any revision_requests row, the
@@ -1153,9 +1155,17 @@ async function photoLock(env, ownerId, key) {
       'WHERE p.photographer_id = ?1 AND r.marks IS NOT NULL ' +
       'UNION ALL SELECT s.photo_keys FROM submissions s JOIN projects p ON p.id = s.project_id WHERE p.photographer_id = ?1'
     ).bind(ownerId).all());
-    ({ results: lines } = await env.DB.prepare(
-      "SELECT i.photo_keys FROM order_items i JOIN orders o ON o.id = i.order_id WHERE o.photographer_id = ? AND i.photo_keys <> '[]'"
-    ).bind(ownerId).all());
+    // an album line with a layout (a guest album: photo_keys '[]', layout
+    // {source:'all_finals'}) takes every photo under its project's finals.
+    // Before the guest-order migration there is no layout column, and so no
+    // such line: the listed keys alone (the retry names no layout).
+    const orderLines = withLayout => env.DB.prepare(
+      `SELECT i.photo_keys, ${withLayout ? "i.kind = 'album' AND i.layout IS NOT NULL" : '0'} AS all_finals, p.final_folders ` +
+      'FROM order_items i JOIN orders o ON o.id = i.order_id ' +
+      'LEFT JOIN projects p ON p.id = o.project_id AND p.photographer_id = o.photographer_id ' +
+      `WHERE o.photographer_id = ? AND (i.photo_keys <> '[]'${withLayout ? " OR (i.kind = 'album' AND i.layout IS NOT NULL)" : ''})`
+    ).bind(ownerId).all();
+    ({ results: lines } = await withoutMissingColumn(() => orderLines(true), () => orderLines(false)));
   } catch (e) {
     if (isMissingSchema(e)) return PHOTO_LOCK_UNAVAILABLE;
     throw e;
@@ -1171,7 +1181,8 @@ async function photoLock(env, ownerId, key) {
   // the album rule on each value: contains the key, as is or URL-encoded; a
   // value that does not parse locks a key its text contains
   if ((frozen || []).some(r => albumNames(parsedOrText(r.v), key))) held.add('photo_in_round');
-  if ((lines || []).some(l => albumNames(parsedOrText(l.photo_keys), key))) held.add('photo_in_order');
+  if ((lines || []).some(l => albumNames(parsedOrText(l.photo_keys), key) ||
+      (l.all_finals === 1 && foldersColumnCovers(l.final_folders, key)))) held.add('photo_in_order');
   const code = Object.keys(PHOTO_LOCKS).find(c => held.has(c));
   if (code) return code;
   if (ownerId !== DEFAULT_PHOTOGRAPHER_ID) return null;

@@ -760,3 +760,71 @@ test('photo_in_round: a database without the revision-pins columns cannot say: 5
   w.env.DB = fakeDB({ schema: BEFORE });
   await refusedWithNothingDeleted(w, () => del(w.env, X, SECRET), 500, 'photo_lock_unavailable');
 });
+
+// ─── guest album orders: the layout names no keys, it means "all the finals"
+// A guest album line stores photo_keys '[]' and layout {source:'all_finals'}:
+// every photo under that project's final_folders goes into it.
+function albumOrder(env, ownerId, projectId, layout = { v: 1, mode: 'photographer', source: 'all_finals', spreads: 10 }) {
+  const id = `ord-${++orderSeq}`;
+  const now = new Date().toISOString();
+  env.DB._db.prepare("INSERT INTO orders (id, photographer_id, project_id, source, status, created_at, updated_at) VALUES (?, ?, ?, 'guest', 'requested', ?, ?)")
+    .run(id, ownerId, projectId, now, now);
+  env.DB._db.prepare("INSERT INTO order_items (id, order_id, kind, name, unit_price, qty, photo_keys, layout) VALUES (?, ?, 'album', '相本', 100, 1, '[]', ?)")
+    .run(`${id}-i`, id, layout === null ? null : typeof layout === 'string' ? layout : JSON.stringify(layout));
+  return id;
+}
+test('locked: an album order line with a layout (all_finals) locks every photo under its project\'s finals: 409 photo_in_order; any status', async () => {
+  const w = await world();
+  const p = await undeliveredAs(w, w.A);
+  assert.equal((await lockOf(w.env, F2, SECRET)).status, 200);
+  const id = albumOrder(w.env, 'default', p.id);
+  await refusedWithNothingDeleted(w, () => del(w.env, F2, SECRET), 409, 'photo_in_order');
+  w.env.DB._db.prepare("UPDATE orders SET status = 'cancelled' WHERE id = ?").run(id);
+  await refusedWithNothingDeleted(w, () => del(w.env, F2, SECRET), 409, 'photo_in_order');
+  // a photo outside that project's finals is free
+  assert.equal((await del(w.env, X, SECRET)).status, 200);
+});
+
+test('an album line with a layout that does not parse locks too; one without a layout (an admin album, its keys listed) does not lock the whole finals', async () => {
+  const w = await world();
+  const p = await undeliveredAs(w, w.A);
+  albumOrder(w.env, 'default', p.id, null);
+  // a print line on the same project, its key listed (and, oddly, a layout): only that key locks
+  const id = order(w.env, 'default', [F1]);
+  w.env.DB._db.prepare("UPDATE orders SET project_id = ? WHERE id = ?").run(p.id, id);
+  w.env.DB._db.prepare("UPDATE order_items SET layout = '{}' WHERE order_id = ?").run(id);
+  assert.equal((await del(w.env, F2, SECRET)).status, 200, 'no album layout: only listed keys lock');
+  await refusedWithNothingDeleted(w, () => del(w.env, F1, SECRET), 409, 'photo_in_order');
+  albumOrder(w.env, 'default', p.id, '{broken');
+  await refusedWithNothingDeleted(w, () => del(w.env, F3, SECRET), 409, 'photo_in_order');
+});
+
+test('the all_finals lock follows the order\'s own project, of this photographer only', async () => {
+  const w = await world();
+  // A's project on FINAL (undelivered), A's other project on FINAL2 with the order
+  await undeliveredAs(w, w.A);
+  rawProject(w.env, 'a2', 'default', JSON.stringify(['elsewhere/']), { final_folders: JSON.stringify([FINAL2]) });
+  albumOrder(w.env, 'default', 'a2');
+  assert.equal((await del(w.env, F2, SECRET)).status, 200, 'FINAL is not a2\'s finals');
+  await refusedWithNothingDeleted(w, () => del(w.env, G1, SECRET), 409, 'photo_in_order');
+  // B's order naming A's project id locks nothing (the join needs the same photographer)
+  rawProject(w.env, 'a3', 'default', JSON.stringify(['elsewhere/']), { final_folders: JSON.stringify([T]) });
+  albumOrder(w.env, w.B.id, 'a3');
+  assert.equal((await del(w.env, X, SECRET)).status, 200);
+  assert.equal((await del(w.env, X, w.B.token)).status, 200, 'B: an order on a project that is not B\'s takes no finals of B\'s');
+  // B's own project and order lock B's photo, not A's or C's
+  rawProject(w.env, 'b1', w.B.id, JSON.stringify(['elsewhere/']), { final_folders: JSON.stringify([FINAL]) });
+  albumOrder(w.env, w.B.id, 'b1');
+  await refusedWithNothingDeleted(w, () => del(w.env, F3, w.B.token), 409, 'photo_in_order');
+  assert.equal((await del(w.env, F3, w.C.token)).status, 200);
+});
+
+test('before the guest-order migration (no order_items.layout) no line can carry a layout: listed keys still lock, nothing else; no 500', async () => {
+  const w = await world();
+  const schema = FRESH.replace(/list_price    INTEGER,\n\s*layout        TEXT\n\);/, 'list_price    INTEGER\n);');
+  assert.notEqual(schema, FRESH);
+  w.env.DB = fakeDB({ schema });
+  order(w.env, 'default', [F1]);
+  await refusedWithNothingDeleted(w, () => del(w.env, F1, SECRET), 409, 'photo_in_order');
+  assert.equal((await del(w.env, F2, SECRET)).status, 200);
+});
