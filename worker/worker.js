@@ -1031,6 +1031,7 @@ const PHOTO_LOCKS = {
   photo_locked_delivered: '這張照片在已交件的專案資料夾裡，不能刪除（要刪請先取消交件或開放修改）',
   photo_locked_archived: '這張照片在已封存的專案資料夾裡，不能刪除',
   photo_in_pick_folder: '這張照片在選片資料夾裡，客人可能已經選了它，不能刪除',
+  photo_in_order: '這張照片在訂單裡（含已取消的訂單），不能刪除',
   photo_in_album: '這張照片已放進相本，不能刪除',
 };
 const PHOTO_LOCK_UNAVAILABLE = 'photo_lock_unavailable';
@@ -1097,12 +1098,21 @@ async function photoInAlbum(env, key) {
 //   them) → photo_in_pick_folder. A finals snapshot of a project neither
 //   delivered nor archived locks nothing: that is the retouched file
 //   uploaded by mistake, the case this exists for.
+// - on any order line of an order of `ownerId`'s (order_items.photo_keys,
+//   every status, a cancelled order too) → photo_in_order. One D1 statement;
+//   checked before the albums, which cost an R2 read per book.
 // - named in an album (the default photographer's only) → photo_in_album.
+// A missing table or column (projects' late columns, the order tables: all
+// in prod since 2026-09-29/30) is PHOTO_LOCK_UNAVAILABLE: fail closed.
 async function photoLock(env, ownerId, key) {
   let rows;
+  let lines;
   try {
     ({ results: rows } = await env.DB.prepare(
       'SELECT folders, final_folders, delivered_at, archived_at FROM projects WHERE photographer_id = ?'
+    ).bind(ownerId).all());
+    ({ results: lines } = await env.DB.prepare(
+      "SELECT i.photo_keys FROM order_items i JOIN orders o ON o.id = i.order_id WHERE o.photographer_id = ? AND i.photo_keys <> '[]'"
     ).bind(ownerId).all());
   } catch (e) {
     if (isMissingSchema(e)) return PHOTO_LOCK_UNAVAILABLE;
@@ -1115,6 +1125,13 @@ async function photoLock(env, ownerId, key) {
     if (p.delivered_at !== null) held.add('photo_locked_delivered');
     else if (p.archived_at !== null) held.add('photo_locked_archived');
     else if (inPick) held.add('photo_in_pick_folder');
+  }
+  // the album rule on each line: contains the key, as is or URL-encoded; a
+  // value that does not parse locks a key its text contains
+  for (const { photo_keys: text } of lines || []) {
+    let keys;
+    try { keys = JSON.parse(text); } catch { keys = String(text); }
+    if (albumNames(keys, key)) { held.add('photo_in_order'); break; }
   }
   const code = Object.keys(PHOTO_LOCKS).find(c => held.has(c));
   if (code) return code;

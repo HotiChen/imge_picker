@@ -536,7 +536,9 @@ removed anything from R2. Worker only (the button comes later); no migration.
     prefix, before any D1 statement: same body and statement sequence).
   - 409 `{error, code, deleted: []}`: locked (below), nothing deleted.
   - 500 `{error, code: 'photo_lock_unavailable', deleted: []}`: the database
-    lacks a column the lock reads; nothing deleted.
+    lacks a table or column the lock reads (the projects' delivery / archive
+    columns, `orders` / `order_items`; prod has all of them since 2026-09-29/30,
+    so only an old or fake database gets this); nothing deleted (fail closed).
   - 500 `{error, code: 'photo_delete_failed', deleted, failed}`: an R2 delete
     threw. A failed thumbnail stops before the original; a retry redoes the
     lock check and finishes (deleting a missing key is not an error in R2).
@@ -544,8 +546,8 @@ removed anything from R2. Worker only (the button comes later); no migration.
   deleting nothing → 200 `{key, deletable, code, error}` (`code` / `error` =
   the 409 the delete would give, both null when free); 400 / 404 / 500 as the
   delete. A hint for showing the button; the delete checks again itself.
-- **Locks** (in this order; only the caller's own projects count — another
-  photographer's projects on the same folder names neither lock nor unlock,
+- **Locks** (in this order; only the caller's own projects and orders count — another
+  photographer's projects or orders on the same names neither lock nor unlock,
   their objects are other objects). A project *references* the photo when a
   folder in its `folders` (the picking folders) or `final_folders` (the last
   chosen finals) covers the key on a `/` boundary (`folderCovers`).
@@ -557,7 +559,13 @@ removed anything from R2. Worker only (the button comes later); no migration.
   3. `photo_in_pick_folder`: under the picking folders of any project neither
      delivered nor archived — the client may have picked it (Tim agreed).
      So proofs are never deletable through this route while a project uses them.
-  4. `photo_in_album`: the default photographer only (books have no other owner
+  4. `photo_in_order`: on any order line of this photographer's
+     (`order_items.photo_keys` of an order with `orders.photographer_id = who.id`),
+     **every status, a cancelled order too** (conservative). Same match as the
+     albums (contains the key, as is or URL-encoded; a value that does not
+     parse locks a key its text contains). One D1 statement, no R2, so it is
+     checked before the albums: an order lock answers without reading a book.
+  5. `photo_in_album`: the default photographer only (books have no other owner
      yet): any string anywhere in any `_books/*.json` containing the key, as
      is or URL-encoded (slots, backgrounds, the editor's `_photoCache`, a field
      added later). Over-matching (`a.jpg` inside `a.jpg.bak`) only refuses a
@@ -568,8 +576,8 @@ removed anything from R2. Worker only (the button comes later); no migration.
   finals folder of a project that is neither delivered nor archived (or under
   a folder no project names).
 - **Order and race.** existence → lock → thumbnails (each `head` then
-  `delete`) → **lock again** → original. If a delivery, an archive or an album
-  edit landed in between, the original stays and the answer is 409 with the
+  `delete`) → **lock again** → original. If a delivery, an archive, an order or an
+  album edit landed in between, the original stays and the answer is 409 with the
   deleted thumbnails listed (the photo still shows: `?w=` falls back to the
   original). **Residual window**: the second check and the original's delete
   are still two calls (R2 and D1 have no shared transaction), so a delivery
@@ -577,13 +585,12 @@ removed anything from R2. Worker only (the button comes later); no migration.
   Delivering, archiving and creating projects are the photographer's own
   actions (two tabs of the same photographer); the one outside actor is a
   client with an album link placing this photo in a slot (`PATCH
-  /api/books/:id`) in that window. A thumbnail uploaded in the same window
+  /api/books/:id`) in that window (and, once guest ordering is on, a guest
+  order naming it). A thumbnail uploaded in the same window
   can be orphaned (harmless; R2's 180-day lifecycle removes it).
 - **Not checked** (refused nowhere; say so if it matters): an album that only
   ever lived in the editor's localStorage (never synced to the cloud) is
-  invisible to the Worker; print orders' `photo_keys` / `order_items` (a print
-  order references photos of a project, which the folder locks usually already
-  cover — not after undeliver); a frozen revision round (`revision_requests.finals`)
+  invisible to the Worker; a frozen revision round (`revision_requests.finals`)
   of a project that is not delivered now (a later redelivery shows that round's
   thumbnail as missing); the retired client accounts' folders. Each delete
   reads every album (one R2 `get` per book, twice) — fine for a few dozen

@@ -377,7 +377,7 @@ Tim 的決定：除了「自助註冊 → 待審核」，operator 可以發**邀
 - `DELETE /api/admin/photo?key=` 與 `GET /api/admin/photo/lock?key=`（標 `// scoped to the caller (who.id)`，非 default 攝影師也可用，
   只刪自己前綴裡的物件）。別人的鍵 = 不存在的鍵：先在**自己的前綴**裡 `head`，沒有就 404，在任何 D1 語句之前，
   所以回應與語句序列完全相同；B 刪同一個邏輯鍵只會刪到 `_t/B/…`，default 與 C 的同名物件不動。`_` 開頭（`_t/`、`_thumbs/`、`_books/`、`_assets/`）一律 400。
-  鎖只看**呼叫者自己**的專案（`WHERE photographer_id = who.id`）；相本鎖只對 default（相本還沒有擁有者）。
+  鎖只看**呼叫者自己**的專案與訂單（`projects.photographer_id` / `orders.photographer_id` = who.id，訂單任何狀態都算，`photo_in_order`）；相本鎖只對 default（相本還沒有擁有者）。
   合約與鎖的規則見 `docs/delivery.md`「Deleting a photo」。測試：`worker/test/photo-delete.test.mjs`、`worker/test/r2-delete-helper.test.mjs`。
 
 ### 4. 每人設定與通知（第 4 批）

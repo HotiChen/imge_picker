@@ -580,3 +580,84 @@ test('an album that names the photo URL-encoded (an image URL kept in the book) 
   book(w.env, 'b9', { pages: [{ slots: [], bgImage: { url: `https://worker.example/${encodeURIComponent(F1)}?w=1200` } }] });
   await refusedWithNothingDeleted(w, () => del(w.env, F1, SECRET), 409, 'photo_in_album');
 });
+
+// ─── orders: a photo on any order line of this photographer ───────────────
+// order_items.photo_keys (JSON) of an order whose photographer_id is the
+// caller, any status (a cancelled one too). One D1 statement, no R2.
+let orderSeq = 0;
+function order(env, ownerId, photoKeys, { status = 'confirmed', raw = false } = {}) {
+  const id = `ord-${++orderSeq}`;
+  const now = new Date().toISOString();
+  env.DB._db.prepare("INSERT INTO orders (id, photographer_id, project_id, source, status, created_at, updated_at) VALUES (?, ?, 'p-x', 'admin', ?, ?, ?)")
+    .run(id, ownerId, status, now, now);
+  env.DB._db.prepare("INSERT INTO order_items (id, order_id, kind, name, unit_price, qty, photo_keys) VALUES (?, ?, 'print', '相片', 100, 1, ?)")
+    .run(`${id}-i`, id, raw ? photoKeys : JSON.stringify(photoKeys));
+  return id;
+}
+test('locked: a photo on an order line of this photographer, whatever the order\'s status, is 409 photo_in_order', async () => {
+  for (const status of ['requested', 'confirmed', 'fulfilled', 'cancelled']) {
+    const w = await world();
+    order(w.env, 'default', [F3, F1], { status });
+    await refusedWithNothingDeleted(w, () => del(w.env, F1, SECRET), 409, 'photo_in_order');
+    assert.equal((await del(w.env, PB, SECRET)).status, 200, `${status}: a photo on no order is free`);
+  }
+});
+
+test('photo_in_order: a URL-encoded key, or a line whose photo_keys does not parse but contains the key, locks too', async () => {
+  const w = await world();
+  order(w.env, 'default', [encodeURIComponent(F1)]);
+  order(w.env, 'default', `["${F3}"`, { raw: true });
+  await refusedWithNothingDeleted(w, () => del(w.env, F1, SECRET), 409, 'photo_in_order');
+  await refusedWithNothingDeleted(w, () => del(w.env, F3, SECRET), 409, 'photo_in_order');
+});
+
+test('photo_in_order: another photographer\'s orders never lock this photographer\'s photo (either way)', async () => {
+  const w = await world();
+  order(w.env, w.B.id, [F1]);
+  order(w.env, 'default', [F3]);
+  assert.equal((await del(w.env, F1, SECRET)).status, 200, 'A: B\'s order');
+  assert.equal((await del(w.env, F3, w.B.token)).status, 200, 'B: A\'s order');
+  assert.equal((await del(w.env, F3, w.C.token)).status, 200, 'C');
+  await refusedWithNothingDeleted(w, () => del(w.env, F1, w.B.token), 409, 'photo_in_order');
+});
+
+test('photo_in_order ranks after the project locks and before photo_in_album (the album scan is R2 reads; the order check is one D1 statement)', async () => {
+  const w = await world();
+  order(w.env, 'default', [F1, PA]);
+  book(w.env, 'b9', { pages: [{ slots: [{ photoId: F1 }] }] });
+  await refusedWithNothingDeleted(w, () => del(w.env, F1, SECRET), 409, 'photo_in_order');
+  await project(w, w.A);
+  await refusedWithNothingDeleted(w, () => del(w.env, PA, SECRET), 409, 'photo_in_pick_folder');
+  // an order lock answers without reading a single album
+  const gets = [];
+  const get = w.env.imagepicker.get.bind(w.env.imagepicker);
+  w.env.imagepicker.get = (k, o) => { gets.push(k); return get(k, o); };
+  await del(w.env, F1, SECRET);
+  assert.deepEqual(gets.filter(k => k.startsWith('_books/')), []);
+});
+
+test('photo_in_order: the lock route says so too; and an order that lands after the thumbnails keeps the original (409)', async () => {
+  const w = await world();
+  order(w.env, 'default', [F1]);
+  const out = await body(await lockOf(w.env, F1, SECRET));
+  assert.deepEqual(out, { status: 200, json: { key: F1, deletable: false, code: 'photo_in_order', error: out.json.error } });
+  assert.ok(out.json.error);
+  const real = w.env.imagepicker.delete.bind(w.env.imagepicker);
+  let landed = false;
+  w.env.imagepicker.delete = async k => {
+    if (!landed) { landed = true; order(w.env, w.B.id, [X]); }
+    return real(k);
+  };
+  const raced = await body(await del(w.env, X, w.B.token));
+  assert.equal(raced.status, 409);
+  assert.equal(raced.json.code, 'photo_in_order');
+  assert.ok(has(w.env, at(w.B, X)));
+});
+
+test('photo_in_order: a database without the order tables cannot say: 500 photo_lock_unavailable, nothing deleted (prod has them since 2026-09-29)', async () => {
+  const w = await world();
+  w.env.DB = fakeDB({ schema: FRESH.replace(/CREATE TABLE IF NOT EXISTS order_items \([\s\S]*?\n\);/, '').replace(/CREATE INDEX IF NOT EXISTS idx_items_order[^\n]*\n/, '') });
+  assert.throws(() => w.env.DB._db.prepare('SELECT 1 FROM order_items').get(), /no such table/);
+  await refusedWithNothingDeleted(w, () => del(w.env, X, SECRET), 500, 'photo_lock_unavailable');
+  await refusedWithNothingDeleted(w, () => lockOf(w.env, X, SECRET), 500, 'photo_lock_unavailable');
+});
