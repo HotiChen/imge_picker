@@ -513,6 +513,136 @@ both the project and its links as they were (a test forces the link UPDATE to
 fail and checks nothing changed). A PATCH without `title` issues no link
 write at all. No migration: both columns already exist.
 
+## Deleting a photo (刪除照片, Worker, 2026-10-14)
+
+Tim's case: a retouched file (精修) uploaded by mistake. Until now no route
+removed anything from R2. Worker only (the button comes later); no migration.
+
+- **`DELETE /api/admin/photo?key=<logical key>`** (photographers only, the
+  caller's own files: `requirePhotographer` + `bucketFor(env, who.id)`; the key
+  comes from `?key=` only, never the path).
+  - 200 `{ok: true, key, deleted: [...], failed?: [...]}`: the photo is gone.
+    `deleted` = the key itself first, then the thumbnails that existed
+    (`_thumbs/<w>/<key>.thumb`, smallest width first). `failed` (only when
+    non-empty): thumbnails whose delete threw; they stay as orphans (nothing
+    reads a thumbnail without its original except the old-round thumbnail
+    route; R2's 180-day lifecycle removes them). Logical keys, never a
+    `_t/<id>/` prefix. `Cache-Control: private, no-store`.
+  - 400 `{error, code: 'invalid_key'}`: empty, a folder (ends in `/`), the
+    Worker's own `_…` namespaces (`_t/`, `_thumbs/`, `_books/`, `_assets/`), a
+    `.` / `..` segment, a control / line-separator character, over 1024 UTF-8
+    bytes, or an extension the upload route does not take (jpg jpeg png webp
+    avif gif heic heif tif tiff bmp). So a legacy `.svg` / `.html` object
+    cannot be removed here. A backslash, a double or a leading slash are
+    literal key characters, looked up as they are.
+  - 404 `{error: 'Not found'}`: the caller has no such photo. Someone else's
+    key is exactly this (the existence check is first, in the caller's own
+    prefix, before any D1 statement: same body and statement sequence).
+  - 409 `{error, code, deleted: []}`: locked (below), nothing deleted.
+  - 500 `{error, code: 'photo_lock_unavailable', deleted: []}`: the lock
+    cannot be decided, nothing deleted (fail closed): the database lacks a
+    table or column the lock reads (the projects' delivery / archive columns,
+    `orders` / `order_items`, `revision_requests.marks` / `submissions`; prod
+    has all of them since 2026-09-29..10-07, so only an old or fake database
+    gets this — Tim: if the revision-pins migration had not run, every delete
+    would answer this), or the default photographer has more
+    than 25 albums (below).
+  - 500 `{error, code: 'photo_delete_failed', deleted: [], failed}`: nothing
+    was deleted — the original's delete threw (`failed: [key]`), or anything
+    else threw before it (a D1 error, `Too many subrequests`, …; `failed: []`).
+    A retry starts over. The route never throws uncaught (CORS headers on
+    every answer).
+- **`GET /api/admin/photo/lock?key=`**: the same checks, deleting nothing →
+  200 `{key, deletable, code, error}` (`code` / `error` = the 409 the delete
+  would give, both null when free); 400 / 404 / 500 `photo_lock_unavailable`
+  as the delete (anything thrown is that 500 too). A hint for showing the
+  button; the delete checks again itself.
+- **Locks** (in this order; only the caller's own projects and orders count — another
+  photographer's projects or orders on the same names neither lock nor unlock,
+  their objects are other objects). A project *references* the photo when a
+  folder in its `folders` (the picking folders) or `final_folders` (the last
+  chosen finals) covers the key on a `/` boundary (`folderCovers`).
+  1. `photo_locked_delivered`: a referencing project is delivered —
+     `delivered_at IS NOT NULL`, never inferred from `final_folders`
+     (confirmed implies delivered). After 取消交件 or 開放修改 the finals are
+     deletable again: `final_folders` stays, `delivered_at` is cleared.
+  2. `photo_locked_archived`: a referencing project is archived. Unarchive lifts it.
+  3. `photo_in_pick_folder`: under the picking folders of any project neither
+     delivered nor archived — the client may have picked it (Tim agreed).
+     So proofs are never deletable through this route while a project uses them.
+  4. `photo_in_round`: frozen in a round the old-round thumbnail route
+     (`GET /api/pick/rounds/:id/photo`) can still serve: the pins of any
+     `revision_requests` row (`marks`, keyed by photo key) or the
+     `photo_keys` of any `submissions` row (the selection) of this
+     photographer's projects, any project state. The round route shows them
+     under whatever finals the project is delivered with now, so a redelivery
+     to other finals (更換精修 to 精修二) or an undeliver does not free them
+     (the review reproduced the 404 this prevents). One D1 statement (a
+     `UNION ALL` joined on `projects.photographer_id`). Draft pins
+     (`revision_pins`) are not rounds and do not lock — a client's stale draft
+     must not block deleting a mistaken upload. The shared matcher now
+     counts object keys as well as string values (the pins are keyed by
+     photo key), for albums and order lines too: only more conservative.
+  5. `photo_in_order`: on any order line of this photographer's
+     (`order_items.photo_keys` of an order with `orders.photographer_id = who.id`),
+     **every status, a cancelled order too** (conservative). Same match as the
+     albums (contains the key, as is or URL-encoded; a value that does not
+     parse locks a key its text contains). **Guest album lines** store
+     `photo_keys '[]'` and `layout {source:'all_finals'}` — every photo under
+     the order's project's finals goes into the album — so an album line with
+     any layout (one that does not parse too) locks every photo its project's
+     `final_folders` cover (the order's own project, joined on
+     `projects.photographer_id = orders.photographer_id`; an order naming
+     another photographer's project id takes nothing). Same code
+     `photo_in_order` (one thing for the photographer to know: it is on an
+     order). An album line without a layout (an admin album) locks only the
+     keys it lists. Before the guest-order migration there is no `layout`
+     column and so no such line: the statement is retried without it (listed
+     keys still lock; no 500). One D1 statement, no R2, so it is checked
+     before the albums: an order lock answers without reading a book.
+  6. `photo_in_album`: the default photographer only (books have no other owner
+     yet): any string anywhere in any `_books/*.json` containing the key, as
+     is or URL-encoded (slots, backgrounds, the editor's `_photoCache`, a field
+     added later). Over-matching (`a.jpg` inside `a.jpg.bak`) only refuses a
+     delete. A book file that does not parse locks a key its text contains.
+     **Cost cap:** every album is one R2 read, a subrequest. The Workers Free
+     plan allows 50 per request (the documented limit for external
+     subrequests; R2 / D1 calls are allowed 1000, but the stricter reading is
+     the safe one); besides the albums a delete makes 14: session 1, head 1,
+     three D1 statements (projects, rounds, orders; 4 before the guest-order
+     migration), two listings 2, the original 1, a head + delete for each of
+     the 3 thumbnail widths 6 (+2 per older width folder found). With 25
+     albums that is 39–40, leaving 10 spare. So at most **25** albums are read (`ALBUM_SCAN_MAX`;
+     `<id>_status.json` is not counted or read when `<id>.json` is listed
+     beside it — otherwise it may be an album whose own id ends in `_status`,
+     book ids being unchecked, and it is read). More than that: 500
+     `photo_lock_unavailable`, nothing deleted, no album read — never a
+     partial scan. On the Paid plan (10,000) the cap can be raised.
+  A `folders` / `final_folders` value that does not parse as a list of strings
+  locks every photo of that photographer (fail closed).
+  So the one case left deletable is the one this exists for: a photo under a
+  finals folder of a project that is neither delivered nor archived (or under
+  a folder no project names).
+- **Order and race.** existence → lock (checked **once**: the D1
+  statements and one album scan) → the thumbnail keys listed → **the original
+  first** → each thumbnail that exists, best effort. A failure before the
+  original's delete deletes nothing; a failed thumbnail after it leaves only
+  an orphan thumbnail. There is never an original whose thumbnails are gone,
+  and never a half-deleted state a retry has to finish.
+  **Residual window**: between the lock check and the original's delete (a
+  thumbnail listing apart, the same few milliseconds as before the reorder;
+  R2 and D1 have no shared transaction), a delivery, archive, order, round or
+  album edit that lands can still lose a photo. Delivering, archiving and
+  creating projects are the photographer's own actions (two tabs of the same
+  photographer); the outside actors are a client with an album link placing
+  this photo in a slot (`PATCH /api/books/:id`), a client sending a revision
+  round on it, and, once guest ordering is on, a guest order naming it.
+- **Not checked** (refused nowhere; say so if it matters): an album that only
+  ever lived in the editor's localStorage (never synced to the cloud) is
+  invisible to the Worker; draft pins (`revision_pins`); the retired client
+  accounts' folders.
+- Tests: `worker/test/photo-delete.test.mjs`, `worker/test/r2-delete-helper.test.mjs`.
+
 ## Out of scope for this step
 
 (Status 2026-10-08: the zip of all finals shipped on the 完成頁, 下載全部精修.) Watermarks; a second link just for delivery;

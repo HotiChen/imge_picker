@@ -948,12 +948,13 @@ function tenantPrefix(photographerId) {
   return `${TENANT_PREFIX}${photographerId}/`;
 }
 
-// The one way to R2: {get, head, put, list} over `photographerId`'s objects.
+// The one way to R2: {get, head, put, delete, list} over `photographerId`'s objects.
 // The id comes from the caller's identity (who.id), a link's project, or a
 // minted token's owner — never the request. An unsafe id throws before any
 // read or write. A reserved key reads as missing (get / head: null; list:
-// nothing) and is refused for a write (throws; the upload route answers 400
-// first). A list returns logical keys and only this photographer's objects.
+// nothing) and is refused for a write or a delete (throws; the upload route
+// answers 400 first). A list returns logical keys and only this
+// photographer's objects.
 function bucketFor(env, photographerId) {
   const bucket = env.imagepicker;
   const prefix = photographerId === DEFAULT_PHOTOGRAPHER_ID ? '' : tenantPrefix(photographerId);
@@ -970,6 +971,13 @@ function bucketFor(env, photographerId) {
     put(key, value, options) {
       if (reserved(key)) throw new Error('R2: reserved key');
       return bucket.put(prefix + key, value, options);
+    },
+    // one string key per call (real R2 also takes an array; not here, so
+    // nothing can sweep a list past the check). A missing key is not an
+    // error in R2.
+    delete(key) {
+      if (reserved(key)) throw new Error('R2: reserved key');
+      return bucket.delete(prefix + key);
     },
     async list(options = {}) {
       const wanted = options.prefix ?? '';
@@ -994,6 +1002,284 @@ function bucketFor(env, photographerId) {
 // one, and every book route is default-only until then.
 function bookBucket(env) {
   return bucketFor(env, DEFAULT_PHOTOGRAPHER_ID);
+}
+
+// ─── Deleting one photo (docs/delivery.md "刪除照片") ──────────────────────
+// A photographer removes one photo of their own (a retouched file uploaded
+// by mistake, typically): its thumbnails, then the original. Refused (409,
+// nothing deleted) while the photo may be in use — see photoLock.
+//
+// The key a delete may name: a photo key the upload route could have stored
+// (an extension upload.html takes), at most R2's 1024 bytes, not a folder,
+// never the Worker's own namespaces (`_…`: `_t/`, `_thumbs/`, `_books/`,
+// `_assets/`), no `.` / `..` segment (no stored key has one: the URL parser
+// folds them away on upload) and no control or line-separator character. A
+// backslash, a double or a leading slash are literal R2 key characters,
+// looked up as they are, inside the caller's own prefix (bucketFor).
+const R2_KEY_MAX_BYTES = 1024;
+function deletablePhotoKey(key) {
+  if (typeof key !== 'string' || !key || key.endsWith('/') || isInternalKey(key)) return false;
+  if (PICK_KEY_CONTROL.test(key) || new TextEncoder().encode(key).length > R2_KEY_MAX_BYTES) return false;
+  const segments = key.split('/');
+  if (segments.includes('.') || segments.includes('..')) return false;
+  return !!UPLOAD_TYPES[keyExtension(key)];
+}
+
+// What a lock code tells the photographer (409; photo_lock_unavailable 500).
+// In precedence order: the first that holds is the one answered.
+const PHOTO_LOCKS = {
+  photo_locked_delivered: '這張照片在已交件的專案資料夾裡，不能刪除（要刪請先取消交件或開放修改）',
+  photo_locked_archived: '這張照片在已封存的專案資料夾裡，不能刪除',
+  photo_in_pick_folder: '這張照片在選片資料夾裡，客人可能已經選了它，不能刪除',
+  photo_in_round: '這張照片在客人送出的選片或修改紀錄裡，不能刪除',
+  photo_in_order: '這張照片在訂單裡（含已取消的訂單），不能刪除',
+  photo_in_album: '這張照片已放進相本，不能刪除',
+};
+const PHOTO_LOCK_UNAVAILABLE = 'photo_lock_unavailable';
+
+// Whether a folders column (a JSON array of folders, or NULL) covers `key`.
+// A value that is not an array of strings counts as covering it: a delete
+// that cannot tell fails closed.
+function foldersColumnCovers(value, key) {
+  if (value === null || value === undefined) return false;
+  let folders;
+  try { folders = JSON.parse(value); } catch { return true; }
+  if (!Array.isArray(folders)) return true;
+  return folders.some(f => typeof f !== 'string' || folderCovers(f, key));
+}
+
+// Any string anywhere in a stored value that names `key` — an album (a slot,
+// a background, the editor's layout cache, a field added later), an order
+// line, a round's pins (keyed BY photo key, so object keys count too):
+// contains it, as is or URL-encoded. Over-matching (`a.jpg` inside
+// `a.jpg.bak`) only refuses a delete; under-matching would lose a photo
+// something still shows.
+function albumNames(value, key, depth = 0) {
+  if (depth > 64) return true;
+  const names = v => v.includes(key) || v.includes(encodeURIComponent(key));
+  if (typeof value === 'string') return names(value);
+  if (value && typeof value === 'object') {
+    return Object.keys(value).some(names) || Object.values(value).some(v => albumNames(v, key, depth + 1));
+  }
+  return false;
+}
+// A stored JSON column, parsed; its text when it does not parse (so a key the
+// text contains still counts).
+function parsedOrText(text) {
+  try { return JSON.parse(text); } catch { return String(text); }
+}
+
+// The most albums one delete reads. Each is an R2 get, a subrequest; on the
+// Workers Free plan a request may make 50 (the documented limit for external
+// subrequests; calls to R2 / D1 are allowed 1000, but the stricter reading is
+// the safe one). Besides the albums a delete makes: the session lookup (1),
+// the photo's head (1), three D1 statements (projects, rounds, orders: 3; 4
+// before the guest-order migration, the orders one retried), the album
+// listing (1), the thumbnail listing (1), the original's delete (1) and a
+// head and a delete per thumbnail width (THUMB_BUCKETS: 3 widths, 6) = 14,
+// 15 before that migration, +2 per older width folder found. With 25
+// albums: 39–40, leaving 10 for older widths or extra listing pages.
+// Over it, the lock cannot be decided within one request: 500
+// photo_lock_unavailable, nothing deleted (never a partial scan).
+const ALBUM_SCAN_MAX = 25;
+
+// Albums (`_books/<id>.json`) belong to the default photographer, and they
+// keep their photos' keys (logical, unprefixed) in the JSON R2 holds. All are
+// listed first (past the first page); more than ALBUM_SCAN_MAX → null
+// (cannot tell); then each is read once. `<id>_status.json` (approved /
+// timestamp, no keys) is neither counted nor read when `<id>.json` is listed
+// too; otherwise it may be an album whose own id ends in `_status` (book ids
+// come from the URL unchecked), so it is read. One that does not parse
+// locks a key its text contains. An album that only ever lived in the
+// editor's localStorage is invisible here (docs/delivery.md).
+async function photoInAlbum(env, key) {
+  const books = bookBucket(env);
+  const listed = new Set();
+  let cursor;
+  let truncated = true;
+  while (truncated) {
+    const page = await books.list({ prefix: '_books/', cursor });
+    for (const o of page.objects || []) if (o.key.endsWith('.json')) listed.add(o.key);
+    cursor = page.cursor;
+    truncated = page.truncated;
+  }
+  const names = [...listed].filter(k => !(k.endsWith('_status.json') && listed.has(k.slice(0, -'_status.json'.length) + '.json')));
+  if (names.length > ALBUM_SCAN_MAX) return null;
+  for (const name of names) {
+    const obj = await books.get(name);
+    if (!obj) continue;
+    const text = await obj.text();
+    let data;
+    try { data = JSON.parse(text); } catch {
+      if (text.includes(key)) return true;
+      continue;
+    }
+    if (albumNames(data, key)) return true;
+  }
+  return false;
+}
+
+// Why `ownerId`'s photo `key` may not be deleted now: a PHOTO_LOCKS code,
+// PHOTO_LOCK_UNAVAILABLE when the database cannot say (a column a hand-run
+// migration adds is missing), or null. Only `ownerId`'s own projects count:
+// another photographer's on the same folder names are other objects.
+// - a project whose `folders` or `final_folders` cover the key, delivered
+//   (`delivered_at` set — never inferred from final_folders, which stays
+//   after undeliver and reopen) → photo_locked_delivered; else archived →
+//   photo_locked_archived; else under its `folders` (the client picks from
+//   them) → photo_in_pick_folder. A finals snapshot of a project neither
+//   delivered nor archived locks nothing: that is the retouched file
+//   uploaded by mistake, the case this exists for.
+// - on any order line of an order of `ownerId`'s (order_items.photo_keys,
+//   every status, a cancelled order too), or under the final_folders of the
+//   order's project when the line is an album with a layout (a guest album
+//   of all the finals) → photo_in_order. One D1 statement;
+//   checked before the albums, which cost an R2 read per book.
+// - frozen in a round the old-round thumbnail route serves (GET
+//   /api/pick/rounds/:id/photo): the pins of any revision_requests row, the
+//   photo_keys of any submission, of `ownerId`'s projects → photo_in_round
+//   (one D1 statement; ranked before the orders). The round route shows them
+//   whatever the finals are now, so a redelivery to other finals does not
+//   free them. Draft pins (revision_pins) are not rounds and do not lock.
+// - named in an album (the default photographer's only) → photo_in_album.
+// A missing table or column (projects' late columns, the order tables, the
+// rounds' marks: all in prod since 2026-09-29..10-07) is
+// PHOTO_LOCK_UNAVAILABLE: fail closed.
+async function photoLock(env, ownerId, key) {
+  let rows;
+  let frozen;
+  let lines;
+  try {
+    ({ results: rows } = await env.DB.prepare(
+      'SELECT folders, final_folders, delivered_at, archived_at FROM projects WHERE photographer_id = ?'
+    ).bind(ownerId).all());
+    ({ results: frozen } = await env.DB.prepare(
+      'SELECT r.marks AS v FROM revision_requests r JOIN projects p ON p.id = r.project_id ' +
+      'WHERE p.photographer_id = ?1 AND r.marks IS NOT NULL ' +
+      'UNION ALL SELECT s.photo_keys FROM submissions s JOIN projects p ON p.id = s.project_id WHERE p.photographer_id = ?1'
+    ).bind(ownerId).all());
+    // an album line with a layout (a guest album: photo_keys '[]', layout
+    // {source:'all_finals'}) takes every photo under its project's finals.
+    // Before the guest-order migration there is no layout column, and so no
+    // such line: the listed keys alone (the retry names no layout).
+    const orderLines = withLayout => env.DB.prepare(
+      `SELECT i.photo_keys, ${withLayout ? "i.kind = 'album' AND i.layout IS NOT NULL" : '0'} AS all_finals, p.final_folders ` +
+      'FROM order_items i JOIN orders o ON o.id = i.order_id ' +
+      'LEFT JOIN projects p ON p.id = o.project_id AND p.photographer_id = o.photographer_id ' +
+      `WHERE o.photographer_id = ? AND (i.photo_keys <> '[]'${withLayout ? " OR (i.kind = 'album' AND i.layout IS NOT NULL)" : ''})`
+    ).bind(ownerId).all();
+    ({ results: lines } = await withoutMissingColumn(() => orderLines(true), () => orderLines(false)));
+  } catch (e) {
+    if (isMissingSchema(e)) return PHOTO_LOCK_UNAVAILABLE;
+    throw e;
+  }
+  const held = new Set();
+  for (const p of rows || []) {
+    const inPick = foldersColumnCovers(p.folders, key);
+    if (!inPick && !foldersColumnCovers(p.final_folders, key)) continue;
+    if (p.delivered_at !== null) held.add('photo_locked_delivered');
+    else if (p.archived_at !== null) held.add('photo_locked_archived');
+    else if (inPick) held.add('photo_in_pick_folder');
+  }
+  // the album rule on each value: contains the key, as is or URL-encoded; a
+  // value that does not parse locks a key its text contains
+  if ((frozen || []).some(r => albumNames(parsedOrText(r.v), key))) held.add('photo_in_round');
+  if ((lines || []).some(l => albumNames(parsedOrText(l.photo_keys), key) ||
+      (l.all_finals === 1 && foldersColumnCovers(l.final_folders, key)))) held.add('photo_in_order');
+  const code = Object.keys(PHOTO_LOCKS).find(c => held.has(c));
+  if (code) return code;
+  if (ownerId !== DEFAULT_PHOTOGRAPHER_ID) return null;
+  const inAlbum = await photoInAlbum(env, key);
+  if (inAlbum === null) return PHOTO_LOCK_UNAVAILABLE;
+  return inAlbum ? 'photo_in_album' : null;
+}
+
+function photoLockAnswer(code, deleted) {
+  if (code === PHOTO_LOCK_UNAVAILABLE) {
+    return jsonOk({ error: '現在無法確認這張照片能不能刪除，所以沒有刪除任何東西', code, deleted }, 500, PHOTO_NO_STORE);
+  }
+  return jsonOk({ error: PHOTO_LOCKS[code], code, deleted }, 409, PHOTO_NO_STORE);
+}
+const PHOTO_NO_STORE = { 'Cache-Control': 'private, no-store' };
+
+// Every thumbnail key a photo may have: the widths the app writes
+// (THUMB_BUCKETS) and any other width folder under `_thumbs/` (an older
+// upload page's), smallest first.
+async function thumbKeysOf(photos, key) {
+  const widths = new Set(THUMB_BUCKETS);
+  let cursor;
+  let truncated = true;
+  while (truncated) {
+    const listed = await photos.list({ prefix: THUMB_PREFIX, delimiter: '/', cursor });
+    for (const p of listed.delimitedPrefixes || []) {
+      const m = /^_thumbs\/(\d+)\/$/.exec(p);
+      if (m) widths.add(Number(m[1]));
+    }
+    cursor = listed.cursor;
+    truncated = listed.truncated;
+  }
+  return [...widths].sort((a, b) => a - b).map(w => `${THUMB_PREFIX}${w}/${key}.thumb`);
+}
+
+// The delete itself, for photographer `ownerId` (who.id, never the request).
+// 400 invalid_key; 404 when the caller has no such photo (someone else's key
+// is exactly this: the existence check comes first, in the caller's own
+// prefix, before any D1 statement); 409 / 500 photoLock, checked once; the
+// thumbnail keys listed; then the ORIGINAL first (failing: 500
+// photo_delete_failed, nothing deleted, a retry starts over), then each
+// thumbnail that exists, best effort: one that fails stays as an orphan
+// (named in `failed`, the photo is deleted all the same: 200). So there is
+// never an original whose thumbnails are gone. Anything thrown before the
+// original's delete is a JSON 500 with nothing deleted; nothing after it can
+// throw.
+async function deletePhoto(env, ownerId, key) {
+  if (!deletablePhotoKey(key)) return jsonOk({ error: 'Invalid key', code: 'invalid_key' }, 400);
+  const notDone = failed => jsonOk({ error: '刪除沒有完成，沒有刪除任何東西，請再試一次', code: 'photo_delete_failed', deleted: [], failed }, 500, PHOTO_NO_STORE);
+  const photos = bucketFor(env, ownerId);
+  let thumbs;
+  try {
+    if (!(await photos.head(key))) return jsonErr('Not found', 404);
+    const locked = await photoLock(env, ownerId, key);
+    if (locked) return photoLockAnswer(locked, []);
+    thumbs = await thumbKeysOf(photos, key);
+  } catch (e) {
+    console.error('photo delete: refused before deleting anything:', e?.message);
+    return notDone([]);
+  }
+  try {
+    await photos.delete(key);
+  } catch {
+    return notDone([key]);
+  }
+  const deleted = [key];
+  const failed = [];
+  for (const thumb of thumbs) {
+    try {
+      if (!(await photos.head(thumb))) continue;
+      await photos.delete(thumb);
+      deleted.push(thumb);
+    } catch {
+      failed.push(thumb);
+    }
+  }
+  return jsonOk({ ok: true, key, deleted, ...(failed.length ? { failed } : {}) }, 200, PHOTO_NO_STORE);
+}
+
+// The same checks as deletePhoto, deleting nothing: 200 {key, deletable,
+// code, error} (code / error: the 409 DELETE would give, null when free);
+// 400 / 404 / 500 photo_lock_unavailable as DELETE, and anything thrown is
+// that 500 too. Only a hint: the delete checks again.
+async function photoLockReport(env, ownerId, key) {
+  if (!deletablePhotoKey(key)) return jsonOk({ error: 'Invalid key', code: 'invalid_key' }, 400);
+  try {
+    if (!(await bucketFor(env, ownerId).head(key))) return jsonErr('Not found', 404);
+    const code = await photoLock(env, ownerId, key);
+    if (code === PHOTO_LOCK_UNAVAILABLE) return photoLockAnswer(code, []);
+    return jsonOk({ key, deletable: !code, code, error: code ? PHOTO_LOCKS[code] : null }, 200, PHOTO_NO_STORE);
+  } catch (e) {
+    console.error('photo lock:', e?.message);
+    return photoLockAnswer(PHOTO_LOCK_UNAVAILABLE, []);
+  }
 }
 
 // Thumbnails live under `_thumbs/<width>/<key>.thumb`, so permission on one is
@@ -4202,6 +4488,22 @@ async function routeRequest(request, env, ctx) {
       await env.DB.prepare('DELETE FROM permissions WHERE user_id = ?').bind(userId).run();
       await env.DB.prepare('DELETE FROM users WHERE id = ?').bind(userId).run();
       return jsonOk({ success: true });
+    }
+
+    // DELETE /api/admin/photo?key=<logical key> — one of the caller's own
+    // photos, its thumbnails first and the original last (deletePhoto).
+    // GET /api/admin/photo/lock?key= — whether that delete would go ahead
+    // now (photoLockReport), so a page can leave the button out. The key
+    // comes from the query only. Anything else under /api/admin/photo is
+    // 404, another method 405.
+    if (pathParts[0] === 'api' && pathParts[1] === 'admin' && pathParts[2] === 'photo') {
+      const auth = await requirePhotographer(request, env); // scoped to the caller (who.id)
+      if (auth.refused) return auth.refused;
+      const lock = pathParts.length === 4 && pathParts[3] === 'lock';
+      if (pathParts.length !== 3 && !lock) return jsonErr('Not found', 404);
+      if (request.method !== (lock ? 'GET' : 'DELETE')) return jsonErr('Method not allowed', 405);
+      if (!env.DB) return jsonErr('DB not configured', 500);
+      return (lock ? photoLockReport : deletePhoto)(env, auth.who.id, params.get('key'));
     }
 
     // POST /api/admin/projects — a guest-picking project and its one link.
