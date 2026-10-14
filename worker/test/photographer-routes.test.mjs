@@ -119,6 +119,8 @@ const ROUTES = [
   R('scoped', 'PUT', () => '/2026/new.jpg', 'bytes', { 'Content-Type': 'image/jpeg' }),
   R('scoped', 'GET', () => `/?list=${encodeURIComponent(MINE)}`),
   R('scoped', 'GET', () => '/20260819/a.jpg'),
+  // A: 409 (the fixture project picks from 20260819/); B: 404 (no such photo of B's)
+  R('scoped', 'DELETE', () => `/api/admin/photo?key=${encodeURIComponent('20260819/a.jpg')}`),
 ];
 const label = r => `${r.method} ${r.path({ projectId: ':id', pickToken: ':token', userId: ':uid' })}`;
 const send = (mod, env, r, f, token) => mod.fetch(req(r.path(f), {
@@ -470,6 +472,7 @@ const DEFAULT_ID_USES = {
   tenantPrefix: 1,           // the default photographer has no R2 prefix: asked for one, it refuses (batch 3)
   bucketFor: 1,              // the default photographer's keys are unprefixed (batch 3)
   bookBucket: 1,             // books have no owner yet: the default's objects (default-only until books)
+  photoLock: 1,              // ...so only the default's photos can be in an album (photo delete, photo-delete.test.mjs)
   isDefaultOwner: 1,         // a link owned by the default (NULL or its id) is never dark; never suspended (security review of batch 3)
   ownerLiveSql: 1,           // the same, as the WHERE condition of the statement that loads a link (security review of batch 3)
   routeRequest: 1,           // the public /api/studio/logo (the default's, 2b-3)
