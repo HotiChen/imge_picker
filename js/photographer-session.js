@@ -35,7 +35,11 @@
     const r = record();
     if (r) set(SESSION, JSON.stringify({ t: r.t, must: !!on }));
   }
-  function clear() { del(TOKEN); del(SESSION); }
+  // the name label (js/studio-who.js) and its cache belong to the token: they leave with it
+  function clear() {
+    del(TOKEN); del(SESSION); del('studio_who');
+    try { if (window.StudioWho) window.StudioWho.unmount(); } catch (e) { /* cosmetic only */ }
+  }
 
   // Sign out: tell the Worker (best effort, only for an account session; Tim's token has nothing to end), then forget.
   function logout() {

@@ -431,7 +431,8 @@ async function rvAssertChrome(page, ok) {
   ok('the top bar has no 預約拍攝 / 上傳 / 相本書 text', RV_GONE_HEADER_TEXT.every(t => !r.hdrText.includes(t)),
     RV_GONE_HEADER_TEXT.filter(t => r.hdrText.includes(t)).join());
   ok('the right side of the top bar shows only the avatar and 登出 (no empty group or placeholder left)',
-    JSON.stringify(r.hrVisible) === JSON.stringify(['userAvatarStudio', 'studio-logout']), JSON.stringify(r.hrVisible));
+    // the studio-name label (js/studio-who.js, suite 81) may sit before 登出 once its lookup answers: it is not a placeholder
+    JSON.stringify((r.hrVisible || []).filter(c => c !== 'studio-who')) === JSON.stringify(['userAvatarStudio', 'studio-logout']), JSON.stringify(r.hrVisible));
   ok('kept: 返回專案 / 複製選片連結 / 張數列 are visible', r.kept.back && r.kept.copy && r.kept.count
     && r.kept.backText.includes('返回專案') && r.kept.copyText === '複製選片連結' && r.kept.countText.includes('Zed') && r.kept.countText.includes('3 張'), JSON.stringify(r.kept));
   ok('kept: avatar and 登出 are visible', r.kept.avatar && r.kept.avatarText === 'HC' && r.kept.logout && r.kept.logoutText === '登出', JSON.stringify(r.kept));

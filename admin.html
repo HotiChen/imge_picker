@@ -9,6 +9,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@600;900&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="css/revision-rounds-view.css?v=20261014a">
 <link rel="stylesheet" href="css/side-nav.css?v=20261014a">
+<link rel="stylesheet" href="css/studio-who.css?v=20261014a">
 <link rel="stylesheet" href="css/guest-order-card.css?v=20261014a">
 <style>
   /* Bright theme, shared with home.html / dashboard.html / settings.html — cream
@@ -522,6 +523,7 @@
 <script src="js/password-toggle.js?v=20261014a"></script>
 <script src="js/util.js?v=20261014a"></script>
 <script src="js/side-nav.js?v=20261014a"></script>
+<script src="js/studio-who.js?v=20261014a"></script>
 <script src="js/orders-common.js?v=20261014a"></script>
 <script src="js/selection-export.js?v=20261014a"></script>
 <script src="js/pin-layer.js?v=20261014a"></script>
@@ -563,6 +565,7 @@
     adminView.style.display = 'block';
     loaded.projects = false;
     loaded.clients = false;
+    if (window.StudioWho) StudioWho.mount(document.getElementById('logout-btn'));   // the name beside 登出 (js/studio-who.js)
     startAutoRefresh();
     applyView();
   }
