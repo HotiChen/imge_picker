@@ -542,8 +542,10 @@ removed anything from R2. Worker only (the button comes later); no migration.
   - 500 `{error, code: 'photo_lock_unavailable', deleted: []}`: the lock
     cannot be decided, nothing deleted (fail closed): the database lacks a
     table or column the lock reads (the projects' delivery / archive columns,
-    `orders` / `order_items`; prod has all of them since 2026-09-29/30, so only
-    an old or fake database gets this), or the default photographer has more
+    `orders` / `order_items`, `revision_requests.marks` / `submissions`; prod
+    has all of them since 2026-09-29..10-07, so only an old or fake database
+    gets this — Tim: if the revision-pins migration had not run, every delete
+    would answer this), or the default photographer has more
     than 25 albums (below).
   - 500 `{error, code: 'photo_delete_failed', deleted: [], failed}`: nothing
     was deleted — the original's delete threw (`failed: [key]`), or anything
@@ -568,13 +570,26 @@ removed anything from R2. Worker only (the button comes later); no migration.
   3. `photo_in_pick_folder`: under the picking folders of any project neither
      delivered nor archived — the client may have picked it (Tim agreed).
      So proofs are never deletable through this route while a project uses them.
-  4. `photo_in_order`: on any order line of this photographer's
+  4. `photo_in_round`: frozen in a round the old-round thumbnail route
+     (`GET /api/pick/rounds/:id/photo`) can still serve: the pins of any
+     `revision_requests` row (`marks`, keyed by photo key) or the
+     `photo_keys` of any `submissions` row (the selection) of this
+     photographer's projects, any project state. The round route shows them
+     under whatever finals the project is delivered with now, so a redelivery
+     to other finals (更換精修 to 精修二) or an undeliver does not free them
+     (the review reproduced the 404 this prevents). One D1 statement (a
+     `UNION ALL` joined on `projects.photographer_id`). Draft pins
+     (`revision_pins`) are not rounds and do not lock — a client's stale draft
+     must not block deleting a mistaken upload. The shared matcher now
+     counts object keys as well as string values (the pins are keyed by
+     photo key), for albums and order lines too: only more conservative.
+  5. `photo_in_order`: on any order line of this photographer's
      (`order_items.photo_keys` of an order with `orders.photographer_id = who.id`),
      **every status, a cancelled order too** (conservative). Same match as the
      albums (contains the key, as is or URL-encoded; a value that does not
      parse locks a key its text contains). One D1 statement, no R2, so it is
      checked before the albums: an order lock answers without reading a book.
-  5. `photo_in_album`: the default photographer only (books have no other owner
+  6. `photo_in_album`: the default photographer only (books have no other owner
      yet): any string anywhere in any `_books/*.json` containing the key, as
      is or URL-encoded (slots, backgrounds, the editor's `_photoCache`, a field
      added later). Over-matching (`a.jpg` inside `a.jpg.bak`) only refuses a
@@ -611,9 +626,8 @@ removed anything from R2. Worker only (the button comes later); no migration.
   round on it, and, once guest ordering is on, a guest order naming it.
 - **Not checked** (refused nowhere; say so if it matters): an album that only
   ever lived in the editor's localStorage (never synced to the cloud) is
-  invisible to the Worker; a frozen revision round (`revision_requests.finals`)
-  of a project that is not delivered now (a later redelivery shows that round's
-  thumbnail as missing); the retired client accounts' folders.
+  invisible to the Worker; draft pins (`revision_pins`); the retired client
+  accounts' folders.
 - Tests: `worker/test/photo-delete.test.mjs`, `worker/test/r2-delete-helper.test.mjs`.
 
 ## Out of scope for this step

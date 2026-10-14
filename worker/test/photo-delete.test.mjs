@@ -24,8 +24,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { fakeBucket, fakeDB } from './fakes.mjs';
 import {
-  OBJECTS, PROOF, FINAL, PA, PB, F1, F2, F3, G1, FRESH,
-  setup, admin, guest, pin, SECRET, call, claim, save,
+  OBJECTS, PROOF, FINAL, FINAL2, PA, PB, F1, F2, F3, G1, FRESH, BEFORE,
+  setup, admin, guest, pin, SECRET, call, claim, save, withRound, deliver, delivered, photo, putPins,
 } from './revision-helpers.mjs';
 import { seedPhotographer, snapshot, ROUTES_ON } from './tenant-helpers.mjs';
 
@@ -684,4 +684,79 @@ test('photo_in_order: a database without the order tables cannot say: 500 photo_
   assert.throws(() => w.env.DB._db.prepare('SELECT 1 FROM order_items').get(), /no such table/);
   await refusedWithNothingDeleted(w, () => del(w.env, X, SECRET), 500, 'photo_lock_unavailable');
   await refusedWithNothingDeleted(w, () => lockOf(w.env, X, SECRET), 500, 'photo_lock_unavailable');
+});
+
+// ─── rounds: a key frozen in a revision round or a submitted selection ────
+// GET /api/pick/rounds/:id/photo serves `_thumbs/<w>/<key>.thumb` of a key
+// frozen in revision_requests.marks (a pins round) or the latest
+// submissions.photo_keys (the selection), for as long as the project is
+// delivered — under whatever finals it is delivered with now.
+test('locked: a photo pinned in a revision round, redelivered under other finals (更換精修 to 精修二), is 409 photo_in_round; the round keeps its thumbnail', async () => {
+  const w = await world();
+  const p = await withRound(w.env);
+  assert.equal((await deliver(w.env, p.id, [FINAL2])).status, 200);
+  await refusedWithNothingDeleted(w, () => del(w.env, F1, SECRET), 409, 'photo_in_round');
+  const lock = await body(await call(w.env, `/api/admin/photo/lock?key=${q(F1)}`, { token: SECRET }));
+  assert.equal(lock.json.code, 'photo_in_round');
+  // the round lists F1 and F3 in code point order: index 0 is F1
+  const res = await photo(w.env, p.token, p.key, p.roundId, 'i=0&w=400');
+  assert.equal(res.status, 200);
+  assert.equal(await res.text(), 'F1-T400');
+  // a finals photo the round does not name is free
+  assert.equal((await del(w.env, F2, SECRET)).status, 200);
+});
+
+test('locked: after undeliver too (a later redelivery shows the round again)', async () => {
+  const w = await world();
+  const p = await withRound(w.env);
+  assert.equal((await admin(w.env, p.id, 'undeliver')).status, 200);
+  await refusedWithNothingDeleted(w, () => del(w.env, F3, SECRET), 409, 'photo_in_round');
+  assert.equal((await del(w.env, F2, SECRET)).status, 200);
+});
+
+test('locked: a key in a submitted selection (submissions.photo_keys) is photo_in_round even when no project folder covers it any more', async () => {
+  const w = await world();
+  const now = new Date().toISOString();
+  rawProject(w.env, 'gone', 'default', JSON.stringify(['elsewhere/']));
+  w.env.DB._db.prepare("INSERT INTO submissions (id, project_id, picker_id, relationship, photo_keys, count, created_at) VALUES ('s1', 'gone', 'pk', '本人', ?, 1, ?)")
+    .run(JSON.stringify([X]), now);
+  await refusedWithNothingDeleted(w, () => del(w.env, X, SECRET), 409, 'photo_in_round');
+});
+
+test('photo_in_round: only this photographer\'s projects\' rounds count (A\'s round never locks B\'s photo, nor B\'s A\'s)', async () => {
+  const w = await world();
+  const p = await withRound(w.env);
+  assert.equal((await deliver(w.env, p.id, [FINAL2])).status, 200);
+  assert.equal((await del(w.env, F1, w.B.token)).status, 200);
+  const now = new Date().toISOString();
+  rawProject(w.env, 'b-proj', w.B.id, JSON.stringify(['elsewhere/']));
+  w.env.DB._db.prepare("INSERT INTO revision_requests (id, project_id, message, created_at, marks, finals) VALUES ('r-b', 'b-proj', 'x', ?, ?, ?)")
+    .run(now, JSON.stringify({ [X]: [pin()] }), JSON.stringify([T]));
+  await refusedWithNothingDeleted(w, () => del(w.env, X, w.B.token), 409, 'photo_in_round');
+  assert.equal((await del(w.env, X, w.C.token)).status, 200);
+  assert.equal((await del(w.env, X, SECRET)).status, 200);
+});
+
+test('draft pins (revision_pins, never sent as a round) do not lock: after undeliver the photo is deletable', async () => {
+  const w = await world();
+  const p = await delivered(w.env);
+  assert.equal((await putPins(w.env, p.token, p.key, [{ photo_key: F2, marks: [pin(0.5, 0.5, '這張傳錯了')] }])).status, 200);
+  assert.equal(w.env.DB._db.prepare('SELECT COUNT(*) AS n FROM revision_pins').get().n, 1, 'the draft is there');
+  assert.equal((await admin(w.env, p.id, 'undeliver')).status, 200);
+  assert.equal((await del(w.env, F2, SECRET)).status, 200);
+});
+
+test('photo_in_round ranks after the project locks and before photo_in_order', async () => {
+  const w = await world();
+  const p = await withRound(w.env);
+  await refusedWithNothingDeleted(w, () => del(w.env, F1, SECRET), 409, 'photo_locked_delivered');
+  assert.equal((await deliver(w.env, p.id, [FINAL2])).status, 200);
+  order(w.env, 'default', [F1]);
+  await refusedWithNothingDeleted(w, () => del(w.env, F1, SECRET), 409, 'photo_in_round');
+});
+
+test('photo_in_round: a database without the revision-pins columns cannot say: 500 photo_lock_unavailable, nothing deleted', async () => {
+  const w = await world();
+  w.env.DB = fakeDB({ schema: BEFORE });
+  await refusedWithNothingDeleted(w, () => del(w.env, X, SECRET), 500, 'photo_lock_unavailable');
 });

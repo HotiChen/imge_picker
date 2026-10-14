@@ -1031,6 +1031,7 @@ const PHOTO_LOCKS = {
   photo_locked_delivered: '這張照片在已交件的專案資料夾裡，不能刪除（要刪請先取消交件或開放修改）',
   photo_locked_archived: '這張照片在已封存的專案資料夾裡，不能刪除',
   photo_in_pick_folder: '這張照片在選片資料夾裡，客人可能已經選了它，不能刪除',
+  photo_in_round: '這張照片在客人送出的選片或修改紀錄裡，不能刪除',
   photo_in_order: '這張照片在訂單裡（含已取消的訂單），不能刪除',
   photo_in_album: '這張照片已放進相本，不能刪除',
 };
@@ -1047,15 +1048,25 @@ function foldersColumnCovers(value, key) {
   return folders.some(f => typeof f !== 'string' || folderCovers(f, key));
 }
 
-// Any string anywhere in an album that names `key` (a slot, a background,
-// the editor's layout cache, a field added later): contains it, as is or
-// URL-encoded. Over-matching (`a.jpg` inside `a.jpg.bak`) only refuses a
-// delete; under-matching would break an album.
+// Any string anywhere in a stored value that names `key` — an album (a slot,
+// a background, the editor's layout cache, a field added later), an order
+// line, a round's pins (keyed BY photo key, so object keys count too):
+// contains it, as is or URL-encoded. Over-matching (`a.jpg` inside
+// `a.jpg.bak`) only refuses a delete; under-matching would lose a photo
+// something still shows.
 function albumNames(value, key, depth = 0) {
   if (depth > 64) return true;
-  if (typeof value === 'string') return value.includes(key) || value.includes(encodeURIComponent(key));
-  if (value && typeof value === 'object') return Object.values(value).some(v => albumNames(v, key, depth + 1));
+  const names = v => v.includes(key) || v.includes(encodeURIComponent(key));
+  if (typeof value === 'string') return names(value);
+  if (value && typeof value === 'object') {
+    return Object.keys(value).some(names) || Object.values(value).some(v => albumNames(v, key, depth + 1));
+  }
   return false;
+}
+// A stored JSON column, parsed; its text when it does not parse (so a key the
+// text contains still counts).
+function parsedOrText(text) {
+  try { return JSON.parse(text); } catch { return String(text); }
 }
 
 // The most albums one delete reads. Each is an R2 get, a subrequest; on the
@@ -1119,15 +1130,28 @@ async function photoInAlbum(env, key) {
 // - on any order line of an order of `ownerId`'s (order_items.photo_keys,
 //   every status, a cancelled order too) → photo_in_order. One D1 statement;
 //   checked before the albums, which cost an R2 read per book.
+// - frozen in a round the old-round thumbnail route serves (GET
+//   /api/pick/rounds/:id/photo): the pins of any revision_requests row, the
+//   photo_keys of any submission, of `ownerId`'s projects → photo_in_round
+//   (one D1 statement; ranked before the orders). The round route shows them
+//   whatever the finals are now, so a redelivery to other finals does not
+//   free them. Draft pins (revision_pins) are not rounds and do not lock.
 // - named in an album (the default photographer's only) → photo_in_album.
-// A missing table or column (projects' late columns, the order tables: all
-// in prod since 2026-09-29/30) is PHOTO_LOCK_UNAVAILABLE: fail closed.
+// A missing table or column (projects' late columns, the order tables, the
+// rounds' marks: all in prod since 2026-09-29..10-07) is
+// PHOTO_LOCK_UNAVAILABLE: fail closed.
 async function photoLock(env, ownerId, key) {
   let rows;
+  let frozen;
   let lines;
   try {
     ({ results: rows } = await env.DB.prepare(
       'SELECT folders, final_folders, delivered_at, archived_at FROM projects WHERE photographer_id = ?'
+    ).bind(ownerId).all());
+    ({ results: frozen } = await env.DB.prepare(
+      'SELECT r.marks AS v FROM revision_requests r JOIN projects p ON p.id = r.project_id ' +
+      'WHERE p.photographer_id = ?1 AND r.marks IS NOT NULL ' +
+      'UNION ALL SELECT s.photo_keys FROM submissions s JOIN projects p ON p.id = s.project_id WHERE p.photographer_id = ?1'
     ).bind(ownerId).all());
     ({ results: lines } = await env.DB.prepare(
       "SELECT i.photo_keys FROM order_items i JOIN orders o ON o.id = i.order_id WHERE o.photographer_id = ? AND i.photo_keys <> '[]'"
@@ -1144,13 +1168,10 @@ async function photoLock(env, ownerId, key) {
     else if (p.archived_at !== null) held.add('photo_locked_archived');
     else if (inPick) held.add('photo_in_pick_folder');
   }
-  // the album rule on each line: contains the key, as is or URL-encoded; a
+  // the album rule on each value: contains the key, as is or URL-encoded; a
   // value that does not parse locks a key its text contains
-  for (const { photo_keys: text } of lines || []) {
-    let keys;
-    try { keys = JSON.parse(text); } catch { keys = String(text); }
-    if (albumNames(keys, key)) { held.add('photo_in_order'); break; }
-  }
+  if ((frozen || []).some(r => albumNames(parsedOrText(r.v), key))) held.add('photo_in_round');
+  if ((lines || []).some(l => albumNames(parsedOrText(l.photo_keys), key))) held.add('photo_in_order');
   const code = Object.keys(PHOTO_LOCKS).find(c => held.has(c));
   if (code) return code;
   if (ownerId !== DEFAULT_PHOTOGRAPHER_ID) return null;
