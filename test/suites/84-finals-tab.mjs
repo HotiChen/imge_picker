@@ -99,14 +99,51 @@ const world = (extra = {}) => {
 
 {
   const w = world();
-  await suite('84 精修分頁 — 專案還沒選精修資料夾：不列任何東西，說明要到專案頁選資料夾',
+  await suite('84 精修分頁 — 專案還沒選精修資料夾、旁邊剛好有一個叫「精修」的：直接列它，橫幅註明尚未交件選定，不寫入',
     `${base}/index.html?project=proj-f&mode=finals`,
     async page => {
       const out = [], ok = okFn(out);
-      await page.waitForFunction(() => /還沒選精修資料夾/.test(document.querySelector('#emptyState h2')?.textContent || ''), null, { timeout: 5000 });
+      await page.waitForFunction(() => document.querySelectorAll('.photo-card').length === 3, null, { timeout: 5000 });
+      const got = (await ids(page)).sort();
+      ok('the 3 finals are shown, no proof', JSON.stringify(got) === JSON.stringify([...FINALS].sort()), JSON.stringify(got));
+      const banner = await page.$eval('#pvBannerText', e => e.textContent);
+      ok('banner says it is not yet chosen for delivery', /3 張/.test(banner) && /尚未交件選定/.test(banner), banner);
+      const writes = w.m.requests.filter(r => r.method !== 'GET' && r.path !== '/api/auth/studio-token');
+      ok('nothing was written', writes.length === 0, JSON.stringify(writes.map(r => r.method + r.path)));
+      ok('no chooser shown', await page.evaluate(() => !document.getElementById('pvFinalPick')));
+      return out;
+    },
+    { before: w.attach, initScript: ADMIN_SRC });
+}
+
+{
+  const w = world({ pickFiles: [...PROOFS, 'shoot/修A/x1.jpg', 'shoot/修B/y1.jpg', 'shoot/修B/y2.jpg'] });
+  await suite('84 精修分頁 — 沒選、旁邊有兩個沒有「精修」的資料夾：列出按鈕讓你選，點了才列照片',
+    `${base}/index.html?project=proj-f&mode=finals`,
+    async page => {
+      const out = [], ok = okFn(out);
+      await page.waitForSelector('#pvFinalPick button', { timeout: 5000 });
+      const names = await page.$$eval('#pvFinalPick button', bs => bs.map(b => b.textContent).sort());
+      ok('floor: one button per sibling folder, the proof folder not among them', JSON.stringify(names) === JSON.stringify(['修A', '修B']), JSON.stringify(names));
+      ok('no photo yet', (await ids(page)).length === 0);
+      await page.click('#pvFinalPick button:nth-child(2), #pvFinalPick button:has-text("修B")');
+      await page.waitForFunction(() => document.querySelectorAll('.photo-card').length === 2, null, { timeout: 5000 });
+      ok('the 2 photos of 修B', JSON.stringify((await ids(page)).sort()) === JSON.stringify(['shoot/修B/y1.jpg', 'shoot/修B/y2.jpg']));
+      ok('chooser gone', await page.evaluate(() => !document.getElementById('pvFinalPick')));
+      return out;
+    },
+    { before: w.attach, initScript: ADMIN_SRC });
+}
+
+{
+  const w = world({ pickFiles: [...PROOFS] });
+  await suite('84 精修分頁 — 旁邊什麼資料夾都沒有：不列任何東西，說明要到專案頁選資料夾',
+    `${base}/index.html?project=proj-f&mode=finals`,
+    async page => {
+      const out = [], ok = okFn(out);
+      await page.waitForFunction(() => /還沒選精修資料夾|找不到精修資料夾/.test(document.querySelector('#emptyState h2')?.textContent || ''), null, { timeout: 5000 });
       ok('no photo card at all', (await ids(page)).length === 0);
       ok('the hint names where to choose them', /交件區/.test(await page.$eval('#emptyState p', e => e.textContent)));
-      ok('no listing was requested', w.m.requests.filter(r => r.search.includes('list=')).length === 0);
       return out;
     },
     { before: w.attach, initScript: ADMIN_SRC });

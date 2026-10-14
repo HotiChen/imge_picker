@@ -32,6 +32,8 @@
         finalFolders: [],        // the project's chosen finals folders (final_folders; kept after 取消交件)
         finalPhotos: null,       // listed afresh on every entry to the 精修 tab (a delete changes it)
         finalError: false,
+        finalPick: null,         // a folder chosen on this tab for looking only (not saved)
+        finalCandidates: [],
         proofFolders: [],
         allPhotos: null,        // every proof, once listed (null = not loaded yet)
         _selByKey: new Map(),   // photo_key -> the client's selection row
@@ -203,9 +205,18 @@
             this.finalError = false;
             this.finalPhotos = null;   // never show the previous listing while this one loads
             const seq = this._finalSeq = (this._finalSeq || 0) + 1;
-            if (!this.finalFolders.length) { this.finalPhotos = []; return; }
+            this.finalCandidates = [];
             try {
-                const list = await this._listAllProofs(this.finalFolders, false);
+                // nothing chosen on the project yet (it is not delivered): look beside the proof folders. One folder
+                // named 精修 is taken as the finals; otherwise the photographer picks one. Viewing only, nothing saved.
+                if (!this.finalFolders.length && !this.finalPick) {
+                    const found = await this._findFinalCandidates();
+                    if (seq !== this._finalSeq) return;
+                    const named = found.filter(f => f.includes('精修'));
+                    if (named.length === 1) this.finalPick = [named[0]];
+                    else { this.finalCandidates = found; this.finalPhotos = []; return; }
+                }
+                const list = await this._listAllProofs(this._finalRoots(), false);
                 if (seq === this._finalSeq) this.finalPhotos = list;   // a newer entry to the tab wins
             } catch (e) {
                 if (seq !== this._finalSeq) return;
@@ -213,6 +224,49 @@
                 this.finalError = true;
                 if (typeof toast !== 'undefined') toast.error('無法讀取精修資料夾');
             }
+        },
+
+        _finalRoots() { return this.finalFolders.length ? this.finalFolders : (this.finalPick || []); },
+
+        // The folders next to each proof folder (same parent), minus the proof folders and thumbnails.
+        async _findFinalCandidates() {
+            const proofs = new Set(this.proofFolders.map(f => f.endsWith('/') ? f : f + '/'));
+            const parents = new Set([...proofs].map(f => f.replace(/[^/]+\/$/, '')));
+            const out = [];
+            for (const parent of parents) {
+                const res = await fetch(`${CONFIG.WORKER_URL}/?list=${encodeURIComponent(parent)}`,
+                    { headers: driveManager._authHeaders() });
+                const r = await res.json().catch(() => null);
+                if (!res.ok || !r || r.status !== 'success') throw new Error('list failed');
+                (r.folders || []).forEach(f => {
+                    if (typeof f === 'string' && f && !proofs.has(f) && !f.startsWith('_thumbs/') && !out.includes(f)) out.push(f);
+                });
+            }
+            return out;
+        },
+
+        _renderFinalPick() {
+            const host = document.getElementById('emptyState');
+            document.getElementById('pvFinalPick')?.remove();
+            if (!host || this.mode !== 'finals' || !this.finalCandidates || !this.finalCandidates.length) return;
+            const box = document.createElement('div');
+            box.id = 'pvFinalPick';
+            box.className = 'pv-mode-toggle';
+            box.style.flexWrap = 'wrap';
+            this.finalCandidates.forEach(f => {
+                const b = document.createElement('button');
+                b.type = 'button';
+                b.className = 'btn btn-outline pv-banner-btn';
+                b.textContent = f.replace(/\/$/, '').split('/').pop() || f;
+                b.addEventListener('click', async () => {
+                    this.finalPick = [f];
+                    await this._loadFinals();
+                    this.renderBanner();
+                    this.loadGrid();
+                });
+                box.appendChild(b);
+            });
+            host.appendChild(box);
         },
 
         _applyState(data) {
@@ -576,7 +630,7 @@
             const link = document.getElementById('pvBackLink');
             if (textEl) {
                 textEl.textContent = this.mode === 'finals' && this.finalPhotos
-                    ? `精修 · ${this.finalPhotos.length} 張`
+                    ? `精修 · ${this.finalPhotos.length} 張${this.finalFolders.length || !this.finalPick ? '' : `（${this.finalPick[0].replace(/\/$/, '').split('/').pop()}，尚未交件選定）`}`
                     : this.mode === 'all' && this.allPhotos
                     ? `全部毛片 · ${this.allPhotos.length} 張（客人選了 ${this.photos.length} 張）`
                     : `${this.ownerName || '（尚無人認領）'} 的選片 · ${this.photos.length} 張`;
@@ -648,9 +702,10 @@
             const h2 = document.querySelector('#emptyState h2');
             const p = document.querySelector('#emptyState p');
             if (this.mode === 'finals') {
-                const none = !this.finalFolders.length;
-                if (h2) h2.textContent = none ? '還沒選精修資料夾' : this.finalError ? '無法讀取精修' : '沒有精修照片';
-                if (p) p.textContent = none ? '到專案頁的交件區選好精修資料夾，這裡就看得到' : this.finalError ? '精修資料夾暫時讀不到，請稍後再試' : '精修資料夾裡還沒有照片';
+                const none = !this._finalRoots().length;
+                const cands = !!(this.finalCandidates && this.finalCandidates.length);
+                if (h2) h2.textContent = cands ? '選一個資料夾來看' : none ? '還沒選精修資料夾' : this.finalError ? '無法讀取精修' : '沒有精修照片';
+                if (p) p.textContent = cands ? '這個專案還沒選精修資料夾（交件時才會選）。點下面的資料夾，先看看裡面的照片，不會改任何設定' : none ? '找不到精修資料夾。到專案頁的交件區選好精修資料夾，這裡就看得到' : this.finalError ? '精修資料夾暫時讀不到，請稍後再試' : '精修資料夾裡還沒有照片';
             } else if (this.mode === 'all') {
                 if (h2) h2.textContent = this.allError ? '無法讀取毛片' : '沒有毛片';
                 if (p) p.textContent = this.allError ? '毛片資料夾暫時讀不到，請稍後再試' : '這個專案的毛片資料夾裡還沒有照片';
@@ -658,6 +713,7 @@
                 if (h2) h2.textContent = '尚無選取的照片';
                 if (p) p.textContent = '這個專案目前還沒有人選片';
             }
+            this._renderFinalPick();
             this.app.photos = list;
             this.app.currentFolders = [];
             this.app.applyFilters();
