@@ -1072,10 +1072,13 @@ function parsedOrText(text) {
 // The most albums one delete reads. Each is an R2 get, a subrequest; on the
 // Workers Free plan a request may make 50 (the documented limit for external
 // subrequests; calls to R2 / D1 are allowed 1000, but the stricter reading is
-// the safe one). Besides the albums a delete makes at most ~16 more: the
-// session lookup, the photo's head, three D1 statements, the album listing,
-// the thumbnail listing, a head and a delete per thumbnail width (3–4 widths)
-// and the original's delete. 25 leaves room for a few more widths and pages.
+// the safe one). Besides the albums a delete makes: the session lookup (1),
+// the photo's head (1), three D1 statements (projects, rounds, orders: 3; 4
+// before the guest-order migration, the orders one retried), the album
+// listing (1), the thumbnail listing (1), the original's delete (1) and a
+// head and a delete per thumbnail width (THUMB_BUCKETS: 3 widths, 6) = 14,
+// 15 before that migration, +2 per older width folder found. With 25
+// albums: 39–40, leaving 10 for older widths or extra listing pages.
 // Over it, the lock cannot be decided within one request: 500
 // photo_lock_unavailable, nothing deleted (never a partial scan).
 const ALBUM_SCAN_MAX = 25;

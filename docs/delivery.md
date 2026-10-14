@@ -608,9 +608,11 @@ removed anything from R2. Worker only (the button comes later); no migration.
      **Cost cap:** every album is one R2 read, a subrequest. The Workers Free
      plan allows 50 per request (the documented limit for external
      subrequests; R2 / D1 calls are allowed 1000, but the stricter reading is
-     the safe one); a delete makes about 16 others (session, head, three D1
-     statements, two listings, a head + delete per thumbnail width, the
-     original). So at most **25** albums are read (`ALBUM_SCAN_MAX`;
+     the safe one); besides the albums a delete makes 14: session 1, head 1,
+     three D1 statements (projects, rounds, orders; 4 before the guest-order
+     migration), two listings 2, the original 1, a head + delete for each of
+     the 3 thumbnail widths 6 (+2 per older width folder found). With 25
+     albums that is 39–40, leaving 10 spare. So at most **25** albums are read (`ALBUM_SCAN_MAX`;
      `<id>_status.json` is not counted or read when `<id>.json` is listed
      beside it — otherwise it may be an album whose own id ends in `_status`,
      book ids being unchecked, and it is read). More than that: 500
