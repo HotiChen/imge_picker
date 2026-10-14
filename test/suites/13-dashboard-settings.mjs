@@ -61,11 +61,12 @@ await suite('入口 — 未登入時看到品牌、三張特色卡與手機示�
       const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
 
       await page.click('#photographerLoginBtn');
+      await page.fill('#loginAccountInput', 'admin');   // the unified form: 帳號 admin = the studio password
       await page.fill('#loginTokenInput', 'wrong-pw');
       await page.click('#loginSubmitBtn');
       await page.waitForTimeout(300);
       const err1 = await page.textContent('#loginErr');
-      ok('wrong password shows 密碼錯誤', err1.trim() === '密碼錯誤', err1);
+      ok('wrong password shows the uniform 帳號或密碼不正確 (it no longer says which part)', err1.includes('帳號或密碼不正確'), err1);
       ok('nothing was stored on the wrong attempt',
         await page.evaluate(() => sessionStorage.getItem('studio_token')) === null);
 

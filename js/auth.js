@@ -17,13 +17,7 @@
     };
     const theme = () => (document.documentElement.hasAttribute('data-studio-light') ? PALETTE.light : PALETTE.dark);
 
-    const FIELD_STYLE = T => `width:100%;box-sizing:border-box;background:${T.field};border:1px solid ${T.border};color:${T.text};padding:10px 12px;border-radius:${T.radius};font-size:14px;outline:none;font-family:inherit;`;
-    const LINK_STYLE = T => `display:block;margin:10px auto 0;min-height:44px;padding:0 8px;background:none;border:none;color:${T.sub};font-size:12px;font-family:inherit;text-decoration:underline;cursor:pointer;`;
-    const LOGIN_ERRORS = {
-        login_failed: '帳號或密碼不正確，或帳號尚未開通',
-        too_many_attempts: '嘗試次數太多，請 15 分鐘後再試',
-        photographers_unavailable: '帳號登入功能尚未啟用',
-    };
+    const FIELD_STYLE = T => `width:100%;box-sizing:border-box;min-height:44px;background:${T.field};border:1px solid ${T.border};color:${T.text};padding:10px 12px;border-radius:${T.radius};font-size:16px;outline:none;font-family:inherit;`;
 
     function showLoginOverlay() {
         const T = theme();
@@ -38,118 +32,51 @@
         overlay.innerHTML = `
             <div style="background:${T.card};border:1px solid ${T.border};border-radius:${T.cardRadius};box-shadow:${T.shadow};padding:40px 32px;width:320px;text-align:center;">
                 <div style="color:${T.brand};font-size:13px;letter-spacing:0.15em;font-family:'IBM Plex Mono',monospace;margin-bottom:4px;">STUDIO</div>
-                <div id="auth-token-pane">
-                    <div style="color:${T.sub};font-size:12px;margin-bottom:28px;">輸入存取密碼以繼續</div>
-                    <input id="auth-input" type="password" placeholder="密碼"
-                        style="width:100%;box-sizing:border-box;background:${T.field};border:1px solid ${T.border};color:${T.text};padding:10px 12px;border-radius:${T.radius};font-size:14px;outline:none;font-family:inherit;">
-                    <button id="auth-btn"
-                        style="margin-top:10px;width:100%;background:${T.btn};color:${T.btnText};border:none;padding:10px;border-radius:${T.radius};font-size:14px;cursor:pointer;font-weight:600;letter-spacing:0.05em;">
-                        進入
-                    </button>
-                    <button id="auth-mode-email" type="button" style="${LINK_STYLE(T)}">改用 Email 登入</button>
-                </div>
-                <div id="auth-email-pane" hidden>
-                    <div style="color:${T.sub};font-size:12px;margin-bottom:28px;">用 Email 和密碼登入</div>
-                    <input id="auth-email" type="email" placeholder="Email" autocomplete="username" autocapitalize="none" spellcheck="false" inputmode="email"
-                        style="${FIELD_STYLE(T)}margin-bottom:10px;">
-                    <input id="auth-pw" type="password" placeholder="密碼" autocomplete="current-password"
-                        style="${FIELD_STYLE(T)}">
-                    <button id="auth-email-btn"
-                        style="margin-top:10px;width:100%;background:${T.btn};color:${T.btnText};border:none;padding:10px;border-radius:${T.radius};font-size:14px;cursor:pointer;font-weight:600;letter-spacing:0.05em;">
+                <form id="auth-form" method="post" novalidate>
+                    <div style="color:${T.sub};font-size:12px;margin-bottom:28px;">登入攝影師後台</div>
+                    <input id="auth-account" type="text" placeholder="帳號" aria-label="帳號" style="${FIELD_STYLE(T)}margin-bottom:10px;">
+                    <input id="auth-input" type="password" placeholder="密碼" aria-label="密碼" style="${FIELD_STYLE(T)}">
+                    <button id="auth-btn" type="submit"
+                        style="margin-top:10px;width:100%;min-height:44px;background:${T.btn};color:${T.btnText};border:none;padding:10px;border-radius:${T.radius};font-size:14px;cursor:pointer;font-weight:600;letter-spacing:0.05em;">
                         登入
                     </button>
-                    <button id="auth-mode-token" type="button" style="${LINK_STYLE(T)}">改用存取密碼</button>
-                </div>
+                </form>
                 <div id="auth-err" style="color:${T.err};font-size:12px;margin-top:10px;min-height:16px;"></div>
             </div>
         `;
 
         document.body.appendChild(overlay);
 
-        const input = document.getElementById('auth-input');
+        const account = document.getElementById('auth-account');
+        const input = document.getElementById('auth-input');   // the 密碼 field
+        UnifiedLogin.prepare(account, input);
         PasswordToggle.attach(input, { color: T.sub });
         const btn = document.getElementById('auth-btn');
         const err = document.getElementById('auth-err');
 
+        // one form (js/unified-login.js): `admin` + the studio password is verified against /api/auth/verify-admin
+        // (a network error or non-ok answer refuses, nothing stored); anything else is an email + password account login
         async function tryLogin() {
-            const val = input.value.trim();
-            if (!val) { showError('請輸入密碼'); return; }
+            err.textContent = '';
             btn.disabled = true;
             btn.textContent = '驗證中…';
             try {
                 const workerBase = (typeof CONFIG !== 'undefined' && CONFIG.WORKER_URL) || 'https://imagepicker.hotichen.workers.dev';
-                const res = await fetch(`${workerBase}/api/auth/verify-admin`, {
-                    headers: { 'Authorization': `Bearer ${val}` }
+                const res = await UnifiedLogin.login({
+                    account: account.value, password: input.value, workerUrl: workerBase,
+                    verifyPath: '/api/auth/verify-admin',
                 });
-                if (!res.ok) {
-                    showError('密碼不正確，請重試');
-                    btn.disabled = false;
-                    btn.textContent = '進入';
-                    return;
-                }
-            } catch (e) {
-                // network error — let them in anyway
-            }
-            sessionStorage.setItem(STORAGE_KEY, val);
-            CONFIG.PHOTOGRAPHER_TOKEN = val;
-            overlay.remove();
-        }
-
-        function showError(msg) {
-            err.textContent = msg || '請輸入密碼';
-            input.style.borderColor = T.err;
-            setTimeout(() => { input.style.borderColor = T.border; err.textContent = ''; }, 2000);
-        }
-
-        btn.addEventListener('click', () => tryLogin());
-        input.addEventListener('keydown', e => { if (e.key === 'Enter') tryLogin(); });
-
-        // email + password (a photographer account); the stored result is the same studio_token
-        const tokenPane = document.getElementById('auth-token-pane');
-        const emailPane = document.getElementById('auth-email-pane');
-        const emailIn = document.getElementById('auth-email');
-        const pwIn = document.getElementById('auth-pw');
-        const emailBtn = document.getElementById('auth-email-btn');
-        PasswordToggle.attach(pwIn, { color: T.sub });
-        function showMode(email) {
-            tokenPane.hidden = email; emailPane.hidden = !email;
-            err.textContent = '';
-            (email ? emailIn : input).focus();
-        }
-        async function tryEmailLogin() {
-            const email = emailIn.value.trim();
-            const password = pwIn.value;
-            if (!email || !password) { err.textContent = '請輸入 Email 和密碼'; return; }
-            err.textContent = '';
-            emailBtn.disabled = true;
-            try {
-                const workerBase = (typeof CONFIG !== 'undefined' && CONFIG.WORKER_URL) || 'https://imagepicker.hotichen.workers.dev';
-                const res = await fetch(`${workerBase}/api/photographer/login`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ email, password }),
-                });
-                const data = await res.json().catch(() => ({}));
-                if (!res.ok || typeof data.token !== 'string' || !data.token) {
-                    err.textContent = LOGIN_ERRORS[data && data.code] || (res.status === 429 ? LOGIN_ERRORS.too_many_attempts : `登入失敗（${res.status}）`);
-                    return;
-                }
-                const must = data.must_change_password === true;
-                PhotographerSession.store(data.token, { mustChange: must });
-                if (must) { window.location.href = PhotographerSession.settingsUrl(); return; }
-                CONFIG.PHOTOGRAPHER_TOKEN = data.token;
+                if (!res.ok) { err.textContent = res.error; return; }
+                if (res.kind === 'account' && res.must) { window.location.href = PhotographerSession.settingsUrl(); return; }
+                CONFIG.PHOTOGRAPHER_TOKEN = res.token;
                 overlay.remove();
-            } catch (e) {
-                err.textContent = '無法連線到 Worker';
             } finally {
-                emailBtn.disabled = false;
+                btn.disabled = false;
+                btn.textContent = '登入';
             }
         }
-        document.getElementById('auth-mode-email').addEventListener('click', () => showMode(true));
-        document.getElementById('auth-mode-token').addEventListener('click', () => showMode(false));
-        emailBtn.addEventListener('click', tryEmailLogin);
-        [emailIn, pwIn].forEach(el => el.addEventListener('keydown', e => { if (e.key === 'Enter') tryEmailLogin(); }));
-        setTimeout(() => input.focus(), 50);
+        UnifiedLogin.bind(document.getElementById('auth-form'), tryLogin);
+        setTimeout(() => account.focus(), 50);
     }
 
     document.addEventListener('DOMContentLoaded', () => {

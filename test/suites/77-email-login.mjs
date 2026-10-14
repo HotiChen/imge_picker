@@ -18,33 +18,9 @@ export default async function register() {
   const disp = (page, sel) => page.$eval(sel, e => getComputedStyle(e).display);
   // really on screen (an ancestor with display:none counts), unlike the element's own computed display
   const shown = (page, sel) => page.$eval(sel, e => e.getClientRects().length > 0);
-  const openEmailLogin = async page => { await page.click('#photographerLoginBtn'); await page.click('#loginModeEmail'); };
-  const fillLogin = async (page, email, pw) => { await page.fill('#loginEmailInput', email); await page.fill('#loginPwInput', pw); await page.click('#loginEmailSubmit'); };
-
-  {
-    const f = photographerFake({ accounts: [ACCT] });
-    await suite('email login — the overlay: Tim’s token entry is still the default, a link switches to email + password and back',
-      `${base}/home.html`,
-      async page => {
-        const out = [];
-        const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
-        await page.click('#photographerLoginBtn');
-        ok('the token field (as today) is what shows first, with its button', (await shown(page, '#loginTokenInput')) && (await shown(page, '#loginSubmitBtn')));
-        ok('the email pane is hidden at first (computed display)', (await disp(page, '#loginEmailPane')) === 'none');
-        ok('a link offers 改用 Email 登入', (await page.textContent('#loginModeEmail')).includes('Email'));
-        await page.click('#loginModeEmail');
-        ok('the email pane shows email + password fields (email type, password hidden) and the token field is gone',
-          (await disp(page, '#loginEmailPane')) !== 'none' && (await shown(page, '#loginTokenInput')) === false &&
-          (await page.getAttribute('#loginEmailInput', 'type')) === 'email' && (await page.getAttribute('#loginPwInput', 'type')) === 'password' &&
-          (await page.getAttribute('#loginPwInput', 'autocomplete')) === 'current-password');
-        ok('the password has the show/hide eye', (await page.$('#loginEmailPane .pw-eye')) !== null);
-        await page.click('#loginModeToken');
-        ok('and back: the token field again, the email pane hidden', (await shown(page, '#loginTokenInput')) && !(await shown(page, '#loginEmailPane')));
-        ok('opening the page and switching panes sent nothing', f.st.calls.length === 0);
-        return out;
-      },
-      { before: f.attach });
-  }
+  // one unified form now (no 改用 Email 登入 toggle): 帳號 + 密碼; the toggle's own behaviour is gone, see 83-unified-login.mjs
+  const openEmailLogin = async page => { await page.click('#photographerLoginBtn'); };
+  const fillLogin = async (page, email, pw) => { await page.fill('#loginAccountInput', email); await page.fill('#loginTokenInput', pw); await page.click('#loginSubmitBtn'); };
 
   {
     const f = photographerFake({ accounts: [ACCT] });
@@ -56,7 +32,7 @@ export default async function register() {
         const errT = () => page.textContent('#loginErr');
         await openEmailLogin(page);
 
-        await page.click('#loginEmailSubmit');
+        await page.click('#loginSubmitBtn');
         ok('empty fields are refused on the page, nothing sent', (await errT()).length > 0 && f.st.calls.length === 0, await errT());
 
         await fillLogin(page, ACCT.email, 'wrong-password-x');

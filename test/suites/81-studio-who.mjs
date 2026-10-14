@@ -186,6 +186,7 @@ export default async function register() {
       async page => {
         const { out, ok } = lines();
         ok('before login there is no label (login view)', (await page.$(WHO)) === null || !(await who(page)).shown);
+        await page.fill('#admin-account-input', 'admin');
         await page.fill('#admin-token-input', 'adm');
         await page.click('#admin-login-btn');
         await waitWho(page);
@@ -197,6 +198,7 @@ export default async function register() {
         ok('the label is gone from the DOM', (await page.$(WHO)) === null);
         ok('and the cache with the token', (await cache(page)) === null && (await page.evaluate(() => sessionStorage.getItem('studio_token'))) === null);
         // sign in again with the same token: shown again (not stuck gone)
+        await page.fill('#admin-account-input', 'admin');
         await page.fill('#admin-token-input', 'adm');
         await page.click('#admin-login-btn');
         await waitWho(page);

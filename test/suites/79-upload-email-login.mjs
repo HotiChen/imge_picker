@@ -15,28 +15,21 @@ export default async function register() {
 
   {
     const f = photographerFake({ accounts: [ACCT, FLAGGED] });
-    await suite('upload login overlay — studio password stays the default; email + password signs in, a flagged account goes to settings',
+    await suite('upload login overlay — unified 帳號 + 密碼 form; an email account signs in, a flagged account goes to settings',
       `${base}/upload.html`,
       async page => {
         const out = [];
         const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
         await page.waitForSelector('#auth-overlay', { timeout: 5000 });
-        ok('the studio-password field is what shows first', (await shown(page, '#auth-input')) && !(await shown(page, '#auth-email')));
-        await page.click('#auth-mode-email');
-        ok('the link switches to email + password fields', (await shown(page, '#auth-email')) && (await shown(page, '#auth-pw')) && !(await shown(page, '#auth-input')));
-        await page.click('#auth-mode-token');
-        ok('and back to the studio password', (await shown(page, '#auth-input')) && !(await shown(page, '#auth-email')));
-        ok('switching sent nothing', f.st.calls.length === 0);
-
-        await page.click('#auth-mode-email');
-        await page.fill('#auth-email', ACCT.email);
-        await page.fill('#auth-pw', 'wrong-password-x');
-        await page.click('#auth-email-btn');
+        ok('the unified form shows 帳號 + 密碼 and no mode switch (83-unified-login.mjs asserts it in depth)', (await shown(page, '#auth-account')) && (await shown(page, '#auth-input')) && !(await page.$('#auth-mode-email')));
+        await page.fill('#auth-account', ACCT.email);
+        await page.fill('#auth-input', 'wrong-password-x');
+        await page.click('#auth-btn');
         await page.waitForFunction(() => document.getElementById('auth-err').textContent.includes('帳號或密碼不正確'));
         ok('a wrong password shows the Worker’s sentence; the overlay stays; nothing stored', (await shown(page, '#auth-overlay')) && (await store(page)).t === null);
 
-        await page.fill('#auth-pw', ACCT.password);
-        await page.click('#auth-email-btn');
+        await page.fill('#auth-input', ACCT.password);
+        await page.click('#auth-btn');
         await page.waitForFunction(() => !document.getElementById('auth-overlay'));
         const s = await store(page);
         ok('a good login removes the overlay and stores the session token + its description', !!s.t && s.s && s.s.t === s.t && s.s.must === false, JSON.stringify(s));
@@ -54,10 +47,9 @@ export default async function register() {
         const out = [];
         const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
         await page.waitForSelector('#auth-overlay', { timeout: 5000 });
-        await page.click('#auth-mode-email');
-        await page.fill('#auth-email', FLAGGED.email);
-        await page.fill('#auth-pw', FLAGGED.password);
-        await page.click('#auth-email-btn');
+        await page.fill('#auth-account', FLAGGED.email);
+        await page.fill('#auth-input', FLAGGED.password);
+        await page.click('#auth-btn');
         await page.waitForURL('**/settings.html', { timeout: 5000 });
         const s = await store(page);
         ok('landed on settings.html with must: true stored', s.s && s.s.must === true && s.s.t === s.t, JSON.stringify(s));

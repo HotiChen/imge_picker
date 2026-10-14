@@ -66,7 +66,7 @@ await suite('password eye — home.html: a login reopened after being closed wit
     await page.click('#heroLoginBtn');
     await page.waitForSelector('#loginTokenInput', { state: 'visible', timeout: 5000 });
     await page.fill('#loginTokenInput', 'abc');
-    await page.locator('#loginTokenPane .pw-eye').click();   // the email pane has its own eye now
+    await page.locator('#loginForm .pw-eye').click();
     ok('(shown)', (await page.$eval('#loginTokenInput', e => e.type)) === 'text');
     // closed by script, so no focusout from the eye button: the reopen itself must hide it again
     await page.evaluate(() => document.getElementById('loginOverlay').classList.remove('open'));

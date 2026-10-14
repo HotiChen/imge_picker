@@ -359,10 +359,11 @@ await suite('亮色主題 — admin 登入畫面',
     const out = [];
     const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
     await page.waitForSelector('#login-view', { state: 'visible', timeout: 5000 });
+    await page.fill('#admin-account-input', 'x');
     await page.fill('#admin-token-input', 'x');
     await page.evaluate(() => { document.getElementById('admin-login-err').textContent = '密碼錯誤'; });
     await tokenChecks(page, ok, 'admin 登入');
-    await brightChecks(page, ok, 'admin 登入', { minItems: 4, named: ['.login-card .subtitle', '#admin-token-input', '#admin-login-btn', '#admin-login-err'] });
+    await brightChecks(page, ok, 'admin 登入', { minItems: 5, named: ['.login-card .subtitle', '#admin-account-input', '#admin-token-input', '#admin-login-btn', '#admin-login-err'] });
     const card = await page.$eval('.login-card', e => getComputedStyle(e).backgroundColor);
     ok('the card is white on cream', card === WHITE, card);
     await shot(page, 'admin-login-1280');
@@ -446,7 +447,7 @@ await suite('亮色主題 — upload.html 未登入：auth.js 的登入遮罩也
     await page.waitForSelector('#auth-overlay', { timeout: 5000 });
     const ov = await page.$eval('#auth-overlay', e => getComputedStyle(e).backgroundColor);
     ok('the overlay ground is the cream', ov === CREAM, ov);
-    await brightChecks(page, ok, 'upload 登入遮罩', { root: '#auth-overlay', minItems: 3, named: ['#auth-overlay #auth-input', '#auth-overlay #auth-btn'] });
+    await brightChecks(page, ok, 'upload 登入遮罩', { root: '#auth-overlay', minItems: 3, named: ['#auth-overlay #auth-account', '#auth-overlay #auth-input', '#auth-overlay #auth-btn'] });
     await shot(page, 'upload-login-1280');
     return out;
   },

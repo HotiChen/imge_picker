@@ -56,10 +56,9 @@ export default async function register() {
         const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
         await page.waitForSelector('#auth-overlay', { timeout: 5000 });
         ok('the helper is loaded on this page', await page.evaluate(() => typeof window.PhotographerSession === 'object'));
-        await page.click('#auth-mode-email');
-        await page.fill('#auth-email', FLAGGED.email);
-        await page.fill('#auth-pw', FLAGGED.password);
-        await page.click('#auth-email-btn');
+        await page.fill('#auth-account', FLAGGED.email);
+        await page.fill('#auth-input', FLAGGED.password);
+        await page.click('#auth-btn');
         await page.waitForURL('**/settings.html', { timeout: 5000 });
         ok('the flagged login lands on the ROOT settings.html (not a 404 beside this page)', new URL(page.url()).pathname === root, page.url());
         ok('the session is stored with must: true', JSON.parse((await store(page)).s || 'null')?.must === true);
@@ -75,10 +74,9 @@ export default async function register() {
         const out = [];
         const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
         await page.waitForSelector('#auth-overlay', { timeout: 5000 });
-        await page.click('#auth-mode-email');
-        await page.fill('#auth-email', ACCT.email);
-        await page.fill('#auth-pw', ACCT.password);
-        await page.click('#auth-email-btn');
+        await page.fill('#auth-account', ACCT.email);
+        await page.fill('#auth-input', ACCT.password);
+        await page.click('#auth-btn');
         await page.waitForFunction(() => !document.getElementById('auth-overlay'), null, { timeout: 5000 });
         const s = await store(page);
         ok('the overlay is gone and the session is stored (and no 無法連線 was shown)', !!s.t && JSON.parse(s.s).t === s.t && JSON.parse(s.s).must === false);
