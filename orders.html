@@ -8,6 +8,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@600;900&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="css/side-nav.css?v=20261013b">
+<link rel="stylesheet" href="css/studio-who.css?v=20261013b">
 <link rel="stylesheet" href="css/guest-order-card.css?v=20261013b">
 <style>
   /* Bright design, approved by Tim (design-canvas spec: /tmp/claude-0/light-design.html) —
@@ -104,6 +105,7 @@
 <script src="js/build-version.js?v=20261013b"></script>
 <script src="js/util.js?v=20261013b"></script>
 <script src="js/side-nav.js?v=20261013b"></script>
+<script src="js/studio-who.js?v=20261013b"></script>
 <script src="js/orders-common.js?v=20261013b"></script>
 <script>
 (function () {
@@ -112,6 +114,7 @@
   if (!token) return; // requireToken() already redirected
   SideNav.render(document.getElementById('sideNav'), 'orders', SideNav.logoutToHome);
   document.getElementById('logout-btn').addEventListener('click', SideNav.logoutToHome);
+  if (window.StudioWho) StudioWho.mount(document.getElementById('logout-btn'));   // the name beside 登出
 
   const O = window.Orders;
   const api = O.client({ workerUrl: WORKER_URL, getToken: () => token, onUnauthorized: SideNav.logoutToHome });

@@ -39,6 +39,12 @@
       location.reload();
     });
     host.appendChild(btn);
+    // the name beside 登出 (js/studio-who.js): in the header, and as a full-name line above 登出 in the phone menu
+    if (window.StudioWho) {
+      window.StudioWho.mount(btn);
+      const phoneOut = document.getElementById('phoneLogoutBtn');
+      if (phoneOut) window.StudioWho.mount(phoneOut, { full: true });
+    }
   }
 
   function getClientSession() {

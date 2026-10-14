@@ -1,0 +1,19 @@
+/* The signed-in name beside 登出 (js/studio-who.js). Used by the cream photographer pages (admin, dashboard, orders,
+   settings) and by index.html's dark header: only variables both themes define, with fallbacks.
+   Desktop: the name, cut with an ellipsis (the full name is in the title). Phone (<= 768px): the header has no room, so
+   only the initial in a small circle; 登出 and the pill row keep their size. */
+.studio-who { display: inline-flex; align-items: center; gap: 8px; flex: none; min-width: 0; font-size: 12px; line-height: 1.2; color: var(--ink-70, #8c8375); font-family: inherit; }
+.studio-who-name { display: block; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.studio-who-ini { display: none; align-items: center; justify-content: center; flex: none; width: 28px; height: 28px; border-radius: 50%; background: var(--accent-dim, rgba(229,164,72,.18)); color: var(--ink-90, var(--ink, #e8e3da)); font-size: 13px; font-weight: 600; }
+html.guest-mode .studio-who { display: none !important; }
+
+@media (max-width: 768px) {
+  .studio-who-name { display: none; }
+  .studio-who-ini { display: inline-flex; }
+  /* index.html: 登出 leaves the header on a phone (the ☰ menu has it), so its label leaves too, except on the review view */
+  html:not(.guest-mode) body:not(.pv-active) .header-right .studio-who { display: none; }
+  /* the ☰ menu line: the name itself, above 登出 */
+  .studio-who--menu { display: flex; padding: 8px 2px 0; font-size: 13px; }
+  .studio-who--menu .studio-who-ini { display: none; }
+  .studio-who--menu .studio-who-name { display: block; max-width: 100%; }
+}

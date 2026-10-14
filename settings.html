@@ -8,6 +8,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@600;900&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="css/side-nav.css?v=20261013b">
+<link rel="stylesheet" href="css/studio-who.css?v=20261013b">
 <style>
   /* Bright design, approved by Tim (design-canvas spec: /tmp/claude-0/light-design.html) —
      cream ground, white cards, dark ink text, warm accent, soft pastel pills. */
@@ -299,6 +300,7 @@
 <script src="js/util.js?v=20261013b"></script>
 <script src="js/password-toggle.js?v=20261013b"></script>
 <script src="js/side-nav.js?v=20261013b"></script>
+<script src="js/studio-who.js?v=20261013b"></script>
 <script src="js/orders-common.js?v=20261013b"></script>
 <script>
 (function () {
@@ -312,6 +314,7 @@
   // must_change_password on every other route, so the rest of the page does not even start.
   const mustChange = !!token && PS.mustChange();
   if (mustChange) document.body.classList.add('must-change');
+  if (token && window.StudioWho) StudioWho.mount(document.getElementById('logout-btn'));   // the name beside 登出 (also while the password must be changed)
 
   // ── 帳號與密碼 ────────────────────────────────────────────────────────────
   // Only for an account session (email + password login / invited registration); Tim's own token has no account,
@@ -330,10 +333,13 @@
     // who this session is (and whether the Worker agrees that a password change is due)
     (async () => {
       try {
-        const r = await fetch(`${WORKER_URL}/api/photographer/me`, { headers: { 'Authorization': `Bearer ${token}` } });
+        // shared with the name label (js/studio-who.js) so the page asks /me once, not twice
+        const r = window.StudioWho
+          ? await StudioWho.me(token)
+          : await fetch(`${WORKER_URL}/api/photographer/me`, { headers: { 'Authorization': `Bearer ${token}` } }).then(async x => ({ status: x.status, ok: x.ok, data: x.ok ? await x.json() : null }));
         if (r.status === 401) { SideNav.logoutToHome(); return; }
         if (!r.ok) return;
-        const me = await r.json();
+        const me = r.data || {};
         const p = me.photographer || {};
         $a('acct-who').textContent = `${p.display_name || ''}（${p.email || ''}）`;
         if (me.must_change_password === true && !mustChange) { PS.setMust(true); location.reload(); }
@@ -657,6 +663,7 @@
         if ('default_extra_max' in putBody) loadedExtraMax = extra_max;
         if ('transfer_info' in putBody) loadedTransfer = transferInput.value;
         for (const m of LM) if (m.field in putBody) m.loaded = linkNext[m.field];
+        if (window.StudioWho) StudioWho.setStudioName(putBody.studio_name);   // Tim's label follows the saved name (no-op for an account session)
         okEl.textContent = '已儲存';
         setTimeout(() => { okEl.textContent = ''; }, 2500);
       } catch (e) {

@@ -215,6 +215,9 @@ const BASE_GUEST_1280 = {".header-left":{"shown":true,"l":0,"t":17,"w":280,"h":2
       const { out, ok } = lines();
       await page.waitForSelector('#studio-logout', { state: 'attached', timeout: 5000 });
       await page.waitForTimeout(500);
+      // The studio-name label (js/studio-who.js, suite 81) now sits before 登出 and shifts everything left of it by its
+      // own width: that is the intended change, so this old-layout baseline is taken with the label hidden (suite 81 tests the label).
+      await page.addStyleTag({ content: '.studio-who { display: none !important; }' });
       const now = await snap(page);
       if (process.env.DUMP) console.log('DUMP_ADMIN_1280 ' + JSON.stringify(now));
       const bad = sameAsBase(now, BASE_ADMIN_1280);
