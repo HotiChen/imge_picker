@@ -521,9 +521,13 @@ removed anything from R2. Worker only (the button comes later); no migration.
 - **`DELETE /api/admin/photo?key=<logical key>`** (photographers only, the
   caller's own files: `requirePhotographer` + `bucketFor(env, who.id)`; the key
   comes from `?key=` only, never the path).
-  - 200 `{ok: true, key, deleted: [...]}`: the thumbnails that existed
-    (`_thumbs/<w>/<key>.thumb`, smallest width first), then the key itself,
-    last. Logical keys, never a `_t/<id>/` prefix. `Cache-Control: private, no-store`.
+  - 200 `{ok: true, key, deleted: [...], failed?: [...]}`: the photo is gone.
+    `deleted` = the key itself first, then the thumbnails that existed
+    (`_thumbs/<w>/<key>.thumb`, smallest width first). `failed` (only when
+    non-empty): thumbnails whose delete threw; they stay as orphans (nothing
+    reads a thumbnail without its original except the old-round thumbnail
+    route; R2's 180-day lifecycle removes them). Logical keys, never a
+    `_t/<id>/` prefix. `Cache-Control: private, no-store`.
   - 400 `{error, code: 'invalid_key'}`: empty, a folder (ends in `/`), the
     Worker's own `_…` namespaces (`_t/`, `_thumbs/`, `_books/`, `_assets/`), a
     `.` / `..` segment, a control / line-separator character, over 1024 UTF-8
@@ -535,17 +539,22 @@ removed anything from R2. Worker only (the button comes later); no migration.
     key is exactly this (the existence check is first, in the caller's own
     prefix, before any D1 statement: same body and statement sequence).
   - 409 `{error, code, deleted: []}`: locked (below), nothing deleted.
-  - 500 `{error, code: 'photo_lock_unavailable', deleted: []}`: the database
-    lacks a table or column the lock reads (the projects' delivery / archive
-    columns, `orders` / `order_items`; prod has all of them since 2026-09-29/30,
-    so only an old or fake database gets this); nothing deleted (fail closed).
-  - 500 `{error, code: 'photo_delete_failed', deleted, failed}`: an R2 delete
-    threw. A failed thumbnail stops before the original; a retry redoes the
-    lock check and finishes (deleting a missing key is not an error in R2).
-- **`GET /api/admin/photo/lock?key=`**: the same checks up to the first lock,
-  deleting nothing → 200 `{key, deletable, code, error}` (`code` / `error` =
-  the 409 the delete would give, both null when free); 400 / 404 / 500 as the
-  delete. A hint for showing the button; the delete checks again itself.
+  - 500 `{error, code: 'photo_lock_unavailable', deleted: []}`: the lock
+    cannot be decided, nothing deleted (fail closed): the database lacks a
+    table or column the lock reads (the projects' delivery / archive columns,
+    `orders` / `order_items`; prod has all of them since 2026-09-29/30, so only
+    an old or fake database gets this), or the default photographer has more
+    than 25 albums (below).
+  - 500 `{error, code: 'photo_delete_failed', deleted: [], failed}`: nothing
+    was deleted — the original's delete threw (`failed: [key]`), or anything
+    else threw before it (a D1 error, `Too many subrequests`, …; `failed: []`).
+    A retry starts over. The route never throws uncaught (CORS headers on
+    every answer).
+- **`GET /api/admin/photo/lock?key=`**: the same checks, deleting nothing →
+  200 `{key, deletable, code, error}` (`code` / `error` = the 409 the delete
+  would give, both null when free); 400 / 404 / 500 `photo_lock_unavailable`
+  as the delete (anything thrown is that 500 too). A hint for showing the
+  button; the delete checks again itself.
 - **Locks** (in this order; only the caller's own projects and orders count — another
   photographer's projects or orders on the same names neither lock nor unlock,
   their objects are other objects). A project *references* the photo when a
@@ -570,31 +579,41 @@ removed anything from R2. Worker only (the button comes later); no migration.
      is or URL-encoded (slots, backgrounds, the editor's `_photoCache`, a field
      added later). Over-matching (`a.jpg` inside `a.jpg.bak`) only refuses a
      delete. A book file that does not parse locks a key its text contains.
+     **Cost cap:** every album is one R2 read, a subrequest. The Workers Free
+     plan allows 50 per request (the documented limit for external
+     subrequests; R2 / D1 calls are allowed 1000, but the stricter reading is
+     the safe one); a delete makes about 16 others (session, head, three D1
+     statements, two listings, a head + delete per thumbnail width, the
+     original). So at most **25** albums are read (`ALBUM_SCAN_MAX`;
+     `<id>_status.json` is not counted or read when `<id>.json` is listed
+     beside it — otherwise it may be an album whose own id ends in `_status`,
+     book ids being unchecked, and it is read). More than that: 500
+     `photo_lock_unavailable`, nothing deleted, no album read — never a
+     partial scan. On the Paid plan (10,000) the cap can be raised.
   A `folders` / `final_folders` value that does not parse as a list of strings
   locks every photo of that photographer (fail closed).
   So the one case left deletable is the one this exists for: a photo under a
   finals folder of a project that is neither delivered nor archived (or under
   a folder no project names).
-- **Order and race.** existence → lock → thumbnails (each `head` then
-  `delete`) → **lock again** → original. If a delivery, an archive, an order or an
-  album edit landed in between, the original stays and the answer is 409 with the
-  deleted thumbnails listed (the photo still shows: `?w=` falls back to the
-  original). **Residual window**: the second check and the original's delete
-  are still two calls (R2 and D1 have no shared transaction), so a delivery
-  that lands in the few milliseconds between them can still lose a photo.
-  Delivering, archiving and creating projects are the photographer's own
-  actions (two tabs of the same photographer); the one outside actor is a
-  client with an album link placing this photo in a slot (`PATCH
-  /api/books/:id`) in that window (and, once guest ordering is on, a guest
-  order naming it). A thumbnail uploaded in the same window
-  can be orphaned (harmless; R2's 180-day lifecycle removes it).
+- **Order and race.** existence → lock (checked **once**: the D1
+  statements and one album scan) → the thumbnail keys listed → **the original
+  first** → each thumbnail that exists, best effort. A failure before the
+  original's delete deletes nothing; a failed thumbnail after it leaves only
+  an orphan thumbnail. There is never an original whose thumbnails are gone,
+  and never a half-deleted state a retry has to finish.
+  **Residual window**: between the lock check and the original's delete (a
+  thumbnail listing apart, the same few milliseconds as before the reorder;
+  R2 and D1 have no shared transaction), a delivery, archive, order, round or
+  album edit that lands can still lose a photo. Delivering, archiving and
+  creating projects are the photographer's own actions (two tabs of the same
+  photographer); the outside actors are a client with an album link placing
+  this photo in a slot (`PATCH /api/books/:id`), a client sending a revision
+  round on it, and, once guest ordering is on, a guest order naming it.
 - **Not checked** (refused nowhere; say so if it matters): an album that only
   ever lived in the editor's localStorage (never synced to the cloud) is
   invisible to the Worker; a frozen revision round (`revision_requests.finals`)
   of a project that is not delivered now (a later redelivery shows that round's
-  thumbnail as missing); the retired client accounts' folders. Each delete
-  reads every album (one R2 `get` per book, twice) — fine for a few dozen
-  books, but each is a subrequest against the Worker's per-request limit.
+  thumbnail as missing); the retired client accounts' folders.
 - Tests: `worker/test/photo-delete.test.mjs`, `worker/test/r2-delete-helper.test.mjs`.
 
 ## Out of scope for this step

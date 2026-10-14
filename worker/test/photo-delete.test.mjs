@@ -45,7 +45,8 @@ const XS = {
   // a width the app no longer writes (an old upload): found by listing _thumbs/
   [`_thumbs/800/${X}.thumb`]: 'X-T800',
 };
-const X_ALL = [`_thumbs/400/${X}.thumb`, `_thumbs/800/${X}.thumb`, `_thumbs/1200/${X}.thumb`, `_thumbs/1600/${X}.thumb`, X];
+const X_THUMBS = [`_thumbs/400/${X}.thumb`, `_thumbs/800/${X}.thumb`, `_thumbs/1200/${X}.thumb`, `_thumbs/1600/${X}.thumb`];
+const X_ALL = [X, ...X_THUMBS];
 
 function tenantObjects(id, tag) {
   const out = {};
@@ -126,15 +127,15 @@ async function refusedWithNothingDeleted(w, fn, status, code) {
 }
 
 // ─── rule 1 / 2: the caller's own photo, and its thumbnails, and nothing else
-test('A deletes its own photo: the thumbnails of every width, then the original; nothing else goes (neighbours, B\'s and C\'s copies)', async () => {
+test('A deletes its own photo: the original first, then the thumbnails of every width; nothing else goes (neighbours, B\'s and C\'s copies)', async () => {
   const w = await world();
   const before = keysOf(w.env);
   const res = await del(w.env, X, SECRET);
   assert.equal(res.status, 200, await res.clone().text());
   assert.deepEqual(await res.json(), { ok: true, key: X, deleted: X_ALL });
   assert.deepEqual(keysOf(w.env), before.filter(k => !X_ALL.includes(k)), 'exactly the photo and its thumbnails');
-  // the original was the last thing asked for
-  assert.equal(w.env.imagepicker._deletes.at(-1), X);
+  // the original was the first thing asked for
+  assert.equal(w.env.imagepicker._deletes[0], X);
   for (const n of Object.keys(NEIGHBOURS)) assert.ok(has(w.env, n), n);
   for (const who of [w.B, w.C]) for (const k of X_ALL) assert.ok(has(w.env, at(who, k)), `${who.tag} ${k}`);
 });
@@ -277,6 +278,16 @@ test('an album file that does not parse still locks a photo whose key it contain
   assert.equal((await del(w.env, PB, SECRET)).status, 200);
 });
 
+test('an album whose own id ends in `_status` (no `<id>.json` beside it) is read like any other: it locks its photos', async () => {
+  const w = await world();
+  book(w.env, 'foo_status', { pages: [{ slots: [{ photoId: F1 }] }] });
+  // and a real status file beside its album is not mistaken for one
+  book(w.env, 'bar', { pages: [] });
+  book(w.env, 'bar_status', { approved: true, note: F3 });
+  await refusedWithNothingDeleted(w, () => del(w.env, F1, SECRET), 409, 'photo_in_album');
+  assert.equal((await del(w.env, F3, SECRET)).status, 200);
+});
+
 test('albums are listed past the first R2 page', async () => {
   const w = await world();
   const objects = Object.fromEntries([...w.env.imagepicker._store].map(([k, v]) => [k, { body: v.body, contentType: v.contentType }]));
@@ -397,85 +408,108 @@ test('nobody else deletes: anonymous, an unknown token, a pick link, a studio to
   assert.equal((await del(w.env, X, SECRET)).status, 409, 'A: locked by its own picking project on shoot/x/');
 });
 
-// ─── rule 2: partial failure, and a retry that finishes ───────────────────
-function failingOnce(env, key) {
-  const real = env.imagepicker.delete.bind(env.imagepicker);
+// ─── rule 2: the original first; a thumbnail failure leaves an orphan only ──
+function failingOnce(env, key, method = 'delete') {
+  const real = env.imagepicker[method].bind(env.imagepicker);
   let failed = false;
-  env.imagepicker.delete = async k => {
-    env.imagepicker._deletes.push(k);
-    if (!failed && k === key) { failed = true; throw new Error('R2 down'); }
-    env.imagepicker._deletes.pop();
-    return real(k);
+  env.imagepicker[method] = async (k, ...rest) => {
+    if (!failed && k === key) {
+      failed = true;
+      if (method === 'delete') env.imagepicker._deletes.push(k);
+      throw new Error('R2 down');
+    }
+    return real(k, ...rest);
   };
 }
-test('a thumbnail that fails to delete: 500 photo_delete_failed naming it, the original kept; the retry removes the rest', async () => {
+test('a thumbnail that fails to delete: the photo is deleted (200), the thumbnail named in `failed` and left as an orphan; a retry is 404', async () => {
   const w = await world();
   const bad = at(w.B, `_thumbs/1200/${X}.thumb`);
   failingOnce(w.env, bad);
   const first = await body(await del(w.env, X, w.B.token));
-  assert.equal(first.status, 500);
-  assert.equal(first.json.code, 'photo_delete_failed');
-  assert.deepEqual(first.json.failed, [`_thumbs/1200/${X}.thumb`]);
-  assert.deepEqual(first.json.deleted, [`_thumbs/400/${X}.thumb`, `_thumbs/800/${X}.thumb`, `_thumbs/1600/${X}.thumb`]);
-  assert.ok(first.json.error);
-  assert.ok(has(w.env, at(w.B, X)), 'the original stays');
-  assert.ok(has(w.env, bad));
-  assert.ok(!w.env.imagepicker._deletes.includes(at(w.B, X)), 'never asked to delete the original');
-  const again = await body(await del(w.env, X, w.B.token));
-  assert.deepEqual(again, { status: 200, json: { ok: true, key: X, deleted: [`_thumbs/1200/${X}.thumb`, X] } });
-  for (const k of X_ALL) assert.ok(!has(w.env, at(w.B, k)), k);
+  assert.deepEqual(first, { status: 200, json: { ok: true, key: X, deleted: [X, `_thumbs/400/${X}.thumb`, `_thumbs/800/${X}.thumb`, `_thumbs/1600/${X}.thumb`], failed: [`_thumbs/1200/${X}.thumb`] } });
+  assert.ok(!has(w.env, at(w.B, X)), 'the original is gone');
+  assert.ok(has(w.env, bad), 'the orphan thumbnail');
+  assert.equal((await del(w.env, X, w.B.token)).status, 404);
   for (const k of X_ALL) assert.ok(has(w.env, k), `A's ${k}`);
 });
 
-test('the original that fails to delete: 500 photo_delete_failed naming it, the thumbnails gone; the retry deletes the original', async () => {
+test('a thumbnail whose head throws after the original is gone: named in `failed`, the rest still go, 200', async () => {
+  const w = await world();
+  failingOnce(w.env, `_thumbs/800/${X}.thumb`, 'head');
+  const out = await body(await del(w.env, X, SECRET));
+  assert.equal(out.status, 200);
+  assert.deepEqual(out.json.failed, [`_thumbs/800/${X}.thumb`]);
+  assert.deepEqual(out.json.deleted, [X, `_thumbs/400/${X}.thumb`, `_thumbs/1200/${X}.thumb`, `_thumbs/1600/${X}.thumb`]);
+});
+
+test('the original that fails to delete: 500 photo_delete_failed, nothing deleted (the thumbnails stay); the retry deletes it all', async () => {
   const w = await world();
   failingOnce(w.env, X);
+  const before = keysOf(w.env);
   const first = await body(await del(w.env, X, SECRET));
   assert.equal(first.status, 500);
-  assert.equal(first.json.code, 'photo_delete_failed');
-  assert.deepEqual(first.json.failed, [X]);
-  assert.deepEqual(first.json.deleted, X_ALL.slice(0, -1));
-  assert.ok(has(w.env, X));
+  assert.deepEqual(first.json, { error: first.json.error, code: 'photo_delete_failed', deleted: [], failed: [X] });
+  assert.ok(first.json.error);
+  assert.deepEqual(keysOf(w.env), before, 'nothing deleted');
   const again = await body(await del(w.env, X, SECRET));
-  assert.deepEqual(again, { status: 200, json: { ok: true, key: X, deleted: [X] } });
-  assert.ok(!has(w.env, X));
-  // a third time: gone, so 404 (nothing more to do)
+  assert.deepEqual(again, { status: 200, json: { ok: true, key: X, deleted: X_ALL } });
   assert.equal((await del(w.env, X, SECRET)).status, 404);
 });
 
-// ─── rule 5: the lock is checked again before the original ────────────────
-test('race: a delivery that lands after the thumbnails are gone keeps the original (409 photo_locked_delivered, the thumbnails reported)', async () => {
+// ─── one lock check, one album scan; nothing ever thrown uncaught ─────────
+test('the lock is checked once per delete: one projects statement, each album read once', async () => {
   const w = await world();
-  const real = w.env.imagepicker.delete.bind(w.env.imagepicker);
-  let landed = false;
-  w.env.imagepicker.delete = async k => {
-    if (!landed) {
-      landed = true;
-      const now = new Date().toISOString();
-      w.env.DB._db.prepare("INSERT INTO projects (id, title, folders, created_at, photographer_id, phase, delivered_at, final_folders) VALUES ('late', '', ?, ?, ?, 'retouching', ?, ?)")
-        .run(JSON.stringify(['elsewhere/']), now, w.B.id, now, JSON.stringify([T]));
-    }
-    return real(k);
-  };
-  const out = await body(await del(w.env, X, w.B.token));
-  assert.equal(out.status, 409);
-  assert.equal(out.json.code, 'photo_locked_delivered');
-  assert.deepEqual(out.json.deleted, X_ALL.slice(0, -1));
-  assert.ok(has(w.env, at(w.B, X)), 'the original stays');
-  assert.ok(!w.env.imagepicker._deletes.includes(at(w.B, X)));
+  book(w.env, 'b9', { pages: [{ slots: [{ photoId: F3 }] }] });
+  const gets = [];
+  const get = w.env.imagepicker.get.bind(w.env.imagepicker);
+  w.env.imagepicker.get = (k, o) => { gets.push(k); return get(k, o); };
+  const sql0 = w.env.DB._sql.length;
+  assert.equal((await del(w.env, X, SECRET)).status, 200);
+  assert.equal(w.env.DB._sql.slice(sql0).filter(q => /FROM projects WHERE photographer_id/.test(q)).length, 1);
+  assert.deepEqual(gets.filter(k => k.startsWith('_books/')).sort(), ['_books/b1.json', '_books/b9.json']);
 });
 
-test('race: an album that names the photo after the thumbnails are gone keeps the original (409 photo_in_album)', async () => {
+const CORS = res => assert.equal(res.headers.get('Access-Control-Allow-Origin'), '*');
+test('an unexpected error before the original is deleted (an album read, D1, the thumbnail listing) is a JSON 500 with CORS, and nothing is deleted', async () => {
+  const cases = [
+    ['an album read', w => { const get = w.env.imagepicker.get.bind(w.env.imagepicker); w.env.imagepicker.get = (k, o) => { if (k.startsWith('_books/')) throw new Error('Too many subrequests.'); return get(k, o); }; }],
+    ['D1', w => { const prepare = w.env.DB.prepare.bind(w.env.DB); w.env.DB.prepare = q => { if (/FROM order_items/.test(q)) throw new Error('D1_ERROR: network'); return prepare(q); }; }],
+    ['the thumbnail listing', w => { const list = w.env.imagepicker.list.bind(w.env.imagepicker); w.env.imagepicker.list = o => { if (o?.prefix === '_thumbs/') throw new Error('Too many subrequests.'); return list(o); }; }],
+  ];
+  for (const [what, breakIt] of cases) {
+    const w = await world();
+    breakIt(w);
+    let res;
+    const out = await refusedWithNothingDeleted(w, async () => (res = await del(w.env, X, SECRET)), 500, 'photo_delete_failed');
+    CORS(res);
+    assert.deepEqual(out.json.deleted, [], what);
+    assert.ok(out.json.error, what);
+  }
+});
+
+test('lock route: an unexpected error is a JSON 500 photo_lock_unavailable with CORS', async () => {
   const w = await world();
-  const real = w.env.imagepicker.delete.bind(w.env.imagepicker);
-  w.env.imagepicker.delete = async k => {
-    book(w.env, 'late', { pages: [{ slots: [{ photoId: X }] }] });
-    return real(k);
-  };
-  const out = await body(await del(w.env, X, SECRET));
-  assert.equal(out.status, 409);
-  assert.equal(out.json.code, 'photo_in_album');
-  assert.ok(has(w.env, X));
+  const get = w.env.imagepicker.get.bind(w.env.imagepicker);
+  w.env.imagepicker.get = (k, o) => { if (k.startsWith('_books/')) throw new Error('Too many subrequests.'); return get(k, o); };
+  let res;
+  await refusedWithNothingDeleted(w, async () => (res = await call(w.env, `/api/admin/photo/lock?key=${q(X)}`, { token: SECRET })), 500, 'photo_lock_unavailable');
+  CORS(res);
+});
+
+test('more albums than one request can afford to read: 500 photo_lock_unavailable, nothing deleted, no album read (status files do not count)', async () => {
+  const w = await world();
+  // OBJECTS already holds _books/b1.json: 24 more is 25, the most that is read
+  for (let i = 0; i < 24; i++) { book(w.env, `n${i}`, { pages: [] }); book(w.env, `n${i}_status`, { approved: false }); }
+  assert.equal((await del(w.env, X, SECRET)).status, 200, '25 albums: read');
+  book(w.env, 'one-more', { pages: [] });
+  const gets = [];
+  const get = w.env.imagepicker.get.bind(w.env.imagepicker);
+  w.env.imagepicker.get = (k, o) => { gets.push(k); return get(k, o); };
+  await refusedWithNothingDeleted(w, () => del(w.env, F3, SECRET), 500, 'photo_lock_unavailable');
+  await refusedWithNothingDeleted(w, () => call(w.env, `/api/admin/photo/lock?key=${q(F3)}`, { token: SECRET }), 500, 'photo_lock_unavailable');
+  assert.deepEqual(gets.filter(k => k.startsWith('_books/')), []);
+  // B has no albums to read: unaffected
+  assert.equal((await del(w.env, F3, w.B.token)).status, 200);
 });
 
 // ─── before a migration: refuse rather than guess ─────────────────────────
@@ -499,7 +533,7 @@ test('the 200 answer is private (no-store) JSON', async () => {
 test('only thumbnails that exist are reported as deleted', async () => {
   const w = await world();
   const res = await del(w.env, PB, w.C.token);
-  assert.deepEqual(await res.json(), { ok: true, key: PB, deleted: [`_thumbs/400/${PB}.thumb`, PB] });
+  assert.deepEqual(await res.json(), { ok: true, key: PB, deleted: [PB, `_thumbs/400/${PB}.thumb`] });
 });
 
 // ─── GET /api/admin/photo/lock?key=: may the button show? ─────────────────
@@ -636,22 +670,12 @@ test('photo_in_order ranks after the project locks and before photo_in_album (th
   assert.deepEqual(gets.filter(k => k.startsWith('_books/')), []);
 });
 
-test('photo_in_order: the lock route says so too; and an order that lands after the thumbnails keeps the original (409)', async () => {
+test('photo_in_order: the lock route says so too', async () => {
   const w = await world();
   order(w.env, 'default', [F1]);
   const out = await body(await lockOf(w.env, F1, SECRET));
   assert.deepEqual(out, { status: 200, json: { key: F1, deletable: false, code: 'photo_in_order', error: out.json.error } });
   assert.ok(out.json.error);
-  const real = w.env.imagepicker.delete.bind(w.env.imagepicker);
-  let landed = false;
-  w.env.imagepicker.delete = async k => {
-    if (!landed) { landed = true; order(w.env, w.B.id, [X]); }
-    return real(k);
-  };
-  const raced = await body(await del(w.env, X, w.B.token));
-  assert.equal(raced.status, 409);
-  assert.equal(raced.json.code, 'photo_in_order');
-  assert.ok(has(w.env, at(w.B, X)));
 });
 
 test('photo_in_order: a database without the order tables cannot say: 500 photo_lock_unavailable, nothing deleted (prod has them since 2026-09-29)', async () => {

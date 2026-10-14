@@ -1058,31 +1058,49 @@ function albumNames(value, key, depth = 0) {
   return false;
 }
 
-// Albums (`_books/*.json`) belong to the default photographer, and they keep
-// their photos' keys (logical, unprefixed) in the JSON R2 holds. Every one is
-// read, past the first page. One that does not parse locks a key its text
-// contains. An album that only ever lived in the editor's localStorage is
-// invisible here (docs/delivery.md).
+// The most albums one delete reads. Each is an R2 get, a subrequest; on the
+// Workers Free plan a request may make 50 (the documented limit for external
+// subrequests; calls to R2 / D1 are allowed 1000, but the stricter reading is
+// the safe one). Besides the albums a delete makes at most ~16 more: the
+// session lookup, the photo's head, three D1 statements, the album listing,
+// the thumbnail listing, a head and a delete per thumbnail width (3–4 widths)
+// and the original's delete. 25 leaves room for a few more widths and pages.
+// Over it, the lock cannot be decided within one request: 500
+// photo_lock_unavailable, nothing deleted (never a partial scan).
+const ALBUM_SCAN_MAX = 25;
+
+// Albums (`_books/<id>.json`) belong to the default photographer, and they
+// keep their photos' keys (logical, unprefixed) in the JSON R2 holds. All are
+// listed first (past the first page); more than ALBUM_SCAN_MAX → null
+// (cannot tell); then each is read once. `<id>_status.json` (approved /
+// timestamp, no keys) is neither counted nor read when `<id>.json` is listed
+// too; otherwise it may be an album whose own id ends in `_status` (book ids
+// come from the URL unchecked), so it is read. One that does not parse
+// locks a key its text contains. An album that only ever lived in the
+// editor's localStorage is invisible here (docs/delivery.md).
 async function photoInAlbum(env, key) {
   const books = bookBucket(env);
+  const listed = new Set();
   let cursor;
   let truncated = true;
   while (truncated) {
-    const listed = await books.list({ prefix: '_books/', cursor });
-    for (const o of listed.objects || []) {
-      if (!o.key.endsWith('.json')) continue;
-      const obj = await books.get(o.key);
-      if (!obj) continue;
-      const text = await obj.text();
-      let data;
-      try { data = JSON.parse(text); } catch {
-        if (text.includes(key)) return true;
-        continue;
-      }
-      if (albumNames(data, key)) return true;
+    const page = await books.list({ prefix: '_books/', cursor });
+    for (const o of page.objects || []) if (o.key.endsWith('.json')) listed.add(o.key);
+    cursor = page.cursor;
+    truncated = page.truncated;
+  }
+  const names = [...listed].filter(k => !(k.endsWith('_status.json') && listed.has(k.slice(0, -'_status.json'.length) + '.json')));
+  if (names.length > ALBUM_SCAN_MAX) return null;
+  for (const name of names) {
+    const obj = await books.get(name);
+    if (!obj) continue;
+    const text = await obj.text();
+    let data;
+    try { data = JSON.parse(text); } catch {
+      if (text.includes(key)) return true;
+      continue;
     }
-    cursor = listed.cursor;
-    truncated = listed.truncated;
+    if (albumNames(data, key)) return true;
   }
   return false;
 }
@@ -1135,13 +1153,15 @@ async function photoLock(env, ownerId, key) {
   }
   const code = Object.keys(PHOTO_LOCKS).find(c => held.has(c));
   if (code) return code;
-  if (ownerId === DEFAULT_PHOTOGRAPHER_ID && await photoInAlbum(env, key)) return 'photo_in_album';
-  return null;
+  if (ownerId !== DEFAULT_PHOTOGRAPHER_ID) return null;
+  const inAlbum = await photoInAlbum(env, key);
+  if (inAlbum === null) return PHOTO_LOCK_UNAVAILABLE;
+  return inAlbum ? 'photo_in_album' : null;
 }
 
 function photoLockAnswer(code, deleted) {
   if (code === PHOTO_LOCK_UNAVAILABLE) {
-    return jsonOk({ error: '無法確認這張照片能不能刪除（資料庫欄位尚未建立）', code, deleted }, 500, PHOTO_NO_STORE);
+    return jsonOk({ error: '現在無法確認這張照片能不能刪除，所以沒有刪除任何東西', code, deleted }, 500, PHOTO_NO_STORE);
   }
   return jsonOk({ error: PHOTO_LOCKS[code], code, deleted }, 409, PHOTO_NO_STORE);
 }
@@ -1169,52 +1189,62 @@ async function thumbKeysOf(photos, key) {
 // The delete itself, for photographer `ownerId` (who.id, never the request).
 // 400 invalid_key; 404 when the caller has no such photo (someone else's key
 // is exactly this: the existence check comes first, in the caller's own
-// prefix, before any D1 statement); 409 / 500 photoLock; then each thumbnail
-// that exists, then the lock again (a delivery or an album edit may have
-// landed meanwhile: the original stays, 409), then the original. A failed R2
-// delete is 500 photo_delete_failed naming what was and was not deleted;
-// with the original last, a retry finishes the job.
+// prefix, before any D1 statement); 409 / 500 photoLock, checked once; the
+// thumbnail keys listed; then the ORIGINAL first (failing: 500
+// photo_delete_failed, nothing deleted, a retry starts over), then each
+// thumbnail that exists, best effort: one that fails stays as an orphan
+// (named in `failed`, the photo is deleted all the same: 200). So there is
+// never an original whose thumbnails are gone. Anything thrown before the
+// original's delete is a JSON 500 with nothing deleted; nothing after it can
+// throw.
 async function deletePhoto(env, ownerId, key) {
   if (!deletablePhotoKey(key)) return jsonOk({ error: 'Invalid key', code: 'invalid_key' }, 400);
+  const notDone = failed => jsonOk({ error: '刪除沒有完成，沒有刪除任何東西，請再試一次', code: 'photo_delete_failed', deleted: [], failed }, 500, PHOTO_NO_STORE);
   const photos = bucketFor(env, ownerId);
-  if (!(await photos.head(key))) return jsonErr('Not found', 404);
-  const locked = await photoLock(env, ownerId, key);
-  if (locked) return photoLockAnswer(locked, []);
-  const deleted = [];
+  let thumbs;
+  try {
+    if (!(await photos.head(key))) return jsonErr('Not found', 404);
+    const locked = await photoLock(env, ownerId, key);
+    if (locked) return photoLockAnswer(locked, []);
+    thumbs = await thumbKeysOf(photos, key);
+  } catch (e) {
+    console.error('photo delete: refused before deleting anything:', e?.message);
+    return notDone([]);
+  }
+  try {
+    await photos.delete(key);
+  } catch {
+    return notDone([key]);
+  }
+  const deleted = [key];
   const failed = [];
-  for (const thumb of await thumbKeysOf(photos, key)) {
-    if (!(await photos.head(thumb))) continue;
+  for (const thumb of thumbs) {
     try {
+      if (!(await photos.head(thumb))) continue;
       await photos.delete(thumb);
       deleted.push(thumb);
     } catch {
       failed.push(thumb);
     }
   }
-  const partial = () => jsonOk({ error: '刪除沒有完成，請再試一次', code: 'photo_delete_failed', deleted, failed }, 500, PHOTO_NO_STORE);
-  if (failed.length) return partial();
-  const late = await photoLock(env, ownerId, key);
-  if (late) return photoLockAnswer(late, deleted);
-  try {
-    await photos.delete(key);
-  } catch {
-    failed.push(key);
-    return partial();
-  }
-  deleted.push(key);
-  return jsonOk({ ok: true, key, deleted }, 200, PHOTO_NO_STORE);
+  return jsonOk({ ok: true, key, deleted, ...(failed.length ? { failed } : {}) }, 200, PHOTO_NO_STORE);
 }
 
-// The same checks as deletePhoto up to the first lock, deleting nothing:
-// 200 {key, deletable, code, error} (code / error: the 409 DELETE would give,
-// null when free); 400 / 404 / 500 photo_lock_unavailable as DELETE. Only a
-// hint: the delete checks again (and again before the original).
+// The same checks as deletePhoto, deleting nothing: 200 {key, deletable,
+// code, error} (code / error: the 409 DELETE would give, null when free);
+// 400 / 404 / 500 photo_lock_unavailable as DELETE, and anything thrown is
+// that 500 too. Only a hint: the delete checks again.
 async function photoLockReport(env, ownerId, key) {
   if (!deletablePhotoKey(key)) return jsonOk({ error: 'Invalid key', code: 'invalid_key' }, 400);
-  if (!(await bucketFor(env, ownerId).head(key))) return jsonErr('Not found', 404);
-  const code = await photoLock(env, ownerId, key);
-  if (code === PHOTO_LOCK_UNAVAILABLE) return photoLockAnswer(code, []);
-  return jsonOk({ key, deletable: !code, code, error: code ? PHOTO_LOCKS[code] : null }, 200, PHOTO_NO_STORE);
+  try {
+    if (!(await bucketFor(env, ownerId).head(key))) return jsonErr('Not found', 404);
+    const code = await photoLock(env, ownerId, key);
+    if (code === PHOTO_LOCK_UNAVAILABLE) return photoLockAnswer(code, []);
+    return jsonOk({ key, deletable: !code, code, error: code ? PHOTO_LOCKS[code] : null }, 200, PHOTO_NO_STORE);
+  } catch (e) {
+    console.error('photo lock:', e?.message);
+    return photoLockAnswer(PHOTO_LOCK_UNAVAILABLE, []);
+  }
 }
 
 // Thumbnails live under `_thumbs/<width>/<key>.thumb`, so permission on one is
