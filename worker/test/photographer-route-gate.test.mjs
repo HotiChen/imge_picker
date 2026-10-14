@@ -227,6 +227,7 @@ test('crawl: every non-public /api path refuses a caller without a photographer 
           // the photo delete (photo-delete.test.mjs): no ?key= is 400, another
           // method 405, both before anything is looked up (no data)
           if (bOn && path === '/api/admin/photo') allowed.push(method === 'DELETE' ? 400 : 405);
+          if (bOn && path === '/api/admin/photo/lock') allowed.push(method === 'GET' ? 400 : 405);
           assert.ok(allowed.includes(res.status), `${flags.PHOTOGRAPHER_ROUTES ?? 'off'} ${who} ${method} ${path} → ${res.status} ${text.slice(0, 120)}`);
           // (B's own upload answers the key B itself sent, which may hold the id)
           assert.ok((upload ||!text.includes(project.project.id)) && !text.includes('王先生'), `${who} ${method} ${path} leaked: ${text.slice(0, 200)}`);

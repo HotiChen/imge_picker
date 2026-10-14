@@ -1188,6 +1188,18 @@ async function deletePhoto(env, ownerId, key) {
   return jsonOk({ ok: true, key, deleted }, 200, PHOTO_NO_STORE);
 }
 
+// The same checks as deletePhoto up to the first lock, deleting nothing:
+// 200 {key, deletable, code, error} (code / error: the 409 DELETE would give,
+// null when free); 400 / 404 / 500 photo_lock_unavailable as DELETE. Only a
+// hint: the delete checks again (and again before the original).
+async function photoLockReport(env, ownerId, key) {
+  if (!deletablePhotoKey(key)) return jsonOk({ error: 'Invalid key', code: 'invalid_key' }, 400);
+  if (!(await bucketFor(env, ownerId).head(key))) return jsonErr('Not found', 404);
+  const code = await photoLock(env, ownerId, key);
+  if (code === PHOTO_LOCK_UNAVAILABLE) return photoLockAnswer(code, []);
+  return jsonOk({ key, deletable: !code, code, error: code ? PHOTO_LOCKS[code] : null }, 200, PHOTO_NO_STORE);
+}
+
 // Thumbnails live under `_thumbs/<width>/<key>.thumb`, so permission on one is
 // permission on the photo it was made from.
 function sourceKey(key) {
@@ -4397,16 +4409,19 @@ async function routeRequest(request, env, ctx) {
     }
 
     // DELETE /api/admin/photo?key=<logical key> — one of the caller's own
-    // photos, its thumbnails first and the original last (deletePhoto). The
-    // key comes from the query only. Anything else under /api/admin/photo is
+    // photos, its thumbnails first and the original last (deletePhoto).
+    // GET /api/admin/photo/lock?key= — whether that delete would go ahead
+    // now (photoLockReport), so a page can leave the button out. The key
+    // comes from the query only. Anything else under /api/admin/photo is
     // 404, another method 405.
     if (pathParts[0] === 'api' && pathParts[1] === 'admin' && pathParts[2] === 'photo') {
       const auth = await requirePhotographer(request, env); // scoped to the caller (who.id)
       if (auth.refused) return auth.refused;
-      if (pathParts.length !== 3) return jsonErr('Not found', 404);
-      if (request.method !== 'DELETE') return jsonErr('Method not allowed', 405);
+      const lock = pathParts.length === 4 && pathParts[3] === 'lock';
+      if (pathParts.length !== 3 && !lock) return jsonErr('Not found', 404);
+      if (request.method !== (lock ? 'GET' : 'DELETE')) return jsonErr('Method not allowed', 405);
       if (!env.DB) return jsonErr('DB not configured', 500);
-      return deletePhoto(env, auth.who.id, params.get('key'));
+      return (lock ? photoLockReport : deletePhoto)(env, auth.who.id, params.get('key'));
     }
 
     // POST /api/admin/projects — a guest-picking project and its one link.

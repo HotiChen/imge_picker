@@ -121,6 +121,8 @@ const ROUTES = [
   R('scoped', 'GET', () => '/20260819/a.jpg'),
   // A: 409 (the fixture project picks from 20260819/); B: 404 (no such photo of B's)
   R('scoped', 'DELETE', () => `/api/admin/photo?key=${encodeURIComponent('20260819/a.jpg')}`),
+  // A: 200 {deletable: false}; B: 404
+  R('scoped', 'GET', () => `/api/admin/photo/lock?key=${encodeURIComponent('20260819/a.jpg')}`),
 ];
 const label = r => `${r.method} ${r.path({ projectId: ':id', pickToken: ':token', userId: ':uid' })}`;
 const send = (mod, env, r, f, token) => mod.fetch(req(r.path(f), {

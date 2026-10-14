@@ -24,7 +24,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { fakeBucket, fakeDB } from './fakes.mjs';
 import {
-  OBJECTS, PROOF, FINAL, PA, PB, F1, F2, F3, FRESH,
+  OBJECTS, PROOF, FINAL, PA, PB, F1, F2, F3, G1, FRESH,
   setup, admin, guest, pin, SECRET, call, claim, save,
 } from './revision-helpers.mjs';
 import { seedPhotographer, snapshot, ROUTES_ON } from './tenant-helpers.mjs';
@@ -500,6 +500,57 @@ test('only thumbnails that exist are reported as deleted', async () => {
   const w = await world();
   const res = await del(w.env, PB, w.C.token);
   assert.deepEqual(await res.json(), { ok: true, key: PB, deleted: [`_thumbs/400/${PB}.thumb`, PB] });
+});
+
+// ─── GET /api/admin/photo/lock?key=: may the button show? ─────────────────
+const lockOf = (env, key, token) => call(env, `/api/admin/photo/lock?key=${q(key)}`, { token });
+test('lock: a free photo is {deletable: true, code: null}; asking deletes nothing and writes nothing', async () => {
+  const w = await world();
+  for (const who of [w.A, w.B]) {
+    const out = await refusedWithNothingDeleted(w, () => lockOf(w.env, X, who.token), 200);
+    assert.deepEqual(out.json, { key: X, deletable: true, code: null, error: null }, who.tag);
+  }
+});
+
+test('lock: each lock answers 200 {deletable: false} with the code and message DELETE would give', async () => {
+  const w = await world();
+  await deliveredAs(w, w.A);
+  const archived = await project(w, w.A, [T]);
+  assert.equal((await admin(w.env, archived.id, 'archive')).status, 200);
+  await project(w, w.A, ['shoot/x2/']);
+  book(w.env, 'b9', { pages: [{ slots: [{ photoId: G1 }] }] });
+  for (const [key, code] of [[F1, 'photo_locked_delivered'], [X, 'photo_locked_archived'], ['shoot/x2/a.jpg', 'photo_in_pick_folder'], [G1, 'photo_in_album']]) {
+    const out = await refusedWithNothingDeleted(w, () => lockOf(w.env, key, SECRET), 200);
+    const refused = await refusedWithNothingDeleted(w, () => del(w.env, key, SECRET), 409, code);
+    assert.deepEqual(out.json, { key, deletable: false, code, error: refused.json.error }, key);
+  }
+});
+
+test('lock: someone else\'s key is the 404 of a key nobody has (same body, same SQL); a bad key 400; before the migration 500', async () => {
+  const w = await world();
+  const sql0 = w.env.DB._sql.length;
+  const other = await refusedWithNothingDeleted(w, () => lockOf(w.env, `${PROOF}A-only.jpg`, w.B.token), 404);
+  const sqlOther = w.env.DB._sql.slice(sql0);
+  const sql1 = w.env.DB._sql.length;
+  const none = await refusedWithNothingDeleted(w, () => lockOf(w.env, `${PROOF}nobody.jpg`, w.B.token), 404);
+  assert.deepEqual(other, none);
+  assert.deepEqual(sqlOther, w.env.DB._sql.slice(sql1));
+  for (const key of ['', `_thumbs/400/${PA}.thumb`, `${T}a.txt`, 'shoot/']) {
+    await refusedWithNothingDeleted(w, () => lockOf(w.env, key, SECRET), 400, 'invalid_key');
+  }
+  w.env.DB = fakeDB({ schema: FRESH.replace(/\n\s*archived_at\s+TEXT,/, '\n') });
+  await refusedWithNothingDeleted(w, () => lockOf(w.env, X, SECRET), 500, 'photo_lock_unavailable');
+});
+
+test('lock: GET only (405 otherwise, nothing deleted), and nobody but a photographer (401)', async () => {
+  const w = await world();
+  for (const method of ['DELETE', 'POST', 'PUT', 'PATCH']) {
+    await refusedWithNothingDeleted(w, () => call(w.env, `/api/admin/photo/lock?key=${q(X)}`, { method, token: SECRET }), 405);
+  }
+  await refusedWithNothingDeleted(w, () => lockOf(w.env, X), 401);
+  w.env.PHOTOGRAPHER_ROUTES = 'off';
+  await refusedWithNothingDeleted(w, () => lockOf(w.env, X, w.B.token), 401);
+  assert.equal((await lockOf(w.env, X, SECRET)).status, 200);
 });
 
 // ─── the stored folders, read defensively ─────────────────────────────────
