@@ -28,7 +28,10 @@
         projectTitle: '',
         // 'picks' (the client's picks, the default) or 'all' (every proof in the
         // project's folders, read-only). ?mode=all opens straight into the second.
-        mode: params.get('mode') === 'all' ? 'all' : 'picks',
+        mode: ['all', 'finals'].includes(params.get('mode')) ? params.get('mode') : 'picks',
+        finalFolders: [],        // the project's chosen finals folders (final_folders; kept after 取消交件)
+        finalPhotos: null,       // listed afresh on every entry to the 精修 tab (a delete changes it)
+        finalError: false,
         proofFolders: [],
         allPhotos: null,        // every proof, once listed (null = not loaded yet)
         _selByKey: new Map(),   // photo_key -> the client's selection row
@@ -82,6 +85,7 @@
             this.renderCollaborators();
             this.renderRevisions(data.revision_requests);
             if (this.mode === 'all') { await this._ensureAllLoaded(); this.renderBanner(); }
+            if (this.mode === 'finals') { await this._loadFinals(); this.renderBanner(); }
             this.loadGrid();
         },
 
@@ -92,6 +96,7 @@
         // Read-only: nothing here writes. A picked photo keeps its ♥ / 💬 / 📍
         // flags; the rest show none.
         currentPhotos() {
+            if (this.mode === 'finals') return this.finalPhotos || [];
             return this.mode === 'all' && this.allPhotos ? this.allPhotos : this.photos;
         },
 
@@ -103,7 +108,7 @@
             wrap.className = 'pv-mode-toggle';
             wrap.setAttribute('role', 'group');
             wrap.setAttribute('aria-label', '顯示範圍');
-            [['picks', '客人選的'], ['all', '全部毛片']].forEach(([mode, label]) => {
+            [['picks', '客人選的'], ['all', '全部毛片'], ['finals', '精修']].forEach(([mode, label]) => {
                 const b = document.createElement('button');
                 b.type = 'button';
                 b.className = 'btn btn-outline pv-banner-btn pv-mode-btn';
@@ -126,16 +131,17 @@
         },
 
         async setMode(mode) {
-            if (mode !== 'picks' && mode !== 'all') return;
+            if (mode !== 'picks' && mode !== 'all' && mode !== 'finals') return;
             if (mode === this.mode) return;
             this.mode = mode;
             this._syncModeToggle();
             try {
                 const u = new URL(location.href);
-                if (mode === 'all') u.searchParams.set('mode', 'all'); else u.searchParams.delete('mode');
+                if (mode !== 'picks') u.searchParams.set('mode', mode); else u.searchParams.delete('mode');
                 history.replaceState(history.state, '', u.pathname + u.search + u.hash);
             } catch (e) { /* the address is a convenience only */ }
             if (mode === 'all') await this._ensureAllLoaded();
+            if (mode === 'finals') await this._loadFinals();
             if (this.mode !== mode) return;   // toggled again while listing
             this.renderBanner();
             this.loadGrid();
@@ -159,7 +165,7 @@
         // driveManager.loadPhotosFromFolder makes (same headers), repeated into the
         // subfolders (photos can sit one or two levels down, docs/backlog.md),
         // without touching driveManager's own state.
-        async _listAllProofs() {
+        async _listAllProofs(roots = this.proofFolders, withSelections = true) {
             const seen = new Map();
             const walk = async (prefix, depth) => {
                 const res = await fetch(`${CONFIG.WORKER_URL}/?list=${encodeURIComponent(prefix)}`,
@@ -168,7 +174,7 @@
                 if (!res.ok || !r || r.status !== 'success') throw new Error('list failed');
                 (r.data || []).forEach(f => {
                     if (!f || !f.id || seen.has(f.id)) return;
-                    const sel = this._selByKey.get(f.id);
+                    const sel = withSelections ? this._selByKey.get(f.id) : null;
                     seen.set(f.id, {
                         id: f.id,
                         name: f.name || f.id.split('/').pop(),
@@ -184,11 +190,34 @@
                 });
                 if (depth < 3) await Promise.all((r.folders || []).map(f => walk(f, depth + 1)));
             };
-            for (const f of this.proofFolders) await walk(f.endsWith('/') ? f : f + '/', 0);
+            for (const f of roots) await walk(f.endsWith('/') ? f : f + '/', 0);
             return [...seen.values()].sort((a, b) => a.id.localeCompare(b.id));
         },
 
+        // 精修 tab: every file under the project's chosen finals folders, listed with the studio credential
+        // (a photographer's own files — the guest gate pickFinals is not involved). Not cached: a delete from
+        // this tab changes it. Read-only apart from the delete button.
+        async _loadFinals() {
+            const textEl = document.getElementById('pvBannerText');
+            if (textEl) textEl.textContent = '載入精修中…';
+            this.finalError = false;
+            this.finalPhotos = null;   // never show the previous listing while this one loads
+            const seq = this._finalSeq = (this._finalSeq || 0) + 1;
+            if (!this.finalFolders.length) { this.finalPhotos = []; return; }
+            try {
+                const list = await this._listAllProofs(this.finalFolders, false);
+                if (seq === this._finalSeq) this.finalPhotos = list;   // a newer entry to the tab wins
+            } catch (e) {
+                if (seq !== this._finalSeq) return;
+                this.finalPhotos = [];
+                this.finalError = true;
+                if (typeof toast !== 'undefined') toast.error('無法讀取精修資料夾');
+            }
+        },
+
         _applyState(data) {
+            this.finalFolders = data.project && Array.isArray(data.project.final_folders)
+                ? data.project.final_folders.filter(f => typeof f === 'string' && f) : [];
             this.ownerName = data.owner ? data.owner.name : null;
             this.projectTitle = data.project && data.project.title ? String(data.project.title) : '';
             // GET /api/admin/projects/:id already returns these newest-first
@@ -439,7 +468,7 @@
             const self = this;
             const zipName = () => {
                 const list = self.currentPhotos();
-                return `${driveManager.sanitizeFileTitle(self.projectTitle)}_${self.mode === 'all' ? '毛片' : '選片'}_${list.length}張.zip`;
+                return `${driveManager.sanitizeFileTitle(self.projectTitle)}_${self.mode === 'all' ? '毛片' : self.mode === 'finals' ? '精修' : '選片'}_${list.length}張.zip`;
             };
             driveManager.downloadAllPhotos = function () {
                 return this.downloadPhotos(self.currentPhotos(), zipName());
@@ -546,7 +575,9 @@
             const textEl = document.getElementById('pvBannerText');
             const link = document.getElementById('pvBackLink');
             if (textEl) {
-                textEl.textContent = this.mode === 'all' && this.allPhotos
+                textEl.textContent = this.mode === 'finals' && this.finalPhotos
+                    ? `精修 · ${this.finalPhotos.length} 張`
+                    : this.mode === 'all' && this.allPhotos
                     ? `全部毛片 · ${this.allPhotos.length} 張（客人選了 ${this.photos.length} 張）`
                     : `${this.ownerName || '（尚無人認領）'} 的選片 · ${this.photos.length} 張`;
             }
@@ -616,7 +647,11 @@
             const list = this.currentPhotos();
             const h2 = document.querySelector('#emptyState h2');
             const p = document.querySelector('#emptyState p');
-            if (this.mode === 'all') {
+            if (this.mode === 'finals') {
+                const none = !this.finalFolders.length;
+                if (h2) h2.textContent = none ? '還沒選精修資料夾' : this.finalError ? '無法讀取精修' : '沒有精修照片';
+                if (p) p.textContent = none ? '到專案頁的交件區選好精修資料夾，這裡就看得到' : this.finalError ? '精修資料夾暫時讀不到，請稍後再試' : '精修資料夾裡還沒有照片';
+            } else if (this.mode === 'all') {
                 if (h2) h2.textContent = this.allError ? '無法讀取毛片' : '沒有毛片';
                 if (p) p.textContent = this.allError ? '毛片資料夾暫時讀不到，請稍後再試' : '這個專案的毛片資料夾裡還沒有照片';
             } else if (!this.photos.length) {

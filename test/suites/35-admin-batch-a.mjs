@@ -68,7 +68,7 @@ const cards = page => page.evaluate(() => [...document.querySelectorAll('.photo-
       const banner = await page.$eval('#pvBannerText', e => e.textContent);
       ok('the banner says 全部毛片 · 5 張 and that the client picked 2', /全部毛片/.test(banner) && /5 張/.test(banner) && /選了 2 張/.test(banner), banner);
       const t = await page.$$eval('#pvModeToggle [data-pv-mode]', bs => bs.map(b => [b.dataset.pvMode, b.textContent, b.getAttribute('aria-pressed')]));
-      ok('toggle: 客人選的 / 全部毛片, 全部毛片 pressed', JSON.stringify(t) === JSON.stringify([['picks', '客人選的', 'false'], ['all', '全部毛片', 'true']]), JSON.stringify(t));
+      ok('toggle: 客人選的 / 全部毛片 / 精修, 全部毛片 pressed', JSON.stringify(t) === JSON.stringify([['picks', '客人選的', 'false'], ['all', '全部毛片', 'true'], ['finals', '精修', 'false']]), JSON.stringify(t));
       // the photos load through the studio credential only
       const lists = m.requests.filter(r => r.search.includes('list='));
       ok('floor: the proofs were listed (folder + subfolder)', lists.length >= 2, String(lists.length));
@@ -91,7 +91,7 @@ const cards = page => page.evaluate(() => [...document.querySelectorAll('.photo-
       ok('default = picks: only the 2 rating>0 photos', cs.length === 2 && cs.every(c => c.heart), JSON.stringify(cs));
       ok('and no listing was requested yet', m.requests.filter(r => r.search.includes('list=')).length === 0);
       const pressed = () => page.$$eval('#pvModeToggle [data-pv-mode]', bs => bs.map(b => b.dataset.pvMode + ':' + b.getAttribute('aria-pressed')).join());
-      ok('客人選的 is pressed', (await pressed()) === 'picks:true,all:false', await pressed());
+      ok('客人選的 is pressed', (await pressed()) === 'picks:true,all:false,finals:false', await pressed());
       const bannerPicks = await page.$eval('#pvBannerText', e => e.textContent);
       ok('banner names the owner', bannerPicks.includes('Grace') && bannerPicks.includes('2 張'), bannerPicks);
 
@@ -99,7 +99,7 @@ const cards = page => page.evaluate(() => [...document.querySelectorAll('.photo-
       await page.waitForFunction(() => document.querySelectorAll('.photo-card').length === 5, null, { timeout: 5000 });
       cs = await cards(page);
       ok('toggled to 全部毛片: 5 photos, 2 flagged', cs.length === 5 && cs.filter(c => c.heart).length === 2, JSON.stringify(cs));
-      ok('pressed state follows', (await pressed()) === 'picks:false,all:true', await pressed());
+      ok('pressed state follows', (await pressed()) === 'picks:false,all:true,finals:false', await pressed());
       ok('the address says mode=all (reload keeps the view)', new URL(page.url()).searchParams.get('mode') === 'all', page.url());
 
       await page.click('[data-pv-mode="picks"]');

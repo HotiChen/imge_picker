@@ -1242,11 +1242,11 @@ class App {
     // ─── Delete one photo (photographer's own file view only) ────────────────
 
     // Only the photographer's drive view: a real photographer credential, and neither a guest link (?t=) nor the
-    // project review view. Anywhere else the button is not in the DOM at all.
+    // project review view (except its 精修 tab: the photographer's own finals). Anywhere else the button is not in the DOM at all.
     _canDeletePhotos() {
         const tok = (typeof CONFIG !== 'undefined' && CONFIG.PHOTOGRAPHER_TOKEN) || '';
         return !!tok && !(window.PickController && PickController.active)
-            && !(window.ProjectViewController && ProjectViewController.active);
+            && !(window.ProjectViewController && ProjectViewController.active && ProjectViewController.mode !== 'finals');
     }
 
     _deleteReason(res) {
@@ -1336,6 +1336,8 @@ class App {
         const wasAt = this.currentPhotoIndex;
         driveManager.forgetPhoto(photo.id);   // driveManager.photos may be a different array from this.photos
         this.photos = this.photos.filter(p => p.id !== photo.id);
+        const pv = window.ProjectViewController;   // its 精修 tab keeps its own list (banner count, zip)
+        if (pv && pv.active && Array.isArray(pv.finalPhotos)) { pv.finalPhotos = pv.finalPhotos.filter(p => p.id !== photo.id); pv.renderBanner(); }
         this.selectedPhotoIds.delete(photo.id);
         this.applyFilters();
         if (this.currentFolders.length > 0 && this.photos.length === 0) this.renderFolderGrid();
