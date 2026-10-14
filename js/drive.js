@@ -90,6 +90,35 @@ class DriveManager {
         return h;
     }
 
+    // Photographer-only: delete ONE uploaded photo (docs/delivery.md "Deleting a photo"). Both calls answer
+    // {status, body}; status 0 = the request never reached the Worker. The key is a logical R2 key and may hold
+    // + # & % ? spaces or Chinese, so it is always encodeURIComponent'd. The real credential rides in a header.
+    async _photoAdminCall(method, path, key) {
+        const tok = (typeof CONFIG !== 'undefined' && CONFIG.PHOTOGRAPHER_TOKEN) || '';
+        try {
+            const res = await fetch(`${CONFIG.WORKER_URL}${path}?key=${encodeURIComponent(key)}`,
+                { method, headers: { 'Authorization': `Bearer ${tok}` } });
+            let body = null;
+            try { body = await res.json(); } catch (e) { /* a non-JSON answer: the status alone speaks */ }
+            return { status: res.status, body };
+        } catch (e) {
+            return { status: 0, body: null };
+        }
+    }
+    deletePhoto(key) { return this._photoAdminCall('DELETE', '/api/admin/photo', key); }
+    photoLock(key) { return this._photoAdminCall('GET', '/api/admin/photo/lock', key); }
+
+    // The photo is gone from R2: forget it here too (list, local rating / note / pins).
+    forgetPhoto(key) {
+        this.photos = this.photos.filter(p => p.id !== key);
+        try {
+            for (const k of [CONFIG.STORAGE_KEYS.RATINGS, CONFIG.STORAGE_KEYS.ANNOTATIONS, CONFIG.STORAGE_KEYS.NOTES]) {
+                const all = JSON.parse(localStorage.getItem(k) || '{}');
+                if (key in all) { delete all[key]; localStorage.setItem(k, JSON.stringify(all)); }
+            }
+        } catch (e) { /* local extras only */ }
+    }
+
     // 載入資料庫中的照片清單
     async loadPhotosFromFolder(folderPath) {
         if (!folderPath) folderPath = CONFIG.DEFAULT_FOLDER;

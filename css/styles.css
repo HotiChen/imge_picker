@@ -1531,6 +1531,18 @@ body {
 .zoom-btn-small { opacity: .7; transition: opacity var(--transition-fast); }
 .zoom-btn-small:hover { opacity: 1; }
 
+/* Photographer-only 刪除 (js/app.js _syncDeleteBtn): last in the bar, far from the arrows and the close X */
+.modal-delete-btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  min-height: 36px; padding: 0 12px; margin-left: 12px;
+  background: transparent; border: 1px solid #c0392b; color: #e0685a;
+  font: inherit; font-size: 13px; cursor: pointer; flex-shrink: 0;
+}
+.modal-delete-btn:hover:not(:disabled) { background: #c0392b; color: #fff; }
+.modal-delete-btn:disabled { opacity: .45; cursor: not-allowed; }
+.modal-delete-msg { flex: 1 0 100%; text-align: center; font-size: 12px; line-height: 1.5; color: #e0685a; }
+.modal-delete-msg[hidden] { display: none; }
+
 /* Nav arrows inside canvas */
 .modal-nav-overlay {
   position: absolute;
@@ -2297,6 +2309,8 @@ span.pick-heart-btn { cursor: default; }
   .modal-photo-info .info-group, #modalPhotoName { min-width: 0; }
   .zoom-tools-compact { gap: 0; flex-shrink: 0; }
   .zoom-tools-compact button { min-width: 44px; min-height: 44px; justify-content: center; }
+  .modal-photo-info.has-delete { flex-wrap: wrap; row-gap: 4px; }
+  .modal-delete-btn { min-height: 44px; min-width: 44px; margin-left: 4px; }
   #modalPhotoRating { flex-shrink: 0; }
 }
 

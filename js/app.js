@@ -1,4 +1,19 @@
 // Main Application (R2 完整功能回歸版)
+// 刪除照片 (photographer's preview): the Chinese sentence per Worker code, and the button icon
+const DELETE_REASONS = {
+    photo_locked_delivered: '已交件的照片已鎖定、無法刪除（要刪請先取消交件或開放修改）',
+    photo_locked_archived: '這張照片在已封存的專案裡，無法刪除',
+    photo_in_pick_folder: '這是客人選片的資料夾（客人可能已選取），無法刪除',
+    photo_in_round: '客人的選片或修改紀錄用到這張，無法刪除',
+    photo_in_order: '這張在訂單裡（含已取消的訂單），無法刪除',
+    photo_in_album: '這張已放進相本，無法刪除',
+    photo_lock_unavailable: '現在無法確認這張能不能刪除，沒有刪除任何東西，請稍後再試',
+    photo_delete_failed: '刪除沒有完成，沒有刪除任何東西，請再試一次',
+    invalid_key: '這個檔案不能從這裡刪除',
+};
+const DELETE_ICON = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ' +
+    'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14M10 11v6M14 11v6"/></svg>';
+
 class App {
     constructor() {
         this.photos = [];
@@ -1208,6 +1223,7 @@ class App {
             'pick-picked', (pickMode || projectMode) && (photo.rating || 0) > 0);
 
         this.syncPickedBy();
+        this._syncDeleteBtn(photo);
         this.updateModalNavigation();
         this.schedulePreload(index);
 
@@ -1221,6 +1237,127 @@ class App {
         if (projectMode) ProjectViewController.syncPinUI(photo);
 
         await annotationManager.loadPhoto(photo);
+    }
+
+    // ─── Delete one photo (photographer's own file view only) ────────────────
+
+    // Only the photographer's drive view: a real photographer credential, and neither a guest link (?t=) nor the
+    // project review view. Anywhere else the button is not in the DOM at all.
+    _canDeletePhotos() {
+        const tok = (typeof CONFIG !== 'undefined' && CONFIG.PHOTOGRAPHER_TOKEN) || '';
+        return !!tok && !(window.PickController && PickController.active)
+            && !(window.ProjectViewController && ProjectViewController.active);
+    }
+
+    _deleteReason(res) {
+        const body = res.body || {};
+        if (res.status === 401) return '登入已失效，請重新整理頁面並重新登入';
+        if (res.status === 404) return '找不到這張照片（可能已經被刪除），請重新整理';
+        if (DELETE_REASONS[body.code]) return DELETE_REASONS[body.code];
+        if (res.status === 0) return '連不上伺服器，沒有刪除任何東西，請再試一次';
+        return (typeof body.error === 'string' && body.error) ? body.error : `刪除失敗（${res.status}），沒有刪除任何東西`;
+    }
+
+    _setDeleteMsg(text) {
+        const el = document.getElementById('modalDeleteMsg');
+        if (!el) return;
+        el.textContent = text || '';
+        el.hidden = !text;
+    }
+
+    // Called by openModal for every photo shown: (re)builds the button, or removes it outright where it is not allowed.
+    _syncDeleteBtn(photo) {
+        clearTimeout(this._lockTimer);
+        const bar = document.querySelector('#photoModal .modal-photo-info');
+        document.getElementById('modalDeleteBtn')?.remove();
+        document.getElementById('modalDeleteMsg')?.remove();
+        if (!bar) return;
+        bar.classList.remove('has-delete');
+        if (!photo || !this._canDeletePhotos()) return;
+
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.id = 'modalDeleteBtn';
+        btn.className = 'modal-delete-btn';
+        btn.innerHTML = DELETE_ICON;
+        btn.appendChild(document.createTextNode('刪除'));
+        btn.disabled = !!this._deleting;
+        btn.addEventListener('click', () => this.deleteCurrentPhoto());
+        const msg = document.createElement('div');
+        msg.id = 'modalDeleteMsg';
+        msg.className = 'modal-delete-msg';
+        msg.setAttribute('role', 'alert');
+        msg.hidden = true;
+        bar.append(btn, msg);
+        bar.classList.add('has-delete');
+
+        // Ask the Worker whether it would go ahead (debounced: flipping through photos must not fire one per photo).
+        // A failing answer changes nothing: the button stays and the DELETE itself is the judge.
+        const key = photo.id;
+        this._lockTimer = setTimeout(async () => {
+            const res = await driveManager.photoLock(key);
+            const cur = this.filteredPhotos[this.currentPhotoIndex];
+            if (!cur || cur.id !== key || this._deleting) return;
+            const b = document.getElementById('modalDeleteBtn');
+            const body = res.body;
+            if (b && res.status === 200 && body && body.deletable === false) {
+                b.disabled = true;
+                this._setDeleteMsg(this._deleteReason({ status: 409, body }));
+            }
+        }, 250);
+    }
+
+    async deleteCurrentPhoto() {
+        if (this._deleting || !this._canDeletePhotos()) return;
+        const photo = this.filteredPhotos[this.currentPhotoIndex];
+        if (!photo) return;
+        if (!confirm(`刪除「${photo.name}」？縮圖會一併刪除，無法復原。`)) return;
+        this._deleting = true;
+        clearTimeout(this._lockTimer);
+        const btn = document.getElementById('modalDeleteBtn');
+        if (btn) btn.disabled = true;
+        this._setDeleteMsg('');
+        let res;
+        try {
+            res = await driveManager.deletePhoto(photo.id);
+        } finally {
+            this._deleting = false;
+        }
+        const b = document.getElementById('modalDeleteBtn');
+        if (res.status !== 200 || !res.body || res.body.ok !== true) {
+            if (b) b.disabled = false;
+            this._setDeleteMsg(this._deleteReason(res));
+            return;
+        }
+
+        // gone from R2. The person may have flipped to another photo while the request was out: keep showing THAT one
+        // (found again by id after the list shrinks); only when they are still on the deleted one does the next move in.
+        const viewing = this.filteredPhotos[this.currentPhotoIndex];
+        const wasAt = this.currentPhotoIndex;
+        driveManager.forgetPhoto(photo.id);   // driveManager.photos may be a different array from this.photos
+        this.photos = this.photos.filter(p => p.id !== photo.id);
+        this.selectedPhotoIds.delete(photo.id);
+        this.applyFilters();
+        if (this.currentFolders.length > 0 && this.photos.length === 0) this.renderFolderGrid();
+        else this.renderPhotoGrid();
+        this.updateStats();
+        this.updateBulkUI();
+        const partial = Array.isArray(res.body.failed) && res.body.failed.length > 0;
+        const modalEl = document.getElementById('photoModal');
+        if (!modalEl.classList.contains('active')) {
+            // closed (X / Esc) while the request was out: leave it closed; the preview pane follows the shrunken list
+            this._syncDeleteBtn(null);
+            this.updatePreviewPane(null);
+        } else if (this.filteredPhotos.length) {
+            const stay = viewing && viewing.id !== photo.id ? this.filteredPhotos.findIndex(p => p.id === viewing.id) : -1;
+            await this.openModal(stay >= 0 ? stay : Math.min(wasAt, this.filteredPhotos.length - 1));
+        } else {
+            this._syncDeleteBtn(null);
+            document.getElementById('photoNote').value = '';   // nothing left for closeModal to save a note for
+            modalEl.classList.remove('active');
+            this.updatePreviewPane(null);
+        }
+        if (typeof toast !== 'undefined') toast.success(partial ? '已刪除（有幾張縮圖沒清乾淨，不影響使用）' : '已刪除');
     }
 
     // Mobile task: preload the photos next to the one on screen, at the same
