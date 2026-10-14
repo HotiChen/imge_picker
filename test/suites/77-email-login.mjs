@@ -19,7 +19,6 @@ export default async function register() {
   // really on screen (an ancestor with display:none counts), unlike the element's own computed display
   const shown = (page, sel) => page.$eval(sel, e => e.getClientRects().length > 0);
   // one unified form now (no 改用 Email 登入 toggle): 帳號 + 密碼; the toggle's own behaviour is gone, see 83-unified-login.mjs
-  const openEmailLogin = async page => { await page.click('#photographerLoginBtn'); };
   const fillLogin = async (page, email, pw) => { await page.fill('#loginAccountInput', email); await page.fill('#loginTokenInput', pw); await page.click('#loginSubmitBtn'); };
 
   {
@@ -30,7 +29,7 @@ export default async function register() {
         const out = [];
         const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
         const errT = () => page.textContent('#loginErr');
-        await openEmailLogin(page);
+        await page.click('#photographerLoginBtn');
 
         await page.click('#loginSubmitBtn');
         ok('empty fields are refused on the page, nothing sent', (await errT()).length > 0 && f.st.calls.length === 0, await errT());
@@ -74,7 +73,7 @@ export default async function register() {
       async page => {
         const out = [];
         const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
-        await openEmailLogin(page);
+        await page.click('#photographerLoginBtn');
         await fillLogin(page, FLAGGED.email, FLAGGED.password);
         await page.waitForURL('**/settings.html', { timeout: 5000 });
         const s0 = await store(page);

@@ -190,6 +190,34 @@ export default async function register() {
     }
   }
 
+  // ── the studio verification fails at the network level / with a 5xx: the login is REFUSED, nothing is stored ─────────
+  for (const S of SURFACES) {
+    for (const mode of ['network error', 'HTTP 500', 'HTTP 503']) {
+      const studio = studioMock(S.emptyBody); const f = photographerFake({ accounts: [ACCT] });
+      const before = async page => {
+        await both(studio, f, S.fabric ? stubFabric : null)(page);
+        // registered last, so it wins over the generic mock for the verification route only
+        await page.route(`**/${WORKER}${S.verify}`, route => mode === 'network error' ? route.abort('failed')
+          : route.fulfill({ status: Number(mode.slice(5)), headers: { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*' }, contentType: 'application/json', body: '{"error":"boom"}' }));
+      };
+      await suite(`unified login — ${S.name}: ${mode} on the admin verification refuses the login (無法連線，請稍後再試) and stores nothing`,
+        S.url,
+        async page => {
+          const { out, ok } = lines();
+          await S.open(page);
+          await fill(page, S, 'admin', STUDIO_PW);
+          await page.waitForFunction(sel => document.querySelector(sel).textContent.length > 0, S.err);
+          const s = await store(page);
+          ok('the message says it could not connect and to retry', (await errText(page, S)).includes('無法連線，請稍後再試'), await errText(page, S));
+          ok('the password is nowhere in sessionStorage / localStorage (never store an unverified password)', s.t === null && !s.all.includes(STUDIO_PW) && !s.ls.includes(STUDIO_PW), JSON.stringify(s));
+          ok('the form is still there (positive) and no /api/photographer call was made', (await shown(page, S.acct)) && (await shown(page, S.pw)) && f.st.calls.length === 0);
+          if (S.name.includes('overlay')) ok('the overlay is still on the page and the page token is unset', (await page.$('#auth-overlay')) !== null && !(await page.evaluate(() => CONFIG.PHOTOGRAPHER_TOKEN)));
+          else ok('still on the same page', page.url().startsWith(S.url));
+          return out;
+        }, { before, initScript: S.init });
+    }
+  }
+
   // ── `admin` in any case, with spaces ────────────────────────────────────────────────────────
   for (const variant of ['ADMIN', ' admin ', 'Admin', '\tAdMiN  ']) {
     const S = SURFACES[0];
@@ -282,8 +310,23 @@ export default async function register() {
         const hits = files.filter(p => BAD.test(fs.readFileSync(p, 'utf8'))).map(p => path.relative(ROOT, p));
         ok(`scanned ${files.length} files (floor: 30, includes home.html and js/auth.js)`, files.length >= 30 && files.some(p => p.endsWith('home.html')) && files.some(p => p.endsWith(path.join('js', 'auth.js'))));
         ok('no toggle text or old pane / field id anywhere', hits.length === 0, JSON.stringify(hits));
-        const loaders = ['home.html', 'admin.html', 'upload.html', 'book_editor/index.html', 'r2_designer/index.html'].filter(f2 => /unified-login\.js/.test(fs.readFileSync(path.join(ROOT, f2), 'utf8')));
-        ok('all five login surfaces load the one shared module', loaders.length === 5, JSON.stringify(loaders));
+        // every page that shows the form: a real <script src> with a ?v= stamp, placed before the script that uses it
+        const PAGES = [['home.html', null], ['admin.html', null], ['upload.html', 'js/auth.js'], ['book_editor/index.html', 'js/auth.js'], ['r2_designer/index.html', 'js/auth.js']];
+        const bad = [];
+        for (const [f2, user] of PAGES) {
+          const html = fs.readFileSync(path.join(ROOT, f2), 'utf8');
+          const m = /<script[^>]+src="[^"]*js\/unified-login\.js\?v=\d{8}[a-z]?"[^>]*><\/script>/.exec(html);
+          if (!m) { bad.push(`${f2}: no stamped script tag`); continue; }
+          const needs = [/js\/photographer-session\.js/, /js\/password-toggle\.js/].filter(re => { const x = re.exec(html); return !x || x.index > m.index; });
+          if (needs.length) bad.push(`${f2}: photographer-session.js / password-toggle.js must come before it`);
+          if (user) { const u = html.indexOf(user + '?'); if (u < 0 || u < m.index) bad.push(`${f2}: must load before ${user}`); }
+          else if (!/<script>[\s\S]*UnifiedLogin\./.test(html.slice(m.index + m[0].length))) bad.push(`${f2}: the inline script using UnifiedLogin must come after it`);
+        }
+        ok('all five login surfaces load js/unified-login.js (stamped ?v=, after its dependencies, before the code that uses it)', bad.length === 0, JSON.stringify(bad));
+        // and no other html page uses the form without it: every page that mentions UnifiedLogin or auth.js loads the module
+        const users = files.filter(p => p.endsWith('.html')).filter(p => /UnifiedLogin\.|js\/auth\.js/.test(fs.readFileSync(p, 'utf8')));
+        const missing = users.filter(p => !/js\/unified-login\.js\?v=/.test(fs.readFileSync(p, 'utf8'))).map(p => path.relative(ROOT, p));
+        ok(`every html using UnifiedLogin or js/auth.js loads the module (scanned ${users.length}, floor: 5)`, users.length >= 5 && missing.length === 0, JSON.stringify(missing));
         return out;
       }, { before: f.attach });
   }
