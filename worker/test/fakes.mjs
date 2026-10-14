@@ -20,11 +20,13 @@ export function fakeBucket(initial = {}, { pageSize = 1000 } = {}) {
   }
 
   const putLog = [];
+  const deleteLog = [];
 
   return {
     _store: store,
     // which keys were written, so a test can pin that a repeat call is a no-op
     _puts: putLog,
+    _deletes: deleteLog,
 
     async get(key, opts = {}) {
       const rec = store.get(key);
@@ -93,6 +95,16 @@ export function fakeBucket(initial = {}, { pageSize = 1000 } = {}) {
       const text = typeof value === 'string' ? value : await new Response(value).text();
       store.set(key, entry(key, { body: text, contentType: opts.httpMetadata?.contentType }));
       return { key };
+    },
+
+    // real R2: delete(key | key[]) resolves to undefined; a key that is not
+    // there is not an error (nothing happens). _deletes logs every key asked
+    // for, in order, so a test can pin what a route tried to remove.
+    async delete(keys) {
+      for (const key of Array.isArray(keys) ? keys : [keys]) {
+        deleteLog.push(key);
+        store.delete(key);
+      }
     },
 
     async list({ prefix = '', delimiter, cursor } = {}) {

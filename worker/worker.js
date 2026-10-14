@@ -948,12 +948,13 @@ function tenantPrefix(photographerId) {
   return `${TENANT_PREFIX}${photographerId}/`;
 }
 
-// The one way to R2: {get, head, put, list} over `photographerId`'s objects.
+// The one way to R2: {get, head, put, delete, list} over `photographerId`'s objects.
 // The id comes from the caller's identity (who.id), a link's project, or a
 // minted token's owner — never the request. An unsafe id throws before any
 // read or write. A reserved key reads as missing (get / head: null; list:
-// nothing) and is refused for a write (throws; the upload route answers 400
-// first). A list returns logical keys and only this photographer's objects.
+// nothing) and is refused for a write or a delete (throws; the upload route
+// answers 400 first). A list returns logical keys and only this
+// photographer's objects.
 function bucketFor(env, photographerId) {
   const bucket = env.imagepicker;
   const prefix = photographerId === DEFAULT_PHOTOGRAPHER_ID ? '' : tenantPrefix(photographerId);
@@ -970,6 +971,13 @@ function bucketFor(env, photographerId) {
     put(key, value, options) {
       if (reserved(key)) throw new Error('R2: reserved key');
       return bucket.put(prefix + key, value, options);
+    },
+    // one string key per call (real R2 also takes an array; not here, so
+    // nothing can sweep a list past the check). A missing key is not an
+    // error in R2.
+    delete(key) {
+      if (reserved(key)) throw new Error('R2: reserved key');
+      return bucket.delete(prefix + key);
     },
     async list(options = {}) {
       const wanted = options.prefix ?? '';
