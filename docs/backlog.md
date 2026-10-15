@@ -315,6 +315,16 @@ Still open:
   `test/suites/28-finals-gallery.mjs` 的 6 組分享測試要搬到「已確認」fixture、改點 `cpShare`，
   另加正向檢查「驗收頁沒有分享鈕」；`test/suites/18-guest-downloads.mjs` 版面測試引用
   `#fgShare` 也要改。Normal 等級（sonnet、相關測試、約 5 mutants）。**只記錄，尚未動工。**
+- 驗收頁的「下載毛片原檔」鈕會讓人搞混（Tim 2026-10-15）。三點，皆只記錄、尚未討論／動工：
+  1. 語意：客人會以為按了是「回到毛片」（看／挑過的那批），實際是進毛片原檔下載清單
+     （`js/pick.js` `_renderDeliveryBar`，`switchView('proofs')`，字樣「下載毛片原檔」／「← 回精修成品」），
+     而且是壓縮全部毛片一次下載。應改成「回到毛片」。
+  2. 權限：非主人（viewer，`isOwner` 為 false）不該能下載毛片原檔；目前只看 `allowProofDownload`。
+     **High 等級**（動到誰能讀原檔 / 下載閘）：worker 端也要擋，不能只藏按鈕；opus、完整 TDD、
+     ~10 mutants、security review；先確認 worker 的毛片下載路徑有沒有 owner 檢查（grep `allowProofDownload`）。
+  3. 版面：「尚待選片人確認完成」（`js/delivery-done.js`）跟「回到毛片」放同一列，且該狀態列 fixed、
+     不跟著 scroll；**挑片頁的狀態列也一樣不要跟著 scroll**（兩處都固定在頂端）。要注意 iPhone Safari
+     的 sticky/fixed 與網址列收合、LINE 內建瀏覽器。
 
 ## Future / not scheduled: 成果 content (video) and Travel Story (written 2026-10-07, ideas only)
 Nothing here is built or started. THE ORDER wins: real jobs first (step 2), then the
