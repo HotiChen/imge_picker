@@ -309,6 +309,12 @@ Still open:
   只有上一張／下一張＋下載。待討論：直接共用毛片的縮放模組 vs. 另做；注意交件圖庫只
   走 `pickFinals`，不可為此新增讀取路徑；縮放時要不要載入大圖（1200 → 原圖不可，仍只給 thumb）。
   **只記錄，尚未討論、尚未動工。**
+- 驗收頁（交件後、客人還沒確認完成）不該有「分享」鈕；只有確認後的完成頁（`cpShare`）才有
+  （Tim 2026-10-15 確認：「完整頁面」＝完成頁）。做法：`js/pick.js` 只在 `cp` 時傳 `onShare`，
+  `js/finals-gallery.js` 沒有 `onShare` 就不畫 `#fgShare`；完成頁分享不動。測試代價：
+  `test/suites/28-finals-gallery.mjs` 的 6 組分享測試要搬到「已確認」fixture、改點 `cpShare`，
+  另加正向檢查「驗收頁沒有分享鈕」；`test/suites/18-guest-downloads.mjs` 版面測試引用
+  `#fgShare` 也要改。Normal 等級（sonnet、相關測試、約 5 mutants）。**只記錄，尚未動工。**
 
 ## Future / not scheduled: 成果 content (video) and Travel Story (written 2026-10-07, ideas only)
 Nothing here is built or started. THE ORDER wins: real jobs first (step 2), then the
