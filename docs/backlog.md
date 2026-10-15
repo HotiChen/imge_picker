@@ -331,6 +331,12 @@ Still open:
 - 「✨ 看看你的照片排成相本」入口（`js/album-preview.js`，`album-entry-title`）現在不能顯示。
   規則：只在客人確認完成（`client_confirmed_at`）之後、在完成頁顯示；這個規則做好前一律不顯示。
   動工前先查它現在在哪些頁面露出（驗收頁有沒有）。（同上，併自 `claude/backlog-notes-oct15`，尚未動工）
+- 客人剛點進連結時，有一段空白等待（讀取 `/api/pick/state` 與照片列表），要加 loading 動畫
+  （Tim 2026-10-15，尚未動工）。現況線索：`index.html` 有 `#loadingState`（`.spinner`，預設
+  `display:none`，`js/pick.js` 約 1710 行也只負責把它隱藏），看起來客人頁首次載入從沒顯示過它；
+  另有 `#loadingModal`（小藥丸，`正在處理...`）。做法方向：首次載入就顯示、state 回來才換成內容；
+  注意 state 失敗（過期／無效連結）時要換成錯誤畫面，不能轉圈圈轉到天荒地老；
+  暗色客人頁配色、LINE 內建瀏覽器、慢網路實測。Tiny～Normal 等級（純前端，不動 worker）。
 
 ## Future / not scheduled: 成果 content (video) and Travel Story (written 2026-10-07, ideas only)
 Nothing here is built or started. THE ORDER wins: real jobs first (step 2), then the
