@@ -423,3 +423,8 @@ State of the branch `claude/lucid-cori-viif3w`:
 - Frontend for it (no cap while hearting, red counter + over-limit dialog at submit, reliable drafts) was still being built by an agent: NOT committed, NOT verified. Do not merge until the full browser + worker suites pass.
 - Before merging, Tim runs 4 D1 ALTERs in the D1 Console: `selections.marks`, `submissions.marks`, `projects.extra_max`, `studio_settings.default_extra_max` (files in `worker/migrations/2026-09-30-*.sql`). Merge to main deploys; only when Tim says 合併. Then Purge Everything, test on a real iPhone/LINE.
 - Co-picking ("共同挑選") is decided in principle only; `docs/pick-handover.md` §3+ (seat passing) is superseded and must be rewritten before any build.
+
+## Notes from Tim, to do when the quota is back (2026-10-15)
+Not started. Both are on the guest page `index.html` (the delivered-gallery view):
+- Remove the footer text 「點此進行系統自檢」 (`index.html` ~line 691, the link to the diagnostics). Tim said before: no 系統自檢 wording on client-facing pages. `js/diagnostics.js` can stay; only the guest-visible link goes.
+- The 「✨ 看看你的照片排成相本」 entry (`js/album-preview.js`, `album-entry-title`) must NOT show yet. Rule: show it on the 完成頁 only after the client has confirmed (確認完成, `client_confirmed_at`). Until that is built, do not show it at all.
