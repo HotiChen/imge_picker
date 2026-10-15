@@ -303,6 +303,12 @@ Still open:
 - Link a registered client account to a pick seat (`pickers.user_id`).
 - Storage usage tracking per photographer (limit by GB, not album count).
 - Cap the number of photo keys listed in the change-notification email.
+- 精修（交件後的成品圖庫）lightbox 要有跟毛片一樣的放大／縮小（Tim 2026-10-15，iPhone 實測：
+  看精修圖要刻意放大縮小，現在沒辦法順手看細節）。毛片預覽的 pinch / − + / 平移已有
+  （`js/app.js` 預覽、`js/visual-viewport.js`）；交件圖庫（`js/pick.js` delivery gallery）
+  只有上一張／下一張＋下載。待討論：直接共用毛片的縮放模組 vs. 另做；注意交件圖庫只
+  走 `pickFinals`，不可為此新增讀取路徑；縮放時要不要載入大圖（1200 → 原圖不可，仍只給 thumb）。
+  **只記錄，尚未討論、尚未動工。**
 
 ## Future / not scheduled: 成果 content (video) and Travel Story (written 2026-10-07, ideas only)
 Nothing here is built or started. THE ORDER wins: real jobs first (step 2), then the
