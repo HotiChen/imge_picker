@@ -325,6 +325,12 @@ Still open:
   3. 版面：「尚待選片人確認完成」（`js/delivery-done.js`）跟「回到毛片」放同一列，且該狀態列 fixed、
      不跟著 scroll；**挑片頁的狀態列也一樣不要跟著 scroll**（兩處都固定在頂端）。要注意 iPhone Safari
      的 sticky/fixed 與網址列收合、LINE 內建瀏覽器。
+- 客人頁（`index.html`，交件圖庫）頁尾拿掉「點此進行系統自檢」連結（`index.html` 約第 691 行，
+  指向診斷頁）。Tim 之前就說過：客人看得到的頁面不要出現「系統自檢」字樣。`js/diagnostics.js`
+  留著，只拿掉客人看得到的連結。（Tim 2026-10-15，併自 `claude/backlog-notes-oct15`，尚未動工）
+- 「✨ 看看你的照片排成相本」入口（`js/album-preview.js`，`album-entry-title`）現在不能顯示。
+  規則：只在客人確認完成（`client_confirmed_at`）之後、在完成頁顯示；這個規則做好前一律不顯示。
+  動工前先查它現在在哪些頁面露出（驗收頁有沒有）。（同上，併自 `claude/backlog-notes-oct15`，尚未動工）
 
 ## Future / not scheduled: 成果 content (video) and Travel Story (written 2026-10-07, ideas only)
 Nothing here is built or started. THE ORDER wins: real jobs first (step 2), then the
