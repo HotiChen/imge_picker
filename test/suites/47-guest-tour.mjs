@@ -95,6 +95,23 @@ const nextBtn = page => page.click('.gt-next');
     }, { before: m.attach, initScript: OWNER, contextOptions: MOBILE });
 }
 
+// ═════ A1b. scrolling is free (behaviour, on a desktop viewport: a wheel moves the photos while the tour is up)
+{
+  const m = pickWorld({ photos: PHOTOS(40) });
+  await sx('guest tour (desktop 1280px) — a real wheel over the photos scrolls them while the tour is up',
+    URL_, async (page, ok) => {
+      await gridReady(page);
+      ok('positive: the tour is up', await waitCard(page));
+      const before = await page.evaluate(() => { const c = document.querySelector('.content'); return { top: c.scrollTop, room: c.scrollHeight - c.clientHeight }; });
+      ok('control: there is room to scroll', before.room > 500 && before.top === 0, JSON.stringify(before));
+      await page.mouse.move(640, 500);
+      await page.mouse.wheel(0, 600);
+      await sleep(300);
+      const after = await page.evaluate(() => ({ top: document.querySelector('.content').scrollTop, card: !!document.querySelector('.gt-card') }));
+      ok('the photos scrolled and the tour card is still up', after.top > 0 && after.card, JSON.stringify(after));
+    }, { before: m.attach, initScript: `${OWNER}window.GUEST_TOUR_FORCE = true;`, contextOptions: { viewport: { width: 1280, height: 900 } } });
+}
+
 // ═════ A2. outside taps are swallowed; the highlighted target advances; scrolling is free
 {
   const m = pickWorld();
@@ -106,12 +123,9 @@ const nextBtn = page => page.click('.gt-next');
       const other = cards[cards.length - 1];
       await other.scrollIntoViewIfNeeded();
       ok('card still up after scrolling the page (no scroll lock)', await hasCard(page));
-      const y1 = await page.evaluate(() => scrollY + document.querySelector('.content, .main-content, #photoGrid')?.scrollTop);
       await page.evaluate(() => { window.scrollTo(0, 0); document.querySelectorAll('.content,.main-content,.photo-grid').forEach(e => { e.scrollTop = 0; }); });
-      await page.mouse.wheel(0, 600);
-      await sleep(250);
-      const moved = await page.evaluate(() => scrollY > 0 || [...document.querySelectorAll('.content,.main-content,.photo-grid,main')].some(e => e.scrollTop > 0));
-      ok('positive: a wheel scroll moves the page while the tour is up', moved, String(y1));
+      // (scrolling stays free with the tour up: the real wheel check is A1b, on a desktop viewport; an emulated phone does not
+      // scroll .content by wheel or CDP touch-scroll even without the tour)
       await page.evaluate(() => { window.scrollTo(0, 0); document.querySelectorAll('.content,.main-content,.photo-grid,main').forEach(e => { e.scrollTop = 0; }); });
       await sleep(300);
       const c0 = await info(page);

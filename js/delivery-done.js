@@ -256,16 +256,36 @@
             if (kind === 'revision') setTimeout(() => document.getElementById('doneReviseText')?.focus(), 30);
         },
 
-        // 確認完成 with drafts still unsent: say so (they do not reach the photographer)
+        // 確認完成 with drafts still unsent (a client who marked photos and pressed the wrong button): say so, and make
+        // the way forward — going back to send them — the main button; confirming anyway is the quiet one. Always
+        // rebuilt from the drafts as they are now, so reopening the dialog never keeps an old state.
         fillConfirm() {
             document.getElementById('doneConfirmUnsent')?.remove();
+            document.getElementById('doneConfirmBack')?.remove();
+            const submit = document.getElementById('doneConfirmSubmit');
+            if (!submit) return;
             const n = pinsOn() ? RevisionPins.photoCount() : 0;
+            // with unsent drafts confirming is the quiet choice (outline), else the green main button
+            submit.textContent = n ? '仍要確認完成' : '確認完成';
+            submit.classList.toggle('btn-success', !n);
+            submit.classList.toggle('btn-outline', !!n);
             if (!n) return;
             const p = document.createElement('p');
             p.id = 'doneConfirmUnsent';
             p.className = 'pick-over-line done-round-warn';
-            p.textContent = `你還有 ${n} 張照片的標示沒有送出，確認完成後不會送給攝影師`;
+            p.textContent = `你還有 ${n} 張照片的標示沒有送出。現在確認完成，這些標示會被丟掉，攝影師看不到。`;
             document.getElementById('doneConfirmErr')?.before(p);
+            const back = document.createElement('button');
+            back.id = 'doneConfirmBack';
+            back.type = 'button';
+            back.className = 'btn btn-success';
+            back.textContent = `回去送出修改（${n} 張）`;
+            back.addEventListener('click', () => {
+                if (this.busy) return;
+                this.closeModal('confirm');
+                this.openModal(this.pc, 'round');
+            });
+            submit.after(back);
         },
 
         // the round dialog's title, rows and empty-note warning, from the drafts as they are now

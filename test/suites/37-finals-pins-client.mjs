@@ -387,8 +387,19 @@ const SEED = () => [{ photo_key: K(1), marks: [pin(0.2, 0.3, '臉修瘦一點'),
     async (page, ok) => {
       await page.waitForSelector('#doneConfirmBtn', { timeout: 6000 });
       await page.click('#doneConfirmBtn');
-      ok('the dialog says: you still have 2 photos with pins not sent', (await page.textContent('#doneConfirmUnsent')) === '你還有 2 張照片的標示沒有送出，確認完成後不會送給攝影師');
+      ok('the dialog says: you still have 2 photos with pins not sent, and that confirming drops them', (await page.textContent('#doneConfirmUnsent')) === '你還有 2 張照片的標示沒有送出。現在確認完成，這些標示會被丟掉，攝影師看不到。');
       ok('the usual confirm text is still there', (await page.textContent('#doneConfirmModal')).includes('確認後攝影師會收到通知'));
+      const g = await page.evaluate(() => { const s = document.getElementById('doneConfirmSubmit'), b = document.getElementById('doneConfirmBack');
+        return { sub: s.textContent, subCls: s.className, back: b && b.textContent, backCls: b && b.className, sameRow: !!b && s.parentElement === b.parentElement, backAfter: !!b && s.nextElementSibling === b }; });
+      ok('going back to send is the main (green) button; confirming anyway is the quiet outline one, worded 仍要確認完成',
+        g.back === '回去送出修改（2 張）' && /btn-success/.test(g.backCls) && g.sub === '仍要確認完成' && /btn-outline/.test(g.subCls) && !/btn-success/.test(g.subCls) && g.sameRow && g.backAfter, JSON.stringify(g));
+      // 回去送出修改: the confirm dialog closes, the round dialog opens with the drafts, nothing was confirmed
+      await page.click('#doneConfirmBack');
+      ok('the round dialog is open and the confirm dialog is closed', await modalActive(page, 'doneRoundModal') && !(await modalActive(page, 'doneConfirmModal')));
+      ok('nothing was confirmed', donePosts(w.m, 'confirm').length === 0 && (await page.$('#completionPage')) === null);
+      await page.click('#doneRoundCancel');
+      await page.click('#doneConfirmBtn');
+      ok('reopening the dialog shows the warning again (not a stale state)', await modalActive(page, 'doneConfirmModal') && (await page.$('#doneConfirmUnsent')) !== null && (await page.$$('#doneConfirmBack')).length === 1);
       await page.click('#doneConfirmSubmit');
       ok('confirming works as before: completion page', await until(async () => (await page.$('#completionPage')) !== null) && donePosts(w.m, 'confirm').length === 1);
     },
@@ -400,7 +411,9 @@ const SEED = () => [{ photo_key: K(1), marks: [pin(0.2, 0.3, '臉修瘦一點'),
       await page.waitForSelector('#doneConfirmBtn', { timeout: 6000 });
       await page.click('#doneConfirmBtn');
       ok('positive: the dialog is open', await modalActive(page, 'doneConfirmModal'));
-      ok('no unsent-pins line', (await page.$('#doneConfirmUnsent')) === null);
+      ok('no unsent-pins line, no 回去送出修改 button', (await page.$('#doneConfirmUnsent')) === null && (await page.$('#doneConfirmBack')) === null);
+      const s = await page.evaluate(() => { const b = document.getElementById('doneConfirmSubmit'); return { t: b.textContent, c: b.className }; });
+      ok('the plain 確認完成 stays the green main button', s.t === '確認完成' && /btn-success/.test(s.c), JSON.stringify(s));
     },
     { before: w2.before, initScript: OWNER, contextOptions: ALB_DESK });
 }

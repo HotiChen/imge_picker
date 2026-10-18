@@ -79,6 +79,10 @@ separated before he can run real shoots through the studio.
   saves the bytes: `js/pick.js` `_downloadKeyed`); such a response varies on `X-Picker-Key`.
   Tests: `worker/test/proof-owner-gate.test.mjs`. The 毛片 view's button is 「回到毛片」 and
   reads the proofs as thumbnails; the download buttons exist for the owner only.
+- **確認完成 with unsent pins is guarded** (2026-10-18; a client marked photos, then pressed 確認完成 instead of
+  送出修改): the dialog says the marks will be dropped, 「回去送出修改（N 張）」 is the main button and
+  「仍要確認完成」 the quiet one (`js/delivery-done.js` `fillConfirm`). Confirming anyway stays possible (a client may
+  mean it); with no drafts the dialog is unchanged.
 - **The 驗收頁 strip** (`#deliveryStrip`): the 回到毛片 button and the status block share one row
   and stay under the 56px header while scrolling (`position: sticky`). No share button here: sharing
   and the album preview belong to the 完成頁 (after 確認完成).

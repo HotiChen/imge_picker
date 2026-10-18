@@ -41,6 +41,7 @@ export function pinsWorld(o = {}) {
   const w = albumWorld({
     ...o,
     fake: {
+      confirmedAt: null,                 // the 驗收頁 (albumWorld defaults to a confirmed project); a suite passes its own to confirm
       ...(o.fake || {}),
       decorateState(resp, { isOwner }) {
         if (resp.mode !== 'delivered' || !isOwner) return;       // viewers and non-delivered: no such keys
