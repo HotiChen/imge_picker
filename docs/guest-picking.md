@@ -187,6 +187,15 @@ Frontend facts that the Worker contract below does not say (`js/pick.js`, `js/ap
   comes back `409 retouching` opens a notice in the **middle of the screen** (`#pickNoticeModal`, `PickController.showNotice` /
   `showRetouchLocked`): 攝影師已安排精修，無法再修改或新增愛心，如需修改請聯絡攝影師. Warning and error toasts are centred
   too (css/styles.css `.toast.error, .toast.warning`: each one positioned on its own, a plain one lets taps through, a second one sits 56px lower and a third would overlap it); success toasts keep the corner. Tests: `test/suites/89-retouch-locked-notice.mjs`.
+- **A save that changes nothing is not sent** (2026-10-18, found when an owner flipping the lightbox with the arrows lost a
+  collaborator's ♥): every arrow press used to re-save the photo it left (rating and note as the page had them), and in the
+  Worker a save is a claim on the row — for a photo nobody picked (as the page knew it) it is a delete. So an owner whose page
+  was older than the server un-hearted a collaborator's photo, and an up-to-date one re-stamped it as the owner's. Now the client
+  sends only what changed (`js/app.js` `saveCurrentNote`, `js/pick.js` `queueUpsert`), and the Worker drops an owner's item that
+  is identical to a row another picker wrote (as it already did for a collaborator) instead of taking the row over; a real
+  change or delete by the owner still goes through. Tests: `worker/test/selection-attribution.test.mjs`,
+  `test/suites/90-no-op-saves.mjs`. Still open: the owner's page does not refresh the selections while it is open (only the
+  collaborator's does), so it can show an older picture than the server.
 - **The submit form remembers** 與新人的關係 and Email per link on this device after a submit that went through (`pick_submit:<token>`).
 - Delivered views: `docs/delivery.md` (the finals gallery, the 驗收頁, the 完成頁), `docs/revision-pins.md`.
 

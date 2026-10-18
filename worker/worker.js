@@ -6985,35 +6985,39 @@ async function routeRequest(request, env, ctx) {
           if (!pickKeyValid(k)) return pickKeyInvalid();
           if (!pickKeyAllowed(s, k)) return jsonErr('照片不在開放資料夾內', 403);
         }
-        // A collaborator's item on a row someone else last wrote: refused
-        // for that item (`not_yours`) when it would change the rating, the
-        // note or the pins — a delete always would — and dropped silently
-        // when it would not (re-sending what is there is a no-op, and must
-        // not make the row theirs). The rest of the batch goes on. This read
-        // only decides what to send and what to report: every statement
-        // below re-checks the author itself, so a write by the owner landing
-        // in between is never overwritten (and is reported after).
+        // An item on a row someone else last wrote. A collaborator's: refused for that item (`not_yours`) when it would
+        // change the rating, the note or the pins — a delete always would — and dropped silently when it would not
+        // (re-sending what is there is a no-op, and must not make the row theirs). The owner's: dropped silently when it
+        // changes nothing, for the same reason (the lightbox used to re-save every photo the owner flipped past, which
+        // took a collaborator's ♥ for the owner); any real change or delete by the owner still goes through. The rest
+        // of the batch goes on. This read only decides what to send and what to report: every statement below
+        // re-checks the author itself, so a write by the owner landing in between is never overwritten (and is
+        // reported after).
         const rejected = isCollaborator ? new Set() : null;
-        if (rejected) {
+        if (items.length || remove.length) {
           const keys = [...new Set([...items.map(i => i.k), ...remove])];
           const read = cols => env.DB.prepare(
             `SELECT photo_key, rating, note, updated_by${cols} FROM selections WHERE project_id = ? AND photo_key IN (SELECT value FROM json_each(?))`
           ).bind(project.id, JSON.stringify(keys)).all();
-          const { results: current } = await withoutMissingColumn(() => read(', marks'), () => read(''));
+          // the pins column is only named when pins are in play (an item that carries them, or a collaborator's save):
+          // a save without them must work before the retouch-pins migration has run
+          const { results: current } = isCollaborator || items.some(i => i.s === 1)
+            ? await withoutMissingColumn(() => read(', marks'), () => read(''))
+            : await read('');
           const theirs = new Map(current.filter(r => r.updated_by !== picker.id).map(r => [r.photo_key, r]));
           const kept = items.filter(i => {
             const row = theirs.get(i.k);
             if (!row) return true;
             const pins = parseMarks(row.marks);
             const same = row.rating === i.r && row.note === i.n && (i.s !== 1 || (pins ? JSON.stringify(pins) : null) === i.m);
-            if (!same) rejected.add(i.k);
-            return false;
+            if (!same && rejected) rejected.add(i.k);
+            return !same && !rejected;       // identical: dropped for both; different: refused for a collaborator, the owner's to change
           });
           items.splice(0, items.length, ...kept);
           const keptRemove = remove.filter(k => {
             if (!theirs.has(k)) return true;
-            rejected.add(k);
-            return false;
+            if (rejected) rejected.add(k);
+            return !rejected;                // a delete is always a change: refused for a collaborator, the owner's to do
           });
           remove.splice(0, remove.length, ...keptRemove);
         }

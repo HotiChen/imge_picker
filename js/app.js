@@ -1402,7 +1402,9 @@ class App {
     saveCurrentNote() {
         const val = document.getElementById('photoNote').value;
         const photo = this.filteredPhotos[this.currentPhotoIndex];
-        if (photo) driveManager.saveNote(photo.id, val);
+        // only a note that changed is saved: every arrow press used to re-save the photo it left, and in guest picking a
+        // save is a write that makes the photo that person's (and, on a photo nobody picked, deletes it)
+        if (photo && val !== (photo.note || '')) driveManager.saveNote(photo.id, val);
     }
 
     async navigatePhoto(dir) {

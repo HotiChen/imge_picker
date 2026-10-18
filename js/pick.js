@@ -646,6 +646,9 @@
         queueUpsert(photoKey, rating, note, marks) {
             if (!this.canEdit()) return;
             const prevSel = this.selections.get(photoKey);
+            // nothing changed (same rating and note, no pins sent): nothing is written. A save is a claim on the photo, and
+            // for a photo nobody picked it is a delete; the page's idea of a photo can be older than the server's
+            if (marks === undefined && (prevSel ? prevSel.rating : 0) === rating && (prevSel ? prevSel.note : '') === (note || '')) return;
             if (!this._pendingPrev.has(photoKey)) {
                 this._pendingPrev.set(photoKey, prevSel ? { ...prevSel } : null);
             }
