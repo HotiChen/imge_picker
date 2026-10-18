@@ -859,6 +859,7 @@
                 this.renderBanner();
                 this.rerenderGrid();
                 this.syncPinUI();
+                this.showRetouchLocked();   // the change the guest just made was not saved: say so, in the middle
                 return;
             }
             if (status === 403 && data && (data.code === 'collaborator_expired' || data.code === 'collaborator_removed')) {
@@ -1992,6 +1993,24 @@
         },
         // 已超出可送出張數: d = {count, max, over, limit, extra_max} (from the
         // local numbers, or the server's 409 pick_cap body).
+        // A notice in the middle of the screen (#pickNoticeModal): for something the guest must read, not a corner toast.
+        showNotice(text, title) {
+            const modal = document.getElementById('pickNoticeModal');
+            const body = document.getElementById('pickNoticeBody');
+            if (!modal || !body) { if (typeof toast !== 'undefined') toast.warning(text); return; }
+            document.getElementById('pickNoticeTitle').textContent = title || '無法修改選片';
+            const p = document.createElement('p');
+            p.className = 'pick-over-line';
+            p.textContent = text;
+            body.replaceChildren(p);
+            modal.classList.add('active');
+            document.getElementById('pickNoticeOkBtn')?.focus({ preventScroll: true });
+        },
+        closeNotice() { document.getElementById('pickNoticeModal')?.classList.remove('active'); },
+        // Once the photographer has started retouching, hearts and submits are closed until they reopen it.
+        showRetouchLocked() {
+            this.showNotice('攝影師已安排精修，無法再修改或新增愛心。如需修改，請聯絡攝影師。', '已安排精修');
+        },
         openCapModal(d) {
             const modal = document.getElementById('pickCapModal');
             const body = document.getElementById('pickCapBody');
@@ -2056,6 +2075,8 @@
                 this._setFilterMode('selected');
             });
             document.getElementById('pickOverBackBtn')?.addEventListener('click', () => this.closeOverModal());
+            document.getElementById('pickNoticeOkBtn')?.addEventListener('click', () => this.closeNotice());
+            document.querySelector('#pickNoticeModal .modal-overlay')?.addEventListener('click', () => this.closeNotice());
             document.getElementById('pickOverConfirmBtn')?.addEventListener('click', () => {
                 this.closeOverModal();
                 this.openSubmitModal();
@@ -2118,6 +2139,7 @@
                 this.renderBanner();
                 this.rerenderGrid();
                 this._syncTour();
+                this.showRetouchLocked();
             } else if (errEl) {
                 // a real, server-authored message (e.g. 請選擇與新人的關係,
                 // Email 格式不正確) rather than a made-up one

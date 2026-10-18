@@ -183,6 +183,11 @@ Frontend facts that the Worker contract below does not say (`js/pick.js`, `js/ap
   the current phase's tour. Test switch: `FORCE_DEFAULT` in `js/guest-tour.js` (or `window.GUEST_TOUR_FORCE`)
   forces the tour on every visit and never records "seen"; it is **false** (first visit only) in the shipped
   code, and the browser harness sets `GUEST_TOUR_FORCE = false` in every suite (`test/README.md`).
+- **Picking closed (the photographer pressed 開始精修)**: hearts are read-only. A tap on a ♥, a submit, or a change that
+  comes back `409 retouching` opens a notice in the **middle of the screen** (`#pickNoticeModal`, `PickController.showNotice` /
+  `showRetouchLocked`): 攝影師已安排精修，無法再修改或新增愛心，如需修改請聯絡攝影師. Warning and error toasts are centred
+  too (css/styles.css `.toast.error, .toast.warning`: each one positioned on its own, a plain one lets taps through, a second one sits 56px lower and a third would overlap it); success toasts keep the corner. Tests: `test/suites/89-retouch-locked-notice.mjs`.
+- **The submit form remembers** 與新人的關係 and Email per link on this device after a submit that went through (`pick_submit:<token>`).
 - Delivered views: `docs/delivery.md` (the finals gallery, the 驗收頁, the 完成頁), `docs/revision-pins.md`.
 
 ## Schema

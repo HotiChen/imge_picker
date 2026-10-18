@@ -1708,6 +1708,18 @@ body.pick-guest .content { overscroll-behavior: contain; }
   pointer-events: none;
 }
 
+/* Warnings and errors are read where the eyes are: each one in the middle of the screen, not in the corner (a success
+   toast next to one stays in the corner). In the middle it sits over the photos, so a plain message lets taps through
+   (a toast with a button stays clickable). Two at once stack 56px apart. */
+.toast.error, .toast.warning {
+  position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  max-width: calc(100vw - 32px);
+  animation-name: toastFade;
+}
+.toast.error:not(:has(button)), .toast.warning:not(:has(button)) { pointer-events: none; }
+:is(.toast.error, .toast.warning) ~ :is(.toast.error, .toast.warning) { margin-top: 56px; }
+@keyframes toastFade { from { opacity: 0; } to { opacity: 1; } }
+
 .toast {
   display: flex;
   align-items: center;

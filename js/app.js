@@ -728,9 +728,8 @@ class App {
         // (POST /api/pick/submit); every other mode keeps the fake one below.
         if (window.PickController && PickController.active) {
             if (!PickController.canEdit()) {
-                toast.warning(PickController.phase === 'retouching'
-                    ? '攝影師已安排精修，如需修改請透過 LINE 聯絡攝影師'
-                    : '目前無法送出');
+                if (PickController.phase === 'retouching') PickController.showRetouchLocked();
+                else toast.warning('目前無法送出');
                 return;
             }
             PickController.requestSubmit();
@@ -951,6 +950,12 @@ class App {
             card.querySelector('.pick-heart-btn')?.addEventListener('click', (e) => {
                 e.stopPropagation(); // 阻止觸發開 Modal
                 this.togglePickHeart(photo, e.currentTarget);
+            });
+        } else if (pickMode && !gallery && PickController.phase === 'retouching') {
+            // picking is closed (攝影師已安排精修): a tap on the ♥ says so, in the middle of the screen
+            card.querySelector('.pick-heart-btn')?.addEventListener('click', (e) => {
+                e.stopPropagation();
+                PickController.showRetouchLocked();
             });
         }
 
