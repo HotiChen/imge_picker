@@ -262,7 +262,7 @@ for (const [name, opts] of [
       await fgReady(page, 6);
       ok('control: the finals gallery is up first', !!(await page.$('#fgHero')) && (await page.$$('.photo-card')).length === 0);
       const bar = await page.evaluate(() => { const b = document.getElementById('deliveryBar'); return { shown: b.getBoundingClientRect().height > 20, hidden: b.hidden, btn: document.getElementById('deliveryProofsBtn').textContent }; });
-      ok('the thin bar with 下載毛片原檔 is visible when the switch is on', bar.shown && !bar.hidden && bar.btn === '下載毛片原檔', JSON.stringify(bar));
+      ok('the thin bar with 回到毛片 is visible when the switch is on', bar.shown && !bar.hidden && bar.btn === '回到毛片', JSON.stringify(bar));
       await page.click('#deliveryProofsBtn');
       await page.waitForFunction(() => document.querySelector('.photo-card')?.dataset.photoId.includes('毛片'), null, { timeout: 5000 });
       const s = await page.evaluate(() => ({ g: !!document.getElementById('finalsGallery'), hero: !!document.getElementById('fgHero'), tile: !!document.querySelector('.fg-tile'), share: !!document.getElementById('fgShare'),

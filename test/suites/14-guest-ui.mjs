@@ -344,7 +344,7 @@ for (const [label, co, proofs] of [['390px', MOBILE, false], ['390px + proofs sw
         (await page.$('.pick-heart-btn')) === null && (await page.$('#submitJobBtn')) === null && (await page.$('#pickSubmitBtn')) === null &&
         (await page.$('#pickCounter')) === null && (await page.$('#mobileActionBar')) === null);
       if (proofs) {
-        ok('下載毛片原檔 entry still there', (await page.textContent('#deliveryProofsBtn')) === '下載毛片原檔');
+        ok('回到毛片 entry still there', (await page.textContent('#deliveryProofsBtn')) === '回到毛片');
         await page.click('#deliveryProofsBtn');
         await page.waitForFunction(() => document.querySelector('.photo-card')?.dataset.photoId.includes('毛片'), null, { timeout: 5000 });
         ok('it switches to the proofs (old card list); still no filter', (await page.$('#pickFilterBar')) === null && JSON.stringify(await guiIds(page)) === '["shoot/毛片/a.jpg","shoot/毛片/b.jpg"]');
