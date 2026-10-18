@@ -309,12 +309,14 @@ Still open:
   只有上一張／下一張＋下載。待討論：直接共用毛片的縮放模組 vs. 另做；注意交件圖庫只
   走 `pickFinals`，不可為此新增讀取路徑；縮放時要不要載入大圖（1200 → 原圖不可，仍只給 thumb）。
   **只記錄，尚未討論、尚未動工。**
+- ✅ 已做 2026-10-18（`claude/guest-delivery-fixes`，未合併，待 Tim 實機驗）：驗收頁的分享鈕已移除，只留完成頁 `cpShare`；測試 `85-share-on-completion-page.mjs`。
 - 驗收頁（交件後、客人還沒確認完成）不該有「分享」鈕；只有確認後的完成頁（`cpShare`）才有
   （Tim 2026-10-15 確認：「完整頁面」＝完成頁）。做法：`js/pick.js` 只在 `cp` 時傳 `onShare`，
   `js/finals-gallery.js` 沒有 `onShare` 就不畫 `#fgShare`；完成頁分享不動。測試代價：
   `test/suites/28-finals-gallery.mjs` 的 6 組分享測試要搬到「已確認」fixture、改點 `cpShare`，
   另加正向檢查「驗收頁沒有分享鈕」；`test/suites/18-guest-downloads.mjs` 版面測試引用
   `#fgShare` 也要改。Normal 等級（sonnet、相關測試、約 5 mutants）。**只記錄，尚未動工。**
+- ✅ 已做 2026-10-18（同上）：字樣改「回到毛片」／毛片頁標題「毛片」；毛片原檔只有主人（`isOwner`）能讀／下載，Worker 端用 `X-Picker-Key` 擋（`worker/test/proof-owner-gate.test.mjs`，10 個 mutants），主人的單張下載改成帶 header 的 fetch；狀態列與「回到毛片」同一列、貼在 header 下不跟著捲（`#deliveryStrip`）；挑片頁拿掉 footer 讓頁面不再多捲 41px。**挑片頁的「狀態列」在無頭瀏覽器量到本來就貼著，Tim 看到會動的原因我判斷是這 41px 的外層捲動，未在真 iPhone 驗證。** 測試 `87-guest-proofs-and-strip.mjs`。
 - 驗收頁的「下載毛片原檔」鈕會讓人搞混（Tim 2026-10-15）。三點，皆只記錄、尚未討論／動工：
   1. 語意：客人會以為按了是「回到毛片」（看／挑過的那批），實際是進毛片原檔下載清單
      （`js/pick.js` `_renderDeliveryBar`，`switchView('proofs')`，字樣「下載毛片原檔」／「← 回精修成品」），
@@ -325,12 +327,15 @@ Still open:
   3. 版面：「尚待選片人確認完成」（`js/delivery-done.js`）跟「回到毛片」放同一列，且該狀態列 fixed、
      不跟著 scroll；**挑片頁的狀態列也一樣不要跟著 scroll**（兩處都固定在頂端）。要注意 iPhone Safari
      的 sticky/fixed 與網址列收合、LINE 內建瀏覽器。
+- ✅ 已做 2026-10-18（同上）：客人頁拿掉自檢連結（`#diagLink`，photographer 的 index 仍有）；測試 `86-guest-first-load.mjs`。
 - 客人頁（`index.html`，交件圖庫）頁尾拿掉「點此進行系統自檢」連結（`index.html` 約第 691 行，
   指向診斷頁）。Tim 之前就說過：客人看得到的頁面不要出現「系統自檢」字樣。`js/diagnostics.js`
   留著，只拿掉客人看得到的連結。（Tim 2026-10-15，併自 `claude/backlog-notes-oct15`，尚未動工）
+- ✅ 已做 2026-10-18（同上）：相本入口只在完成頁出現（驗收頁原本就會出現，是 bug）；`26-album-preview.mjs` 第 1 節重寫，其餘相本 suite 的共用世界預設改成「已確認」（`test/lib/album-world.mjs`）。
 - 「✨ 看看你的照片排成相本」入口（`js/album-preview.js`，`album-entry-title`）現在不能顯示。
   規則：只在客人確認完成（`client_confirmed_at`）之後、在完成頁顯示；這個規則做好前一律不顯示。
   動工前先查它現在在哪些頁面露出（驗收頁有沒有）。（同上，併自 `claude/backlog-notes-oct15`，尚未動工）
+- ✅ 已做 2026-10-18（同上）：首次載入顯示轉圈圈（`#guestBoot`，`js/pick.js` `_boot`），資料回來、失效或錯誤都會移除，不會一直轉；測試 `86-guest-first-load.mjs`。
 - 客人剛點進連結時，有一段空白等待（讀取 `/api/pick/state` 與照片列表），要加 loading 動畫
   （Tim 2026-10-15，尚未動工）。現況線索：`index.html` 有 `#loadingState`（`.spinner`，預設
   `display:none`，`js/pick.js` 約 1710 行也只負責把它隱藏），看起來客人頁首次載入從沒顯示過它；

@@ -919,7 +919,7 @@ class App {
             ? `<span class="pv-pin-badge" title="有 ${pinCount} 個標示">📍${pinCount}</span>` : '';
         const noteMarker = projectMode && photo.note
             ? '<span class="pv-note-badge" title="有備註">💬</span>' : '';
-        const dlTag = gallery
+        const dlTag = gallery && PickController.canDownload()
             ? `<a class="btn btn-outline pick-dl-link pick-card-dl" href="${escHtml(driveManager.downloadUrl(photo))}" data-download>${escHtml(PickController.downloadLabel())}</a>`
             : '';
         card.innerHTML = `

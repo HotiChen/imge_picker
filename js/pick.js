@@ -236,12 +236,14 @@
         // The delivery gallery / proof-download list: no picking UI at all.
         isGallery() { return this.active && this.view !== 'picking'; },
 
-        // Whether this link may show a download button. Picking: only when
-        // the photographer switched proof downloads on. Gallery: always (the
-        // finals are the deliverable; the proofs list only exists when the
-        // switch is on).
+        // Whether this link may show a download button. The finals: always (they are the deliverable, for the
+        // owner and for everyone with the link). A proof original (picking, or the 毛片 view): only when the
+        // photographer switched proof downloads on AND this is the seat owner (Tim 2026-10-15; the Worker
+        // refuses anyone else, js/pick.js _downloadKeyed sends the key).
         canDownload() {
-            return this.active && (this.view === 'picking' ? this.allowProofDownload : true);
+            if (!this.active) return false;
+            if (this.view === 'finals') return true;
+            return this.allowProofDownload && this.isOwner;
         },
 
         downloadLabel() { return this.view === 'finals' ? '下載' : '下載原檔'; },
@@ -258,6 +260,9 @@
         async download(e, photo) {
             if (e) e.preventDefault();
             const url = driveManager.downloadUrl(photo);
+            // a proof original is the seat owner's: the Worker wants the picker key, which only a header can
+            // carry (never a URL), so a plain link cannot do it: fetch it and save the bytes
+            if (this.view !== 'finals') return this._downloadKeyed(url, photo);
             let res;
             try {
                 res = await fetch(url, { headers: { Range: 'bytes=0-0' } });
@@ -281,6 +286,36 @@
             document.body.appendChild(a);
             a.click();
             a.remove();
+        },
+
+        async _downloadKeyed(url, photo) {
+            const fail = msg => { if (typeof toast !== 'undefined') toast.error(msg); };
+            let res;
+            try {
+                res = await fetch(url, { headers: this.headers() });
+            } catch (err) {
+                fail('無法連線，請檢查網路');
+                return;
+            }
+            if (!res.ok) {
+                let data = null;
+                try { data = await res.json(); } catch (err) { /* not JSON */ }
+                fail(res.status === 403 && data && data.code === 'original_not_allowed'
+                    ? '原檔未開放下載'
+                    : (res.status === 401 ? '連結已失效，請向攝影師索取新的連結' : '下載失敗，請稍後再試'));
+                return;
+            }
+            let blob;
+            try { blob = await res.blob(); } catch (err) { fail('下載失敗，請稍後再試'); return; }
+            const href = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = href;
+            a.download = photo && photo.name ? photo.name : 'photo.jpg';
+            a.rel = 'noopener';
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            setTimeout(() => URL.revokeObjectURL(href), 30000);
         },
 
         async switchView(view) {
@@ -343,10 +378,10 @@
             // carries the 下載毛片原檔 entry (the hero already has the title)
             el.classList.toggle('fg-bar-proofs', this.allowProofDownload);
             const t = this.projectTitle ? ` · ${this.projectTitle}` : '';
-            if (titleEl) titleEl.textContent = this.view === 'finals' ? `精修成品${t}` : `毛片原檔（僅供下載）${t}`;
+            if (titleEl) titleEl.textContent = this.view === 'finals' ? `精修成品${t}` : `毛片${t}`;
             if (btn) {
                 if (this.allowProofDownload) {
-                    btn.textContent = this.view === 'finals' ? '下載毛片原檔' : '← 回精修成品';
+                    btn.textContent = this.view === 'finals' ? '回到毛片' : '← 回精修成品';
                     btn.hidden = false;
                     btn.onclick = () => this.switchView(this.view === 'finals' ? 'proofs' : 'finals');
                 } else {
@@ -384,7 +419,6 @@
                 title: this.projectTitle,
                 studio: { name: studio.name || '', hasLogo: !!studio.has_logo, logoUrl: this.logoUrl() },
                 drive: driveManager,
-                onShare: () => this.shareLink(),
                 onDownload: (e, photo) => this.download(e, photo),
                 onFolder: folder => this.app && this.app.handleLoadPhotos(folder),
                 ...(cp ? { hero: false, theme: 'light' } : {}),
@@ -558,7 +592,9 @@
             if (!window.AlbumPreview) return;
             const cp = this._completionWanted() && !!window.CompletionPage && CompletionPage.isMounted();
             AlbumPreview.syncEntry({
-                show: this.mode === 'delivered' && this.view === 'finals' && this.finalFolders.length > 0 && (!cp || CompletionPage.shopSettled()),
+                // only on the 完成頁 (the client confirmed), once the shop has answered so the spread bounds are
+                // already set; never on the 驗收頁 (Tim 2026-10-15: the album comes after 確認完成)
+                show: cp && this.mode === 'delivered' && this.view === 'finals' && this.finalFolders.length > 0 && CompletionPage.shopSettled(),
                 // the gallery's last row: the entry is the last thing on the page (on the 完成頁: in its own
                 // album section, once the shop has answered so the spread bounds are already set)
                 after: cp ? CompletionPage.albumAnchor() : ((this._finalsOn() && FinalsGallery.afterEl()) || document.getElementById('deliveryDone')),
@@ -955,8 +991,35 @@
         },
 
         // ── lifecycle ─────────────────────────────────────────────────────
+        // A guest opening the link waits on the state read and the first photo listing: say so (a spinner over the
+        // page) instead of a blank screen. Gone as soon as that wait ends, whatever it ended in: the page, the claim
+        // overlay or the fatal error (finally), so it can never spin forever.
+        _boot(on) {
+            const id = 'guestBoot';
+            const old = document.getElementById(id);
+            if (!on) { old?.remove(); return; }
+            if (old) return;
+            const box = document.createElement('div');
+            box.id = id;
+            box.className = 'guest-boot';
+            box.setAttribute('role', 'status');
+            const ring = document.createElement('div');
+            ring.className = 'spinner';
+            const msg = document.createElement('p');
+            msg.textContent = '載入中…';
+            box.append(ring, msg);
+            document.body.appendChild(box);
+        },
+
         async start(app) {
+            this._boot(true);
+            try { await this._start(app); } finally { this._boot(false); }
+        },
+
+        async _start(app) {
             this.app = app;
+            document.getElementById('diagLink')?.remove();   // no 系統自檢 wording on a client's page
+            document.body.classList.add('pick-guest');
             if (typeof CONFIG !== 'undefined') CONFIG.SHARE_TOKEN = this.token;
             this._hideStudioOnlyUI();
             this._removeSourceControls();

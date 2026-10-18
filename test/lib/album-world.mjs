@@ -71,7 +71,9 @@ export function albumWorld(o = {}) {
   const files = o.files || albKeys(o.n ?? 48, o.sub ?? 0);
   const dup = o.dup || {};                       // index -> index whose picture it repeats
   const idx = new Map(files.map((k, i) => [k, i]));
-  const m = pickFakeWorker(doneOpts({ pickFiles: ['shoot/毛片/a.jpg', ...files], ...(o.fake || {}) }));
+  // confirmed by default: the album entry exists only on the 完成頁 (js/pick.js _renderAlbumEntry); a suite about
+  // the unconfirmed 驗收頁 passes `fake: { confirmedAt: null }`
+  const m = pickFakeWorker(doneOpts({ pickFiles: ['shoot/毛片/a.jpg', ...files], confirmedAt: '2026-09-21T03:00:00.000Z', ...(o.fake || {}) }));
   const log = [];                                // every request the page sent to the Worker
   const assets = [];                             // every request the page sent to the static host
   const ctl = { failImages: false, failList: 0, hold: null, waiting: [], imageHits: 0, corsHits: 0 };

@@ -59,8 +59,9 @@ const state = async (env, t, key) => {
   return res.json();
 };
 // a read through the link, the way an <img> sends it (?t=)
-const read = (env, path, t) => call(env, withT(path, t));
-const readHeader = (env, path, t) => call(env, path, { headers: { 'X-Share-Token': t } });
+// `key`: the seat owner's picker key, a header only (a proof original is the owner's alone: proof-owner-gate.test.mjs)
+const read = (env, path, t, key) => call(env, withT(path, t), key == null ? {} : { headers: { 'X-Picker-Key': key } });
+const readHeader = (env, path, t, key) => call(env, path, { headers: { 'X-Share-Token': t, ...(key == null ? {} : { 'X-Picker-Key': key }) } });
 const enc = k => '/' + k.split('/').map(encodeURIComponent).join('/');
 const listing = (env, prefix, t) => read(env, `/?list=${encodeURIComponent(prefix)}`, t);
 
@@ -99,8 +100,8 @@ async function delivered(env, finals = [FINAL]) {
 
 const setSwitch = (env, on) => env.DB._db.prepare('UPDATE projects SET allow_proof_download = ?').run(on ? 1 : 0);
 
-async function expectStatus(env, t, path, status, body) {
-  for (const res of [await read(env, path, t), await readHeader(env, path, t)]) {
+async function expectStatus(env, t, path, status, body, key) {
+  for (const res of [await read(env, path, t, key), await readHeader(env, path, t, key)]) {
     const text = await res.text();
     assert.equal(res.status, status, `${path} → ${res.status} ${text}`);
     if (body !== undefined) assert.equal(text, body, path);
@@ -413,12 +414,13 @@ test('picking: finals are invisible, even with a finals snapshot sitting on the 
 test('picking with the switch on: proof originals and downloads are served', async () => {
   const env = setup();
   const p = await createProject(env);
+  const owner = (await claim(env, p.token)).key;   // proof originals are the seat owner's (header key)
   setSwitch(env, true);
-  await expectStatus(env, p.token, enc(PA), 200, 'PROOF-A-ORIGINAL');
-  await expectStatus(env, p.token, enc(PSUB), 200, 'PROOF-SUB-ORIGINAL');
+  await expectStatus(env, p.token, enc(PA), 200, 'PROOF-A-ORIGINAL', owner);
+  await expectStatus(env, p.token, enc(PSUB), 200, 'PROOF-SUB-ORIGINAL', owner);
   // no thumbnail: the original is allowed now, so it is the fallback
-  await expectStatus(env, p.token, `${enc('shoot/毛片/b.jpg')}?w=400`, 200, 'PROOF-B-ORIGINAL');
-  const dl = await read(env, `${enc(PA)}?download=1`, p.token);
+  await expectStatus(env, p.token, `${enc('shoot/毛片/b.jpg')}?w=400`, 200, 'PROOF-B-ORIGINAL', owner);
+  const dl = await read(env, `${enc(PA)}?download=1`, p.token, owner);
   assert.equal(dl.status, 200);
   assert.equal(await dl.text(), 'PROOF-A-ORIGINAL');
   assert.match(dl.headers.get('Content-Disposition'), /^attachment;/);
@@ -467,8 +469,8 @@ test('delivered with the switch on: proofs come back, download-only (originals, 
   const p = await delivered(env);
   setSwitch(env, true);
   await expectStatus(env, p.token, `${enc(PA)}?w=400`, 200, 'PROOF-A-400');
-  await expectStatus(env, p.token, enc(PA), 200, 'PROOF-A-ORIGINAL');
-  await expectStatus(env, p.token, `${enc(PA)}?download=1`, 200, 'PROOF-A-ORIGINAL');
+  await expectStatus(env, p.token, enc(PA), 200, 'PROOF-A-ORIGINAL', p.key);
+  await expectStatus(env, p.token, `${enc(PA)}?download=1`, 200, 'PROOF-A-ORIGINAL', p.key);
   assert.equal((await listing(env, PROOF, p.token)).status, 200);
   // and the finals are still there
   await expectStatus(env, p.token, enc(FA), 200, 'FINAL-A-ORIGINAL');
@@ -600,9 +602,9 @@ test('undelivered with the switch on: proof originals come back, the kept finals
   assert.equal((await admin(env, p.id, 'undeliver')).status, 200);
   assert.deepEqual(JSON.parse(one(env, 'SELECT final_folders FROM projects').final_folders), [FINAL]);
   for (const [path] of FINAL_READS) await expectStatus(env, p.token, path, 401);
-  // the switch is what opens the proofs in full, as while picking
-  await expectStatus(env, p.token, enc(PA), 200, 'PROOF-A-ORIGINAL');
-  await expectStatus(env, p.token, `${enc(PA)}?download=1`, 200, 'PROOF-A-ORIGINAL');
+  // the switch is what opens the proofs in full, as while picking (to the seat owner: the key header)
+  await expectStatus(env, p.token, enc(PA), 200, 'PROOF-A-ORIGINAL', p.key);
+  await expectStatus(env, p.token, `${enc(PA)}?download=1`, 200, 'PROOF-A-ORIGINAL', p.key);
   const s = await state(env, p.token, p.key);
   assert.equal(s.mode, 'picking');
   assert.deepEqual(s.final_folders, []);
@@ -651,7 +653,7 @@ test('reopen takes the gallery down: the kept finals are never readable, picking
     for (const [path] of FINAL_READS) await expectStatus(env, p.token, path, 401);
     // the proofs are back as while picking: thumbnails, originals only with the switch
     await expectStatus(env, p.token, `${enc(PA)}?w=400`, 200, 'PROOF-A-400');
-    await expectStatus(env, p.token, enc(PA), on ? 200 : 403);
+    await expectStatus(env, p.token, enc(PA), on ? 200 : 403, undefined, p.key);
     for (const key of [p.key, undefined, 'not-a-key']) {
       const s = await state(env, p.token, key);
       assert.equal(s.mode, 'picking', `switch ${on}`);
@@ -773,12 +775,13 @@ test("another project's link never reads this project's finals, and vice versa",
   const env = setup();
   const p = await delivered(env);
   const q = await createProject(env, ['other/']);
+  const qKey = (await claim(env, q.token)).key;
   setSwitch(env, true);
   for (const path of [enc(FA), `${enc(FA)}?w=400`, `${enc(FA)}?download=1`, enc(PA), `/?list=${encodeURIComponent(FINAL)}`]) {
     await expectStatus(env, q.token, path, 401);
   }
   // q, undelivered with the switch on, reads its own proofs in full
-  await expectStatus(env, q.token, enc('other/x.jpg'), 200, 'OTHER-SHOOT');
+  await expectStatus(env, q.token, enc('other/x.jpg'), 200, 'OTHER-SHOOT', qKey);
   await expectStatus(env, p.token, enc('other/x.jpg'), 401);
 });
 

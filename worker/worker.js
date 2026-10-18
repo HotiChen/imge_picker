@@ -8067,6 +8067,8 @@ async function routeRequest(request, env, ctx) {
       // whether the original (full resolution) may be served; only a pick
       // link is ever told no
       let original = true;
+      // the answer depended on X-Picker-Key (a proof original): it goes into Vary
+      let ownerKeyed = false;
       const source = sourceKey(key);
       const isThumb = source !== key;
       // ?download=1: the original as an attachment. Never a thumbnail.
@@ -8088,6 +8090,14 @@ async function routeRequest(request, env, ctx) {
           const scope = pickReadScope(s);
           if (!pickKeyAllowed({ folders: scope.preview }, source)) return jsonErr('Unauthorized', 401);
           original = pickKeyAllowed({ folders: scope.full }, source);
+          // A proof original (not a final) is the seat owner's alone, even with the switch on: the key rides in
+          // the X-Picker-Key header only (an <img> or a plain link cannot send it, so those never get one).
+          // A viewer, a collaborator or anyone without the key keeps the thumbnails; the finals are unchanged.
+          if (original && !pickKeyAllowed({ folders: scope.finals }, source)) {
+            const seat = request.headers.get('X-Picker-Key') ? await resolvePick(s, request, env) : null;
+            original = !!seat && seat.isOwner;
+            ownerKeyed = true;
+          }
         } else if (!(isStudioShare(s) || shareCovers(s, source))) {
           return jsonErr('Unauthorized', 401);
         }
@@ -8152,7 +8162,7 @@ async function routeRequest(request, env, ctx) {
         // form because the credential is in the query string, the admin form
         // because there is no credential in the URL to tell the two apart by.
         headers.set('Cache-Control', 'private, max-age=86400, stale-while-revalidate=604800');
-        headers.set('Vary', viaShare ? 'X-Share-Token' : 'Authorization');
+        headers.set('Vary', viaShare ? (ownerKeyed ? 'X-Share-Token, X-Picker-Key' : 'X-Share-Token') : 'Authorization');
         if (download) headers.set('Content-Disposition', attachmentDisposition(key));
 
         // onlyIf failed the precondition → R2 returns metadata with no body

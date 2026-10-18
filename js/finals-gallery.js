@@ -102,7 +102,7 @@
 
         // Build (or refresh) the shell: hero, the rows host. `host` is the page's
         // content column; `cfg` = { title, studio: {name, hasLogo, logoUrl}, drive,
-        // onShare(), onDownload(e, photo), onFolder(path), hero?: false, theme?: 'light' }.
+        // onDownload(e, photo), onFolder(path), hero?: false, theme?: 'light' }.
         mount(host, cfg) {
             this.ctx = cfg;
             if (this.root && this.root.isConnected) {
@@ -116,10 +116,10 @@
             const media = el('div', 'fg-hero-media');
             const shade = el('div', 'fg-hero-shade');
             const body = el('div', 'fg-hero-body');
-            const share = btn('fgShare', 'fg-share', '分享', '分享這個相簿');
-            share.addEventListener('click', () => { if (this.ctx && this.ctx.onShare) this.ctx.onShare(); });
+            // no share button here: this is the 驗收頁, the album is not final yet. Sharing lives on the
+            // 完成頁 (js/completion-page.js, cpShare), which only a confirmed delivery reaches.
             body.append(el('h1', 'fg-title', null, 'fgTitle'), el('div', 'fg-count', null, 'fgCount'));
-            hero.append(media, shade, body, share);
+            hero.append(media, shade, body);
             const rows = el('div', 'fg-rows', null, 'fgRows');
             // hero: false: the hero stays a detached element (the code below keeps writing to it,
             // harmlessly) and never reaches the page

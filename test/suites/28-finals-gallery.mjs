@@ -109,7 +109,7 @@ const fgW = r => new URLSearchParams(r.search).get('w');
 const fgName = r => decodeURIComponent(r.path).split('/').pop();
 const fgRowsOk = (g, tol = 1.5) => g.rows.slice(0, -1).every(r => Math.abs(r.span - g.W) <= tol && Math.max(...r.hs) - Math.min(...r.hs) <= 1);
 
-// ── 1. desktop: hero, justified rows, order, buckets, the album entry last
+// ── 1. desktop: hero, justified rows, order, buckets (no album entry: that is the 完成頁's)
 {
   const files = fgFiles(40);
   const m = fgWorld(files);
@@ -134,7 +134,7 @@ const fgRowsOk = (g, tol = 1.5) => g.rows.slice(0, -1).every(r => Math.abs(r.spa
       ok('one gallery with a hero: the project title and the studio name + logo', dom.galleries === 1 && dom.hero && dom.title === '婚禮精修' && dom.studio === '光影工作室' && /\/api\/pick\/logo\?t=TOK$/.test(dom.logo || ''), JSON.stringify(dom));
       ok('the cover is the first final in gallery order, as a ?w= bucket through the token', dom.coverKey === files[0] && /\?w=(1200|1600)&t=TOK$/.test(dom.cover || '') && dom.cover.includes(encodeURI(files[0])), dom.cover);
       ok('the old card grid was never built (no .photo-card) and is not shown; no sidebar', dom.oldCards === 0 && dom.oldGrid === 'none' && dom.sidebar === 'none' && dom.bodyCls, JSON.stringify(dom));
-      ok('a share button; no folder chips for one folder', dom.share && !dom.chips);
+      ok('no share button on the 驗收頁 (sharing is the 完成頁\'s); no folder chips for one folder', !dom.share && !dom.chips);
       ok('the hero is tall but leaves the first row on screen', dom.heroH >= 240 && dom.heroH <= 560, dom.heroH);
       const g = await fgGeom(page);
       ok('no horizontal scroll', g.sw <= g.iw, JSON.stringify([g.sw, g.iw]));
@@ -160,13 +160,9 @@ const fgRowsOk = (g, tol = 1.5) => g.rows.slice(0, -1).every(r => Math.abs(r.spa
         reqs.every(r => ['400', '1200', '1600'].includes(fgW(r)) && !r.search.includes('download')), JSON.stringify(reqs.filter(r => !['400', '1200', '1600'].includes(fgW(r))).slice(0, 3)));
       ok('1280px / DPR1: tiles ask the 400 bucket, only the cover a big one', reqs.filter(r => fgW(r) !== '400').every(r => fgName(r) === 'f001.jpg') && reqs.some(r => fgW(r) === '400'), JSON.stringify(reqs.filter(r => fgW(r) !== '400').map(r => r.path + r.search)));
       ok('nothing of the proofs was read', !m.requests.some(r => decodeURIComponent(r.path).includes('毛片') || decodeURIComponent(r.search).includes('毛片')));
-      // the album entry: inside the gallery, after the rows, below the last tile
-      const e = await page.evaluate(() => {
-        const entry = document.getElementById('albumPreviewEntry'), rows = document.getElementById('fgRows');
-        const lastTile = [...rows.querySelectorAll('.fg-tile')].pop().getBoundingClientRect();
-        return { inside: !!entry && !!entry.closest('#finalsGallery'), prev: entry?.previousElementSibling?.id, top: entry?.getBoundingClientRect().top, lastB: lastTile.bottom, n: document.querySelectorAll('#albumPreviewEntry').length };
-      });
-      ok('the 相本預覽 entry is the last thing: right after #fgRows, below the last photo, once', e.inside && e.prev === 'fgRows' && e.top >= e.lastB - 0.5 && e.n === 1, JSON.stringify(e));
+      // the album entry belongs to the 完成頁 (after 確認完成): none on this 驗收頁, and the rows are the last thing
+      const e = await page.evaluate(() => ({ entry: document.querySelectorAll('#albumPreviewEntry').length, btn: document.querySelectorAll('#albumPreviewBtn').length, rows: !!document.getElementById('fgRows') }));
+      ok('no 相本預覽 entry here (it is on the 完成頁 only); control: the rows are there', e.rows && e.entry === 0 && e.btn === 0, JSON.stringify(e));
       if (process.env.SHOTS) {
         await page.evaluate(() => window.scrollTo(0, 0));
         await page.screenshot({ path: `${process.env.SHOTS}/desktop-top.png` });
@@ -174,13 +170,6 @@ const fgRowsOk = (g, tol = 1.5) => g.rows.slice(0, -1).every(r => Math.abs(r.spa
         await page.waitForTimeout(300);
         await page.screenshot({ path: `${process.env.SHOTS}/desktop-bottom.png` });
       }
-      await page.evaluate(() => document.getElementById('albumPreviewBtn').scrollIntoView());
-      await page.click('#albumPreviewBtn');
-      await page.waitForSelector('#albumViewer', { timeout: 5000 });
-      ok('pressing it still opens the album viewer', true);
-      await page.click('#albumClose');
-      await page.waitForFunction(() => !document.getElementById('albumViewer'), null, { timeout: 3000 });
-      ok('✕ closes it and the focus is back on the entry button', await page.evaluate(() => document.activeElement?.id === 'albumPreviewBtn'));
       return out;
     },
     { before: m.attach, initScript: FG_OWNER, contextOptions: FG_DESK });
@@ -217,12 +206,12 @@ const fgRowsOk = (g, tol = 1.5) => g.rows.slice(0, -1).every(r => Math.abs(r.spa
       ok('its buttons are still there, tappable (>= 40px) and inside the phone', p.doneBtns.length === 2 && p.doneBtns.every(([, h, inside]) => h >= 40 && inside), JSON.stringify(p.doneBtns));
       ok('no delivery bar taking room when the proofs switch is off', p.bar.h === 0, JSON.stringify(p.bar));
       ok('the hero fits the phone: shorter than 62% of the screen, and the long title stays inside', p.hero.h <= p.vh * 0.62 && p.title.r <= 390 + 0.5 && p.title.l >= 0, JSON.stringify([p.hero, p.title]));
-      ok('the share button is inside the screen and tappable', p.share && p.share.l >= 0 && p.share.r <= 390 + 0.5 && p.share.h >= 40, JSON.stringify(p.share));
+      ok('no share button on the 驗收頁', p.share === null, JSON.stringify(p.share));
       ok('390px / DPR3: the cover is a 1200 bucket', /\?w=1200&t=TOK$/.test(p.cover || ''), p.cover);
       const reqs = fgReqs(m).filter(r => decodeURIComponent(r.path).includes('精修'));
       ok('tiles on a DPR3 phone ask the 1200 bucket (still never an original)', reqs.length >= 10 && reqs.every(r => fgW(r) === '1200' && !r.search.includes('download')), JSON.stringify(reqs.slice(0, 2)));
-      const e = await page.evaluate(() => ({ prev: document.getElementById('albumPreviewEntry')?.previousElementSibling?.id, h: document.getElementById('albumPreviewBtn')?.getBoundingClientRect().height }));
-      ok('the album entry is last and tappable', e.prev === 'fgRows' && e.h >= 44, JSON.stringify(e));
+      const e = await page.evaluate(() => ({ entry: document.querySelectorAll('#albumPreviewEntry').length, rows: !!document.getElementById('fgRows') }));
+      ok('no album entry here; control: the rows are there', e.rows && e.entry === 0, JSON.stringify(e));
       if (process.env.SHOTS) {
         await page.evaluate(() => window.scrollTo(0, 0));
         await page.screenshot({ path: `${process.env.SHOTS}/phone-top.png` });
@@ -284,7 +273,7 @@ for (const [name, opts] of [
       await fgReady(page, 6);
       const t = await page.evaluate(() => ({ g: document.querySelectorAll('#finalsGallery').length, hero: document.querySelectorAll('#fgHero').length, share: document.querySelectorAll('#fgShare').length,
         entry: document.querySelectorAll('#albumPreviewEntry').length, cards: document.querySelectorAll('.photo-card').length, tiles: document.querySelectorAll('.fg-tile').length }));
-      ok('back on the finals: one gallery, one hero, one share, one entry, 6 tiles, no cards', t.g === 1 && t.hero === 1 && t.share === 1 && t.entry === 1 && t.tiles === 6 && t.cards === 0, JSON.stringify(t));
+      ok('back on the finals: one gallery, one hero, no share, no entry, 6 tiles, no cards', t.g === 1 && t.hero === 1 && t.share === 0 && t.entry === 0 && t.tiles === 6 && t.cards === 0, JSON.stringify(t));
       return out;
     },
     { before: m.attach, initScript: FG_OWNER, contextOptions: FG_DESK });
@@ -555,7 +544,7 @@ for (const [name, opts] of [
       ok('the cover did not change (it is the first photo of the first folder)', (await page.$eval('#fgCover', i => i.src)) === cover && (await page.$eval('#fgCover', i => i.dataset.photoId)) === 'shoot/精修/f001.jpg');
       ok('the folder was listed through the token like any other read', listed(m).includes('shoot/精修二/'));
       const g = await fgGeom(page);
-      ok('rows are right for the second folder, and the entry still follows them', fgRowsOk(g) && (await page.$eval('#albumPreviewEntry', e => e.previousElementSibling.id)) === 'fgRows');
+      ok('rows are right for the second folder, and there is still no album entry', fgRowsOk(g) && (await page.$('#albumPreviewEntry')) === null);
       if (process.env.SHOTS) { await page.waitForTimeout(800); await page.screenshot({ path: `${process.env.SHOTS}/desktop-chips.png` }); }
       await page.click('#fgChips .fg-chip[data-folder="shoot/精修/"]');
       await fgReady(page, 6);
@@ -635,99 +624,7 @@ for (const [label, co, init] of [['owner 1280px', FG_DESK, FG_OWNER], ['viewer 3
     { before: m.attach, initScript: init, contextOptions: co });
 }
 
-// ── 11. share: the link only, never the owner's key
-const FG_SHARE_URL = `${base}/index.html?t=TOK`;
-const FG_DIRTY = `${base}/index.html?t=TOK&k=ZOE-KEY&owner_key=ZOE-KEY&utm=x#h=ZOE-KEY`;
-const fgShareInit = (mode, who = 'owner') => `
-  ${who === 'owner' ? `localStorage.setItem('pick_key:TOK', 'ZOE-KEY'); sessionStorage.setItem('picker_key', 'ZOE-KEY'); localStorage.setItem('h', 'ZOE-KEY');` : ''}
-  window.__shared = []; window.__copied = []; window.__exec = [];
-  const def = (o, k, v) => Object.defineProperty(o, k, { value: v, configurable: true, writable: true });
-  ${mode === 'share' ? `def(navigator, 'share', async d => { window.__shared.push(d); });` : ''}
-  ${mode === 'cancel' ? `def(navigator, 'share', async d => { window.__shared.push(d); throw new DOMException('cancelled', 'AbortError'); });` : ''}
-  ${mode === 'sharefail' ? `def(navigator, 'share', async d => { window.__shared.push(d); throw new DOMException('no', 'NotAllowedError'); });` : ''}
-  ${['copy', 'sharefail'].includes(mode) ? `def(navigator, 'clipboard', { writeText: async t => { window.__copied.push(t); } });` : ''}
-  ${mode === 'execcopy' ? `def(navigator, 'clipboard', { writeText: async () => { throw new Error('denied'); } }); document.execCommand = c => { window.__exec.push([c, document.activeElement && document.activeElement.value]); return true; };` : ''}
-  ${mode === 'nocopy' ? `def(navigator, 'clipboard', { writeText: async () => { throw new Error('denied'); } }); document.execCommand = () => false;` : ''}
-  ${['copy', 'execcopy', 'nocopy'].includes(mode) ? `def(navigator, 'share', undefined);` : ''}
-`;
-for (const [name, mode, who, expectKey] of [
-  ['Web Share API (owner, a dirty URL with the key in it)', 'share', 'owner', true],
-  ['no Web Share: copied to the clipboard + a toast (owner, dirty URL)', 'copy', 'owner', true],
-  ['no clipboard permission: the textarea + execCommand fallback copies (owner, dirty URL)', 'execcopy', 'owner', true],
-  ['a viewer (no key anywhere) shares the same clean link', 'share', 'viewer', false],
-]) {
-  const m = fgWorld(fgFiles(6));
-  await suite(`finals gallery share — ${name}`,
-    expectKey ? FG_DIRTY : FG_SHARE_URL,
-    async page => {
-      const out = [];
-      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
-      await fgReady(page, 6);
-      if (expectKey) {
-        const leak = await page.evaluate(() => ({ href: location.href, store: localStorage.getItem('pick_key:TOK') }));
-        ok('control: the page\'s own URL and storage DO carry the key (so a naive share would leak it)', leak.href.includes('ZOE-KEY') && leak.store === 'ZOE-KEY', JSON.stringify(leak));
-      }
-      await page.click('#fgShare');
-      await page.waitForTimeout(250);
-      const r = await page.evaluate(() => ({ shared: window.__shared, copied: window.__copied, exec: window.__exec, toast: document.querySelector('.toast.success .toast-message')?.textContent || null, err: document.querySelector('.toast.error') !== null }));
-      const sent = mode === 'share' ? r.shared[0]?.url : mode === 'copy' ? r.copied[0] : r.exec[0]?.[1];
-      ok('the link that went out is exactly origin + path + ?t=<token>', sent === FG_SHARE_URL, JSON.stringify(r));
-      ok('nothing that went out carries the owner key, an extra query or a hash', !JSON.stringify(r).includes('ZOE-KEY') && !/owner_key|utm|#|[?&]k=/.test(sent || ''), JSON.stringify(r));
-      if (mode === 'share') ok('the share sheet gets the project title and exactly one url', r.shared.length === 1 && r.shared[0].title === '婚禮精修' && r.copied.length === 0 && r.toast === null, JSON.stringify(r));
-      if (mode === 'copy') ok('copied once, and the toast says 已複製連結', r.copied.length === 1 && r.toast === '已複製連結', JSON.stringify(r));
-      if (mode === 'execcopy') ok('copy command ran once on the textarea holding the link, the toast says 已複製連結, no textarea left behind', r.exec.length === 1 && r.exec[0][0] === 'copy' && r.toast === '已複製連結' && (await page.$('textarea[data-fg-copy]')) === null, JSON.stringify(r));
-      return out;
-    },
-    { before: m.attach, initScript: fgShareInit(mode, who), contextOptions: FG_DESK });
-}
-{
-  const m = fgWorld(fgFiles(6));
-  await suite('finals gallery share — cancelling the share sheet is silent; a failing share sheet falls back to the clipboard; no way to copy says so',
-    `${base}/index.html?t=TOK`,
-    async page => {
-      const out = [];
-      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
-      await fgReady(page, 6);
-      await page.click('#fgShare');
-      await page.waitForTimeout(250);
-      const r = await page.evaluate(() => ({ shared: window.__shared.length, copied: window.__copied.length, toasts: document.querySelectorAll('.toast').length }));
-      ok('AbortError (the guest closed the sheet): the sheet was asked once, nothing copied, no toast at all', r.shared === 1 && r.copied === 0 && r.toasts === 0, JSON.stringify(r));
-      return out;
-    },
-    { before: m.attach, initScript: fgShareInit('cancel'), contextOptions: FG_DESK });
-}
-{
-  const m = fgWorld(fgFiles(6));
-  await suite('finals gallery share — a share sheet that fails (not a cancel) falls back to copying the same clean link',
-    `${base}/index.html?t=TOK`,
-    async page => {
-      const out = [];
-      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
-      await fgReady(page, 6);
-      await page.click('#fgShare');
-      await page.waitForSelector('.toast.success', { timeout: 3000 });
-      const r = await page.evaluate(() => ({ shared: window.__shared.length, copied: window.__copied, toast: document.querySelector('.toast.success .toast-message')?.textContent }));
-      ok('asked the sheet once, then copied the clean link and said so', r.shared === 1 && JSON.stringify(r.copied) === JSON.stringify([FG_SHARE_URL]) && r.toast === '已複製連結', JSON.stringify(r));
-      return out;
-    },
-    { before: m.attach, initScript: fgShareInit('sharefail'), contextOptions: FG_DESK });
-}
-{
-  const m = fgWorld(fgFiles(6));
-  await suite('finals gallery share — nothing can copy: a plain error toast, no crash',
-    `${base}/index.html?t=TOK`,
-    async page => {
-      const out = [];
-      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
-      await fgReady(page, 6);
-      await page.click('#fgShare');
-      await page.waitForSelector('.toast.error', { timeout: 3000 });
-      ok('says 無法複製連結', (await page.textContent('.toast.error .toast-message')) === '無法複製連結');
-      ok('no textarea left behind', (await page.$('textarea[data-fg-copy]')) === null);
-      return out;
-    },
-    { before: m.attach, initScript: fgShareInit('nocopy'), contextOptions: FG_DESK });
-}
+// ── 11. (the share tests moved with the button: test/suites/85-share-on-completion-page.mjs)
 
 // ── 12. outside strings are text: file names, folder names, title, studio name
 {

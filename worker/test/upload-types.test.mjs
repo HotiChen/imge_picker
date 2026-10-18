@@ -28,6 +28,7 @@ import assert from 'node:assert/strict';
 import worker from '../worker.js';
 import { ctx, req } from './fakes.mjs';
 import { setup, PROOF, PA, SECRET, call } from './revision-helpers.mjs';
+import { claim } from './pick-helpers.mjs';
 import { seedPhotographer, snapshot, ROUTES_ON } from './tenant-helpers.mjs';
 
 const CSP = "default-src 'none'; sandbox";
@@ -355,7 +356,8 @@ test('serving through a pick link: the delivered preview and the original carry 
   }
   // proofs downloadable: the original too
   w.env.DB._db.prepare('UPDATE projects SET allow_proof_download = 1 WHERE id = ?').run(project.id);
-  const o = await call(w.env, `/${encodeURIComponent('shoot/毛片/evil.svg')}?t=${encodeURIComponent(token)}`);
+  const owner = (await claim(w.env, token)).key;   // a proof original is the seat owner's alone (header key)
+  const o = await call(w.env, `/${encodeURIComponent('shoot/毛片/evil.svg')}?t=${encodeURIComponent(token)}`, { headers: { 'X-Picker-Key': owner } });
   assert.equal(o.status, 200);
   assertHardened(o, 'shoot/毛片/evil.svg', 'pick original');
 });

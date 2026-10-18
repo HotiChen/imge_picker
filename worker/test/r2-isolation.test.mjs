@@ -56,8 +56,8 @@ const at = (who, key) => (who.id === 'default' ? key : `_t/${who.id}/${key}`);
 const stored = (env, key) => env.imagepicker._store.get(key)?.body;
 const keysOf = env => [...env.imagepicker._store.keys()].sort();
 
-const read = async (env, path, token) => {
-  const res = await call(env, path, { token });
+const read = async (env, path, token, key) => {
+  const res = await call(env, path, { token, headers: key == null ? {} : { 'X-Picker-Key': key } });
   return { status: res.status, text: await res.text(), res };
 };
 const list = async (env, prefix, token, link) => {
@@ -372,18 +372,20 @@ test('a guest link of B\'s project reads B\'s prefix only — never the default\
     assert.equal(res.status, 200, who.tag);
   }
   assert.equal(one(w.env, 'SELECT photographer_id FROM projects WHERE id = ?', b.id).photographer_id, w.B.id);
+  // a proof original is the seat owner's (header key): the two seats are taken
+  const bKey = (await claim(w.env, b.token)).key, aKey = (await claim(w.env, a.token)).key;
   const r = await list(w.env, PROOF, undefined, b.token);
   assert.equal(r.status, 200);
   assert.deepEqual(r.body.data.map(f => f.id).sort(), [`${PROOF}B-only.jpg`, PA, PB].sort());
-  assert.equal((await read(w.env, `/${PA}?t=${t(b.token)}`)).text, 'B:PA-ORIG');
+  assert.equal((await read(w.env, `/${PA}?t=${t(b.token)}`, undefined, bKey)).text, 'B:PA-ORIG');
   assert.equal((await read(w.env, `/${PA}?w=400&t=${t(b.token)}`)).text, 'B:PA-T400');
-  assert.equal((await read(w.env, `/${PA}?t=${t(a.token)}`)).text, 'PA-ORIG', 'the default\'s link: the default\'s bytes');
+  assert.equal((await read(w.env, `/${PA}?t=${t(a.token)}`, undefined, aKey)).text, 'PA-ORIG', 'the default\'s link: the default\'s bytes');
   assert.equal((await list(w.env, PROOF, undefined, a.token)).body.data.length, 2);
   // B's object gone: 404, not a fall back to the default's same key
   w.env.imagepicker._store.delete(`_t/${w.B.id}/${PA}`);
   w.env.imagepicker._store.delete(`_t/${w.B.id}/_thumbs/400/${PA}.thumb`);
   w.env.imagepicker._store.delete(`_t/${w.B.id}/_thumbs/1200/${PA}.thumb`);
-  assert.equal((await read(w.env, `/${PA}?t=${t(b.token)}`)).status, 404);
+  assert.equal((await read(w.env, `/${PA}?t=${t(b.token)}`, undefined, bKey)).status, 404);
   assert.equal((await read(w.env, `/${PA}?w=400&t=${t(b.token)}`)).status, 404);
   // and a link never reads a `_t/` key at all
   assert.equal((await read(w.env, `/_t/${w.C.id}/${PA}?t=${t(b.token)}`)).status, 401);
@@ -393,14 +395,15 @@ test('a guest link takes the photographer from its project, not from the request
   const w = await world();
   const b = await project(w, w.B);
   assert.equal((await call(w.env, `/api/admin/projects/${b.id}`, { method: 'PATCH', token: w.B.token, body: { allow_proof_download: true } })).status, 200);
+  const bKey = (await claim(w.env, b.token)).key;   // a proof original is the seat owner's (header key)
   // a photographer token riding along does not move the link to its own prefix
   for (const hdr of [{ 'X-Photographer-Id': 'default' }, { 'X-Photographer-Id': w.C.id }]) {
-    const res = await call(w.env, `/${PA}?t=${t(b.token)}&photographer_id=default`, { headers: hdr });
+    const res = await call(w.env, `/${PA}?t=${t(b.token)}&photographer_id=default`, { headers: { ...hdr, 'X-Picker-Key': bKey } });
     assert.equal(await res.text(), 'B:PA-ORIG');
   }
   // the project handed to C (as the operator might, by hand): the link now reads C's
   w.env.DB._db.prepare('UPDATE projects SET photographer_id = ? WHERE id = ?').run(w.C.id, b.id);
-  assert.equal((await read(w.env, `/${PA}?t=${t(b.token)}`)).text, 'C:PA-ORIG');
+  assert.equal((await read(w.env, `/${PA}?t=${t(b.token)}`, undefined, bKey)).text, 'C:PA-ORIG');
 });
 
 // ─── delivery: the finals gate for a non-default project ───────────────────

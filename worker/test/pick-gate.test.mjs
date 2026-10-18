@@ -6,7 +6,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  SECRET, MINE, setup, call, pick, createProject, claimed, save, rows, seedToken, withT,
+  SECRET, MINE, setup, call, pick, createProject, claim, claimed, save, rows, seedToken, withT,
 } from './pick-helpers.mjs';
 
 // every non-pick route, as [method, path, body?]
@@ -96,6 +96,7 @@ test('the pick routes refuse every token that is not a pick token', async () => 
 test('a pick token reads thumbnails and listings inside its folders; originals only with the switch (docs/delivery.md)', async () => {
   const env = setup();
   const { token } = await createProject(env);
+  const owner = (await claim(env, token)).key;   // a proof original is the seat owner's alone (header key)
   await env.imagepicker.put('_thumbs/400/20260819/sub/d.jpg.thumb', 'MINE-SUB-D-THUMB');
   for (const path of ['/20260819/sub/d.jpg?w=400', '/_thumbs/400/20260819/a.jpg.thumb', '/20260819/a.jpg?w=400']) {
     const res = await call(env, withT(path, token));
@@ -109,9 +110,11 @@ test('a pick token reads thumbnails and listings inside its folders; originals o
   }
   env.DB._db.prepare('UPDATE projects SET allow_proof_download = 1').run();
   for (const [path, body] of [['/20260819/a.jpg', 'MINE-A'], ['/20260819/sub/d.jpg', 'MINE-SUB-D']]) {
-    const res = await call(env, withT(path, token));
+    const res = await call(env, withT(path, token), { headers: { 'X-Picker-Key': owner } });
     assert.equal(res.status, 200, path);
     assert.equal(await res.text(), body);
+    // the same link without the owner's key is still refused
+    assert.equal((await call(env, withT(path, token))).status, 403, path);
   }
   const list = await call(env, withT(`/?list=${encodeURIComponent(MINE)}`, token));
   assert.equal(list.status, 200);

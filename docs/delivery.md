@@ -68,8 +68,20 @@ separated before he can run real shoots through the studio.
   button in preview) and after delivery (a secondary 「下載毛片原檔」 entry
   that lists the proofs for download only — no picking). When off, proofs
   are never served at full resolution to a guest (today's behaviour).
-- Owner and viewers of the link see the same gallery; downloads are allowed
+- Owner and viewers of the link see the same gallery; **finals** downloads are allowed
   for both (the link is what the photographer shared).
+- **Proof originals are the seat owner's alone** (Tim 2026-10-15, "我不是主人，不應該讓我下載").
+  With the switch on, only the picker whose key is the project's owner seat may read a proof
+  original or download it; a viewer, a collaborator, a key from before a seat reset or no key
+  gets 403 `original_not_allowed` (and a 404 for a proof with no thumbnail, never the original).
+  Thumbnails and the proof listing stay as for everyone. The key rides in the `X-Picker-Key`
+  header only (a link or `<img>` cannot send it, so the owner's single download is a fetch that
+  saves the bytes: `js/pick.js` `_downloadKeyed`); such a response varies on `X-Picker-Key`.
+  Tests: `worker/test/proof-owner-gate.test.mjs`. The 毛片 view's button is 「回到毛片」 and
+  reads the proofs as thumbnails; the download buttons exist for the owner only.
+- **The 驗收頁 strip** (`#deliveryStrip`): the 回到毛片 button and the status block share one row
+  and stay under the 56px header while scrolling (`position: sticky`). No share button here: sharing
+  and the album preview belong to the 完成頁 (after 確認完成).
 - The shop (guest add-ons, B) and the album chain later hang off the
   delivery gallery, not the picking view.
 

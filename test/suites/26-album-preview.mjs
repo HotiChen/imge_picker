@@ -27,62 +27,62 @@ const albExpected = (page, ids) => page.evaluate(async ids => {
 }, ids);
 const albEngineLoads = world => world.assets.filter(p => /\/book_editor\/js\/(layouts|spread_templates|auto_layout)\.js/.test(p));
 
-// ── 1. the entry: delivered only, beside (never over) the confirmation block
+// ── 1. the entry: on the 完成頁 only (a delivered project the client CONFIRMED). Tim 2026-10-15: the album comes
+//    after 確認完成, so the unconfirmed 驗收頁 must not offer it at all.
 for (const [label, co, init] of [['owner 1280px', ALB_DESK, ALB_OWNER], ['viewer 390px', MOBILE, ALB_VIEWER]]) {
-  const w = albumWorld({ n: 6, fake: { allowProofDownload: true } });
-  // REWRITTEN with the finals gallery: the entry now sits under the last row (the last thing on the page),
-  // no longer right under the 確認完成 block — that block is a thin strip at the top.
-  await suite(`album preview entry ${label} — delivered gallery has it, under the last row, nothing loaded yet`,
+  const w = albumWorld({ n: 6, fake: { allowProofDownload: true, confirmedAt: null } });
+  await suite(`album preview entry ${label} — the unconfirmed 驗收頁 has no entry, nothing loaded or requested for it`,
     `${base}/index.html?t=TOK`,
     async page => {
       const out = [];
       const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
       const owner = label.startsWith('owner');
-      await page.waitForSelector('#albumPreviewBtn', { timeout: 5000 });
       await page.waitForSelector('.fg-tile', { timeout: 5000 });
+      await page.waitForTimeout(600);   // long enough for the shop answer / any late render to have added it
       const g = await page.evaluate(() => {
-        const R = id => { const e = document.getElementById(id); if (!e) return null; const r = e.getBoundingClientRect(); return { l: r.left, t: r.top, r: r.right, b: r.bottom, w: r.width, h: r.height }; };
-        const btn = document.getElementById('albumPreviewBtn');
         const done = document.getElementById('deliveryDone');
-        const lastTile = [...document.querySelectorAll('.fg-tile')].pop().getBoundingClientRect();
-        const cs = getComputedStyle(btn);
-        const buttons = [...done.querySelectorAll('button')].map(b => { const r = b.getBoundingClientRect(); const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2); return { text: b.textContent, hit: hit === b || b.contains(hit) }; });
-        return { entry: R('albumPreviewEntry'), done: R('deliveryDone'), bar: R('deliveryBar'), btn: R('albumPreviewBtn'), text: btn.textContent, disp: cs.display,
-          order: document.getElementById('albumPreviewEntry').previousElementSibling?.id === 'fgRows' && !!document.getElementById('albumPreviewEntry').closest('#finalsGallery') && done.nextElementSibling?.id !== 'albumPreviewEntry',
-          lastTileB: lastTile.bottom,
-          buttons, sw: document.documentElement.scrollWidth, iw: innerWidth,
-          count: document.querySelectorAll('#albumPreviewBtn').length, viewer: !!document.getElementById('albumViewer') };
+        return { tiles: document.querySelectorAll('.fg-tile').length, done: !!done, state: done?.dataset.state,
+          buttons: done ? [...done.querySelectorAll('button')].length : -1, cp: !!document.getElementById('completionPage'),
+          entry: !!document.getElementById('albumPreviewEntry'), btn: !!document.getElementById('albumPreviewBtn'), viewer: !!document.getElementById('albumViewer') };
       });
-      ok('the entry exists, once, with the wording', g.count === 1 && /看看你的照片排成相本/.test(g.text), g.text);
-      ok('one line says it is an automatic sketch the photographer can adjust', /系統自動排版的示意/.test(g.text) && /攝影師/.test(g.text), g.text);
-      ok('it is the last thing on the page: inside the gallery, right after the rows (and no longer next to the 確認完成 block)', g.order);
-      ok('it is shown, tappable size, and inside the viewport width', g.disp !== 'none' && g.btn.h >= 44 && g.btn.l >= 0 && g.btn.r <= g.iw + 0.5, JSON.stringify(g.btn));
-      ok('it sits below the last photo and does not overlap the confirmation block, which is above everything', g.entry.t >= g.lastTileB - 0.5 && g.entry.t >= g.done.b - 0.5 && g.done.t >= g.bar.b - 0.5, JSON.stringify([g.bar, g.done, g.entry, g.lastTileB]));
-      ok(owner ? '確認完成 / 需要修改 are still there and are what a tap hits'
-        : 'a viewer: the status block is there with no buttons, and the entry is still offered', owner
-        ? g.buttons.length === 2 && g.buttons.every(b => b.hit) : g.buttons.length === 0, JSON.stringify(g.buttons));
-      ok('no horizontal scroll', g.sw <= g.iw);
-      ok('the viewer is not in the DOM before the press', !g.viewer);
-      const dark = await page.evaluate(`(() => { const L = ${LUM}; const cs = s => getComputedStyle(document.querySelector(s));
-        return { body: L(cs('body').backgroundColor), entry: L(cs('#albumPreviewBtn').backgroundColor), text: L(cs('#albumPreviewBtn .album-entry-title').color) }; })()`);
-      ok('still the dark client theme (dark entry, light text)', dark.body < 0.2 && dark.entry < 0.3 && dark.text > 0.6, JSON.stringify(dark));
-      // nothing loaded, nothing requested for it
+      // positive controls first: this really is the delivered, unconfirmed page with its gallery
+      ok('control: the 驗收頁 is up with 6 tiles and its status block, not the 完成頁', g.tiles === 6 && g.done && g.state === 'open' && !g.cp, JSON.stringify(g));
+      ok(owner ? 'control: the owner has 確認完成 / 需要修改' : 'control: a viewer has the status block with no buttons', owner ? g.buttons === 2 : g.buttons === 0, JSON.stringify(g));
+      ok('no album entry, no button, no viewer', !g.entry && !g.btn && !g.viewer, JSON.stringify(g));
       const pre = await page.evaluate(() => ({ layouts: typeof LAYOUTS, auto: typeof AutoLayout, fn: typeof renderPageHTML, tpl: typeof SpreadTemplates }));
-      ok('before the press: no layouts.js / spread_templates.js / auto_layout.js requested, no globals', albEngineLoads(w).length === 0 && pre.layouts === 'undefined' && pre.auto === 'undefined' && pre.fn === 'undefined' && pre.tpl === 'undefined', JSON.stringify([albEngineLoads(w), pre]));
+      ok('no layouts.js / spread_templates.js / auto_layout.js requested, no globals', albEngineLoads(w).length === 0 && pre.layouts === 'undefined' && pre.auto === 'undefined' && pre.fn === 'undefined' && pre.tpl === 'undefined', JSON.stringify([albEngineLoads(w), pre]));
       ok('control: the page did ask for its own scripts (the request log works)', w.assets.some(p => /\/js\/pick\.js/.test(p)) && w.assets.some(p => /\/js\/album-preview\.js/.test(p)), w.assets.slice(0, 4).join());
-      ok('before the press: only the gallery\'s own reads — the final folder listing and the cover / tile thumbnails (400 / 1200 / 1600 buckets, never an original)',
-        w.log.every(r => r.method === 'GET' && (r.path === '/api/pick/state' || r.path === '/api/pick/logo' || r.list === 'shoot/精修/' || (['400', '1200', '1600'].includes(r.w) && r.key.startsWith('shoot/精修/') && !r.download))),
-        JSON.stringify(w.log.filter(r => !(r.path === '/api/pick/state' || r.path === '/api/pick/logo' || r.list === 'shoot/精修/' || ['400', '1200', '1600'].includes(r.w)))));
-      await albShot(page, `entry-${label.replace(' ', '-')}`);
-
-      // the proofs view is not the finals: the entry goes, and comes back with them
+      // the proofs view and back: still no entry
       await page.click('#deliveryProofsBtn');
       await page.waitForFunction(() => document.getElementById('deliveryTitle')?.textContent.startsWith('毛片'), null, { timeout: 4000 });
-      ok('in the 下載毛片原檔 view the entry is gone from the DOM', (await page.$('#albumPreviewEntry')) === null && (await page.$('#albumPreviewBtn')) === null);
-      ok('...while the confirmation block is still there (control)', (await page.$('#deliveryDone')) !== null);
       await page.click('#deliveryProofsBtn');
-      await page.waitForSelector('#albumPreviewBtn', { timeout: 4000 });
-      ok('back on the finals the entry is back, once', (await page.$$('#albumPreviewBtn')).length === 1);
+      await page.waitForSelector('.fg-tile', { timeout: 4000 });
+      ok('back on the finals there is still no entry', (await page.$('#albumPreviewEntry')) === null && (await page.$('#albumPreviewBtn')) === null);
+      return out;
+    },
+    { before: w.before, initScript: init, contextOptions: co });
+}
+for (const [label, co, init] of [['owner 1280px', ALB_DESK, ALB_OWNER], ['viewer 390px', MOBILE, ALB_VIEWER]]) {
+  const w = albumWorld({ n: 6, fake: { allowProofDownload: true } });   // confirmed by default
+  await suite(`album preview entry ${label} — the 完成頁 has it once, tappable, nothing loaded yet`,
+    `${base}/index.html?t=TOK`,
+    async page => {
+      const out = [];
+      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+      await page.waitForSelector('#albumPreviewBtn', { timeout: 5000 });
+      const g = await page.evaluate(() => {
+        const btn = document.getElementById('albumPreviewBtn'); const r = btn.getBoundingClientRect(); const cs = getComputedStyle(btn);
+        return { cp: !!document.getElementById('completionPage'), inCp: !!btn.closest('#completionPage'), count: document.querySelectorAll('#albumPreviewBtn').length,
+          text: btn.textContent, disp: cs.display, h: r.height, l: r.left, r: r.right, sw: document.documentElement.scrollWidth, iw: innerWidth,
+          viewer: !!document.getElementById('albumViewer') };
+      });
+      ok('control: this is the 完成頁 and the entry is inside it, once', g.cp && g.inCp && g.count === 1, JSON.stringify(g));
+      ok('with the wording, and one line saying it is an automatic sketch the photographer can adjust', /看看你的照片排成相本/.test(g.text) && /系統自動排版的示意/.test(g.text) && /攝影師/.test(g.text), g.text);
+      ok('shown, tappable size, inside the viewport width, no horizontal scroll', g.disp !== 'none' && g.h >= 44 && g.l >= 0 && g.r <= g.iw + 0.5 && g.sw <= g.iw, JSON.stringify(g));
+      ok('the viewer is not in the DOM before the press', !g.viewer);
+      const pre = await page.evaluate(() => ({ layouts: typeof LAYOUTS, auto: typeof AutoLayout, fn: typeof renderPageHTML, tpl: typeof SpreadTemplates }));
+      ok('before the press: no engine script requested, no globals', albEngineLoads(w).length === 0 && pre.layouts === 'undefined' && pre.auto === 'undefined' && pre.fn === 'undefined' && pre.tpl === 'undefined', JSON.stringify([albEngineLoads(w), pre]));
+      await albShot(page, `entry-${label.replace(' ', '-')}`);
       return out;
     },
     { before: w.before, initScript: init, contextOptions: co });

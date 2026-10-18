@@ -842,6 +842,20 @@ body {
 
 .loading-state p { font-size: 13px; color: var(--ink-55); }
 
+/* The picking page scrolls inside .content, under a header and a status bar that stay put. The footer used to add 41px
+   below the viewport, so a swipe moved the whole page (header and bars with it): none while picking, and no scroll
+   chaining from .content to the page. (The delivered gallery scrolls the page itself and keeps its footer.) */
+body.pick-guest:not(.fg-mode) footer.app-footer { display: none; }
+body.pick-guest .content { overscroll-behavior: contain; }
+
+/* the guest page's first load (js/pick.js _boot): a full-page cover with a spinner until the state and the first photos are in */
+.guest-boot {
+  position: fixed; inset: 0; z-index: 9000;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px;
+  background: var(--bg);
+}
+.guest-boot p { margin: 0; font-size: 13px; color: var(--ink-55); }
+
 /* ── Photo Grid ─────────────────────────────────────── */
 .photo-grid {
   display: grid;
@@ -2233,6 +2247,14 @@ span.pick-heart-btn { cursor: default; }
   font-size: 11px;
   font-family: var(--font-mono);
 }
+
+/* The 驗收頁 strip (Tim 2026-10-15): the 毛片 button and the status block on one row, fixed under the 56px header
+   (position: sticky, so it keeps its place in the page) instead of scrolling away. The gallery's own hero carries
+   the title, so the bar's title is not repeated there. */
+.delivery-strip { position: sticky; top: 56px; z-index: 50; display: flex; flex-wrap: wrap; align-items: stretch; background: var(--surface); }
+.delivery-strip > .delivery-bar { flex: 0 0 auto; }
+.delivery-strip > .delivery-done { flex: 1 1 260px; min-width: 0; }
+body.fg-mode #deliveryTitle { display: none; }
 
 /* Delivery gallery (docs/delivery.md). [hidden] must beat .btn's display. */
 .delivery-bar .pick-banner-line { font-size: 15px; letter-spacing: .04em; }
