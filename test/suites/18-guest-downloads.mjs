@@ -71,8 +71,9 @@ const guestCards = page => page.$$eval('.photo-card', cs => cs.map(c => c.datase
 
       const [dl] = await Promise.all([page.waitForEvent('download', { timeout: 5000 }), page.click('#modalDownloadBtn')]);
       ok('clicking saves the file under the Worker’s Content-Disposition name', dl.suggestedFilename() === 'a.jpg', dl.suggestedFilename());
-      ok('a one-byte Range probe went first, then the real download request',
-        m.requests.some(r => r.path.endsWith('a.jpg') && r.range === 'bytes=0-0') &&
+      // a proof original is the owner's: one keyed fetch that saves the bytes (no one-byte probe + plain link, which could not carry the key)
+      ok('one real download request, no one-byte Range probe (the owner\'s key travels in a header: a fetch)',
+        !m.requests.some(r => r.path.endsWith('a.jpg') && r.range === 'bytes=0-0') &&
         m.requests.filter(r => r.path.endsWith('a.jpg') && r.search.includes('download=1') && !r.range).length >= 1);
 
       // the photographer turns the switch off while this page is open
@@ -91,14 +92,17 @@ const guestCards = page => page.$$eval('.photo-card', cs => cs.map(c => c.datase
 
 {
   const m = pickFakeWorker({ ownerName: 'Zoe', ownerKey: 'ZOE-KEY', folders: ['shoot/毛片/'], pickFiles: GUEST_FILES, allowProofDownload: true });
-  await suite('guest viewer, switch ON — a viewer gets the same download button in the preview',
+  await suite('guest viewer, switch ON — a viewer gets NO proof download button (proof originals are the owner\'s)',
     `${base}/index.html?t=TOK`,
     async page => {
       await page.waitForSelector('.photo-card', { timeout: 5000 });
       await page.click('.photo-card', { position: { x: 5, y: 5 } });
       await page.waitForSelector('#photoModal.active', { timeout: 5000 });
-      const href = await page.$eval('#modalDownloadBtn', e => decodeURI(e.href));
-      return [href === DL('shoot/毛片/a.jpg') ? 'ok    viewer sees the button with the right URL' : `FAIL  ${href}`];
+      // positive controls first: the viewer's page is really up (2 proofs, the modal open), then the three download
+      // entries are absent from the DOM (pick.js removes them for a link that may not download), none shown
+      const s = await page.evaluate(() => ({ cards: document.querySelectorAll('.photo-card').length, modal: !!document.querySelector('#photoModal.active'),
+        anyDownload: !!document.querySelector('#modalDownloadBtn, #previewDownloadBtn, [data-download]') }));
+      return [s.cards === 2 && s.modal && !s.anyDownload ? 'ok    the viewer sees the proofs (modal open) and no download button or link exists' : `FAIL  ${JSON.stringify(s)}`];
     },
     { before: m.attach });
 }
@@ -173,7 +177,7 @@ for (const who of [
 {
   const m = pickFakeWorker({ ownerName: 'Zoe', ownerKey: 'ZOE-KEY', phase: 'retouching', folders: ['shoot/毛片/'], finalFolders: ['shoot/精修/'],
     deliveredAt: '2026-09-20T00:00:00.000Z', pickFiles: GUEST_FILES, allowProofDownload: true });
-  await suite('guest delivered + switch ON — a secondary 下載毛片原檔 lists the proofs, download-only; 回精修成品 comes back',
+  await suite('guest delivered + switch ON — a secondary 回到毛片 lists the proofs, download-only (owner); ← 回精修成品 comes back',
     `${base}/index.html?t=TOK`,
     async page => {
       const out = [];
@@ -183,7 +187,7 @@ for (const who of [
       await page.waitForSelector('.fg-tile', { timeout: 5000 });
       ok('the gallery still opens on the finals', (await finals()).length === 2 && (await finals()).every(k => k.startsWith('shoot/精修/')));
       ok('the proofs were not listed yet', listed(m).every(f => f.startsWith('shoot/精修/')), JSON.stringify(listed(m)));
-      ok('the entry is 下載毛片原檔', (await page.textContent('#deliveryProofsBtn')) === '下載毛片原檔' && !(await page.$eval('#deliveryProofsBtn', e => e.hidden)));
+      ok('the entry is 回到毛片', (await page.textContent('#deliveryProofsBtn')) === '回到毛片' && !(await page.$eval('#deliveryProofsBtn', e => e.hidden)));
       await page.click('#deliveryProofsBtn');
       await page.waitForFunction(() => document.querySelector('.photo-card')?.dataset.photoId.includes('毛片'), null, { timeout: 5000 });
       ok('the proofs are listed (a, b)', JSON.stringify(await guestCards(page)) === '["shoot/毛片/a.jpg","shoot/毛片/b.jpg"]', JSON.stringify(await guestCards(page)));
@@ -194,7 +198,7 @@ for (const who of [
       ok('each proof has a 下載原檔 link',
         JSON.stringify(await page.$$eval('.photo-card [data-download]', as => as.map(a => [decodeURI(a.href), a.textContent]))) ===
         JSON.stringify([[DL('shoot/毛片/a.jpg'), '下載原檔'], [DL('shoot/毛片/b.jpg'), '下載原檔']]));
-      ok('the title says it is the proofs', /毛片原檔/.test(await page.textContent('#deliveryTitle')));
+      ok('the title says it is the proofs: exactly 毛片 · <project title>', (await page.textContent('#deliveryTitle')) === '毛片 · T 專案', await page.textContent('#deliveryTitle'));
       const [dl] = await Promise.all([page.waitForEvent('download', { timeout: 5000 }), page.click('.photo-card [data-download]')]);
       ok('downloading a proof original works (switch on)', dl.suggestedFilename() === 'a.jpg');
       ok('the card click did not also open the preview', (await page.$('#photoModal.active')) === null);
