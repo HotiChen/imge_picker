@@ -2025,11 +2025,26 @@
             const relEl = document.getElementById('pickSubmitRelationship');
             const emailEl = document.getElementById('pickSubmitEmail');
             const errEl = document.getElementById('pickSubmitErr');
+            // the same person submitting again (a second round before the photographer starts): what they chose last time
+            const memo = this._recallSubmit();
             if (nameEl) nameEl.value = this.ownerName || '';
-            if (relEl) relEl.value = '';
-            if (emailEl) emailEl.value = '';
+            if (relEl) relEl.value = memo ? memo.relationship : '';   // a value that is not one of the options reads as 請選擇
+            if (emailEl) emailEl.value = memo ? memo.email : '';
             if (errEl) errEl.textContent = '';
             modal.classList.add('active');
+        },
+        // The submit form's 關係 / Email, kept per link on this device after a submit that went through (never after a
+        // refused one), so a second submit does not ask 與新人的關係 again.
+        _submitMemoKey() { return `pick_submit:${this.token}`; },
+        _recallSubmit() {
+            try {
+                const v = JSON.parse(localStorage.getItem(this._submitMemoKey()) || 'null');
+                if (!v || typeof v !== 'object') return null;
+                return { relationship: typeof v.relationship === 'string' ? v.relationship : '', email: typeof v.email === 'string' ? v.email : '' };
+            } catch (e) { return null; }
+        },
+        _rememberSubmit(relationship, email) {
+            try { localStorage.setItem(this._submitMemoKey(), JSON.stringify({ relationship, email: email || '' })); } catch (e) { /* best effort */ }
         },
         closeSubmitModal() {
             document.getElementById('pickSubmitModal')?.classList.remove('active');
@@ -2074,6 +2089,7 @@
             }
 
             if (ok) {
+                this._rememberSubmit(relationship, email);
                 this.phase = 'submitted';
                 this.modifiedAfterSubmit = false;
                 this.submittedAt = data.submitted_at || null;
