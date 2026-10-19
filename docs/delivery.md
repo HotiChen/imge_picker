@@ -711,9 +711,20 @@ Frontend only; no Worker field was added. Top to bottom (`renderProjectDetail`):
   upload of `nextFinalFolder`). Unknown (older project, listing failed) → the unlocked ＋上傳精修 and
   更換精修資料夾. The 交件 chooser, the delivered folders, 更換精修資料夾, the rounds and 標記完成 live in
   the card (same ids as before). The detail page has no status badges any more; the list keeps them.
-- 照片: a row per version (毛片 with 看 = `?mode=all` and ＋上傳毛片; each 精修* with 看 = `?mode=finals`;
-  the delivered one marked 客人目前看的版本; an empty next-version row while a round waits), then
-  下載選片 / 下載需求表. No counts or dates: the page would need a listing per folder.
+- 照片: a row per version (毛片 with 看 = `?mode=all` and ＋上傳毛片; each 精修* with 看 =
+  `?mode=finals&folder=<that folder>`; the delivered one marked 客人目前看的版本; an empty next-version row while a
+  round waits), then 下載選片 / 下載需求表. No counts or dates: the page would need a listing per folder.
+  - The review view (`js/project-view.js`) takes `folder=` only when it is exactly one of the project's own finals
+    candidates: a folder of `final_folders`, or a folder beside the proof folders (the 精修 tab's chooser set, proof
+    folders excluded). Anything else is dropped and the 精修 tab works as before. (`?list=` with the photographer's
+    credential is scoped only to that photographer's own bucket, not to a project, so this check is what keeps the
+    view to the project.) A note under the banner (`#pvVersionNote`) says 客人目前看的版本, 這是 X（舊版），客人現在看的是
+    Y, 這是 X（新版，還沒交給客人），客人現在看的是 Y, or 這一版尚未交給客人 (nothing delivered: `delivered_at` unset,
+    whatever `final_folders` holds). Side-by-side comparison: not done.
+  - 改交這一版 (`[data-revert-version]`): while delivered, on every version row that is not delivered now. After a
+    confirm (客人將改看 X; a confirmation is cleared; open requests are closed; the client's unsent draft pins on the
+    current version do not carry over) it sends the same `deliverFolders([folder])` as 交付精修二 — a repeat deliver
+    of that one folder (keeps the first `delivered_at`). Not shown before the first delivery or after 取消交件.
 - 進度: ✓ / ● / ○ from what the page has (latest submission, delivered_at, rounds, confirmation);
   開始精修 has no date (none is stored).
 - 「✎ 編輯」 modal: 專案名稱 / 拍攝日期 / 攝影類別 and the read-only 資料夾 line; 儲存 sends one PATCH

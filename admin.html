@@ -323,6 +323,7 @@
   .pd-ver-current { display: inline-block; padding: 1px 8px; border-radius: 999px; background: var(--mint); color: var(--success); font-size: 12px; }
   .pd-ver-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-left: auto; }
   .pd-ver-actions a.btn { text-decoration: none; display: inline-flex; align-items: center; justify-content: center; }
+  .pd-ver-actions .btn { min-height: 44px; }   /* 看 / ＋ 上傳 / 改交這一版: touch targets at every width (a tablet is not 'mobile') */
   .pd-photos-dl { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; padding-top: 10px; border-top: 1px solid var(--rule); }
   .pd-steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
   .pd-steps li { display: flex; align-items: baseline; gap: 8px; font-size: 13px; color: var(--ink-70); }
@@ -2401,9 +2402,12 @@
     const rows = [`<div class="pd-ver" data-version="proofs"><span class="pd-ver-name">毛片</span>
       <span class="pd-ver-actions">${hasProofs ? `<a class="btn btn-outline" data-view href="index.html?project=${id}&amp;mode=all">看</a>` : ''}${proofsUploadHtml(p)}</span></div>`];
     for (const f of finalRowsOf(p)) {
+      // 改交這一版: while delivered, on every version the client does not see now (a repeat deliver of just it)
+      const revert = delivered.length && !delivered.includes(f)
+        ? `<button class="btn btn-outline" type="button" data-revert-version data-folder="${escHtml(f)}">改交這一版</button>` : '';
       rows.push(`<div class="pd-ver" data-version="${escHtml(f)}"><span class="pd-ver-name">${escHtml(leafName(f))}</span>
         ${delivered.includes(f) ? '<span class="pd-ver-current" data-current-version>客人目前看的版本</span>' : ''}
-        <span class="pd-ver-actions"><a class="btn btn-outline" data-view href="index.html?project=${id}&amp;mode=finals&amp;folder=${escHtml(encodeURIComponent(f))}">看</a></span></div>`);
+        <span class="pd-ver-actions"><a class="btn btn-outline" data-view href="index.html?project=${id}&amp;mode=finals&amp;folder=${escHtml(encodeURIComponent(f))}">看</a>${revert}</span></div>`);
     }
     if (stage === 'revising' && plan.kind === 'upload' && plan.folder) {
       rows.push(`<div class="pd-ver" data-version="${escHtml(plan.folder)}" data-empty><span class="pd-ver-name">${escHtml(plan.name)}</span>
@@ -2411,6 +2415,13 @@
         <span class="pd-ver-actions"><a class="btn btn-outline" data-version-upload href="${escHtml(PF.uploadHref(p.id, plan.folder, true))}">＋ 上傳</a></span></div>`);
     }
     box.innerHTML = rows.join('');
+    box.querySelectorAll('[data-revert-version]').forEach(btn => btn.addEventListener('click', function () {
+      const name = leafName(this.dataset.folder);
+      const now = delivered.map(leafName).join('、');
+      // docs/delivery.md: a repeat deliver replaces the finals, clears the confirmation and resolves the open requests
+      if (!confirm(`改交「${name}」給客人？\n\n客人將改看「${name}」，不再看到「${now}」。\n客人已確認完成的狀態會取消（需要客人重新確認），待處理的修改要求會一併結案。\n客人在「${now}」上還沒送出的修改標示不會帶到這一版。`)) return;
+      deliverFolders([this.dataset.folder], this);
+    }));
   }
 
   // ── 進度: ✓ done / ● the first step not done / ○ the rest. Dates only where the page has one. ──
