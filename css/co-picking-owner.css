@@ -75,3 +75,14 @@
 .co-confirm { margin-top: 10px; padding: 10px; border-radius: 10px; background: rgba(255, 141, 141, .1); border: 1px solid rgba(255, 141, 141, .35); font-size: 13px; line-height: 1.5; }
 .co-confirm-text { margin: 0 0 8px; overflow-wrap: anywhere; }
 .co-confirm .co-actions { margin-top: 0; }
+
+/* the owner's collaborator stats (js/pick.js renderCollabStats): chips under the 全部 / 已選 / 未選 buttons, inside #pickFilterBar */
+#pickFilterBar.has-collab-stats { flex-wrap: wrap; }
+.pick-collab-stats { flex: 0 0 100%; display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; margin-top: 6px; }
+.pick-collab-chip {
+  min-height: 36px; max-width: 100%; padding: 0 12px; border: 1px solid var(--border); border-radius: 999px; background: var(--card);
+  color: var(--ink-70); font: inherit; font-size: 13px; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  -webkit-tap-highlight-color: transparent;
+}
+.pick-collab-chip:hover { background: var(--card-hi); color: var(--ink); }
+.pick-collab-chip.active { background: var(--card-hi); border-color: var(--accent); color: var(--ink); }
