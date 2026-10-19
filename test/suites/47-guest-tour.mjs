@@ -7,6 +7,7 @@ import { MOBILE } from '../lib/env.mjs';
 import { PHOTOS } from '../lib/editor-mocks.mjs';
 import { pickFakeWorker } from '../lib/pick-fake.mjs';
 import { pinsWorld } from '../lib/revision-pins-fake.mjs';
+import { tourSettled } from '../lib/tour-settle.mjs';
 
 export default async function register() {
 
@@ -31,7 +32,8 @@ const waitCard = page => until(() => hasCard(page));
 const noCardFor = async (page, ms = 1600) => { await sleep(ms); return !(await page.$('.gt-card')); };
 const gridReady = page => page.waitForFunction(() => document.querySelectorAll('.photo-card, .fg-tile').length > 0, null, { timeout: 8000 });
 const storeVal = (page, k) => page.evaluate(k2 => localStorage.getItem(k2), k);
-const info = async page => { await sleep(300); return infoNow(page); };   // the ring eases to its target in .18s
+// the ring eases to its target in .18s, and in the lightbox only after its 300ms slideUp: wait until it has stopped (lib/tour-settle.mjs)
+const info = async page => { await tourSettled(page); return infoNow(page); };
 const infoNow = page => page.evaluate(() => {
   const c = document.querySelector('.gt-card'), ring = document.querySelector('.gt-ring');
   if (!c) return null;
