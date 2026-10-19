@@ -693,3 +693,18 @@ CREATE TABLE IF NOT EXISTS photographer_invites (
 CREATE INDEX IF NOT EXISTS idx_photographer_invites_code ON photographer_invites(code_hash);
 CREATE INDEX IF NOT EXISTS idx_photographer_invites_email ON photographer_invites(email);
 CREATE INDEX IF NOT EXISTS idx_photographer_invites_used_by ON photographer_invites(used_by);
+
+-- ─── Project activity log (docs/delivery.md, "Activity log") ───────────────
+-- A new table, from the hand-run worker/migrations/2026-10-20-project-events.sql
+-- (the column comments are there). Append-only: the Worker only ever INSERTs,
+-- best-effort after the action's own write; before the migration nothing is
+-- logged and every action works as before.
+CREATE TABLE IF NOT EXISTS project_events (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  project_id TEXT NOT NULL,
+  at         TEXT NOT NULL,           -- ISO time of the action, as the other tables
+  kind       TEXT NOT NULL,           -- 'deliver' | 'undeliver' | 'reopen' | 'retouch' | 'confirm'
+  actor      TEXT NOT NULL,           -- 'photographer' | 'client'
+  data       TEXT                     -- JSON or NULL: folders and phases only, never a name, token or key
+);
+CREATE INDEX IF NOT EXISTS idx_project_events_project ON project_events(project_id, at);

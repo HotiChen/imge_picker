@@ -233,6 +233,11 @@ export function pickFakeWorker(opts = {}) {
   // product_interests rows (docs/guest-shop.md, product interest): {product_id, product_name, product_kind,
   // first_at, last_at, tap_count}; opts.interests seeds them
   state.interests = (opts.interests || []).map(x => ({ ...x }));
+  // project_events rows (docs/delivery.md, "Activity log"), oldest first: {id, at, kind, actor, data}.
+  // opts.events seeds them; the admin actions below append exactly where worker.js does (only when the
+  // action changed something). opts.eventsStatus answers GET .../events with that status instead.
+  state.events = (opts.events || []).map((e, i) => ({ id: i + 1, actor: 'photographer', data: null, ...e }));
+  const logEvent = (kind, actor, at, data = null) => state.events.push({ id: state.events.length + 1, at, kind, actor, data });
   const requests = [];
 
   function findByKey(key) {
@@ -714,6 +719,7 @@ export function pickFakeWorker(opts = {}) {
         if (confirming) {
           state.project.client_confirmed_at = at;
           state.project.client_confirmed_by = 'guest';
+          logEvent('confirm', 'client', at);
           resolveOpen(at);
           return json({ ok: true, confirmed_at: at });
         }
@@ -865,9 +871,16 @@ export function pickFakeWorker(opts = {}) {
         state.project.owner_picker_id = null;
         return json({ ok: true });
       }
+      // GET /api/admin/projects/:id/events (worker.js): the newest 200, oldest first; another id is 404
+      if (/^\/api\/admin\/projects\/[^/]+\/events$/.test(u.pathname) && method === 'GET') {
+        if (opts.eventsStatus) return json({ error: 'DB error' }, opts.eventsStatus);
+        if (state.deleted || decodeURIComponent(u.pathname.split('/')[4]) !== state.project.id) return json({ error: 'Not found' }, 404);
+        return json({ events: state.events.slice().sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : a.id - b.id)).slice(-200).map(e => ({ id: e.id, at: e.at, kind: e.kind, actor: e.actor, data: e.data })) });
+      }
       if (/\/api\/admin\/projects\/[^/]+\/start-retouch$/.test(u.pathname) && method === 'POST') {
         if (state.project.phase === 'picking')
           return json({ error: '客人尚未送出，無法開始修圖', code: 'not_submitted', phase: 'picking' }, 409);
+        if (state.project.phase === 'submitted') logEvent('retouch', 'photographer', new Date().toISOString());
         state.project.phase = 'retouching';
         return json({ ok: true, phase: 'retouching' });
       }
@@ -881,10 +894,14 @@ export function pickFakeWorker(opts = {}) {
           state.project.client_confirmed_at = at;
           state.project.client_confirmed_by = 'photographer';
           resolveOpen(at);
+          logEvent('confirm', 'photographer', at);
         }
         return json({ ok: true, client_confirmed_at: state.project.client_confirmed_at, client_confirmed_by: state.project.client_confirmed_by });
       }
       if (/\/api\/admin\/projects\/[^/]+\/reopen$/.test(u.pathname) && method === 'POST') {
+        if (state.project.phase !== 'picking' || state.project.delivered_at) {
+          logEvent('reopen', 'photographer', new Date().toISOString(), { from_phase: state.project.phase, was_delivered: !!state.project.delivered_at });
+        }
         state.project.client_confirmed_at = null;
         state.project.client_confirmed_by = null;
         state.project.phase = 'picking';
@@ -909,8 +926,11 @@ export function pickFakeWorker(opts = {}) {
         const clash = finals.find(f => proofs.some(p => f.startsWith(p) || p.startsWith(f)));
         if (clash) return json({ error: `「${clash}」與毛片資料夾重疊，精修請放在獨立的資料夾`, code: 'final_overlaps_proofs', folder: clash }, 400);
         // a repeat deliver replaces the finals and keeps the first stamp
-        if (!state.project.delivered_at) state.project.delivered_at = new Date().toISOString();
+        const deliverAt = new Date().toISOString();
+        const previous = state.project.delivered_at ? state.project.final_folders : null;
+        if (!state.project.delivered_at) state.project.delivered_at = deliverAt;
         state.project.final_folders = finals;
+        logEvent('deliver', 'photographer', deliverAt, previous ? { final_folders: finals, repeat: true, previous } : { final_folders: finals });
         // every deliver puts a new version up: it clears the confirmation and
         // resolves the open requests (docs/delivery.md)
         state.project.client_confirmed_at = null;
@@ -921,6 +941,7 @@ export function pickFakeWorker(opts = {}) {
       if (/\/api\/admin\/projects\/[^/]+\/undeliver$/.test(u.pathname) && method === 'POST') {
         // clears the stamp only: the snapshot stays as the last chosen finals
         // (worker.js undeliver); pickScopeFake still reads it as not delivered
+        if (state.project.delivered_at) logEvent('undeliver', 'photographer', new Date().toISOString(), { final_folders: state.project.final_folders });
         state.project.delivered_at = null;
         state.project.client_confirmed_at = null;
         state.project.client_confirmed_by = null;

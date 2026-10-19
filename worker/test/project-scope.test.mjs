@@ -75,7 +75,7 @@ async function world(stage) {
 
 // every row that belongs to one project, across every table that hangs off it
 const PROJECT_TABLES = ['pickers', 'selections', 'submissions', 'share_tokens', 'revision_requests', 'revision_pins',
-  'product_interests', 'project_collaborators', 'pick_invites', 'pick_join_failures', 'project_members', 'orders'];
+  'product_interests', 'project_collaborators', 'pick_invites', 'pick_join_failures', 'project_members', 'orders', 'project_events'];
 function projectRows(env, id) {
   const out = { projects: rows(env, 'SELECT * FROM projects WHERE id = ?', id) };
   for (const t of PROJECT_TABLES) out[t] = rows(env, `SELECT * FROM ${t} WHERE project_id = ? ORDER BY rowid`, id);
@@ -107,6 +107,7 @@ const SCOPED = [
   { name: 'links (archived: 409)', method: 'POST', path: id => `${P(id)}/links`, stage: 'archived', ok: 409 },
   { name: 'confirm', method: 'POST', path: id => `${P(id)}/confirm`, stage: 'delivered', ok: 200 },
   { name: 'confirm (not delivered: 409)', method: 'POST', path: id => `${P(id)}/confirm`, stage: 'retouching', ok: 409 },
+  { name: 'GET :id/events (the activity log)', method: 'GET', path: id => `${P(id)}/events`, stage: 'delivered', ok: 200 },
 ];
 
 for (const route of SCOPED) {
@@ -396,7 +397,7 @@ test('guest side: no /api/pick route reads a photographer id from the request; e
 test('source: no `default-only until 2b-1` mark is left, and every project route asks requirePhotographer', () => {
   assert.equal((SRC.match(/default-only until 2b-1\b/g) || []).length, 0);
   const scoped = SRC.match(/requirePhotographer\(request, env\); \/\/ scoped to the caller/g) || [];
-  assert.equal(scoped.length, 9 + 1 + 3 + 7 + 1, 'list, detail, reset-seat, start-retouch/reopen, archive/unarchive, delete, links, confirm, patch; (2b-2) the products / orders block; (2b-3) stats, settings, settings/logo; (batch 3) studio-token, create, deliver/undeliver, minted, revoke-all, revoke, upload; the photo delete');
+  assert.equal(scoped.length, 9 + 1 + 3 + 7 + 1 + 1, 'list, detail, reset-seat, start-retouch/reopen, archive/unarchive, delete, links, confirm, patch; (2b-2) the products / orders block; (2b-3) stats, settings, settings/logo; (batch 3) studio-token, create, deliver/undeliver, minted, revoke-all, revoke, upload; the photo delete; the activity log read (events)');
   const open405 = SRC.match(/requirePhotographer\(request, env\); \/\/ open to every photographer: a 405/g) || [];
   assert.equal(open405.length, 1);
 });

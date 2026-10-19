@@ -729,12 +729,53 @@ Frontend only; no Worker field was added. Top to bottom (`renderProjectDetail`):
     current version do not carry over) it sends the same `deliverFolders([folder])` as 交付精修二 — a repeat deliver
     of that one folder (keeps the first `delivered_at`). Not shown before the first delivery or after 取消交件.
 - 進度: ✓ / ● / ○ from what the page has (latest submission, delivered_at, rounds, confirmation);
-  開始精修 has no date (none is stored).
+  開始精修 has no date (none is stored). Since 2026-10-19 merged with the activity log (below) when it has rows.
 - 「✎ 編輯」 modal: 專案名稱 / 拍攝日期 / 攝影類別 and the read-only 資料夾 line; 儲存 sends one PATCH
   per changed field (the old requests and messages). 「⋯」 menu: 看全部毛片, 複製交件通知文案 and 取消交件
   (delivered), 開放修改, then 重設主人, 封存, 刪除 (no submissions) in the danger colour.
 - The collapsible sections (設定, 目前選取, 訂單, 送出紀錄, 挑選人與連結) follow unchanged; 交件 is no
   longer one of them.
+
+## Activity log (project_events, built 2026-10-19)
+
+Why: 進度 was derived from columns that later actions overwrite (`delivered_at` keeps the first stamp, a repeat
+deliver replaces `final_folders`, undeliver / reopen clear the stamp), so e.g. 改交這一版 left no trace.
+
+- Table `project_events` (`worker/migrations/2026-10-20-project-events.sql`, two statements, hand-run before the
+  merge): `id` INTEGER PK AUTOINCREMENT, `project_id`, `at` (ISO, like every other table), `kind`, `actor`
+  (`photographer` | `client`), `data` (JSON or NULL), index `(project_id, at)`.
+- Written by the Worker (`logProjectEvent`), each only when the action's own write changed something:
+
+  | kind | route | actor | data |
+  |---|---|---|---|
+  | `deliver` | POST .../deliver | photographer | `{final_folders}`; a repeat (the stamp was older than this request): `{final_folders, repeat: true, previous}` (改交) |
+  | `undeliver` | POST .../undeliver, only when it took a delivery down | photographer | `{final_folders}` taken down |
+  | `reopen` | POST .../reopen, unless already picking and undelivered | photographer | `{from_phase, was_delivered}` |
+  | `retouch` | POST .../start-retouch from `submitted` (a repeat press: none) | photographer | NULL |
+  | `confirm` | POST .../confirm (標記完成) / POST /api/pick/confirm, only the press that made the stamp | photographer / client | NULL |
+
+  Not logged: revision requests (`revision_requests` already holds them; the page merges them by time). `data`
+  holds folders and phases only, never a name, token or key.
+- "Did this request change it" is the write's own answer (a gated statement first), so racing presses log once.
+- Failure isolation: the insert runs after the action's write, in try/catch, and every error is swallowed (a
+  missing table silently, anything else to `console.error`). An action never fails or answers differently because
+  of the log, including before the migration (then nothing is logged). Trade-off: a crash or error between the
+  write and the insert loses that one event; the log is a history aid, not a source of truth (the columns stay
+  that). Cost: one extra INSERT per action, plus one small read on reopen / undeliver.
+- Append-only: `INSERT INTO project_events` is the only statement on the table in worker.js (a worker test scans
+  for UPDATE / DELETE / REPLACE). Project deletion does not touch it: a deletable project (never submitted) cannot
+  have events.
+- Read: `GET /api/admin/projects/:id/events` (requirePhotographer, scoped to the caller: another photographer's
+  project is 404 as for none): the newest 200, oldest first, `{events: [{id, at, kind, actor, data}]}`; before the
+  migration `{events: []}`. No guest route, `pickReadScope` or the admin detail reads it.
+- admin.html 進度: fetched in parallel with the detail; 進度 draws without it first and again when it arrives. No
+  events (or any fetch failure) = exactly the old 進度. With events: the done steps and the events by time, then the
+  steps still ahead in their usual order; the first 交件 event at `delivered_at` becomes the 交件 step's line (with
+  the folder), a confirm event at `client_confirmed_at` is the 客人確認 step (not a second line), the latest
+  開始精修 event dates the 開始精修 step; a pins round says how many photos (第 N 輪，M 張); dates show the time
+  (`m/d HH:mm`). Lines: 交件（精修）, 改交精修（原本是精修三）, 重新交件（X） (same set again), 取消交件, 開放修改, 開始精修,
+  客人確認完成, 已標記完成（代客人）. Unknown kinds are skipped. textContent only.
+- Events start when the migration runs: an older project's earlier history stays as derived before.
 
 ## Out of scope for this step
 

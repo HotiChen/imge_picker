@@ -2775,6 +2775,35 @@ function resolveRevisionsIfConfirmed(env, projectId, at, ownerId) {
   ).bind(at, projectId, projectId, ownerId);
 }
 
+// ─── Project activity log (docs/delivery.md, "Activity log") ────────────────
+// project_events: one row per action that overwrites project columns
+// (deliver, a repeat deliver 改交, undeliver, reopen, start-retouch, confirm),
+// so the 進度 history survives the overwrite. Append-only: this INSERT is the
+// one statement that touches the table (a worker test scans for it). Called
+// AFTER the action's own write and only when that write changed something.
+// Best-effort: any failure — the table not there before its migration, a
+// locked database — is swallowed, so the log never fails or changes an
+// action. The cost: a crash between the write and this insert loses that one
+// event. `data`: folders and phases only, never a name, token or key.
+const PROJECT_EVENTS_MAX = 200;
+async function logProjectEvent(env, projectId, kind, actor, at, data = null) {
+  try {
+    await env.DB.prepare('INSERT INTO project_events (project_id, at, kind, actor, data) VALUES (?, ?, ?, ?, ?)')
+      .bind(projectId, at, kind, actor, data == null ? null : JSON.stringify(data)).run();
+  } catch (e) {
+    if (!isMissingSchema(e)) console.error('project event not logged:', kind, e?.message || e);
+  }
+}
+
+// A project row's final_folders as an array (a parse that fails is null).
+function parsedFinals(row) {
+  if (typeof row?.final_folders !== 'string') return null;
+  try {
+    const v = JSON.parse(row.final_folders);
+    return Array.isArray(v) ? v : null;
+  } catch { return null; }
+}
+
 // The latest open request of a project ({message, message_auto}) or null —
 // also before the migrations (message_auto then reads as absent: the guest's).
 async function openRevision(env, projectId) {
@@ -4664,6 +4693,36 @@ async function routeRequest(request, env, ctx) {
       }, 200, ADMIN_ONLY_HEADERS);
     }
 
+    // GET /api/admin/projects/:id/events — the project's activity log
+    // (docs/delivery.md, "Activity log"): the newest PROJECT_EVENTS_MAX
+    // events, oldest first, {id, at, kind, actor, data}. The project's
+    // photographer only (another's is 404, as for no project); no guest route
+    // reads the table. Before the migration: {events: []}.
+    if (request.method === 'GET' && pathParts[0] === 'api' && pathParts[1] === 'admin' && pathParts[2] === 'projects' && pathParts[3] &&
+        pathParts[4] === 'events' && !pathParts[5]) {
+      const auth = await requirePhotographer(request, env); // scoped to the caller (who.id)
+      if (auth.refused) return auth.refused;
+      const who = auth.who;
+      if (!env.DB) return jsonErr('DB not configured', 500);
+      const project = await env.DB.prepare('SELECT id FROM projects WHERE id = ? AND photographer_id = ?')
+        .bind(pathParts[3], who.id).first();
+      if (!project) return jsonErr('Not found', 404);
+      let listed = [];
+      try {
+        ({ results: listed } = await env.DB.prepare(
+          'SELECT id, at, kind, actor, data FROM project_events WHERE project_id = ? ORDER BY at DESC, id DESC LIMIT ?'
+        ).bind(project.id, PROJECT_EVENTS_MAX).all());
+      } catch (e) {
+        if (!isMissingSchema(e)) throw e;
+      }
+      const events = listed.reverse().map(r => {
+        let data = null;
+        try { data = r.data == null ? null : JSON.parse(r.data); } catch {}
+        return { id: r.id, at: r.at, kind: r.kind, actor: r.actor, data };
+      });
+      return jsonOk({ events }, 200, ADMIN_ONLY_HEADERS);
+    }
+
     // GET /api/admin/projects/:id — the seat holder, every submit record and
     // who set each pick. Guest strings go out raw in JSON; admin.html escapes
     // them when it renders.
@@ -4779,12 +4838,28 @@ async function routeRequest(request, env, ctx) {
         // migration adds, so it works before that migration too. The
         // confirmation goes with the delivery, in the same statement (retried
         // without it before the client-confirm migration).
-        const reopen = confirm => env.DB.prepare(
-          `UPDATE projects SET phase = 'picking', modified_after_submit = 0, delivered_at = NULL${confirm} WHERE id = ? AND photographer_id = ?`
+        // The activity log (best-effort) needs what it reopens from: read
+        // first, for the event's data only. Whether this request reopened
+        // anything is the write's own answer: the statement gated on "not
+        // already picking and undelivered" goes first, so of two racing
+        // reopens one logs; the ungated one after it (only when that changed
+        // nothing) keeps the old answer for a project already picking.
+        let before = null;
+        try {
+          before = await env.DB.prepare('SELECT phase, delivered_at FROM projects WHERE id = ? AND photographer_id = ?').bind(id, who.id).first();
+        } catch {}
+        const reopen = (confirm, cond) => env.DB.prepare(
+          `UPDATE projects SET phase = 'picking', modified_after_submit = 0, delivered_at = NULL${confirm} WHERE id = ? AND photographer_id = ?${cond}`
         ).bind(id, who.id).run();
-        const moved = await withoutMissingColumn(
-          () => reopen(', client_confirmed_at = NULL, client_confirmed_by = NULL'), () => reopen(''));
+        const run = cond => withoutMissingColumn(
+          () => reopen(', client_confirmed_at = NULL, client_confirmed_by = NULL', cond), () => reopen('', cond));
+        const reopened = await run(" AND (phase != 'picking' OR delivered_at IS NOT NULL)");
+        const moved = reopened.meta?.changes ? reopened : await run('');
         if (!moved.meta?.changes) return jsonErr('Not found', 404);
+        if (reopened.meta?.changes) {
+          await logProjectEvent(env, id, 'reopen', 'photographer', new Date().toISOString(),
+            { from_phase: before?.phase ?? null, was_delivered: !!before?.delivered_at });
+        }
         return jsonOk({ ok: true, phase: 'picking' });
       }
       // start-retouch also brings the automatic extra-pick order in line with
@@ -4795,16 +4870,25 @@ async function routeRequest(request, env, ctx) {
       // loop reads again (the phase then holds, so it cannot happen twice
       // over once retouching). The order writes are gated on the phase having
       // moved too, and re-check their own order inside (extraPickWrites).
+      // The batch's first statement moves 'submitted' only: its count says
+      // whether this press started the retouch (inside the transaction, so
+      // of two racing presses one does), for the activity log. The second is
+      // the move as it always was (a press while retouching is a no-op that
+      // still rewrites the order).
       for (let attempt = 0; attempt < 3; attempt++) {
         const latest = await latestSubmission(env, id, who.id);
         const gate = 'id = ? AND photographer_id = ? AND (SELECT s.id FROM submissions s WHERE s.project_id = ? ORDER BY s.created_at DESC, s.rowid DESC LIMIT 1) IS ?';
         const gateBinds = [id, who.id, id, latest?.id ?? null];
         const writes = await extraPickWrites(env, who.id, id, extraPickFee(latest), `${gate} AND phase = 'retouching'`, gateBinds);
-        const [moved] = await env.DB.batch([
+        const [started, moved] = await env.DB.batch([
+          env.DB.prepare(`UPDATE projects SET phase = 'retouching' WHERE ${gate} AND phase = 'submitted'`).bind(...gateBinds),
           env.DB.prepare(`UPDATE projects SET phase = 'retouching' WHERE ${gate} AND phase IN ('submitted', 'retouching')`).bind(...gateBinds),
           ...writes,
         ]);
-        if (moved.meta?.changes) return jsonOk({ ok: true, phase: 'retouching' });
+        if (moved.meta?.changes) {
+          if (started.meta?.changes) await logProjectEvent(env, id, 'retouch', 'photographer', new Date().toISOString());
+          return jsonOk({ ok: true, phase: 'retouching' });
+        }
         const refused = await notMoved();
         if (refused) return refused;
       }
@@ -4949,18 +5033,34 @@ async function routeRequest(request, env, ctx) {
       if (!env.DB) return jsonErr('DB not configured', 500);
       const id = pathParts[3];
       if (pathParts[4] === 'undeliver') {
-        // the confirmation goes with the delivery, in the same statement
-        const undeliver = confirm => env.DB.prepare(`UPDATE projects SET delivered_at = NULL${confirm} WHERE id = ? AND photographer_id = ?`)
+        // the confirmation goes with the delivery, in the same statement.
+        // The one gated on "delivered" goes first: its count says whether
+        // this request took a delivery down (of two racing, one did), for the
+        // activity log; the ungated one after it (only when that changed
+        // nothing) keeps the old answer for a project not delivered.
+        const undeliver = (confirm, cond) => env.DB.prepare(`UPDATE projects SET delivered_at = NULL${confirm} WHERE id = ? AND photographer_id = ?${cond}`)
           .bind(id, who.id).run();
-        const result = await withoutMissingColumn(
-          () => undeliver(', client_confirmed_at = NULL, client_confirmed_by = NULL'), () => undeliver(''));
+        const run = cond => withoutMissingColumn(
+          () => undeliver(', client_confirmed_at = NULL, client_confirmed_by = NULL', cond), () => undeliver('', cond));
+        const tookDown = await run(' AND delivered_at IS NOT NULL');
+        const result = tookDown.meta?.changes ? tookDown : await run('');
         if (!result.meta?.changes) return jsonErr('Not found', 404);
+        if (tookDown.meta?.changes) {
+          // the snapshot taken down: undeliver keeps it, so it reads the same
+          // after the write (best-effort; null before the delivery migration)
+          let row = null;
+          try {
+            row = await env.DB.prepare('SELECT final_folders FROM projects WHERE id = ? AND photographer_id = ?').bind(id, who.id).first();
+          } catch {}
+          await logProjectEvent(env, id, 'undeliver', 'photographer', new Date().toISOString(), { final_folders: parsedFinals(row) });
+        }
         return jsonOk({ ok: true, delivered_at: null }, 200, ADMIN_ONLY_HEADERS);
       }
       const notRetouching = phase =>
         jsonOk({ error: '尚未開始修圖，無法標記為已交件', code: 'not_retouching', phase }, 409, ADMIN_ONLY_HEADERS);
       const invalid = (code, extra = {}, error = '交件資料夾不正確') => jsonOk({ error, code, ...extra }, 400, ADMIN_ONLY_HEADERS);
-      const project = await env.DB.prepare('SELECT phase, folders FROM projects WHERE id = ? AND photographer_id = ?')
+      // final_folders as it was: the activity log's 改交 names what it replaced
+      const project = await env.DB.prepare('SELECT phase, folders, final_folders FROM projects WHERE id = ? AND photographer_id = ?')
         .bind(id, who.id).first();
       if (!project) return jsonErr('Not found', 404);
       if (project.phase !== 'retouching') return notRetouching(project.phase);
@@ -5013,6 +5113,11 @@ async function routeRequest(request, env, ctx) {
       // cleared the stamp (the snapshot just written stays, as the last
       // choice): either way the project is not delivered now.
       if (!result.meta?.changes || !row.delivered_at) return notRetouching(row.phase);
+      // A stamp older than this request's (COALESCE kept it): a repeat, 改交,
+      // replacing the set read before the write
+      const repeat = row.delivered_at !== at;
+      await logProjectEvent(env, id, 'deliver', 'photographer', at,
+        repeat ? { final_folders: finals, repeat: true, previous: parsedFinals(project) } : { final_folders: finals });
       return jsonOk({ ok: true, delivered_at: row.delivered_at, final_folders: finals }, 200, ADMIN_ONLY_HEADERS);
     }
 
@@ -5037,8 +5142,9 @@ async function routeRequest(request, env, ctx) {
       if (!hasField(project, 'client_confirmed_at')) return done(CONFIRM_UNAVAILABLE, 500);
       if (!project.delivered_at) return notDelivered();
       const at = new Date().toISOString();
+      let stamped;
       try {
-        await env.DB.batch([
+        [stamped] = await env.DB.batch([
           env.DB.prepare(
             "UPDATE projects SET client_confirmed_at = ?, client_confirmed_by = 'photographer' " +
             'WHERE id = ? AND photographer_id = ? AND delivered_at IS NOT NULL AND client_confirmed_at IS NULL'
@@ -5055,6 +5161,8 @@ async function routeRequest(request, env, ctx) {
       if (!row) return jsonErr('Not found', 404);
       // not confirmed now: an undeliver landed before the write
       if (!row.client_confirmed_at) return notDelivered();
+      // logged only when this press made the stamp (a repeat answers the first)
+      if (stamped?.meta?.changes) await logProjectEvent(env, id, 'confirm', 'photographer', at);
       return done({ ok: true, client_confirmed_at: row.client_confirmed_at, client_confirmed_by: row.client_confirmed_by });
     }
 
@@ -7423,6 +7531,9 @@ async function routeRequest(request, env, ctx) {
           }
           return jsonOk({ error: `修改需求已達上限（${REVISION_TOTAL_MAX} 則），請直接聯絡攝影師`, code: 'revision_cap', max: REVISION_TOTAL_MAX }, 409);
         }
+        // the activity log has the confirmation; a request is its own
+        // revision_requests row already (best-effort, never fails this)
+        if (confirming) await logProjectEvent(env, project.id, 'confirm', 'client', at);
         const notify = Promise.resolve()
           .then(() => sendClientNotification(env, project, picker.name, message))
           .catch(e => console.error('client notification failed:', e?.message || e));
