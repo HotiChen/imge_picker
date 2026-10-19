@@ -275,18 +275,82 @@
   .back-btn:focus-visible { outline: 2px solid var(--ink-90); outline-offset: 2px; }
   @media (max-width: 640px) { .back-btn { min-height: 44px; } }
   .proj-notice { margin: 0 0 14px; padding: 10px 14px; border-radius: 10px; background: var(--accent-dim); color: var(--ink-90); font-size: 13px; line-height: 1.6; }
-  .pd-head { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
-  .pd-title-wrap { display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
-  .pd-title-wrap h3 { overflow-wrap: anywhere; }
-  .pd-title-wrap[hidden], .pd-rename-form[hidden] { display: none; }
-  .pd-rename-form { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; flex: 1 1 100%; }
-  .pd-rename-form .field { flex: 1 1 220px; min-width: 0; width: auto; }
-  .pd-rename-hint { flex: 1 1 100%; color: var(--ink-55); font-size: 12px; }
-  .pd-owner { color: var(--ink-55); font-size: 13px; margin-bottom: 14px; }
-  .pd-shoot-text { color: var(--ink-55); font-size: 13px; }
-  .pd-shoot-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; font-size: 13px; color: var(--ink-55); }
-  .pd-shoot-row .field { width: auto; }
-  .pd-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; }
+  /* Project page (Tim 2026-10-19): header (title, one meta line, ✎ 編輯 and ⋯), then the status card (one label, one
+     下一步 line, at most one accent button), 照片 (one row per version), 進度, then the collapsible sections. */
+  .pd-head { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 12px; }
+  .pd-head-main { flex: 1 1 auto; min-width: 0; }
+  .pd-head-main h3 { font-family: 'Noto Serif TC', serif; font-size: 19px; line-height: 1.35; overflow-wrap: anywhere; }
+  .pd-meta { color: var(--ink-70); font-size: 13px; margin-top: 2px; overflow-wrap: anywhere; }
+  .pd-meta [hidden] { display: none; }
+  .pd-head-note { color: var(--ink-70); font-size: 12px; margin-top: 4px; }
+  .pd-head-actions { flex: none; display: flex; align-items: center; gap: 6px; position: relative; flex-wrap: wrap; justify-content: flex-end; }
+  .pd-head-actions .dn-status:empty { display: none; }
+  .pd-head-btn { min-height: 40px; }
+  #pd-more-btn { min-width: 44px; font-size: 18px; line-height: 1; }
+  .pd-more { position: relative; }
+  .pd-more-menu { position: absolute; right: 0; top: calc(100% + 6px); z-index: 50; min-width: 200px; max-width: calc(100vw - 32px);
+    background: var(--surface); border: 1px solid var(--rule); border-radius: 12px; box-shadow: 0 12px 30px rgba(90,60,20,.18); padding: 6px; }
+  .pd-more-item { display: flex; align-items: center; width: 100%; min-height: 44px; padding: 0 12px; border: 0; border-radius: 8px;
+    background: transparent; color: var(--ink-90); font: inherit; font-size: 14px; text-align: left; text-decoration: none; cursor: pointer; white-space: nowrap; }
+  .pd-more-item:hover, .pd-more-item:focus-visible { background: var(--card); outline: none; }
+  .pd-more-item:focus-visible { box-shadow: inset 0 0 0 2px var(--ink-90); }
+  .pd-more-item.danger { color: var(--danger); }
+  .pd-more-sep { height: 1px; background: var(--rule); margin: 6px 4px; }
+  .pd-owner { color: var(--ink-55); font-size: 13px; }
+  .pd-meta .pd-owner { color: inherit; }
+  /* status card */
+  .pd-status { border: 1px solid var(--accent-dim); border-radius: 14px; background: var(--card); padding: 14px 16px; margin: 0 0 12px; }
+  .pd-status-label { font-size: 17px; font-weight: 600; color: var(--ink-90); }
+  .pd-status-next { color: var(--ink-70); font-size: 13px; margin-top: 2px; line-height: 1.6; }
+  .pd-status-actions:empty { display: none; }
+  .pd-status-actions { margin-top: 10px; }
+  /* every button in the card is one height, so the primary and its neighbours line up (44px on a phone, below) */
+  .pd-status .btn { min-height: 40px; display: inline-flex; align-items: center; justify-content: center; text-decoration: none; }
+  .pd-status .btn[data-primary] { font-size: 14px; padding-left: 18px; padding-right: 18px; }
+  #pd-status #pd-delivery { border: 0; padding: 0; margin: 10px 0 0; }
+  #pd-status #pd-delivery[style*="none"] { margin: 0; }
+  .pd-delivered-line { font-size: 13px; color: var(--ink-70); display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin-top: 10px; }
+  .pd-delivered-line [data-delivered-status] { font-weight: 600; color: var(--success); }
+  .pd-delivered-line #pd-delivered-folders { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+  /* 照片 and 進度 */
+  .pd-card { border: 1px solid var(--rule); border-radius: 14px; background: var(--surface); padding: 12px 16px; margin: 0 0 12px; }
+  #project-detail-panel .pd-card > h4 { margin: 0 0 6px; font-size: 14px; }
+  .pd-ver { display: flex; align-items: center; gap: 6px 10px; flex-wrap: wrap; padding: 8px 0; border-top: 1px solid var(--rule); }
+  .pd-ver:first-of-type { border-top: 0; }
+  .pd-ver-name { font-weight: 600; min-width: 4em; }
+  .pd-ver-meta { color: var(--ink-70); font-size: 12px; flex: 1 1 auto; min-width: 0; }
+  .pd-ver[data-empty] .pd-ver-name { color: var(--ink-70); }
+  .pd-ver-current { display: inline-block; padding: 1px 8px; border-radius: 999px; background: var(--mint); color: var(--success); font-size: 12px; }
+  .pd-ver-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-left: auto; }
+  .pd-ver-actions a.btn { text-decoration: none; display: inline-flex; align-items: center; justify-content: center; }
+  .pd-photos-dl { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; padding-top: 10px; border-top: 1px solid var(--rule); }
+  .pd-steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+  .pd-steps li { display: flex; align-items: baseline; gap: 8px; font-size: 13px; color: var(--ink-70); }
+  .pd-steps li[data-state="done"] { color: var(--ink-90); }
+  .pd-steps li[data-state="current"] { color: var(--ink-90); font-weight: 600; }
+  .pd-step-mark { width: 1.2em; flex: none; text-align: center; }
+  .pd-steps li[data-state="done"] .pd-step-mark { color: var(--success); }
+  .pd-steps li[data-state="current"] .pd-step-mark { color: var(--accent-ink); }
+  .pd-step-date { color: var(--ink-70); font-weight: 400; font-family: 'IBM Plex Mono', monospace; font-size: 12px; }
+  .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+  /* ✎ 編輯 modal */
+  .pd-edit-box { padding: 16px 18px; gap: 12px; max-height: 90vh; overflow-y: auto; }
+  .pd-edit-box h4 { margin: 0; font-size: 15px; }
+  .pd-edit-field label { display: block; font-size: 12px; color: var(--ink-70); margin-bottom: 4px; }
+  .pd-edit-field .field + .field { margin-top: 6px; }
+  .pd-edit-form { display: flex; flex-direction: column; gap: 14px; }
+  .pd-rename-hint { color: var(--ink-70); font-size: 12px; margin-top: 4px; }
+  .pd-edit-field .err { margin-top: 4px; }
+  #pd-edit-modal .err:empty { display: none; }
+  .pd-edit-folder { color: var(--ink-70); font-size: 13px; overflow-wrap: anywhere; }
+  .pd-edit-folder code { font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: var(--ink-90); }
+  .pd-edit-actions { display: flex; justify-content: flex-end; gap: 8px; }
+  .pd-edit-actions .btn, #pd-edit-modal .field { min-height: 44px; }
+  @media (max-width: 780px) { #pd-edit-modal .field { font-size: 16px; } }   /* 16px: iOS does not zoom on focus */
+  @media (max-width: 768px) {
+    .pd-head-btn { min-height: 44px; }
+    .pd-ver-actions .btn { min-width: 44px; }
+  }
   .pd-submission { padding: 10px 0; border-top: 1px solid var(--rule); font-size: 12px; }
   .pd-submission:first-child { border-top: none; }
   .pd-diff { color: var(--ink-55); margin-top: 4px; word-break: break-word; }
@@ -1491,7 +1555,7 @@
   // this page (secChoice), else what this browser remembers (localStorage — a
   // per-browser convenience, so every access is guarded and nothing depends on it),
   // else the section's default. Keyed by section name, not by project.
-  const SEC_TITLE = { delivery: '交件', settings: '設定', selections: '目前選取', orders: '訂單', submissions: '送出紀錄', people: '挑選人與連結' };
+  const SEC_TITLE = { settings: '設定', selections: '目前選取', orders: '訂單', submissions: '送出紀錄', people: '挑選人與連結' };
   const SEC_KEY = 'pd_sec_';
   let secProject = null;       // the project being drawn (the defaults depend on it)
   let secData = null;          // what the summaries count: selections, submissions, pickers, links, owner
@@ -1507,11 +1571,10 @@
   function secStore(name, open) {
     try { localStorage.setItem(SEC_KEY + name, open ? '1' : '0'); } catch (e) { /* storage unavailable: the choice lives in secChoice */ }
   }
-  // 交件 is open whenever it is there (retouching or delivered); 目前選取 once the guest
-  // has submitted; 訂單 opens by itself when its orders arrive with something waiting;
-  // the rest start closed.
+  // (交件 is not a section any more: it is the status card above them.) 目前選取 is open
+  // once the guest has submitted; 訂單 opens by itself when its orders arrive with
+  // something waiting; the rest start closed.
   function secDefault(name) {
-    if (name === 'delivery') return true;
     if (name === 'selections') return !!secProject && secProject.phase === 'submitted';
     return false;
   }
@@ -1550,11 +1613,6 @@
     secStore(name, open);
     secApply(name, open);
   });
-  // 交件 is not there at all until the project is being retouched (or is delivered)
-  function secDeliveryShown(shown) {
-    document.getElementById('pd-sec-delivery')?.classList.toggle('pd-sec-off', !shown);
-  }
-
   // 'M/D' in Taipei time, for the one-line summaries
   function fmtDay(iso) {
     return Util.fmtDate(iso, 'md');
@@ -1563,18 +1621,6 @@
   function secSummaries() {
     const p = currentProject || {}, d = secData || {};
     const out = {};
-    // 交件
-    if (!p.delivered_at) out.delivery = '尚未交件';
-    else {
-      const finals = Array.isArray(p.final_folders) ? p.final_folders : [];
-      const leaf = finals.length ? (String(finals[0]).split('/').filter(Boolean).pop() || '') + '/' : '';
-      const open = currentRevisions.filter(r => !r.resolved_at).length;
-      const confirm = p.client_confirmed_at
-        ? (p.client_confirmed_by === 'photographer' ? '已標記完成' : '客戶已確認')
-        : (open > 0 ? `待修改 ${open}` : '客戶尚未確認');
-      out.delivery = [`已交件 ${fmtDay(p.delivered_at)}`.trim(),
-        leaf ? leaf + (finals.length > 1 ? ` 等 ${finals.length} 個` : '') : '', confirm].filter(Boolean).join(' · ');
-    }
     // 設定: the plan and the proofs download switch
     const plan = [];
     plan.push(p.pick_limit == null ? '不限張數' : `${p.pick_limit} 張` + (p.extra_max != null ? ` + 加選 ${p.extra_max}` : ''));
@@ -1627,122 +1673,290 @@
     shoot_date_unavailable: '拍攝日期尚未啟用，請先執行 migration（2026-10-07-project-shoot-date.sql）',
   };
   const shootDateError = (data, status) => SHOOT_DATE_ERRORS[data && data.code] || (data && data.error) || `儲存失敗（${status}）`;
-  function renderShootDateHeader(project) {
-    const el = document.getElementById('pd-shoot-text');
-    if (!el) return;
-    const d = shootDateOf(project);
-    el.textContent = d ? `拍攝日期 ${d}` : '';
-    el.hidden = !d;
-  }
-  function renderTypeTag(project) {
-    const el = document.getElementById('pd-type-tag');
-    if (!el) return;
-    const v = projectTypeOf(project);
-    el.textContent = v;
-    el.hidden = !v;
-  }
-  function wireProjectType(project) {
-    const sel = document.getElementById('pd-type-select');
-    const other = document.getElementById('pd-type-other');
-    const save = document.getElementById('pd-type-save');
-    const err = document.getElementById('pd-type-err');
-    wireTypePair(sel, other);
-    save.addEventListener('click', async () => {
-      err.textContent = '';
-      save.disabled = true;
-      try {
-        const value = projectTypeValue(sel, other);
-        if (sel.value === SHOOT_TYPE_OTHER && value === null) { err.textContent = '請輸入類別名稱'; return; }
-        const r = await fetch(`${WORKER_URL}/api/admin/projects/${encodeURIComponent(currentProjectId)}`, {
-          method: 'PATCH',
-          headers: { 'Authorization': `Bearer ${getToken()}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ project_type: value || null }),   // 未分類 clears it
-        });
-        const data = await r.json().catch(() => ({}));
-        if (!r.ok) { err.textContent = PROJECT_TYPE_ERRORS[data && data.code] || (data && data.code === 'invalid_body' ? PROJECT_TYPE_ERRORS.invalid_project_type : null) || (data && data.error) || `儲存失敗（${r.status}）`; return; }
-        project.project_type = data.project_type ?? null;
-        renderTypeTag(project);
-        const row = projectsCache.find(x => x.id === project.id);
-        if (row) { row.project_type = project.project_type; drawProjectList(); }
-      } catch (e) {
-        err.textContent = '無法連線到 Worker';
-      } finally {
-        save.disabled = false;
-      }
-    });
-  }
   const RENAME_INVALID = '專案名稱格式不正確（1–200 字）';
-  function wireRename(project) {
-    const wrap = document.getElementById('pd-title-wrap');
-    const form = document.getElementById('pd-rename-form');
-    const input = document.getElementById('pd-rename-input');
-    const save = document.getElementById('pd-rename-save');
-    const err = document.getElementById('pd-rename-err');
-    if (!wrap || !form) return;
-    const open = () => {
-      err.textContent = '';
-      input.value = project.title || '';
-      wrap.hidden = true; form.hidden = false;
-      input.focus(); input.select();
+  const $id = id => document.getElementById(id);
+
+  // The header's one meta line: 拍攝日期 · 攝影類別 · 挑選人. Each part is its own span (textContent only: the
+  // type and the picker's name are user text); an empty date or type is left out, separators only between parts.
+  function renderHeadMeta() {
+    const el = $id('pd-meta');
+    const p = currentProject;
+    if (!el || !p) return;
+    const part = (id, cls, text) => {
+      const s = document.createElement('span');
+      if (id) s.id = id;
+      if (cls) s.className = cls;
+      s.textContent = text;
+      s.hidden = !text;
+      return s;
     };
-    const close = () => {
-      form.hidden = true; wrap.hidden = false;
-      document.getElementById('pd-rename-btn').focus();
-    };
-    document.getElementById('pd-rename-btn').addEventListener('click', open);
-    document.getElementById('pd-rename-cancel').addEventListener('click', close);
-    input.addEventListener('keydown', e => { if (e.key === 'Escape') { e.preventDefault(); close(); } });
-    form.addEventListener('submit', async e => {
-      e.preventDefault();
-      if (save.disabled) return;
-      err.textContent = '';
-      const title = input.value.trim().slice(0, 200);
-      if (!title) { err.textContent = '專案名稱不能空白'; input.focus(); return; }
-      save.disabled = true;
-      try {
-        const r = await fetch(`${WORKER_URL}/api/admin/projects/${encodeURIComponent(project.id)}`, {
-          method: 'PATCH',
-          headers: { 'Authorization': `Bearer ${getToken()}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ title }),
-        });
-        const data = await r.json().catch(() => ({}));
-        if (!r.ok) { err.textContent = data && data.code === 'invalid_body' ? RENAME_INVALID : '儲存失敗，請再試一次'; return; }
-        project.title = typeof data.title === 'string' && data.title ? data.title : title;
-        document.getElementById('pd-title').textContent = project.title || '（未命名）';
-        const row = projectsCache.find(x => x.id === project.id);
-        if (row) { row.title = project.title; drawProjectList(); }
-        close();
-      } catch (e2) {
-        err.textContent = '儲存失敗，請再試一次';
-      } finally {
-        save.disabled = false;
+    const date = part('pd-shoot-text', '', shootDateOf(p));
+    date.setAttribute('data-shoot-date', '');
+    date.title = '拍攝日期';
+    const type = part('pd-type-tag', '', projectTypeOf(p));
+    type.title = '攝影類別';
+    const owner = part(null, 'pd-owner', `挑選人：${currentOwnerName || '尚無人認領'}`);
+    const kids = [];
+    for (const s of [date, type, owner]) {
+      if (s.hidden) continue;
+      if (kids.length) kids.push(document.createTextNode(' · '));
+      kids.push(s);
+    }
+    el.replaceChildren(...kids, ...[date, type].filter(s => s.hidden));
+  }
+
+  // ✎ 編輯: one modal for 專案名稱 / 拍攝日期 / 攝影類別 (the folder is shown, never edited: renaming an R2
+  // folder is decided against, CLAUDE.md). One 儲存 sends the same PATCH requests the old inline rows sent,
+  // one per field that changed, in that order, with the old error messages under each field.
+  function editModalHtml(project) {
+    const info = PF.rootOfProject(project);
+    const folders = Array.isArray(project.folders) ? project.folders : [];
+    const list = info && info.proofShaped ? [info.root + '/'] : folders;
+    const t = projectTypeOf(project);
+    const typed = !!t && !SHOOT_TYPES.includes(t);
+    return `<div id="pd-edit-modal" class="picker-overlay" hidden>
+      <div class="picker-box pd-edit-box" role="dialog" aria-modal="true" aria-labelledby="pd-edit-h">
+        <h4 id="pd-edit-h">編輯專案</h4>
+        <form id="pd-edit-form" class="pd-edit-form" novalidate>
+          <div class="pd-edit-field">
+            <label for="pd-rename-input">專案名稱</label>
+            <input id="pd-rename-input" class="field" type="text" maxlength="200" autocomplete="off">
+            <div class="pd-rename-hint">只改專案名稱，資料夾名稱不變</div>
+            <div id="pd-rename-err" class="err" role="alert"></div>
+          </div>
+          <div class="pd-edit-field">
+            <label for="pd-shoot-input">拍攝日期</label>
+            <input id="pd-shoot-input" class="field" type="date">
+            <div id="pd-shoot-err" class="err" role="alert"></div>
+          </div>
+          <div class="pd-edit-field">
+            <label for="pd-type-select">攝影類別</label>
+            <select id="pd-type-select" class="field">${projectTypeOptionsHtml(t)}</select>
+            <input id="pd-type-other" class="field" type="text" maxlength="20" placeholder="自行輸入（最多 20 字）" aria-label="自行輸入攝影類別"
+              value="${escHtml(typed ? t : '')}" style="${typed ? '' : 'display:none;'}">
+            <div id="pd-type-err" class="err" role="alert"></div>
+          </div>
+          ${list.length ? `<div class="pd-edit-folder" id="pd-edit-folder">資料夾：${list.map(f => `<code>${escHtml(f)}</code>`).join('、')}（不能改）</div>` : ''}
+          <div class="pd-edit-actions">
+            <button id="pd-edit-cancel" class="btn btn-outline" type="button">取消</button>
+            <button id="pd-edit-save" class="btn btn-accent" type="submit">儲存</button>
+          </div>
+        </form>
+      </div>
+    </div>`;
+  }
+  const visibleFocusables = root => [...root.querySelectorAll('a[href], button, input, select, textarea')]
+    .filter(e => !e.disabled && e.getClientRects().length > 0);
+  function editFill() {
+    const p = currentProject || {};
+    for (const id of ['pd-rename-err', 'pd-shoot-err', 'pd-type-err']) $id(id).textContent = '';
+    $id('pd-rename-input').value = p.title || '';
+    $id('pd-shoot-input').value = shootDateOf(p);
+    const t = projectTypeOf(p), typed = !!t && !SHOOT_TYPES.includes(t);
+    $id('pd-type-select').value = typed ? SHOOT_TYPE_OTHER : t;
+    const other = $id('pd-type-other');
+    other.value = typed ? t : '';
+    other.style.display = typed ? '' : 'none';
+  }
+  function closeEditModal() {
+    const modal = $id('pd-edit-modal');
+    if (!modal || modal.hidden) return;
+    modal.hidden = true;
+    $id('pd-edit-btn')?.focus();
+  }
+  function wireEditModal() {
+    const modal = $id('pd-edit-modal');
+    const btn = $id('pd-edit-btn');
+    if (!modal || !btn) return;
+    wireTypePair($id('pd-type-select'), $id('pd-type-other'));
+    btn.addEventListener('click', () => {
+      setMoreMenu(false);
+      editFill();
+      modal.hidden = false;
+      const input = $id('pd-rename-input');
+      input.focus();
+      input.select();
+    });
+    $id('pd-edit-cancel').addEventListener('click', closeEditModal);
+    modal.addEventListener('click', e => { if (e.target === modal) closeEditModal(); });
+    modal.addEventListener('keydown', e => {
+      if (e.key === 'Escape') { e.preventDefault(); closeEditModal(); return; }
+      if (e.key !== 'Tab') return;
+      const f = visibleFocusables(modal);
+      if (!f.length) return;
+      const first = f[0], last = f[f.length - 1];
+      if (e.shiftKey && (document.activeElement === first || !modal.contains(document.activeElement))) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && (document.activeElement === last || !modal.contains(document.activeElement))) { e.preventDefault(); first.focus(); }
+    });
+    $id('pd-edit-form').addEventListener('submit', e => { e.preventDefault(); saveEdit(); });
+  }
+  // One PATCH of one field; true when it stuck. The error goes under that field, worded as the old inline row did.
+  async function patchProjectField(key, value) {
+    const project = currentProject;
+    const err = $id({ title: 'pd-rename-err', shoot_date: 'pd-shoot-err', project_type: 'pd-type-err' }[key]);
+    try {
+      const r = await fetch(`${WORKER_URL}/api/admin/projects/${encodeURIComponent(project.id)}`, {
+        method: 'PATCH',
+        headers: { 'Authorization': `Bearer ${getToken()}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ [key]: value }),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        if (key === 'title') err.textContent = data && data.code === 'invalid_body' ? RENAME_INVALID : '儲存失敗，請再試一次';
+        else if (key === 'shoot_date') err.textContent = shootDateError(data, r.status);
+        else err.textContent = PROJECT_TYPE_ERRORS[data && data.code] || (data && data.code === 'invalid_body' ? PROJECT_TYPE_ERRORS.invalid_project_type : null) || (data && data.error) || `儲存失敗（${r.status}）`;
+        return false;
       }
+      const row = projectsCache.find(x => x.id === project.id);
+      if (key === 'title') {
+        project.title = typeof data.title === 'string' && data.title ? data.title : value;
+        $id('pd-title').textContent = project.title || '（未命名）';
+        if (row) { row.title = project.title; drawProjectList(); }
+      } else if (key === 'shoot_date') {
+        project.shoot_date = data.shoot_date ?? null;
+      } else {
+        project.project_type = data.project_type ?? null;
+        if (row) { row.project_type = project.project_type; drawProjectList(); }
+      }
+      renderHeadMeta();
+      return true;
+    } catch (e) {
+      err.textContent = key === 'title' ? '儲存失敗，請再試一次' : '無法連線到 Worker';
+      return false;
+    }
+  }
+  async function saveEdit() {
+    const save = $id('pd-edit-save');
+    const project = currentProject;
+    if (!save || save.disabled || !project) return;
+    for (const id of ['pd-rename-err', 'pd-shoot-err', 'pd-type-err']) $id(id).textContent = '';
+    const input = $id('pd-rename-input'), sel = $id('pd-type-select'), other = $id('pd-type-other');
+    const title = input.value.trim().slice(0, 200);
+    if (!title) { $id('pd-rename-err').textContent = '專案名稱不能空白'; input.focus(); return; }
+    const type = projectTypeValue(sel, other);
+    if (sel.value === SHOOT_TYPE_OTHER && type === null) { $id('pd-type-err').textContent = '請輸入類別名稱'; other.focus(); return; }
+    const date = $id('pd-shoot-input').value || null;   // an emptied field clears it
+    const todo = [];
+    if (title !== (project.title || '')) todo.push(['title', title]);
+    if ((date || '') !== shootDateOf(project)) todo.push(['shoot_date', date]);
+    if ((type || '') !== projectTypeOf(project)) todo.push(['project_type', type || null]);   // 未分類 clears it
+    save.disabled = true;
+    try {
+      for (const [k, v] of todo) if (!(await patchProjectField(k, v))) return;
+      closeEditModal();
+    } finally {
+      save.disabled = false;
+    }
+  }
+
+  // 「⋯」: the actions that are not the stage's main step, as a menu of real buttons. Each runs exactly what its
+  // old button ran (same requests, same confirm dialogs). Rebuilt with the status card (renderDeliveryBlock), so
+  // 複製交件通知文案 / 取消交件 follow the delivery and 刪除 only shows while there is no submission.
+  function moreItem(id, action, text, danger) {
+    return `<button type="button" id="${id}" class="pd-more-item${danger ? ' danger' : ''}" role="menuitem" tabindex="-1" data-action="${action}">${text}</button>`;
+  }
+  function renderMoreMenu() {
+    const menu = $id('pd-more-menu');
+    const p = currentProject;
+    if (!menu || !p) return;
+    const delivered = !!p.delivered_at;
+    const items = [];
+    if (Array.isArray(p.folders) && p.folders.length)
+      items.push(`<a id="pd-view-all-btn" class="pd-more-item" role="menuitem" tabindex="-1" href="index.html?project=${encodeURIComponent(p.id)}&amp;mode=all">看全部毛片</a>`);
+    if (delivered) items.push(moreItem('pd-copy-notice-btn', 'copy-notice', '複製交件通知文案'));
+    items.push(moreItem('pd-reopen-btn', 'reopen', '開放修改'));
+    if (delivered) items.push(moreItem('pd-undeliver-btn', 'undeliver', '取消交件'));
+    items.push('<div class="pd-more-sep" role="separator"></div>');
+    items.push(moreItem('pd-reset-seat-btn', 'reset-seat', '重設主人', true));
+    // an archived project's 取消封存 is the status card's button
+    if (!p.archived_at) items.push(moreItem('pd-archive-btn', 'archive', '封存', true));
+    if (!currentSubmissions.length) items.push(moreItem('pd-delete-btn', 'delete', '刪除', true));
+    menu.innerHTML = items.join('');
+  }
+  const moreItems = () => [...($id('pd-more-menu')?.querySelectorAll('[role="menuitem"]') || [])];
+  function setMoreMenu(open, focusButton) {
+    const btn = $id('pd-more-btn'), menu = $id('pd-more-menu');
+    if (!btn || !menu) return;
+    menu.hidden = !open;
+    btn.setAttribute('aria-expanded', String(open));
+    if (open) moreItems()[0]?.focus();
+    else if (focusButton) btn.focus();
+  }
+  function wireMoreMenu() {
+    const btn = $id('pd-more-btn'), menu = $id('pd-more-menu');
+    if (!btn || !menu) return;
+    btn.addEventListener('click', () => setMoreMenu(menu.hidden));
+    btn.addEventListener('keydown', e => { if (e.key === 'ArrowDown' && menu.hidden) { e.preventDefault(); setMoreMenu(true); } });
+    menu.addEventListener('keydown', e => {
+      const items = moreItems();
+      const i = items.indexOf(document.activeElement);
+      if (e.key === 'Escape') { e.preventDefault(); setMoreMenu(false, true); }
+      else if (e.key === 'ArrowDown') { e.preventDefault(); items[(i + 1) % items.length]?.focus(); }
+      else if (e.key === 'ArrowUp') { e.preventDefault(); items[(i - 1 + items.length) % items.length]?.focus(); }
+      else if (e.key === 'Home') { e.preventDefault(); items[0]?.focus(); }
+      else if (e.key === 'End') { e.preventDefault(); items[items.length - 1]?.focus(); }
+      else if (e.key === 'Tab') setMoreMenu(false);
+    });
+    menu.addEventListener('click', e => {
+      const item = e.target.closest('[role="menuitem"]');
+      if (!item) return;
+      setMoreMenu(false, true);
+      if (item.dataset.action) runMoreAction(item.dataset.action);
     });
   }
-  function wireShootDate(project) {
-    const input = document.getElementById('pd-shoot-input');
-    const save = document.getElementById('pd-shoot-save');
-    const err = document.getElementById('pd-shoot-err');
-    save.addEventListener('click', async () => {
-      err.textContent = '';
-      save.disabled = true;
-      try {
-        const r = await fetch(`${WORKER_URL}/api/admin/projects/${encodeURIComponent(currentProjectId)}`, {
-          method: 'PATCH',
-          headers: { 'Authorization': `Bearer ${getToken()}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ shoot_date: input.value || null }),   // an emptied field clears it
-        });
-        const data = await r.json().catch(() => ({}));
-        if (!r.ok) { err.textContent = shootDateError(data, r.status); return; }
-        project.shoot_date = data.shoot_date ?? null;
-        input.value = shootDateOf(project);
-        renderShootDateHeader(project);
-      } catch (e) {
-        err.textContent = '無法連線到 Worker';
-      } finally {
-        save.disabled = false;
+  // a click anywhere outside the open menu closes it (installed once; the menu itself is redrawn per project)
+  document.addEventListener('click', e => {
+    const menu = $id('pd-more-menu');
+    if (menu && !menu.hidden && !(e.target.closest && e.target.closest('.pd-more'))) setMoreMenu(false);
+  });
+  async function runMoreAction(action) {
+    if (action === 'copy-notice') {
+      const st = $id('pd-copy-notice-status');
+      const ok = await copyText(deliveryNoticeText(currentProject, liveLinkOf(currentTokens)));
+      if (!st) return;
+      st.textContent = ok ? '已複製' : '複製失敗，請手動複製';
+      clearTimeout(st._t);
+      st._t = setTimeout(() => { st.textContent = ''; }, 2500);
+    } else if (action === 'reopen') {
+      await projectAction('reopen');
+    } else if (action === 'undeliver') {
+      if (!confirm('取消交件後，客人的連結會回到選片畫面（唯讀），精修成品不再顯示。確定要取消交件嗎？')) return;
+      await projectAction('undeliver');
+    } else if (action === 'reset-seat') {
+      if (!confirm('確定要重設選片人嗎？選取結果與送出紀錄都會保留。\n新的主人會接手目前所有選片，並可修改或刪除')) return;
+      await projectAction('reset-seat');
+    } else if (action === 'archive') {
+      if (!confirm('封存後連結會立即失效，資料會保留')) return;
+      await projectAction('archive'); // refreshes the list too, see projectAction
+    } else if (action === 'delete') {
+      await deleteProject();
+    }
+  }
+  let deleting = false;
+  async function deleteProject() {
+    const errEl = $id('pd-action-err');
+    if (errEl) errEl.textContent = '';
+    if (deleting) return;
+    if (!confirm(`確定刪除專案「${currentProject?.title || '未命名'}」？\n此動作無法復原：選取紀錄與分享連結都會一併移除`)) return;
+    deleting = true;
+    try {
+      const r = await fetch(`${WORKER_URL}/api/admin/projects/${encodeURIComponent(currentProjectId)}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${getToken()}` },
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        if (errEl) errEl.textContent = data.code === 'has_submissions'
+          ? '已有送出紀錄，無法刪除，請改用封存' : (data.error || `失敗（${r.status}）`);
+        return;
       }
-    });
+      leaveProjectDetail();
+      await loadProjectList();
+    } catch (e) {
+      if (errEl) errEl.textContent = '無法連線到 Worker';
+    } finally {
+      deleting = false;
+    }
   }
 
   function renderProjectDetail(data) {
@@ -1757,61 +1971,47 @@
 
     secProject = project;
     body.innerHTML = `
-      <div class="pd-head">
-        <span class="pd-title-wrap" id="pd-title-wrap">
+      <div class="pd-head" id="pd-head">
+        <div class="pd-head-main">
           <h3 id="pd-title" data-pd-title>${escHtml(project.title || '（未命名）')}</h3>
-          <button id="pd-rename-btn" class="btn btn-outline" type="button" aria-label="改專案名稱">改名</button>
-        </span>
-        <form id="pd-rename-form" class="pd-rename-form" hidden>
-          <input id="pd-rename-input" class="field" type="text" maxlength="200" aria-label="專案名稱" autocomplete="off">
-          <button id="pd-rename-save" class="btn btn-accent" type="submit">儲存</button>
-          <button id="pd-rename-cancel" class="btn btn-outline" type="button">取消</button>
-          <span class="pd-rename-hint">只改專案名稱，資料夾名稱不變</span>
-          <span id="pd-rename-err" class="err" role="alert"></span>
-        </form>
-        <span class="pd-shoot-text" id="pd-shoot-text" data-shoot-date></span>
-        <span class="pt-tag" id="pd-type-tag" hidden></span>
-        ${phaseBadgeHtml(project)}
-        ${project.delivered_at ? '<span class="badge badge-approved st-done" data-delivered-badge>已交件</span>' : ''}
-        <span id="pd-confirm-badge-slot" style="display:contents">${confirmBadgeHtml(project)}</span>
-        ${project.archived_at ? '<span class="badge badge-pending st-neutral">已封存</span>' : ''}
-        ${project.modified_after_submit ? '<span class="badge badge-pending st-neutral">已修改，尚未重新送出</span>' : ''}
-        ${data.unnotified_submissions ? `<span class="badge badge-pending st-neutral">${escHtml(data.unnotified_submissions)} 次送出未寄信</span>` : ''}
+          <div class="pd-meta" id="pd-meta"></div>
+          ${project.modified_after_submit ? '<div class="pd-head-note">客人已修改，尚未重新送出</div>' : ''}
+          ${data.unnotified_submissions ? `<div class="pd-head-note">${escHtml(data.unnotified_submissions)} 次送出未寄信</div>` : ''}
+        </div>
+        <div class="pd-head-actions">
+          <span id="pd-copy-notice-status" class="dn-status" role="status"></span>
+          <button id="pd-edit-btn" class="btn btn-outline pd-head-btn" type="button">✎ 編輯</button>
+          <div class="pd-more">
+            <button id="pd-more-btn" class="btn btn-outline pd-head-btn" type="button" aria-label="更多" aria-haspopup="menu" aria-expanded="false" aria-controls="pd-more-menu">⋯</button>
+            <div id="pd-more-menu" class="pd-more-menu" role="menu" aria-label="更多動作" hidden></div>
+          </div>
+        </div>
       </div>
-      <div class="pd-owner">目前挑選人：${ownerName ? escHtml(ownerName) : '<span class="folder-none">尚無人認領</span>'}</div>
-      <div class="pd-shoot-row" id="pd-shoot-row">
-        <label for="pd-shoot-input">拍攝日期</label>
-        <input id="pd-shoot-input" class="field" type="date" value="${escHtml(shootDateOf(project))}">
-        <button id="pd-shoot-save" class="btn btn-outline" type="button">儲存</button>
-        <span id="pd-shoot-err" class="err" role="alert"></span>
-      </div>
-      <div class="pd-shoot-row" id="pd-type-row">
-        <label for="pd-type-select">攝影類別</label>
-        <select id="pd-type-select" class="field">${projectTypeOptionsHtml(projectTypeOf(project))}</select>
-        <input id="pd-type-other" class="field" type="text" maxlength="20" placeholder="自行輸入（最多 20 字）"
-          value="${escHtml(projectTypeOf(project) && !SHOOT_TYPES.includes(projectTypeOf(project)) ? projectTypeOf(project) : '')}"
-          style="${projectTypeOf(project) && !SHOOT_TYPES.includes(projectTypeOf(project)) ? '' : 'display:none;'}">
-        <button id="pd-type-save" class="btn btn-outline" type="button">儲存</button>
-        <span id="pd-type-err" class="err" role="alert"></span>
-      </div>
-      ${projectFolderLineHtml(project)}
-      <div class="pd-actions">
-        ${proofsUploadHtml(project)}
-        ${viewAllHtml(project)}
-        <button id="pd-reset-seat-btn" class="btn btn-ghost" type="button">重設主人</button>
-        <button id="pd-start-retouch-btn" class="btn btn-accent" type="button">開始精修</button>
-        <button id="pd-reopen-btn" class="btn btn-ghost" type="button">開放修改</button>
-        <button id="pd-download-btn" class="btn btn-outline" type="button">下載選片</button>
-        <button id="pd-download-csv-btn" class="btn btn-outline" type="button" title="檔名、客人備註、標示（給修圖師）">下載需求表 (CSV)</button>
-        ${project.archived_at
-          ? '<button id="pd-unarchive-btn" class="btn btn-ghost" type="button">取消封存</button>'
-          : '<button id="pd-archive-btn" class="btn btn-ghost" type="button">封存</button>'}
-        ${!submissions.length ? '<button id="pd-delete-btn" class="btn btn-danger" type="button">刪除</button>' : ''}
-      </div>
-      <div id="pd-action-err" class="err"></div>
+      <div id="pd-action-err" class="err" role="alert"></div>
+
+      <section class="pd-status" id="pd-status" aria-labelledby="pd-status-label">
+        <div class="pd-status-label" id="pd-status-label"></div>
+        <div class="pd-status-next" id="pd-status-next"></div>
+        <div class="pd-status-actions" id="pd-status-actions"></div>
+        <div id="pd-delivery"></div>
+      </section>
+
+      <section class="pd-card" id="pd-photos" aria-labelledby="pd-photos-h">
+        <h4 id="pd-photos-h">照片</h4>
+        <div id="pd-photo-rows"></div>
+        <div class="pd-photos-dl">
+          <button id="pd-download-btn" class="btn btn-outline" type="button">下載選片</button>
+          <button id="pd-download-csv-btn" class="btn btn-outline" type="button" title="檔名、客人備註、標示（給修圖師）">下載需求表 (CSV)</button>
+        </div>
+      </section>
+
+      <section class="pd-card" id="pd-progress" aria-labelledby="pd-progress-h">
+        <h4 id="pd-progress-h">進度</h4>
+        <ol class="pd-steps" id="pd-steps"></ol>
+      </section>
+
       ${interests.length ? '<div id="pd-interests" class="pd-block"></div>' : ''}
 
-      ${secHtml('delivery', '<div id="pd-delivery" class="pd-block"></div>')}
       ${secHtml('settings', '<div id="pd-proofdl" class="pd-block"></div><div id="pd-plan" class="pd-block"></div>')}
 
       ${secHtml('selections', `<div id="pd-selections-details"><div class="table-wrap"><table><thead><tr><th>照片</th><th>♥</th><th>備註</th><th>選片人</th><th>更新時間</th></tr></thead>
@@ -1862,25 +2062,19 @@
         </div>`).join('') : '<div class="empty">尚無連結</div>'}</div>
       ${project.archived_at ? '' : '<button id="pd-new-link-btn" class="btn btn-outline" type="button" style="margin-top:8px;">產生新連結</button>'}
       <div id="pd-link-err" class="err"></div>`)}
+      ${editModalHtml(project)}
     `;
     secData = { selectedCount: selected.length, submissions, pickers, tokens, ownerName };
 
-    renderShootDateHeader(project);
-    wireShootDate(project);
-    wireRename(project);
-    renderTypeTag(project);
-    wireProjectType(project);
-
-    document.getElementById('pd-reset-seat-btn').addEventListener('click', async () => {
-      if (!confirm('確定要重設選片人嗎？選取結果與送出紀錄都會保留。\n新的主人會接手目前所有選片，並可修改或刪除')) return;
-      await projectAction('reset-seat');
-    });
-    document.getElementById('pd-start-retouch-btn').addEventListener('click', () => projectAction('start-retouch'));
-    document.getElementById('pd-reopen-btn').addEventListener('click', () => projectAction('reopen'));
     // 交件 / 毛片下載 have their own blocks (docs/delivery.md).
     currentProject = project;
     currentTokens = tokens;
+    currentOwnerName = ownerName;
+    currentSubmissions = submissions;
     currentRevisions = Array.isArray(data.revision_requests) ? data.revision_requests : [];
+    renderHeadMeta();
+    wireEditModal();
+    wireMoreMenu();
     // Delivery state is delivered_at alone. After 取消交件 or 開放修改 the Worker keeps
     // final_folders, so an undelivered project can still carry them: they
     // pre-fill the chooser (editable; nothing is sent until 交件 is pressed).
@@ -1891,37 +2085,6 @@
     renderDeliveryBlock();
     renderProofDownloadBlock();
     renderPlanBlock();
-    document.getElementById('pd-archive-btn')?.addEventListener('click', async () => {
-      if (!confirm('封存後連結會立即失效，資料會保留')) return;
-      await projectAction('archive'); // refreshes the list too, see projectAction
-    });
-    document.getElementById('pd-unarchive-btn')?.addEventListener('click', async () => {
-      await projectAction('unarchive');
-    });
-    document.getElementById('pd-delete-btn')?.addEventListener('click', async function () {
-      const errEl = document.getElementById('pd-action-err');
-      if (errEl) errEl.textContent = '';
-      if (!confirm(`確定刪除專案「${currentProject?.title || '未命名'}」？\n此動作無法復原：選取紀錄與分享連結都會一併移除`)) return;
-      this.disabled = true;
-      try {
-        const r = await fetch(`${WORKER_URL}/api/admin/projects/${encodeURIComponent(currentProjectId)}`, {
-          method: 'DELETE',
-          headers: { 'Authorization': `Bearer ${getToken()}` },
-        });
-        const data = await r.json().catch(() => ({}));
-        if (!r.ok) {
-          if (errEl) errEl.textContent = data.code === 'has_submissions'
-            ? '已有送出紀錄，無法刪除，請改用封存' : (data.error || `失敗（${r.status}）`);
-          return;
-        }
-        leaveProjectDetail();
-        await loadProjectList();
-      } catch (e) {
-        if (errEl) errEl.textContent = '無法連線到 Worker';
-      } finally {
-        this.disabled = false;
-      }
-    });
     body.querySelectorAll('[data-copy-link]').forEach(btn => {
       btn.addEventListener('click', () => copyLinkAndShare(btn, project.title, btn.dataset.copyLink, linkStage(project)));
     });
@@ -1971,6 +2134,8 @@
   let currentProject = null;
   let currentTokens = [];   // the open project's pick links, newest first (for the 交件通知文案)
   let currentRevisions = [];   // the guest's 要求修改, newest first (detail.revision_requests)
+  let currentOwnerName = null; // the seat holder's name (header meta line)
+  let currentSubmissions = []; // newest first (detail.submissions): 進度's date, and 刪除 only while there are none
   let finalDraft = [];
   let finalEditing = false;
 
@@ -1993,17 +2158,6 @@
     return project.final_folders.slice();
   }
 
-  // 資料夾：<root>/ — the project's folders in one line. A project that follows the
-  // convention (proofs in <root>/毛片/) shows its root; an older one shows the
-  // folders its snapshot holds, as they are.
-  function projectFolderLineHtml(project) {
-    const info = PF.rootOfProject(project);
-    const folders = Array.isArray(project.folders) ? project.folders : [];
-    const list = info && info.proofShaped ? [info.root + '/'] : folders;
-    if (!list.length) return '';
-    return `<div class="pd-folder-line" id="pd-folder-line">資料夾：${list.map(f => `<code>${escHtml(f)}</code>`).join('、')}</div>`;
-  }
-
   // ＋上傳毛片: upload.html on <root>/毛片/, locked there, so a photo cannot land
   // in the wrong project's folder. Only for a project whose proofs follow the
   // convention; an older project keeps uploading through the folder tree.
@@ -2016,14 +2170,6 @@
     return locked
       ? '<button type="button" id="pd-upload-proofs-btn" class="btn btn-outline btn-locked" disabled title="已進入精修階段，不再上傳毛片">＋上傳毛片（已進入精修）</button>'
       : `<a id="pd-upload-proofs-btn" class="btn btn-outline" href="${escHtml(PF.uploadHref(project.id, info.proofFolder, true))}">＋上傳毛片</a>`;
-  }
-
-  // 看全部毛片: the review view (index.html?project=) in its all-proofs mode — every photo in
-  // the project's folders, not just the client's picks. A plain same-tab link, like 看照片.
-  function viewAllHtml(project) {
-    const has = Array.isArray(project.folders) && project.folders.length > 0;
-    if (!has) return '';
-    return `<a id="pd-view-all-btn" class="btn btn-outline" href="index.html?project=${encodeURIComponent(project.id)}&amp;mode=all">看全部毛片</a>`;
   }
 
   // ＋上傳精修: upload.html on the next finals folder, locked there. The next one is
@@ -2054,6 +2200,7 @@
         mine.state = 'ready';
         mine.locked = true;
         mine.folder = PF.nextFinalFolder(info.root, listed.folders);
+        mine.listed = listed.folders;   // what 精修* versions exist: the 照片 rows and the round's next step
         // 交件 starts on the newest 精修 — but never over a choice already made
         // (a draft the photographer built meanwhile, the last delivery's folders,
         // or a delivery that is up).
@@ -2090,11 +2237,17 @@
     return `
       <div class="pd-confirm" id="pd-confirm">
         <div id="pd-confirm-status" class="pd-confirm-status${confirmed ? ' done' : ''}">${escHtml(status)}</div>
-        ${open > 0 ? '<div class="pd-note" id="pd-revision-hint">請上傳新版精修資料夾後按「更換精修資料夾」，會自動結案目前的要求</div>' : ''}
+        ${open > 0 ? `<div class="pd-note" id="pd-revision-hint">${escHtml(revisionHint(roundPlan(project)))}</div>` : ''}
         ${currentRevisions.length ? '<div id="pd-revisions"></div>' : ''}
         ${confirmed ? '' : '<div class="pd-row"><button id="pd-mark-done-btn" class="btn btn-outline" type="button">標記完成</button></div>'}
         <div id="pd-confirm-err" class="err"></div>
       </div>`;
+  }
+  // what to do about an open round, in words that match the button the card shows
+  function revisionHint(plan) {
+    if (plan.kind === 'deliver') return `${plan.name} 已上傳：按「交付${plan.name}」交給客人，會自動結案目前的要求`;
+    if (plan.name) return `請把新版上傳到 ${plan.name}，上傳後回來按「交付${plan.name}」，會自動結案目前的要求`;
+    return '請上傳新版精修資料夾後按「更換精修資料夾」，會自動結案目前的要求';
   }
 
   // One card per round (js/revision-rounds-view.js): kind, photos, time, the client's note, open or
@@ -2144,9 +2297,166 @@
       // the Worker resolves the open requests with the confirmation
       currentRevisions = currentRevisions.map(x => (x.resolved_at ? x : { ...x, resolved_at: at }));
       renderDeliveryBlock();
-      const slot = document.getElementById('pd-confirm-badge-slot');
-      if (slot) slot.innerHTML = confirmBadgeHtml(currentProject);
       await loadProjectList();
+    } catch (e) {
+      if (errEl) errEl.textContent = '無法連線到 Worker';
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  // ── The status card (Tim 2026-10-19) ─────────────────────────────────────────
+  // ONE stage per project, from fields the page already has. Order matters: an archived project is 已封存 whatever
+  // else is true; a delivered one is 已完成 once confirmed (client_confirmed_at is only ever set while delivered),
+  // else 客人要求修改 while a round is open, else 客人確認中; an undelivered one goes by its phase.
+  const STAGE_LABEL = { picking: '客人選片中', submitted: '選片完成・待精修', retouching: '精修中', awaiting: '客人確認中', done: '已完成', archived: '已封存' };
+  // the newest open request and its round number (the oldest request is 第 1 輪); null when none is open
+  function openRoundOf(revisions) {
+    const i = revisions.findIndex(r => !r.resolved_at);
+    return i === -1 ? null : { round: revisions[i], n: revisions.length - i };
+  }
+  function projectStage(p, revisions) {
+    if (p.archived_at) return 'archived';
+    if (p.delivered_at) {
+      if (p.client_confirmed_at) return 'done';
+      if (openRoundOf(revisions)) return 'revising';
+      return 'awaiting';
+    }
+    if (p.phase === 'retouching') return 'retouching';
+    if (p.phase === 'submitted') return 'submitted';
+    return 'picking';
+  }
+  const leafName = f => String(f || '').split('/').filter(Boolean).pop() || '';
+  // The next step of an open round, from the 精修* versions R2 holds under the project's root: a version newer than
+  // the delivered one already has photos (a folder only exists once something is in it) → deliver it; else upload
+  // the next one (nextFinalFolder, never reusing a version). Unknown (an older project, the listing not read yet or
+  // failed) → { kind: 'upload', name: null }: the generic ＋上傳精修 link, which names no folder and locks nothing.
+  function roundPlan(project) {
+    const t = finalsTarget && finalsTarget.projectId === project.id ? finalsTarget : null;
+    const info = PF.rootOfProject(project);
+    if (!t || t.state !== 'ready' || !t.locked || !info || !info.proofShaped) return { kind: 'upload', name: null, folder: null };
+    const latest = PF.latestFinalFolder(info.root, t.listed || []);
+    const delivered = Array.isArray(project.final_folders) ? project.final_folders : [];
+    if (latest && !delivered.includes(latest)) return { kind: 'deliver', folder: latest, name: leafName(latest) };
+    return { kind: 'upload', folder: t.folder, name: leafName(t.folder) };
+  }
+  function stageNext(stage, p, plan) {
+    switch (stage) {
+      case 'picking': return '下一步：等客人送出選片';
+      case 'submitted': return '下一步：開始精修（開始後客人不能再改選片）';
+      case 'retouching': return '下一步：上傳精修後交件';
+      case 'awaiting': return '下一步：等客人確認或提出修改';
+      case 'revising':
+        if (plan.kind === 'deliver') return `下一步：交付${plan.name}給客人`;
+        return plan.name ? `下一步：上傳${plan.name}後交付` : '下一步：上傳新版精修後交付';
+      case 'done': {
+        const d = Util.fmtDate(p.client_confirmed_at, 'iso');
+        return p.client_confirmed_by === 'photographer' ? `你已代客人標記完成（${d}）` : `客人已確認（${d}）`;
+      }
+      case 'archived': return '連結已失效，資料都保留';
+      default: return '';
+    }
+  }
+  function renderStatusHead(stage, plan) {
+    const card = $id('pd-status');
+    const p = currentProject;
+    if (!card || !p) return;
+    const t = finalsTarget && finalsTarget.projectId === p.id ? finalsTarget : null;
+    card.dataset.stage = stage;
+    card.dataset.target = t ? t.state : 'ready';
+    $id('pd-status-label').textContent = stage === 'revising' ? `客人要求修改（第 ${openRoundOf(currentRevisions).n} 輪）` : STAGE_LABEL[stage];
+    $id('pd-status-next').textContent = stageNext(stage, p, plan);
+    const actions = $id('pd-status-actions');
+    actions.innerHTML = stage === 'submitted'
+      ? '<button id="pd-start-retouch-btn" class="btn btn-accent" type="button" data-primary>開始精修</button>'
+      : stage === 'archived' ? '<button id="pd-unarchive-btn" class="btn btn-accent" type="button" data-primary>取消封存</button>' : '';
+    actions.querySelector('#pd-start-retouch-btn')?.addEventListener('click', () => projectAction('start-retouch'));
+    actions.querySelector('#pd-unarchive-btn')?.addEventListener('click', () => projectAction('unarchive'));
+  }
+
+  // ── 照片: one row per version ──
+  // 毛片 (看 = the review view of every proof, ＋上傳毛片 while it is allowed), then each 精修* version R2 holds
+  // under the root, oldest first (or, when that cannot be listed, the project's own finals snapshot), the delivered
+  // one marked 客人目前看的版本, and while a round waits for its new version an empty row to upload it into.
+  // Counts and dates are not shown: the page does not know them without a listing per folder.
+  function finalRowsOf(project) {
+    const t = finalsTarget && finalsTarget.projectId === project.id ? finalsTarget : null;
+    const info = PF.rootOfProject(project);
+    const snapshot = Array.isArray(project.final_folders) ? project.final_folders : [];
+    const out = [];
+    if (t && t.state === 'ready' && t.locked && info) {
+      PF.finalVersions(info.root, t.listed || []).sort((a, b) => a.n - b.n).forEach(v => out.push(v.folder));
+    }
+    for (const f of snapshot) if (!out.includes(f)) out.push(f);
+    return out;
+  }
+  function renderPhotoRows(stage, plan) {
+    const box = $id('pd-photo-rows');
+    const p = currentProject;
+    if (!box || !p) return;
+    const t = finalsTarget && finalsTarget.projectId === p.id ? finalsTarget : null;
+    $id('pd-photos').dataset.target = t ? t.state : 'ready';
+    const id = encodeURIComponent(p.id);
+    const hasProofs = Array.isArray(p.folders) && p.folders.length > 0;
+    const delivered = p.delivered_at && Array.isArray(p.final_folders) ? p.final_folders : [];
+    const rows = [`<div class="pd-ver" data-version="proofs"><span class="pd-ver-name">毛片</span>
+      <span class="pd-ver-actions">${hasProofs ? `<a class="btn btn-outline" data-view href="index.html?project=${id}&amp;mode=all">看</a>` : ''}${proofsUploadHtml(p)}</span></div>`];
+    for (const f of finalRowsOf(p)) {
+      rows.push(`<div class="pd-ver" data-version="${escHtml(f)}"><span class="pd-ver-name">${escHtml(leafName(f))}</span>
+        ${delivered.includes(f) ? '<span class="pd-ver-current" data-current-version>客人目前看的版本</span>' : ''}
+        <span class="pd-ver-actions"><a class="btn btn-outline" data-view href="index.html?project=${id}&amp;mode=finals">看</a></span></div>`);
+    }
+    if (stage === 'revising' && plan.kind === 'upload' && plan.folder) {
+      rows.push(`<div class="pd-ver" data-version="${escHtml(plan.folder)}" data-empty><span class="pd-ver-name">${escHtml(plan.name)}</span>
+        <span class="pd-ver-meta">還沒有照片</span>
+        <span class="pd-ver-actions"><a class="btn btn-outline" data-version-upload href="${escHtml(PF.uploadHref(p.id, plan.folder, true))}">＋ 上傳</a></span></div>`);
+    }
+    box.innerHTML = rows.join('');
+  }
+
+  // ── 進度: ✓ done / ● the first step not done / ○ the rest. Dates only where the page has one. ──
+  function progressSteps(p, submissions, revisions) {
+    const delivered = !!p.delivered_at;
+    const picked = p.phase !== 'picking' || delivered;
+    const steps = [
+      { step: 'picked', label: '客人送出選片', done: picked, at: picked && submissions[0] ? submissions[0].created_at : null },
+      { step: 'retouch', label: '開始精修', done: p.phase === 'retouching' || delivered, at: null },
+      { step: 'delivered', label: '交件', done: delivered, at: p.delivered_at || null },
+    ];
+    revisions.slice().reverse().forEach((r, i) => steps.push({ step: `round-${i + 1}`, label: `客人要求修改（第 ${i + 1} 輪）`, done: !!r.resolved_at, at: r.created_at }));
+    steps.push({ step: 'confirmed', label: p.client_confirmed_by === 'photographer' ? '已標記完成（代客人）' : '客人確認', done: !!p.client_confirmed_at, at: p.client_confirmed_at || null });
+    const cur = steps.findIndex(s => !s.done);
+    return steps.map((s, i) => ({ ...s, state: s.done ? 'done' : (i === cur ? 'current' : 'next') }));
+  }
+  const STEP_MARK = { done: ['✓', '已完成'], current: ['●', '目前'], next: ['○', '還沒到'] };
+  function renderProgress() {
+    const list = $id('pd-steps');
+    const p = currentProject;
+    if (!list || !p) return;
+    list.innerHTML = progressSteps(p, currentSubmissions, currentRevisions).map(s => `<li data-step="${s.step}" data-state="${s.state}">
+      <span class="pd-step-mark" aria-hidden="true">${STEP_MARK[s.state][0]}</span><span class="sr-only">${STEP_MARK[s.state][1]}：</span>
+      <span class="pd-step-label">${escHtml(s.label)}</span><span class="pd-step-date">${escHtml(s.at ? fmtDay(s.at) : '')}</span></li>`).join('');
+  }
+
+  // POST deliver with these finals (a first 交件, 確定更換, or 交付精修二), then redraw and show the 交件通知
+  async function deliverFolders(folders, btn) {
+    const errEl = $id('pd-deliver-err');
+    if (errEl) errEl.textContent = '';
+    if (btn) btn.disabled = true;
+    try {
+      const r = await fetch(`${WORKER_URL}/api/admin/projects/${encodeURIComponent(currentProjectId)}/deliver`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${getToken()}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ final_folders: folders }),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        const map = DELIVER_ERRORS[data.code];
+        if (errEl) errEl.textContent = map ? map(data) : (data.error || `失敗（${r.status}）`);
+        if (btn) btn.disabled = false;
+        return;
+      }
+      await Promise.all([openProjectDetail(currentProjectId), loadProjectList()]);
+      showDeliverNotice(currentProject, currentTokens);
     } catch (e) {
       if (errEl) errEl.textContent = '無法連線到 Worker';
       if (btn) btn.disabled = false;
@@ -2157,11 +2467,18 @@
     const box = document.getElementById('pd-delivery');
     const project = currentProject;
     if (!box || !project) return;
+    const stage = projectStage(project, currentRevisions);
+    const plan = roundPlan(project);
+    renderStatusHead(stage, plan);
+    renderMoreMenu();
+    renderPhotoRows(stage, plan);
+    renderProgress();
     const delivered = !!project.delivered_at;
     const finals = Array.isArray(project.final_folders) ? project.final_folders : [];
-    if (!delivered && project.phase !== 'retouching') { box.style.display = 'none'; box.innerHTML = ''; secDeliveryShown(false); refreshSecSummaries(); return; }
+    if (!delivered && project.phase !== 'retouching') { box.style.display = 'none'; box.innerHTML = ''; refreshSecSummaries(); return; }
     box.style.display = '';
-    secDeliveryShown(true);
+    // at most one accent (primary) button in the card; an archived project's primary is 取消封存
+    const primaryOk = stage !== 'archived';
 
     const last = lastFinalFolders(project);
     const showLastHint = last.length > 0 && finalDraft.length === last.length && last.every((f, i) => f === finalDraft[i]);
@@ -2172,6 +2489,9 @@
         ? '<div class="pd-note" id="pd-upload-final-note">無法讀取既有的精修資料夾，所以不自動編號、也不鎖定資料夾；請在上傳頁自己選資料夾（小心不要蓋掉前一版）。</div>'
         : (target.state === 'ready' && target.locked
           ? `<div class="pd-target-hint" id="pd-upload-final-hint">＋上傳精修會放進 <code>${escHtml(target.folder)}</code></div>` : '');
+    // 交件 is the primary once there is something to deliver; until then (nothing chosen, nothing uploaded) it is ＋上傳精修
+    const deliverMain = primaryOk && finalDraft.length > 0;
+    const uploadMain = primaryOk && !delivered && !finalDraft.length;
     const chooser = `
       <div class="pd-note">精修成品必須放在<strong>獨立的資料夾</strong>（例如毛片旁邊的「精修」），不能放在毛片（選片用）資料夾裡面，否則會被拒絕。</div>
       ${showLastHint ? '<div class="pd-note" data-final-last-hint>上次選的精修資料夾（可修改，按「交件」才會生效）：</div>' : ''}
@@ -2179,28 +2499,31 @@
       <div id="pd-final-chips">${draftChips()}</div>
       <div class="pd-row">
         <button id="pd-final-pick-btn" class="btn btn-outline" type="button">選擇精修資料夾</button>
-        <a id="pd-upload-final-btn" class="btn btn-outline" data-target="${target ? target.state : 'ready'}" href="${escHtml(finalsUploadHref(project))}">＋上傳精修</a>
-        <button id="pd-deliver-btn" class="btn btn-accent" type="button"${finalDraft.length ? '' : ' disabled'}>${delivered ? '確定更換' : '交件'}</button>
+        <a id="pd-upload-final-btn" class="btn ${uploadMain ? 'btn-accent' : 'btn-outline'}"${uploadMain ? ' data-primary' : ''} data-target="${target ? target.state : 'ready'}" href="${escHtml(finalsUploadHref(project))}">＋上傳精修</a>
+        <button id="pd-deliver-btn" class="btn ${deliverMain ? 'btn-accent' : 'btn-outline'}"${deliverMain ? ' data-primary' : ''} type="button"${finalDraft.length ? '' : ' disabled'}>${delivered ? '確定更換' : '交件'}</button>
         ${delivered ? '<button id="pd-final-cancel-btn" class="btn btn-ghost" type="button">取消</button>' : ''}
       </div>
       ${targetNote}`;
     function draftChips() {
       return finalDraft.length ? chipsHtml(finalDraft, true) : '<span class="folder-none">尚未選擇</span>';
     }
+    // an open round: its one next step (upload the next version, or deliver the one already uploaded)
+    const roundMain = !primaryOk || stage !== 'revising' || finalEditing ? ''
+      : plan.kind === 'deliver'
+        ? `<div class="pd-row"><button id="pd-round-deliver-btn" class="btn btn-accent" type="button" data-primary data-folder="${escHtml(plan.folder)}">交付${escHtml(plan.name)}</button></div>`
+        : `<div class="pd-row"><a id="pd-round-upload-btn" class="btn btn-accent" data-primary data-target="${target ? target.state : 'ready'}" href="${escHtml(plan.folder ? PF.uploadHref(project.id, plan.folder, true) : finalsUploadHref(project))}">＋上傳${escHtml(plan.name || PF.FINAL_NAME)}</a></div>`;
 
     if (!delivered) {
       box.innerHTML = `${chooser}<div id="pd-deliver-err" class="err"></div>`;
     } else {
       box.innerHTML = `
-        <h4><span class="badge badge-approved" data-delivered-status>已交件</span>
-          <span class="folder-none">${escHtml(fmtTime(project.delivered_at))}</span></h4>
-        <div id="pd-delivered-folders">${finals.length ? chipsHtml(finals, false)
-          : '<span class="folder-none">（舊資料：沒有指定精修資料夾，客人仍看到選片畫面）</span>'}</div>
+        ${roundMain}
+        <div class="pd-delivered-line"><span data-delivered-status>已交件</span>
+          <span class="folder-none">${escHtml(fmtTime(project.delivered_at))}</span>
+          <span id="pd-delivered-folders">${finals.length ? chipsHtml(finals, false)
+            : '<span class="folder-none">（舊資料：沒有指定精修資料夾，客人仍看到選片畫面）</span>'}</span></div>
         ${finalEditing ? chooser : `<div class="pd-row">
           <button id="pd-replace-final-btn" class="btn btn-outline" type="button">更換精修資料夾</button>
-          <button id="pd-copy-notice-btn" class="btn btn-outline" type="button">複製交件通知文案</button>
-          <span id="pd-copy-notice-status" class="dn-status" role="status"></span>
-          <button id="pd-undeliver-btn" class="btn btn-ghost" type="button">取消交件</button>
         </div>`}
         <div id="pd-deliver-err" class="err"></div>
         ${confirmSectionHtml(project)}`;
@@ -2227,41 +2550,11 @@
       renderDeliveryBlock();
     });
     box.querySelector('#pd-mark-done-btn')?.addEventListener('click', markDone);
-    box.querySelector('#pd-copy-notice-btn')?.addEventListener('click', async () => {
-      const st = document.getElementById('pd-copy-notice-status');
-      const ok = await copyText(deliveryNoticeText(currentProject, liveLinkOf(currentTokens)));
-      if (!st) return;
-      st.textContent = ok ? '已複製' : '複製失敗，請手動複製';
-      clearTimeout(st._t);
-      st._t = setTimeout(() => { st.textContent = ''; }, 2500);
-    });
-    box.querySelector('#pd-undeliver-btn')?.addEventListener('click', async () => {
-      if (!confirm('取消交件後，客人的連結會回到選片畫面（唯讀），精修成品不再顯示。確定要取消交件嗎？')) return;
-      await projectAction('undeliver');
-    });
-    box.querySelector('#pd-deliver-btn')?.addEventListener('click', async function () {
-      const errEl = document.getElementById('pd-deliver-err');
-      if (errEl) errEl.textContent = '';
-      this.disabled = true;
-      try {
-        const r = await fetch(`${WORKER_URL}/api/admin/projects/${encodeURIComponent(currentProjectId)}/deliver`, {
-          method: 'POST',
-          headers: { 'Authorization': `Bearer ${getToken()}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ final_folders: finalDraft }),
-        });
-        const data = await r.json().catch(() => ({}));
-        if (!r.ok) {
-          const map = DELIVER_ERRORS[data.code];
-          if (errEl) errEl.textContent = map ? map(data) : (data.error || `失敗（${r.status}）`);
-          this.disabled = false;
-          return;
-        }
-        await Promise.all([openProjectDetail(currentProjectId), loadProjectList()]);
-        showDeliverNotice(currentProject, currentTokens);
-      } catch (e) {
-        if (errEl) errEl.textContent = '無法連線到 Worker';
-        this.disabled = false;
-      }
+    box.querySelector('#pd-deliver-btn')?.addEventListener('click', function () { deliverFolders(finalDraft, this); });
+    box.querySelector('#pd-round-deliver-btn')?.addEventListener('click', function () {
+      const name = leafName(this.dataset.folder);
+      if (!confirm(`把「${name}」交給客人？\n客人會看到新版，目前的修改要求會一併結案。`)) return;
+      deliverFolders([this.dataset.folder], this);
     });
   }
 

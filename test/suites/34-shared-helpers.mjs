@@ -258,14 +258,16 @@ await suite('util helpers — every page that loads a Util-using script loads js
     deliveredAt: '2026-09-20T00:00:00.000Z', finalFolders: ['shoot/精修/'] });
   m.state.submissions.push({ id: 's1', picker_id: 'picker-0', relationship: '本人', email: null, photo_keys: ['20260819/p0.jpg'], count: 1, pick_limit: null, extra_price: null, created_at: '2026-09-27T14:52:00.000Z' });
   m.state.submissions.push({ id: 's2', picker_id: 'picker-0', relationship: '本人', email: null, photo_keys: ['20260819/p0.jpg'], count: 1, pick_limit: null, extra_price: null, created_at: 'not-a-date' });
-  await suite('util helpers — admin: delivery summary 已交件 9/20, submission time 9/27 22:52, an unparseable time falls back to the raw text',
+  await suite('util helpers — admin: 進度 交件 dated 9/20, submission time 9/27 22:52, an unparseable time falls back to the raw text',
     `${base}/admin.html#project=proj-sec`,
     async page => {
       const out = [];
       const ok = okFn(out);
       await secWait(page);
       const info = await secInfo(page);
-      ok('the delivery one-liner starts with 已交件 9/20 (fmtDay)', /^已交件 9\/20 /.test(info.delivery?.sum || ''), JSON.stringify(info.delivery));
+      // (the 交件 section and its one-liner went with the project page redesign of 2026-10-19; fmtDay now dates the 進度 steps)
+      const step = await page.$eval('#pd-progress [data-step="delivered"] .pd-step-date', e => e.textContent).catch(() => null);
+      ok('the 進度 交件 step is dated 9/20 (fmtDay)', step === '9/20' && !!info.settings, JSON.stringify(step));
       await page.waitForSelector('#pd-submissions .pd-submission', { state: 'attached', timeout: 5000 });
       const subs = await page.$$eval('.pd-submission', els => els.map(e => e.textContent));
       ok('floor: both submissions are listed', subs.length === 2, JSON.stringify(subs));

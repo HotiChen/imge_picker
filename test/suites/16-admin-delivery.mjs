@@ -6,7 +6,7 @@ import { PIXEL } from '../lib/env.mjs';
 import { ADMIN, adminMock } from '../lib/auth-mocks.mjs';
 import { ADMIN_BUCKET, adminDropDefaultFinal, adminPickFinals, chipTexts } from '../lib/delivery-helpers.mjs';
 import { pickFakeWorker } from '../lib/pick-fake.mjs';
-import { PF_NAMES, PF_ROOT, pfLists } from '../lib/project-helpers.mjs';
+import { PF_NAMES, PF_ROOT, moreClick, pfLists } from '../lib/project-helpers.mjs';
 
 export default async function register() {
 const deliverBodies = m => m.requests.filter(r => r.method === 'POST' && r.path.endsWith('/deliver')).map(r => r.body);
@@ -52,8 +52,9 @@ const pfWaitFinalsLink = page => page.waitForSelector('#pd-upload-final-btn[data
         JSON.stringify(await chipTexts(page, '#pd-delivered-folders [data-final-chip]')) === '["shoot/精修/"]');
       ok('更換精修資料夾 and 取消交件 are offered; 交件 is gone',
         !!(await page.$('#pd-replace-final-btn')) && !!(await page.$('#pd-undeliver-btn')) && (await page.$('#pd-deliver-btn')) === null);
-      ok('the detail header and the project list both show the 已交件 badge',
-        (await page.$('.pd-head [data-delivered-badge]')) !== null &&
+      // (project page 2026-10-19: the detail has no badges, its status card says 客人確認中; the list keeps 已交件)
+      ok('the status card says 客人確認中 and the project list shows the 已交件 badge',
+        (await page.textContent('#pd-status-label')) === '客人確認中' &&
         await page.waitForSelector('#proj-recent-list [data-delivered-badge]', { state: 'attached', timeout: 3000 }).then(() => true, () => false));
       const firstStamp = m.state.project.delivered_at;
 
@@ -89,17 +90,17 @@ const pfWaitFinalsLink = page => page.waitForSelector('#pd-upload-final-btn[data
       // undeliver asks first
       let dialogText = '';
       page.once('dialog', d => { dialogText = d.message(); d.dismiss(); });
-      await page.click('#pd-undeliver-btn');
+      await moreClick(page, '#pd-undeliver-btn');   // 取消交件 is in the ⋯ menu
       await page.waitForTimeout(300);
       ok('取消交件 shows a confirm dialog that says what happens', /取消交件/.test(dialogText) && /選片畫面/.test(dialogText), dialogText);
       ok('dismissing it keeps the delivery',
         m.state.project.delivered_at !== null && !m.requests.some(r => r.path.endsWith('/undeliver')));
       page.once('dialog', d => d.accept());
-      await page.click('#pd-undeliver-btn');
+      await moreClick(page, '#pd-undeliver-btn');
       await page.waitForSelector('#pd-final-pick-btn', { timeout: 3000 });
       ok('accepting it undelivers: the chooser is back, no 已交件',
         m.requests.some(r => r.path.endsWith('/undeliver')) && (await page.$('[data-delivered-status]')) === null &&
-        (await page.$('.pd-head [data-delivered-badge]')) === null);
+        (await page.textContent('#pd-status-label')) === '精修中');
       ok('and the server keeps the folders (final_folders stays, delivered_at is null)',
         m.state.project.delivered_at === null && JSON.stringify(m.state.project.final_folders) === '["shoot/精修二/"]',
         JSON.stringify(m.state.project));
@@ -227,7 +228,7 @@ const pfWaitFinalsLink = page => page.waitForSelector('#pd-upload-final-btn[data
         m.state.project.delivered_at === null && JSON.stringify(m.state.project.final_folders) === '["shoot/精修/"]');
       ok('NOT shown as delivered (no status, no replace/undeliver buttons, no header badge)',
         (await page.$('[data-delivered-status]')) === null && (await page.$('#pd-replace-final-btn')) === null &&
-        (await page.$('#pd-undeliver-btn')) === null && (await page.$('.pd-head [data-delivered-badge]')) === null);
+        (await page.$('#pd-undeliver-btn')) === null && (await page.textContent('#pd-status-label')) === '精修中');
       await page.waitForSelector('#proj-recent-list [data-project-row]', { state: 'attached', timeout: 5000 });   // the list is hidden behind the open detail
       ok('the project list row is rendered and has no 已交件 badge',
         (await page.$('#proj-recent-list [data-project-row]')) !== null && (await page.$('#proj-recent-list [data-delivered-badge]')) === null);
@@ -285,17 +286,17 @@ const pfWaitFinalsLink = page => page.waitForSelector('#pd-upload-final-btn[data
         JSON.stringify(await chipTexts(page, '#pd-final-chips [data-final-chip]')) === '["shoot/精修/"]' &&
         !/上次選的精修資料夾/.test(await page.$eval('#pd-delivery', e => e.textContent)));
       await page.click('#pd-final-cancel-btn');
-      await page.waitForSelector('#pd-undeliver-btn', { timeout: 3000 });
+      await page.waitForSelector('#pd-undeliver-btn', { state: 'attached', timeout: 3000 });
       page.once('dialog', d => d.accept());
-      await page.click('#pd-undeliver-btn');
+      await moreClick(page, '#pd-undeliver-btn');
       await page.waitForSelector('#pd-final-pick-btn', { timeout: 3000 });
       ok('after 取消交件 the Worker still has the finals but no delivered_at',
         m.state.project.delivered_at === null && JSON.stringify(m.state.project.final_folders) === '["shoot/精修/"]');
       ok('and the chooser comes back pre-filled with them, with the hint',
         JSON.stringify(await chipTexts(page, '#pd-final-chips [data-final-chip]')) === '["shoot/精修/"]' &&
         /上次選的精修資料夾/.test(await page.$eval('#pd-delivery', e => e.textContent)));
-      ok('no 已交件 badge on the header or the list after cancelling',
-        (await page.$('.pd-head [data-delivered-badge]')) === null && (await page.$('#proj-recent-list [data-delivered-badge]')) === null);
+      ok('the status card is back to 精修中 and the list has no 已交件 badge after cancelling',
+        (await page.textContent('#pd-status-label')) === '精修中' && (await page.$('#proj-recent-list [data-delivered-badge]')) === null);
       const before = deliverBodies(m).length;
       await page.click('#pd-deliver-btn');
       await page.waitForSelector('[data-delivered-status]', { timeout: 3000 });
@@ -322,10 +323,10 @@ const pfWaitFinalsLink = page => page.waitForSelector('#pd-upload-final-btn[data
       await page.click('#pd-deliver-btn');
       await page.waitForSelector('[data-delivered-status]', { timeout: 3000 });
       await page.click('#dn-close-btn');
-      ok('delivered first (positive case)', m.state.project.delivered_at !== null && (await page.$('.pd-head [data-delivered-badge]')) !== null);
-      await page.click('#pd-reopen-btn');
+      ok('delivered first (positive case)', m.state.project.delivered_at !== null && (await page.textContent('#pd-status-label')) === '客人確認中');
+      await moreClick(page, '#pd-reopen-btn');   // 開放修改 is in the ⋯ menu
       // the detail re-rendered in picking (載入中… in between has no #pd-delivery)
-      await page.waitForFunction(() => document.querySelector('.pd-head .badge')?.textContent === '選片中' &&
+      await page.waitForFunction(() => document.getElementById('pd-status-label')?.textContent === '客人選片中' &&
         !!document.getElementById('pd-delivery'), null, { timeout: 3000 });
       ok('reopen answered like the Worker: picking, no stamp, the finals kept',
         m.state.project.phase === 'picking' && m.state.project.delivered_at === null &&
@@ -333,10 +334,13 @@ const pfWaitFinalsLink = page => page.waitForSelector('#pd-upload-final-btn[data
       ok('picking: the delivery block is hidden and empty (the kept finals are not shown as delivered)',
         await page.$eval('#pd-delivery', e => getComputedStyle(e).display === 'none' && e.innerHTML === '') &&
         (await page.$('[data-delivered-status]')) === null);
-      // the guest submits again (outside this page), then 開始精修
+      // the guest submits again (outside this page); the photographer reloads, then 開始精修 (the status card's
+      // primary in 選片完成・待精修 only, since the project page redesign of 2026-10-19)
       m.state.project.phase = 'submitted';
+      await page.reload();
+      await page.waitForSelector('#pd-status #pd-start-retouch-btn', { timeout: 5000 });
       await page.click('#pd-start-retouch-btn');
-      await page.waitForFunction(() => document.querySelector('.pd-head .badge')?.textContent === '精修中' &&
+      await page.waitForFunction(() => document.getElementById('pd-status-label')?.textContent === '精修中' &&
         !!document.querySelector('#pd-delivery #pd-final-pick-btn'), null, { timeout: 3000 });
       ok('retouching again: the chooser comes back pre-filled with the last finals, with the hint',
         JSON.stringify(await chipTexts(page, '#pd-final-chips [data-final-chip]')) === '["shoot/精修/"]' &&
@@ -369,11 +373,14 @@ const pfFiles = names => [`${PF_ROOT}/毛片/IMG_1.jpg`, ...names.map(n => `${PF
       const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
       await page.waitForSelector('#pd-delivery #pd-final-pick-btn', { timeout: 5000 });
       await pfWaitFinalsLink(page);
-      const line = await page.$eval('#pd-folder-line', e => ({ text: e.textContent.trim(), shown: getComputedStyle(e).display !== 'none' })).catch(() => null);
-      ok('the detail says 資料夾：<root>/', line && line.shown && line.text === `資料夾：${PF_ROOT}/`, JSON.stringify(line));
-      // in 精修 the button is still in the top action row but grayed out (suite 95 covers it and the link before 精修)
-      ok('＋上傳毛片 is in the top action row, grayed out in 精修 (no link)',
-        await page.$eval('.pd-actions #pd-upload-proofs-btn', e => e.getAttribute('href') === null && e.disabled === true).catch(() => false));
+      // (project page 2026-10-19: the folder line is in the ✎ 編輯 modal, read-only)
+      await page.click('#pd-edit-btn');
+      const line = await page.$eval('#pd-edit-folder', e => ({ text: e.textContent.trim(), shown: e.getClientRects().length > 0 })).catch(() => null);
+      ok('the edit modal says 資料夾：<root>/（不能改）', line && line.shown && line.text === `資料夾：${PF_ROOT}/（不能改）`, JSON.stringify(line));
+      await page.keyboard.press('Escape');
+      // in 精修 the button is still in the 毛片 row but grayed out (suite 95 covers it and the link before 精修)
+      ok('＋上傳毛片 is in the 照片 block\'s 毛片 row, grayed out in 精修 (no link)',
+        await page.$eval('#pd-photos [data-version="proofs"] #pd-upload-proofs-btn', e => e.getAttribute('href') === null && e.disabled === true).catch(() => false));
       const f = await pfLink(page, '#pd-upload-final-btn');
       ok('＋上傳精修 goes to <root>/精修/, for this project, locked',
         f.file === 'upload.html' && f.folder === `${PF_ROOT}/精修/` && f.project === 'proj-new' && f.lock === '1' && f.target === 'ready' &&
@@ -576,7 +583,7 @@ for (const fail of [500, 'net']) {
       await page.waitForTimeout(500);
       ok('no listing of the root was made for it', !pfLists(m).some(c => c.prefix === '20260819/'), JSON.stringify(pfLists(m)));
       ok('no 精修 folder is preselected, no ＋上傳毛片, no hint', (await page.$('#pd-final-chips [data-final-chip]')) === null && !(await page.$('#pd-upload-proofs-btn')) && !(await page.$('#pd-upload-final-hint')));
-      ok('the folder line lists the snapshot folders', (await page.$eval('#pd-folder-line', e => e.textContent.trim())) === '資料夾：20260819/Anita/');
+      ok('the folder line (edit modal) lists the snapshot folders', (await page.$eval('#pd-edit-folder', e => e.textContent.trim())) === '資料夾：20260819/Anita/（不能改）');
       return out;
     },
     { before: m.attach, initScript: ADMIN });
@@ -587,9 +594,9 @@ for (const fail of [500, 'net']) {
   await suite('舊專案（單層資料夾）— 資料夾一行照實列出；沒有＋上傳毛片',
     `${base}/admin.html#project=proj-old1`,
     async page => {
-      await page.waitForSelector('#pd-folder-line', { timeout: 5000 });
+      await page.waitForSelector('#pd-edit-folder', { state: 'attached', timeout: 5000 });
       return [
-        (await page.$eval('#pd-folder-line', e => e.textContent.trim())) === '資料夾：20260819/' ? 'ok    folder line' : 'FAIL  folder line',
+        (await page.$eval('#pd-edit-folder', e => e.textContent.trim())) === '資料夾：20260819/（不能改）' ? 'ok    folder line (edit modal)' : 'FAIL  folder line',
         !(await page.$('#pd-upload-proofs-btn')) ? 'ok    no ＋上傳毛片' : 'FAIL  ＋上傳毛片 offered for a single-level folder',
       ];
     },

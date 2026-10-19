@@ -692,6 +692,31 @@ removed anything from R2. Worker only (the button comes later); no migration.
   accounts' folders.
 - Tests: `worker/test/photo-delete.test.mjs`, `worker/test/r2-delete-helper.test.mjs`.
 
+## The photographer's project page (admin.html, redesigned 2026-10-19)
+
+Frontend only; no Worker field was added. Top to bottom (`renderProjectDetail`):
+- Header: title, one meta line (拍攝日期 · 攝影類別 · 挑選人), 「✎ 編輯」 and 「⋯」 (更多).
+- Status card (`#pd-status`, `data-stage`): ONE label, one 下一步 line, at most one accent button
+  (`[data-primary]`). `projectStage`: 已封存 (archived_at, primary 取消封存) > 已完成 (client_confirmed_at)
+  > 客人要求修改（第 N 輪） (delivered + an open request; N counts the rounds, oldest = 1) > 客人確認中
+  (delivered) > 精修中 (primary ＋上傳精修 while nothing is chosen, else 交件) > 選片完成・待精修
+  (primary 開始精修) > 客人選片中. In a round, `roundPlan` reads the 精修* folders under the root: a
+  version newer than the delivered one exists → 「交付精修二」 (a repeat deliver of just that folder,
+  after a confirm; the Worker resolves the round as with 更換精修), else 「＋上傳精修二」 (the locked
+  upload of `nextFinalFolder`). Unknown (older project, listing failed) → the unlocked ＋上傳精修 and
+  更換精修資料夾. The 交件 chooser, the delivered folders, 更換精修資料夾, the rounds and 標記完成 live in
+  the card (same ids as before). The detail page has no status badges any more; the list keeps them.
+- 照片: a row per version (毛片 with 看 = `?mode=all` and ＋上傳毛片; each 精修* with 看 = `?mode=finals`;
+  the delivered one marked 客人目前看的版本; an empty next-version row while a round waits), then
+  下載選片 / 下載需求表. No counts or dates: the page would need a listing per folder.
+- 進度: ✓ / ● / ○ from what the page has (latest submission, delivered_at, rounds, confirmation);
+  開始精修 has no date (none is stored).
+- 「✎ 編輯」 modal: 專案名稱 / 拍攝日期 / 攝影類別 and the read-only 資料夾 line; 儲存 sends one PATCH
+  per changed field (the old requests and messages). 「⋯」 menu: 看全部毛片, 複製交件通知文案 and 取消交件
+  (delivered), 開放修改, then 重設主人, 封存, 刪除 (no submissions) in the danger colour.
+- The collapsible sections (設定, 目前選取, 訂單, 送出紀錄, 挑選人與連結) follow unchanged; 交件 is no
+  longer one of them.
+
 ## Out of scope for this step
 
 (Status 2026-10-08: the zip of all finals shipped on the 完成頁, 下載全部精修.) Watermarks; a second link just for delivery;

@@ -3,7 +3,7 @@
 // hidden, 「← 返回專案列表」 on top); #project=<id> is the address of the detail view.
 // Registered by test/run.mjs in file-name order; see test/README.md.
 import { base, suite } from '../lib/harness.mjs';
-import { openCreateForm } from '../lib/project-helpers.mjs';
+import { moreClick, openCreateForm } from '../lib/project-helpers.mjs';
 import { MOBILE } from '../lib/env.mjs';
 import { ADMIN_PLAIN } from '../lib/auth-mocks.mjs';
 import { pickFakeWorker } from '../lib/pick-fake.mjs';
@@ -281,9 +281,9 @@ const lines = () => {
       const { out, ok } = lines();
       await waitList(page);
       await page.click('[data-open-project]');
-      await page.waitForSelector('#pd-archive-btn', { timeout: 5000 });
+      await page.waitForSelector('#pd-archive-btn', { state: 'attached', timeout: 5000 });   // in the ⋯ menu (project page 2026-10-19)
       page.once('dialog', d => d.accept());
-      await page.click('#pd-archive-btn');
+      await moreClick(page, '#pd-archive-btn');
       await page.waitForFunction(() => document.getElementById('proj-recent-list').textContent.includes('尚未建立過專案'), null, { timeout: 5000 });
       ok('the archive endpoint was called', m.requests.some(r => r.method === 'POST' && r.path.endsWith('/archive')));
       ok('back on the list: the (now empty) list, 顯示已封存 and the create form are shown', await isShown(page, '#proj-recent-list') && await isShown(page, '#proj-show-archived-toggle') && await isShown(page, '#project-create-panel'));
@@ -295,7 +295,7 @@ const lines = () => {
       await page.waitForSelector('#pd-unarchive-btn', { timeout: 5000 });
       ok('opening it shows the detail (取消封存 offered), list hidden', await isShown(page, '#pd-unarchive-btn') && await listAllHidden(page));
       await page.click('#pd-unarchive-btn');
-      await page.waitForSelector('#pd-archive-btn', { timeout: 5000 });
+      await page.waitForSelector('#pd-archive-btn', { state: 'attached', timeout: 5000 });   // in the ⋯ menu (project page 2026-10-19)
       ok('取消封存 keeps the detail view (the project is still the one being looked at): detail shown, list area and form hidden',
         await isShown(page, '#project-detail-panel') && await isHidden(page, '#proj-recent-list') && await isHidden(page, '#project-create-panel') && await isHidden(page, '#proj-show-archived-toggle'));
       return out;
@@ -311,9 +311,9 @@ const lines = () => {
       const { out, ok } = lines();
       await waitList(page);
       await page.click('[data-open-project]');
-      await page.waitForSelector('#pd-delete-btn', { timeout: 5000 });
+      await page.waitForSelector('#pd-delete-btn', { state: 'attached', timeout: 5000 });   // in the ⋯ menu (project page 2026-10-19)
       page.once('dialog', d => d.accept());
-      await page.click('#pd-delete-btn');
+      await moreClick(page, '#pd-delete-btn');
       await page.waitForFunction(() => document.getElementById('proj-recent-list').textContent.includes('尚未建立過專案'), null, { timeout: 5000 });
       ok('the DELETE was sent', m.requests.some(r => r.method === 'DELETE'));
       ok('the list view is back (list area and form shown)', await isShown(page, '#proj-recent-list') && await isShown(page, '#project-create-panel') && await isShown(page, '#proj-show-archived-toggle'));

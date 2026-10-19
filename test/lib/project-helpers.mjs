@@ -38,3 +38,16 @@ export async function openCreateForm(page) {
   if (await page.$eval('#project-create-panel', e => e.hidden)) await page.click('#proj-new-btn');
   await page.waitForSelector('#project-create-panel:not([hidden]) #proj-title', { state: 'visible', timeout: 5000 });
 }
+
+// admin.html project page (2026-10-19): the actions that are not the stage's main step live in the 「⋯」 menu
+// (#pd-more-menu, closed until #pd-more-btn is pressed). moreClick opens it and presses one item.
+export async function openMore(page) {
+  if (await page.$eval('#pd-more-menu', m => m.hidden)) await page.click('#pd-more-btn');
+  await page.waitForSelector('#pd-more-menu', { state: 'visible', timeout: 3000 });
+}
+export async function moreClick(page, sel) {
+  await openMore(page);
+  await page.click(`#pd-more-menu ${sel}`);
+}
+// the detail page is drawn (the header's ⋯ is there): what suites used to wait on #pd-reset-seat-btn for
+export const waitProjectPage = page => page.waitForSelector('#pd-more-btn', { timeout: 5000 });

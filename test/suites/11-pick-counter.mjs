@@ -6,7 +6,7 @@ import { MOBILE } from '../lib/env.mjs';
 import { ADMIN } from '../lib/auth-mocks.mjs';
 import { mockWorker } from '../lib/editor-mocks.mjs';
 import { pickFakeWorker } from '../lib/pick-fake.mjs';
-import { pickHeart, pickSubmits } from '../lib/project-helpers.mjs';
+import { moreClick, pickHeart, pickSubmits } from '../lib/project-helpers.mjs';
 
 export default async function register() {
 
@@ -268,11 +268,11 @@ await suite('desktop preview — arrow keys and mouse click still navigate/open 
       const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
       await page.waitForSelector('[data-open-project]', { timeout: 5000 });
       await page.click('[data-open-project]');
-      await page.waitForSelector('#pd-archive-btn', { timeout: 5000 });
+      await page.waitForSelector('#pd-archive-btn', { state: 'attached', timeout: 5000 });   // in the ⋯ menu (project page 2026-10-19)
 
       let dialogMsg = '';
       page.once('dialog', d => { dialogMsg = d.message(); d.dismiss(); });
-      await page.click('#pd-archive-btn');
+      await moreClick(page, '#pd-archive-btn');
       await page.waitForTimeout(200);
       ok('confirm warns links go dead immediately, data is kept',
         dialogMsg.includes('封存後連結會立即失效，資料會保留'), dialogMsg);
@@ -280,7 +280,7 @@ await suite('desktop preview — arrow keys and mouse click still navigate/open 
         !m.requests.some(r => r.method === 'POST' && r.path.endsWith('/archive')));
 
       page.once('dialog', d => d.accept());
-      await page.click('#pd-archive-btn');
+      await moreClick(page, '#pd-archive-btn');
       // 封存 takes the project out of the list, so the page goes back to the list view
       // (test/suites/30-admin-detail-view.mjs); the archived project is opened again from
       // 顯示已封存 to look at what 封存 did.
@@ -290,13 +290,13 @@ await suite('desktop preview — arrow keys and mouse click still navigate/open 
       await page.click('[data-open-project]');
       await page.waitForSelector('#pd-unarchive-btn', { timeout: 5000 });
       const after = await page.evaluate(() => ({
-        badge: document.querySelector('.pd-head')?.textContent.includes('已封存'),
+        badge: document.getElementById('pd-status-label')?.textContent === '已封存',   // the status card (no badges since 2026-10-19)
         newLinkBtn: !!document.getElementById('pd-new-link-btn'),
-        unarchiveBtn: !!document.getElementById('pd-unarchive-btn'),
+        unarchiveBtn: !!document.querySelector('#pd-status #pd-unarchive-btn') && !document.getElementById('pd-archive-btn'),
       }));
-      ok('shows 已封存 badge after archiving', after.badge);
+      ok('the status card says 已封存 after archiving', after.badge);
       ok('產生新連結 is hidden once archived', after.newLinkBtn === false);
-      ok('取消封存 replaces the 封存 button', after.unarchiveBtn);
+      ok('取消封存 (in the status card) replaces 封存 (gone from the ⋯ menu)', after.unarchiveBtn);
       ok('the archive endpoint was actually called',
         m.requests.some(r => r.method === 'POST' && r.path.endsWith('/archive')));
       ok('the live pick link is revoked in the same batch as the archive',
@@ -304,12 +304,12 @@ await suite('desktop preview — arrow keys and mouse click still navigate/open 
         await page.textContent('[data-token-row] .badge'));
 
       await page.click('#pd-unarchive-btn');
-      await page.waitForSelector('#pd-archive-btn', { timeout: 5000 });
+      await page.waitForSelector('#pd-archive-btn', { state: 'attached', timeout: 5000 });   // in the ⋯ menu (project page 2026-10-19)
       const restored = await page.evaluate(() => ({
-        badge: document.querySelector('.pd-head')?.textContent.includes('已封存'),
+        badge: document.getElementById('pd-status-label')?.textContent === '已封存',
         newLinkBtn: !!document.getElementById('pd-new-link-btn'),
       }));
-      ok('取消封存 drops the 已封存 badge', restored.badge === false);
+      ok('取消封存 drops 已封存 from the status card', restored.badge === false);
       ok('產生新連結 comes back', restored.newLinkBtn);
       ok('the unarchive endpoint was actually called',
         m.requests.some(r => r.method === 'POST' && r.path.endsWith('/unarchive')));
@@ -327,9 +327,9 @@ await suite('desktop preview — arrow keys and mouse click still navigate/open 
       const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
       await page.waitForSelector('[data-open-project]', { timeout: 5000 });
       await page.click('[data-open-project]');
-      await page.waitForSelector('#pd-archive-btn', { timeout: 5000 });
+      await page.waitForSelector('#pd-archive-btn', { state: 'attached', timeout: 5000 });   // in the ⋯ menu (project page 2026-10-19)
       page.once('dialog', d => d.accept());
-      await page.click('#pd-archive-btn');
+      await moreClick(page, '#pd-archive-btn');
       // 封存 returns to the list view (test/suites/30-admin-detail-view.mjs)
       await page.waitForFunction(() => document.getElementById('proj-recent-list').textContent.includes('尚未建立過專案'), null, { timeout: 5000 });
       ok('封存 went back to the list: the toggle is shown and the detail panel is not',
@@ -376,19 +376,19 @@ await suite('desktop preview — arrow keys and mouse click still navigate/open 
       const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
       await page.waitForSelector('[data-open-project]', { timeout: 5000 });
       await page.click('[data-open-project]');
-      await page.waitForSelector('#pd-reset-seat-btn', { timeout: 5000 });
+      await page.waitForSelector('#pd-reset-seat-btn', { state: 'attached', timeout: 5000 });   // in the ⋯ menu (project page 2026-10-19)
       ok('刪除 is offered when the project has 0 submissions', !!(await page.$('#pd-delete-btn')));
 
       let dialogMsg = '';
       page.once('dialog', d => { dialogMsg = d.message(); d.dismiss(); });
-      await page.click('#pd-delete-btn');
+      await moreClick(page, '#pd-delete-btn');
       await page.waitForTimeout(200);
       ok('confirm names the project and says it cannot be undone', /確定刪除專案「.+」/.test(dialogMsg) && dialogMsg.includes('無法復原') && dialogMsg.includes('分享連結'), dialogMsg);
       ok('dismissing the confirm does not call DELETE',
         !m.requests.some(r => r.method === 'DELETE'));
 
       page.once('dialog', d => d.accept());
-      await page.click('#pd-delete-btn');
+      await moreClick(page, '#pd-delete-btn');
       await page.waitForSelector('#project-detail-panel', { state: 'hidden', timeout: 5000 });
       ok('the panel is hidden after a successful delete', true);
       ok('the DELETE endpoint was actually called',
@@ -431,7 +431,7 @@ await suite('desktop preview — arrow keys and mouse click still navigate/open 
       const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
       await page.waitForSelector('[data-open-project]', { timeout: 5000 });
       await page.click('[data-open-project]');
-      await page.waitForSelector('#pd-delete-btn', { timeout: 5000 });
+      await page.waitForSelector('#pd-delete-btn', { state: 'attached', timeout: 5000 });   // in the ⋯ menu (project page 2026-10-19)
       // race a submission in right before the delete lands, like the real
       // Worker's own gate re-check
       m2.state.submissions.push({
@@ -440,7 +440,7 @@ await suite('desktop preview — arrow keys and mouse click still navigate/open 
         created_at: '2026-01-01T00:00:00Z', notified: 1,
       });
       page.once('dialog', d => d.accept());
-      await page.click('#pd-delete-btn');
+      await moreClick(page, '#pd-delete-btn');
       await page.waitForSelector('#pd-action-err:not(:empty)', { timeout: 5000 });
       const errText = await page.textContent('#pd-action-err');
       ok('shows the 已有送出紀錄，無法刪除，請改用封存 fallback', errText.includes('已有送出紀錄，無法刪除，請改用封存'), errText);

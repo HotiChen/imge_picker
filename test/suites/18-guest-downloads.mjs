@@ -290,7 +290,7 @@ for (const who of [
     async page => {
       const out = [];
       const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
-      await page.waitForSelector('#pd-reset-seat-btn', { timeout: 5000 });
+      await page.waitForSelector('#pd-more-btn', { timeout: 5000 });   // the detail is drawn (重設主人 is in the ⋯ menu since 2026-10-19)
       ok('no 標記已交件 button while still picking',
         (await page.$('#pd-deliver-btn')) === null && (await page.$('#pd-undeliver-btn')) === null);
 

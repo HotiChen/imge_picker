@@ -180,12 +180,12 @@ for (const [name, fake] of [['a dropped connection', { interestFail: 'net' }], [
     `${base}/admin.html#project=proj-1`, async (page, ok) => {
       await page.waitForSelector('#pd-interests', { timeout: 6000 });
       const r = await page.evaluate(() => ({ head: document.querySelector('#pd-interests h4').textContent, rows: [...document.querySelectorAll('#pd-interests li')].map(li => ({ name: li.querySelector('strong').textContent, kind: li.querySelector('.pd-int-kind').textContent, meta: li.querySelector('.pd-int-meta').textContent })),
-        title: !!document.getElementById('pd-title'), rename: !!document.getElementById('pd-rename-btn'), delivery: !!document.getElementById('pd-delivery'), pwned: window.__pwned, inj: !!document.querySelector('#pd-interests img, #pd-interests b') }));
+        title: !!document.getElementById('pd-title'), rename: !!document.getElementById('pd-edit-btn'), delivery: !!document.getElementById('pd-delivery'), pwned: window.__pwned, inj: !!document.querySelector('#pd-interests img, #pd-interests b') }));
       ok('block titled 客人興趣, three rows, newest tap first (b, c, a)', r.head === '客人興趣' && r.rows.map(x => x.name).join('|') === [EVIL, '謝卡', '相本書'].join('|'), JSON.stringify(r.rows));
       ok('kinds: 無框畫 / 其他 / 相本', r.rows.map(x => x.kind).join('|') === '無框畫|其他|相本', JSON.stringify(r.rows));
       ok('meta: 最近 09/25 12:30・點 3 次 (Taipei), 點 2 次, 點 1 次', /^最近 .*12:30・點 3 次$/.test(r.rows[0].meta) && r.rows[1].meta.endsWith('・點 2 次') && r.rows[2].meta.endsWith('・點 1 次'), JSON.stringify(r.rows.map(x => x.meta)));
       ok('a hostile product name stayed text: no <img> / <b> built, window.__pwned unset', !r.inj && r.pwned === undefined);
-      ok('the rest of the detail is intact (title, 改名, delivery block)', r.title && r.rename && r.delivery, JSON.stringify(r));
+      ok('the rest of the detail is intact (title, ✎ 編輯 (改名 since 2026-10-19), delivery block)', r.title && r.rename && r.delivery, JSON.stringify(r));
     }, { before: w.before, initScript: ADMIN, contextOptions: ALB_DESK });
 }
 {

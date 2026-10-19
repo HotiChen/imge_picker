@@ -67,9 +67,11 @@ const admRevItems = page => page.$$eval('#pd-revisions .pd-rev', els => els.map(
       ok('the list is newest first: 最新, 第二點, 最舊', JSON.stringify(items.map(i => i.msg)) === JSON.stringify(['最新：背景路人', '第二點 f1.jpg 偏黃', '最舊：已處理的要求']), JSON.stringify(items.map(i => i.msg)));
       ok('each item names the picker and the time (Taipei)', items.every(i => /Zoe/.test(i.meta)) && /9\/22 12:00/.test(items[0].meta), JSON.stringify(items.map(i => i.meta)));
       ok('only the resolved one is marked 已處理 and quieter (dashed, softer text)', JSON.stringify(items.map(i => i.resolved)) === '[false,false,true]' && items[2].tag === '已處理' && items[2].dashed && !items[0].dashed && items[2].color !== items[0].color && items[0].tag === null, JSON.stringify(items));
-      ok('with open requests a line explains the flow (上傳新版 → 更換精修資料夾 → 自動結案)',
-        /請上傳新版精修資料夾後按「更換精修資料夾」，會自動結案目前的要求/.test(await page.textContent('#pd-revision-hint')), await page.textContent('#pd-revision-hint').catch(() => 'absent'));
-      ok('the head and the list carry 待修改 2', (await page.$eval('.pd-head [data-confirm-badge]', e => e.textContent.trim())) === '待修改 2' &&
+      // (project page 2026-10-19: the bucket already has 精修二, newer than the delivered 精修, so the card's next step is
+      // 交付精修二 and the line names that button; the head has no badges, the status card says which round it is)
+      ok('with open requests a line explains the flow (精修二 已上傳 → 交付精修二 → 自動結案)',
+        /精修二 已上傳：按「交付精修二」交給客人，會自動結案目前的要求/.test(await page.textContent('#pd-revision-hint')), await page.textContent('#pd-revision-hint').catch(() => 'absent'));
+      ok('the status card says 客人要求修改（第 3 輪） and the list carries 待修改 2', (await page.textContent('#pd-status-label')) === '客人要求修改（第 3 輪）' &&
         (await admListBadges(page)).some(x => x.c === 'revising' && x.t === '待修改 2'), JSON.stringify(await admListBadges(page)));
       ok('the button is 標記完成', (await page.textContent('#pd-mark-done-btn')).trim() === '標記完成');
       ok('existing buttons are still there (更換精修資料夾, 取消交件)', !!(await page.$('#pd-replace-final-btn')) && !!(await page.$('#pd-undeliver-btn')));
@@ -92,8 +94,8 @@ const admRevItems = page => page.$$eval('#pd-revisions .pd-rev', els => els.map(
       ok('the button and the explaining line are gone', (await page.$('#pd-mark-done-btn')) === null && (await page.$('#pd-revision-hint')) === null);
       const after = await admRevItems(page);
       ok('the Worker resolved the requests: every item is now 已處理', after.length === 3 && after.every(i => i.resolved && i.tag === '已處理'), JSON.stringify(after));
-      ok('the head badge turned into 已標記完成, and 已交件 is still there', (await page.$eval('.pd-head [data-confirm-badge]', e => e.textContent.trim() + '|' + e.dataset.confirmBadge)) === '已標記完成|photographer' &&
-        (await page.$('.pd-head [data-delivered-badge]')) !== null);
+      ok('the status card turned into 已完成 (marked by the photographer), and 已交件 is still there', (await page.textContent('#pd-status-label')) === '已完成' &&
+        /^你已代客人標記完成/.test(await page.textContent('#pd-status-next')) && (await page.$('#pd-status [data-delivered-status]')) !== null);
       // marked done: the row leaves the 進行中 tab (list tabs, test 72) and shows up on 已完成
       await page.waitForFunction(() => document.querySelector('[data-pl-tab-n="done"]').textContent === '1', null, { timeout: 5000 });
       ok('the row left 進行中 (not in the DOM there any more)', (await page.$('#proj-recent-list [data-project-row]')) === null);
@@ -213,8 +215,8 @@ for (const [name, setup, re, stillThere] of [
       await page.waitForFunction(() => document.querySelector('#pd-delivered-folders [data-final-chip]')?.dataset.finalChip === 'shoot/精修二/', null, { timeout: 5000 });
       const after = await admRevItems(page);
       ok('every request is now 已處理', after.length === 3 && after.every(i => i.resolved), JSON.stringify(after));
-      ok('the explaining line and the 待修改 badge are gone (the head and the list)',
-        (await page.$('#pd-revision-hint')) === null && (await page.$('.pd-head [data-confirm-badge="revising"]')) === null &&
+      ok('the explaining line and the 待修改 badge are gone (the status card is 客人確認中; the list)',
+        (await page.$('#pd-revision-hint')) === null && (await page.textContent('#pd-status-label')) === '客人確認中' &&
         !(await admListBadges(page)).some(x => x.c === 'revising'), JSON.stringify(await admListBadges(page)));
       ok('a new version is not confirmed: 尚未確認 and 標記完成 is offered again', /尚未確認/.test(await page.textContent('#pd-confirm-status')) && !!(await page.$('#pd-mark-done-btn')));
       return out;

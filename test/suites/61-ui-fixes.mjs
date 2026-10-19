@@ -101,7 +101,7 @@ for (const [name, url, sel, mk] of [
       const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
       await page.waitForSelector('[data-project-row] .proj-row-name', { timeout: 5000 });
       await page.click('[data-project-row] .proj-row-name');
-      await page.waitForSelector('#pd-reset-seat-btn', { timeout: 5000 });
+      await page.waitForSelector('#pd-more-btn', { timeout: 5000 });   // the detail is drawn (project page 2026-10-19: 重設主人 is in the ⋯ menu)
       await page.waitForTimeout(300);
       const hs = await page.$$eval('#project-detail-body .btn', els => els
         .filter(e => e.getClientRects().length > 0 && getComputedStyle(e).display !== 'none')

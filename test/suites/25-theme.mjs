@@ -203,10 +203,15 @@ for (const [tag, ctx] of [['1280', DESKTOP], ['390', PHONE]]) {
           !!document.getElementById('pd-extra-warn') && !!document.querySelector('.ord-card.cancelled') &&
           document.querySelectorAll('#pd-selections-details tbody tr').length === 2));
       await tokenChecks(page, ok, 'admin');
+      // project page 2026-10-19: no header badges; the status card, 照片 and 進度 instead, and the ⋯ menu (opened for the
+      // scan, so its items are on screen and measured)
+      await page.click('#pd-more-btn');
+      await page.waitForSelector('#pd-more-menu', { state: 'visible', timeout: 3000 });
       await brightChecks(page, ok, 'admin 詳情', { minItems: 80,
-        named: ['header .subtitle', '.side-nav-item', '.side-nav-item.active', '#pd-back-btn', '.pd-head .badge-approved', '.pd-head .badge-pending',
-          '#pd-submissions .badge-pending', '.pd-owner', '.pd-diff', '#project-detail-panel a.pd-link', '#pd-start-retouch-btn', '#pd-reset-seat-btn',
-          '#pd-download-btn', '#pd-archive-btn', '#pd-final-pick-btn', 'th', '.field', '.panel-note, .pd-note', '.ord-warn',
+        named: ['header .subtitle', '.side-nav-item', '.side-nav-item.active', '#pd-back-btn', '#pd-status-label', '#pd-status-next', '.pd-meta',
+          '#pd-submissions .badge-pending', '.pd-owner', '.pd-diff', '#project-detail-panel a.pd-link', '#pd-upload-final-btn', '#pd-reset-seat-btn',
+          '#pd-download-btn', '#pd-archive-btn', '#pd-reopen-btn', '#pd-edit-btn', '#pd-more-btn', '.pd-ver-name', '.pd-step-label',
+          '.pd-steps li[data-state="next"]', '#pd-final-pick-btn', 'th', '.field', '.panel-note, .pd-note', '.ord-warn',
           '.ord-card .ord-status', '.ord-owed', '.ord-actions .btn', '[data-copy-link]',
           '.pd-switch'],
         }).then(r => {
@@ -282,16 +287,16 @@ for (const [tag, ctx] of [['1280', DESKTOP], ['390', PHONE]]) {
         const out = [];
         const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
         await page.waitForSelector('#pd-revisions .pd-rev', { timeout: 5000 });
-        await page.waitForSelector('.pd-head [data-confirm-badge]', { timeout: 5000 });
+        await page.waitForSelector('#pd-status-label', { timeout: 5000 });
         const open = state === 'open requests';
-        ok('the fixture reached the places under test (list of 3, one resolved, status line, a badge in the head)',
-          await page.evaluate(() => document.querySelectorAll('#pd-revisions .pd-rev').length === 3 && !!document.getElementById('pd-confirm-status') && !!document.querySelector('.pd-head [data-confirm-badge]')));
+        ok('the fixture reached the places under test (list of 3, one resolved, status line, the status card label)',
+          await page.evaluate(() => document.querySelectorAll('#pd-revisions .pd-rev').length === 3 && !!document.getElementById('pd-confirm-status') && !!document.getElementById('pd-status-label').textContent));
         ok(open ? '標記完成 and the explaining line are on screen' : 'the status line is the confirmed (green) one',
           open ? !!(await page.$('#pd-mark-done-btn')) && !!(await page.$('#pd-revision-hint')) : await page.$eval('#pd-confirm-status', e => e.classList.contains('done')));
         await tokenChecks(page, ok, 'admin');
         await brightChecks(page, ok, `admin 確認區 (${state})`, { minItems: 60,
-          named: ['#pd-confirm-status', '.pd-rev-meta', '.pd-rev-msg', '.pd-rev.resolved .pd-rev-msg', '.pd-rev-done', '.pd-head [data-confirm-badge]',
-            ...(open ? ['#pd-mark-done-btn', '#pd-revision-hint'] : [])] });
+          named: ['#pd-confirm-status', '.pd-rev-meta', '.pd-rev-msg', '.pd-rev.resolved .pd-rev-msg', '.pd-rev-done', '#pd-status-label', '#pd-status-next',
+            '.pd-ver-current', '.pd-step-date', ...(open ? ['#pd-mark-done-btn', '#pd-revision-hint', '#pd-round-deliver-btn'] : [])] });
         const card = await page.$eval('.pd-rev:not(.resolved), .pd-rev', e => { const c = getComputedStyle(e); return { bg: c.backgroundColor }; });
         ok('a request is a light card (not a dark box)', /^rgb\(2[0-9]{2}, 2[0-9]{2}, 2[0-9]{2}\)$/.test(card.bg), JSON.stringify(card));
         if (tag === '390') ok('no horizontal scroll', await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));

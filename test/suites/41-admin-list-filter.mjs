@@ -282,12 +282,14 @@ const setStatus = async (page, v, n) => { await page.selectOption('#pl-status', 
       await page.waitForFunction(() => document.getElementById('proj-create-result').style.display === 'block', null, { timeout: 4000 });
       ok('create without one still works (positive control)', (await page.$eval('#proj-create-err', x => x.textContent.trim())) === '');
       await page.click('[data-open-project]');
+      await page.waitForSelector('#pd-edit-btn', { timeout: 5000 });
+      await page.click('#pd-edit-btn');   // 攝影類別 is in the ✎ 編輯 modal (project page 2026-10-19)
       await page.waitForSelector('#pd-type-select', { timeout: 5000 });
       await page.selectOption('#pd-type-select', '親子');
-      await page.click('#pd-type-save');
+      await page.click('#pd-edit-save');
       await page.waitForFunction(() => document.getElementById('pd-type-err').textContent.trim() !== '', null, { timeout: 4000 });
       ok('detail save → the migration message', (await page.$eval('#pd-type-err', x => x.textContent.trim())) === MSG);
-      ok('and the header tag shows nothing (nothing was stored)', (await page.$('#pd-type-tag')) === null || !(await shown(page, '#pd-type-tag')));
+      ok('and the header tag shows nothing (nothing was stored); the modal stays open', ((await page.$('#pd-type-tag')) === null || !(await shown(page, '#pd-type-tag'))) && await shown(page, '#pd-edit-modal'));
       return out;
     },
     { before: m.attach, initScript: ADMIN_PLAIN });
@@ -303,22 +305,26 @@ const setStatus = async (page, v, n) => { await page.selectOption('#pl-status', 
       const { out, ok } = lines();
       await waitList(page);
       await page.click('[data-project-row="proj-A"] [data-open-project]');
+      await page.waitForSelector('#pd-edit-btn', { timeout: 5000 });
+      await page.click('#pd-edit-btn');   // 攝影類別 is in the ✎ 編輯 modal (project page 2026-10-19)
       await page.waitForSelector('#pd-type-select', { timeout: 5000 });
       ok('the select shows the stored 婚紗', (await page.inputValue('#pd-type-select')) === '婚紗');
       ok('header tag shows 婚紗', (await page.textContent('#pd-type-tag')).trim() === '婚紗');
       await page.selectOption('#pd-type-select', '親子');
-      await page.click('#pd-type-save');
+      await page.click('#pd-edit-save');
       await page.waitForFunction(() => document.getElementById('pd-type-tag')?.textContent.trim() === '親子', null, { timeout: 4000 });
       ok('PATCH { project_type: "親子" }', patches().length === 1 && same(patches()[0].body, { project_type: '親子' }), JSON.stringify(patches()[0]?.body));
       ok('stored in the fake and the header tag follows the echo', m.state.project.project_type === '親子');
+      ok('a successful 儲存 closes the modal', !(await shown(page, '#pd-edit-modal')));
 
+      await page.click('#pd-edit-btn');
       await page.selectOption('#pd-type-select', '其他');
       ok('其他 shows the typed box', await shown(page, '#pd-type-other'));
       await page.fill('#pd-type-other', '');
-      await page.click('#pd-type-save');
-      ok('其他 with an empty box: inline error, nothing sent', (await page.textContent('#pd-type-err')).trim() === '請輸入類別名稱' && patches().length === 1, `${patches().length}`);
+      await page.click('#pd-edit-save');
+      ok('其他 with an empty box: inline error, nothing sent, the modal stays', (await page.textContent('#pd-type-err')).trim() === '請輸入類別名稱' && patches().length === 1 && await shown(page, '#pd-edit-modal'), `${patches().length}`);
       await page.fill('#pd-type-other', '寵物');
-      await page.click('#pd-type-save');
+      await page.click('#pd-edit-save');
       await page.waitForFunction(() => document.getElementById('pd-type-tag')?.textContent.trim() === '寵物', null, { timeout: 4000 });
       ok('typed 寵物 is sent and shown', patches()[1].body.project_type === '寵物', JSON.stringify(patches()[1]?.body));
 
@@ -328,10 +334,12 @@ const setStatus = async (page, v, n) => { await page.selectOption('#pl-status', 
       ok('back on the list the row tag is the new category (no reload)', tag === '寵物', tag);
 
       await page.click('[data-project-row="proj-A"] [data-open-project]');
+      await page.waitForSelector('#pd-edit-btn', { timeout: 5000 });
+      await page.click('#pd-edit-btn');   // 攝影類別 is in the ✎ 編輯 modal (project page 2026-10-19)
       await page.waitForSelector('#pd-type-select', { timeout: 5000 });
       ok('reopened: select is 其他 with the typed value in the box', (await page.inputValue('#pd-type-select')) === '其他' && (await page.inputValue('#pd-type-other')) === '寵物');
       await page.selectOption('#pd-type-select', '');
-      await page.click('#pd-type-save');
+      await page.click('#pd-edit-save');
       await page.waitForFunction(() => { const t = document.getElementById('pd-type-tag'); return !t || t.getClientRects().length === 0 || t.textContent.trim() === ''; }, null, { timeout: 4000 });
       ok('未分類 → PATCH { project_type: null } (clears)', patches().length === 3 && patches()[2].body.project_type === null, JSON.stringify(patches()[2]?.body));
       ok('stored cleared', m.state.project.project_type === null);

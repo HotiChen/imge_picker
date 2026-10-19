@@ -6,7 +6,7 @@ import { readFileSync } from 'node:fs';
 import { base, suite } from '../lib/harness.mjs';
 import { ADMIN } from '../lib/auth-mocks.mjs';
 import { pickFakeWorker } from '../lib/pick-fake.mjs';
-import { PF_NAMES, PF_ROOT, pfLists, openCreateForm } from '../lib/project-helpers.mjs';
+import { PF_NAMES, PF_ROOT, moreClick, pfLists, openCreateForm, waitProjectPage } from '../lib/project-helpers.mjs';
 
 export default async function register() {
 const pfPosts = m => m.requests.filter(r => r.method === 'POST' && r.path === '/api/admin/projects');
@@ -412,12 +412,13 @@ for (const [tag, ctx] of [['390', { viewport: { width: 390, height: 844 }, hasTo
 
       const r = await page.evaluate(() => ({
         owner: document.querySelector('.pd-owner').textContent,
-        phaseBadge: document.querySelector('.pd-head .badge').textContent,
+        // project page 2026-10-19: the stage is the status card's one label (選片完成・待精修 for 已送出)
+        phaseBadge: document.getElementById('pd-status-label').textContent,
         submissionBlocks: [...document.querySelectorAll('.pd-submission')].map(b => b.textContent),
         selectionRows: document.querySelectorAll('#project-detail-body table tbody tr').length,
       }));
       ok('shows the current owner', r.owner.includes('Grace'), r.owner);
-      ok('shows the phase', r.phaseBadge === '已送出', r.phaseBadge);
+      ok('shows the phase', r.phaseBadge === '選片完成・待精修', r.phaseBadge);
       // times render in Asia/Taipei (task: 時間格式), not the raw UTC ISO —
       // 2026-01-0{1,2}T00:00:00Z is 08:00 Taipei the same calendar day
       ok('submissions are newest first', /1\/2 08:00/.test(r.submissionBlocks[0]) && /1\/1 08:00/.test(r.submissionBlocks[1]),
@@ -455,11 +456,11 @@ await suite('admin — escHtml(0): a project with zero submissions shows 送出 
       const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
       await page.waitForSelector('[data-open-project]', { timeout: 5000 });
       await page.click('[data-open-project]');
-      await page.waitForSelector('#pd-reset-seat-btn', { timeout: 5000 });
+      await waitProjectPage(page);
 
       let dialogMsg = '';
       page.once('dialog', d => { dialogMsg = d.message(); d.dismiss(); });
-      await page.click('#pd-reset-seat-btn');
+      await moreClick(page, '#pd-reset-seat-btn');   // in the ⋯ menu (project page 2026-10-19)
       await page.waitForTimeout(200);
       ok('warns that the new owner takes over every current pick and can change or delete it',
         dialogMsg.includes('新的主人會接手目前所有選片，並可修改或刪除'), dialogMsg);

@@ -9,29 +9,31 @@ import { SEC_NAMES, ordersFake, secInfo, secOpen, secWait, waitText } from '../l
 import { pickFakeWorker } from '../lib/pick-fake.mjs';
 
 export default async function register() {
-const SEC_TITLES = { delivery: '交件', settings: '設定', selections: '目前選取', orders: '訂單', submissions: '送出紀錄', people: '挑選人與連結' };
+const SEC_TITLES = { settings: '設定', selections: '目前選取', orders: '訂單', submissions: '送出紀錄', people: '挑選人與連結' };
 const secShut = i => i && i.expanded === 'false' && i.display === 'none' && i.caret === '▸';
 const secFixture = (o = {}) => pickFakeWorker({ projectId: 'proj-sec', title: '收合專案', folders: ['shoot/毛片/'], bucketFolders: ADMIN_BUCKET, ...o });
 const SEC_AT = '2026-01-01T00:00:00Z';
 const secSub = (id, at, keys) => ({ id, picker_id: 'picker-0', relationship: '本人', email: null, photo_keys: keys, count: keys.length, pick_limit: null, extra_price: null, created_at: at });
 
 // ── 1. titles, one-line summaries and the default open/closed state, per project state ──
+// (交件 was a section with its own summary until the project page redesign of 2026-10-19; what it summed up is now the
+// status card's ONE label above the sections — `card` below — and 交件 is not a section at all.)
 for (const [label, build, want] of [
   ['選片中、什麼都還沒有', () => secFixture({ phase: 'picking' }), {
-    delivery: { off: true }, settings: { sum: '不限張數 · 毛片下載：關', open: false }, selections: { sum: '0 張', open: false },
+    card: '客人選片中', settings: { sum: '不限張數 · 毛片下載：關', open: false }, selections: { sum: '0 張', open: false },
     orders: { sum: '尚無訂單', open: false }, submissions: { sum: '尚無送出', open: false }, people: { sum: '尚無人認領 · 連結有效 1 條', open: false } }],
   ['精修中、尚未交件', () => secFixture({ phase: 'retouching', pickLimit: 30, extraMax: 10, extraPrice: 500, allowProofDownload: true }), {
-    delivery: { sum: '尚未交件', open: true }, settings: { sum: '30 張 + 加選 10 · 加選 NT$500 · 毛片下載：開', open: false } }],
+    card: '精修中', settings: { sum: '30 張 + 加選 10 · 加選 NT$500 · 毛片下載：開', open: false } }],
   ['已交件、客戶尚未確認', () => secFixture({ phase: 'retouching', deliveredAt: '2026-09-20T00:00:00.000Z', finalFolders: ['shoot/精修/'] }), {
-    delivery: { sum: '已交件 9/20 · 精修/ · 客戶尚未確認', open: true } }],
+    card: '客人確認中', folders: 1 }],
   ['已交件、兩個精修資料夾', () => secFixture({ phase: 'retouching', deliveredAt: '2026-09-20T00:00:00.000Z', finalFolders: ['shoot/精修/', 'shoot/精修二/'] }), {
-    delivery: { sum: '已交件 9/20 · 精修/ 等 2 個 · 客戶尚未確認', open: true } }],
+    card: '客人確認中', folders: 2 }],
   ['已交件、客戶已確認', () => secFixture({ phase: 'retouching', deliveredAt: '2026-09-20T00:00:00.000Z', finalFolders: ['shoot/精修/'], confirmedAt: '2026-09-23T03:30:00.000Z', confirmedBy: 'guest' }), {
-    delivery: { sum: '已交件 9/20 · 精修/ · 客戶已確認', open: true } }],
+    card: '已完成', next: '客人已確認（2026-09-23）' }],
   ['已交件、攝影師標記完成', () => secFixture({ phase: 'retouching', deliveredAt: '2026-09-20T00:00:00.000Z', finalFolders: ['shoot/精修/'], confirmedAt: '2026-09-23T03:30:00.000Z', confirmedBy: 'photographer' }), {
-    delivery: { sum: '已交件 9/20 · 精修/ · 已標記完成', open: true } }],
+    card: '已完成', next: '你已代客人標記完成（2026-09-23）' }],
   ['已交件、客戶要求修改（2 則未處理、1 則已處理）', () => secFixture({ phase: 'retouching', deliveredAt: '2026-09-20T00:00:00.000Z', finalFolders: ['shoot/精修/'], ownerName: 'Zoe', revisions: ADM_REVS() }), {
-    delivery: { sum: '已交件 9/20 · 精修/ · 待修改 2', open: true }, people: { sum: 'Zoe · 連結有效 1 條', open: false } }],
+    card: '客人要求修改（第 3 輪）', people: { sum: 'Zoe · 連結有效 1 條', open: false } }],
 ]) {
   const m = build();
   await suite(`區塊收合 — 摘要與預設：${label}`,
@@ -41,13 +43,19 @@ for (const [label, build, want] of [
       const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
       await secWait(page);
       const info = await secInfo(page);
-      ok('all six sections exist, each with a title row', SEC_NAMES.every(n => info[n]), JSON.stringify(info));
+      ok('all five sections exist, each with a title row', SEC_NAMES.every(n => info[n]), JSON.stringify(info));
+      ok('交件 is not a section any more', (await page.$('#pd-sec-delivery')) === null);
+      const card = await page.evaluate(() => ({ label: document.getElementById('pd-status-label')?.textContent.trim(), next: document.getElementById('pd-status-next')?.textContent.trim(),
+        folders: document.querySelectorAll('#pd-status #pd-delivered-folders [data-final-chip]').length, first: document.querySelector('#project-detail-body .pd-sec') }))
+        .then(async c => ({ ...c, above: await page.evaluate(() => !!(document.getElementById('pd-status').compareDocumentPosition(document.querySelector('#project-detail-body .pd-sec')) & Node.DOCUMENT_POSITION_FOLLOWING)) }));
+      ok(`the status card above the sections says 「${want.card}」`, card.label === want.card && card.above, JSON.stringify(card));
+      if (want.next) ok(`and 「${want.next}」`, card.next === want.next, card.next);
+      if (want.folders) ok(`the delivered folders (${want.folders}) are listed in the card`, card.folders === want.folders, String(card.folders));
       for (const n of SEC_NAMES) {
         const w = want[n] || {}, i = info[n];
         if (!i) continue;
         ok(`${SEC_TITLES[n]}: the title is ${SEC_TITLES[n]}, a <button type=button> wired to its body`,
           i.title === SEC_TITLES[n] && i.tag === 'BUTTON' && i.type === 'button' && i.controls === i.bodyId, JSON.stringify(i));
-        if (w.off) { ok(`${SEC_TITLES[n]}: not shown at all (display:none) when there is nothing to deliver yet`, i.secDisplay === 'none', JSON.stringify(i)); continue; }
         ok(`${SEC_TITLES[n]}: the section is shown`, i.secDisplay !== 'none', JSON.stringify(i));
         if (w.sum !== undefined) ok(`${SEC_TITLES[n]}: summary "${w.sum}"`, i.sum === w.sum, JSON.stringify(i.sum));
         if (w.open !== undefined) ok(`${SEC_TITLES[n]}: starts ${w.open ? 'open' : 'closed'} (aria-expanded, ${w.open ? '▾' : '▸'}, body display ${w.open ? 'shown' : 'none'})`,
@@ -154,8 +162,9 @@ for (const [label, build, want] of [
 }
 
 {
-  // redraw: the auto-opened 訂單 is drawn open at once (no closed → open flicker)
-  const m = secFixture({ phase: 'picking' });
+  // redraw: the auto-opened 訂單 is drawn open at once (no closed → open flicker). Starts 已送出: 開始精修 is the
+  // status card's button only in that stage (project page 2026-10-19)
+  const m = secFixture({ phase: 'submitted' });
   const o = ordersFake({});
   o.st.addOrder({ id: 'o-req', project_id: 'proj-sec', status: 'requested', items: [{ name: '相本書', kind: 'album', unit_price: 3000, unit_cost: 0, qty: 1 }] });
   await suite('區塊收合 — 訂單自動展開後頁面重畫（開始精修）：一畫出來就是展開的',
@@ -167,7 +176,7 @@ for (const [label, build, want] of [
         .observe(document.getElementById('project-detail-body'), { childList: true, subtree: true, attributes: true }); });
       m.state.project.phase = 'submitted';
       await page.click('#pd-start-retouch-btn');
-      await page.waitForFunction(() => document.querySelector('.pd-head .badge')?.textContent === '精修中', null, { timeout: 5000 });
+      await page.waitForFunction(() => document.getElementById('pd-status-label')?.textContent === '精修中', null, { timeout: 5000 });
       await page.waitForTimeout(500);
       const seen = await page.evaluate(() => window.__seen);
       return [seen.length > 0 ? 'ok    the detail was redrawn (positive)' : 'FAIL  no redraw seen',
@@ -241,8 +250,9 @@ for (const [label, build, want] of [
       const rest = await secInfo(page);
       ok('the other sections kept their state', secShut(rest.selections) && secShut(rest.submissions) && secShut(rest.people), JSON.stringify(rest));
       // the top is not collapsible: its buttons are visible and not inside a section
-      ok('the top (title, badges, owner, action buttons) is not a section: visible, and not inside .pd-sec', await page.evaluate(() => {
-        const ids = ['pd-reset-seat-btn', 'pd-start-retouch-btn', 'pd-download-csv-btn'];
+      // (project page 2026-10-19: the top is the header with ✎ 編輯 / ⋯, the status card, 照片 and 進度)
+      ok('the top (header, status card, 照片, 進度) is not a section: visible, and not inside .pd-sec', await page.evaluate(() => {
+        const ids = ['pd-edit-btn', 'pd-more-btn', 'pd-status-label', 'pd-download-csv-btn', 'pd-steps'];
         return ids.every(id => { const e = document.getElementById(id); return e && e.getClientRects().length > 0 && !e.closest('.pd-sec'); }) && !!document.querySelector('.pd-head') && !document.querySelector('.pd-head').closest('.pd-sec'); }));
       return out;
     },
@@ -299,11 +309,12 @@ for (const [label, build, want] of [
 }
 
 for (const [label, seed, check] of [
-  ['stored 0 beats the default-open 交件', { delivery: '0' }, i => secShut(i.delivery)],
+  // (the default-open section here was 交件 until 2026-10-19; 目前選取 is the one that opens by default now, once submitted)
+  ['stored 0 beats the default-open 目前選取', { selections: '0' }, i => secShut(i.selections)],
   ['stored 1 opens a default-closed section', { submissions: '1', people: '1' }, i => secOpen(i.submissions) && secOpen(i.people) && secShut(i.settings)],
-  ['a garbage value falls back to the default', { settings: 'maybe', delivery: '' }, i => secShut(i.settings) && secOpen(i.delivery)],
+  ['a garbage value falls back to the default', { settings: 'maybe', selections: '' }, i => secShut(i.settings) && secOpen(i.selections)],
 ]) {
-  const m = secFixture({ phase: 'retouching' });
+  const m = secFixture({ phase: 'submitted' });
   await suite(`區塊收合 — 已存的偏好 vs 預設：${label}`,
     `${base}/admin.html#project=proj-sec`,
     async page => {
@@ -343,13 +354,13 @@ for (const [label, seed, check] of [
       await secWait(page);
       ok('localStorage really throws here (the fixture is not a no-op)', await page.evaluate(() => { try { localStorage.getItem('x'); return false; } catch (e) { return true; } }));
       let i = await secInfo(page);
-      ok('the defaults: 交件 closed (submitted, not retouching → no block), 目前選取 open, 設定 closed', i.delivery.secDisplay === 'none' && secOpen(i.selections) && secShut(i.settings), JSON.stringify(i));
+      ok('the defaults: no 交件 section, 目前選取 open, 設定 closed', !i.delivery && (await page.$('#pd-sec-delivery')) === null && secOpen(i.selections) && secShut(i.settings), JSON.stringify(i));
       await page.click('#pd-sec-settings-btn');
       await page.click('#pd-sec-selections-btn');
       i = await secInfo(page);
       ok('clicking still toggles: 設定 open, 目前選取 closed', secOpen(i.settings) && secShut(i.selections), JSON.stringify(i));
       await page.click('#pd-start-retouch-btn');   // the page re-reads and redraws the whole detail
-      await page.waitForFunction(() => document.querySelector('.pd-head .badge')?.textContent === '精修中', null, { timeout: 5000 });
+      await page.waitForFunction(() => document.getElementById('pd-status-label')?.textContent === '精修中', null, { timeout: 5000 });
       i = await secInfo(page);
       ok('after the redraw your choice is kept (kept in memory, since nothing can be stored)', secOpen(i.settings) && secShut(i.selections), JSON.stringify(i));
       ok('and the page threw nothing (the suite reports page errors)', true);
@@ -381,7 +392,7 @@ for (const [tag, ctx] of [['390', { viewport: { width: 390, height: 844 }, hasTo
       ok('every title row and its summary is inside the screen and tall enough to tap (≥ 36px)', g.rows.every(r => r.left >= 0 && r.right <= g.iw && r.sumRight <= g.iw + 1 && r.h >= 36), JSON.stringify(g.rows));
       // (after 目前選取 the 看照片 link may wrap onto a second row on a phone: allow that row)
       ok('collapsed rows sit close together (≤ 16px between two title rows; ≤ 40px after 目前選取, which carries a link row)',
-        g.rows.slice(1).every((r, k) => (g.rows[k].n === 'delivery' ? true : r.top - g.rows[k].bottom <= (g.rows[k].n === 'selections' ? 40 : 16))), JSON.stringify(g.rows.map(r => [r.n, Math.round(r.top), Math.round(r.bottom)])));
+        g.rows.slice(1).every((r, k) => (r.top - g.rows[k].bottom <= (g.rows[k].n === 'selections' ? 40 : 16))), JSON.stringify(g.rows.map(r => [r.n, Math.round(r.top), Math.round(r.bottom)])));
       ok('no big blank under the last section (≤ 40px to the card’s bottom edge)', g.panelBottom - g.lastBottom <= 40, JSON.stringify([g.panelBottom, g.lastBottom]));
       const shut = g.panelH;
       if (process.env.SHOTS_A) await page.screenshot({ path: `${process.env.SHOTS_A}/detail-collapsed-${tag}.png`, fullPage: true });

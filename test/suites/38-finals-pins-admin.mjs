@@ -84,7 +84,8 @@ const pinsIn = (page, sel) => page.$$eval(`${sel} .pin-layer-pin`, els => els.ma
         /文字/.test(c[2].meta) && c[2].msg === '舊式：背景路人' && c[2].photos === 0 && !c[2].csv && c[2].resolved && c[2].done === '已處理', JSON.stringify(c[2]));
       ok('positive: both pins rounds have a photo block and a CSV button', c[0].photos === 1 && c[1].photos === 1 && c[0].csv && c[1].csv);
       ok('rounds are numbered oldest = 1: 第 3 輪 / 第 2 輪 / 第 1 輪', /第 3 輪/.test(c[0].meta) && /第 2 輪/.test(c[1].meta) && /第 1 輪/.test(c[2].meta), JSON.stringify(c.map(x => x.meta)));
-      ok('the 請上傳新版精修資料夾 hint stays while a round is open', /請上傳新版精修資料夾後按「更換精修資料夾」/.test(await page.textContent('#pd-revision-hint')));
+      // (project page 2026-10-19: the hint names the card's next step; this world has 精修 only, so it is ＋上傳精修二)
+      ok('the hint (upload 精修二, then 交付精修二) stays while a round is open', /請把新版上傳到 精修二，上傳後回來按「交付精修二」/.test(await page.textContent('#pd-revision-hint')), await page.textContent('#pd-revision-hint'));
       ok('the status colours still work: the handled card is dashed, the open one is not',
         await page.$eval('#pd-revisions .pd-rev.resolved', e => getComputedStyle(e).borderStyle === 'dashed') && await page.$eval('#pd-revisions .pd-rev:not(.resolved)', e => getComputedStyle(e).borderStyle !== 'dashed'));
     },

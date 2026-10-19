@@ -14,7 +14,8 @@ export default async function register() {
 const lines = () => { const out = []; return { out, ok: (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`) }; };
 const ADMIN_URL = `${base}/admin.html`;
 const fx = (o = {}) => pickFakeWorker({ projectId: 'proj-bk', title: '舊名字專案', folders: ['shoot/毛片/'], ...o });
-const waitDetail = page => page.waitForSelector('#pd-rename-btn', { timeout: 5000 });
+// project page 2026-10-19: 改名 is the 專案名稱 field of the ✎ 編輯 modal (one 儲存 for name / date / category)
+const waitDetail = page => page.waitForSelector('#pd-edit-btn', { timeout: 5000 });
 const waitList = page => page.waitForSelector('[data-project-row]', { timeout: 5000 });
 const patches = m => m.requests.filter(r => r.method === 'PATCH');
 const headTitle = page => page.$eval('#project-detail-body .pd-head h3', e => e.textContent);
@@ -30,23 +31,23 @@ const shown = (page, sel) => page.$eval(sel, e => e.getClientRects().length > 0 
       const { out, ok } = lines();
       await waitDetail(page);
       ok('baseline: header shows the current title (positive control)', (await headTitle(page)) === '舊名字專案', await headTitle(page));
-      ok('the edit form is closed to begin with (really not displayed)', !(await shown(page, '#pd-rename-form')) && await shown(page, '#pd-rename-btn'));
-      ok('改名 button text', (await page.textContent('#pd-rename-btn')).trim() === '改名');
-      await page.click('#pd-rename-btn');
-      ok('the form opens, the title + 改名 button are replaced', await shown(page, '#pd-rename-form') && !(await shown(page, '#pd-rename-btn')) && !(await shown(page, '#pd-title')));
+      ok('the edit modal is closed to begin with (really not displayed)', !(await shown(page, '#pd-edit-modal')) && await shown(page, '#pd-edit-btn'));
+      ok('✎ 編輯 button text', (await page.textContent('#pd-edit-btn')).trim() === '✎ 編輯');
+      await page.click('#pd-edit-btn');
+      ok('the modal opens over the page (the title stays behind it)', await shown(page, '#pd-edit-modal') && await shown(page, '#pd-title'));
       ok('input prefilled with the current title, maxlength 200', (await page.inputValue('#pd-rename-input')) === '舊名字專案' && (await page.getAttribute('#pd-rename-input', 'maxlength')) === '200');
       ok('the hint 「只改專案名稱，資料夾名稱不變」 is visible', (await page.textContent('.pd-rename-hint')).trim() === '只改專案名稱，資料夾名稱不變' && await shown(page, '.pd-rename-hint'));
-      ok('buttons 儲存 / 取消', (await page.textContent('#pd-rename-save')).trim() === '儲存' && (await page.textContent('#pd-rename-cancel')).trim() === '取消');
+      ok('buttons 儲存 / 取消', (await page.textContent('#pd-edit-save')).trim() === '儲存' && (await page.textContent('#pd-edit-cancel')).trim() === '取消');
       await page.fill('#pd-rename-input', '半途而廢');
       await page.press('#pd-rename-input', 'Escape');
-      ok('Esc closes the form; title unchanged; nothing sent', await shown(page, '#pd-rename-btn') && !(await shown(page, '#pd-rename-form')) && (await headTitle(page)) === '舊名字專案' && patches(m).length === 0);
-      await page.click('#pd-rename-btn');
+      ok('Esc closes the modal; title unchanged; nothing sent', await shown(page, '#pd-edit-btn') && !(await shown(page, '#pd-edit-modal')) && (await headTitle(page)) === '舊名字專案' && patches(m).length === 0);
+      await page.click('#pd-edit-btn');
       ok('reopening prefills the stored title again, not the abandoned text', (await page.inputValue('#pd-rename-input')) === '舊名字專案');
       await page.fill('#pd-rename-input', '   ');
-      await page.click('#pd-rename-save');
-      ok('blank: 專案名稱不能空白, form stays open, nothing sent', (await page.textContent('#pd-rename-err')).trim() === '專案名稱不能空白' && await shown(page, '#pd-rename-form') && patches(m).length === 0, await page.textContent('#pd-rename-err'));
-      await page.click('#pd-rename-cancel');
-      ok('取消 closes it too', !(await shown(page, '#pd-rename-form')) && patches(m).length === 0);
+      await page.click('#pd-edit-save');
+      ok('blank: 專案名稱不能空白, modal stays open, nothing sent', (await page.textContent('#pd-rename-err')).trim() === '專案名稱不能空白' && await shown(page, '#pd-edit-modal') && patches(m).length === 0, await page.textContent('#pd-rename-err'));
+      await page.click('#pd-edit-cancel');
+      ok('取消 closes it too', !(await shown(page, '#pd-edit-modal')) && patches(m).length === 0);
       return out;
     },
     { before: m.attach, initScript: ADMIN_PLAIN });
@@ -60,13 +61,13 @@ const shown = (page, sel) => page.$eval(sel, e => e.getClientRects().length > 0 
       const { out, ok } = lines();
       await waitDetail(page);
       ok('baseline: the (hidden) list row carries the old title', (await rowTitle(page)) === '舊名字專案', await rowTitle(page));
-      await page.click('#pd-rename-btn');
+      await page.click('#pd-edit-btn');
       await page.fill('#pd-rename-input', '  新名字 <b>x</b>  ');
       await page.press('#pd-rename-input', 'Enter');
       await page.waitForFunction(() => document.querySelector('#project-detail-body .pd-head h3')?.textContent === '新名字 <b>x</b>', null, { timeout: 4000 }).catch(() => {});
       ok('exactly one PATCH with {title} trimmed', patches(m).length === 1 && JSON.stringify(patches(m)[0].body) === JSON.stringify({ title: '新名字 <b>x</b>' }) && /\/api\/admin\/projects\/proj-bk$/.test(patches(m)[0].path), JSON.stringify(patches(m).map(p => p.body)));
       ok('header title is the new title, as TEXT (no <b> element made)', (await headTitle(page)) === '新名字 <b>x</b>' && (await page.$('#project-detail-body .pd-head h3 b')) === null);
-      ok('the form closed, 改名 is back', !(await shown(page, '#pd-rename-form')) && await shown(page, '#pd-rename-btn'));
+      ok('the modal closed, ✎ 編輯 is back', !(await shown(page, '#pd-edit-modal')) && await shown(page, '#pd-edit-btn'));
       ok('the list row already shows the new title (no reload), as text', (await rowTitle(page)) === '新名字 <b>x</b>' && (await page.$('[data-project-row="proj-bk"] b')) === null, await rowTitle(page));
       ok('detail view undisturbed: hash still #project=proj-bk, panel shown', (await page.evaluate(() => location.hash)).includes('project=proj-bk') && await shown(page, '#project-detail-panel'));
       await page.click('#pd-back-btn');
@@ -90,12 +91,12 @@ const shown = (page, sel) => page.$eval(sel, e => e.getClientRects().length > 0 
     async page => {
       const { out, ok } = lines();
       await waitDetail(page);
-      await page.click('#pd-rename-btn');
+      await page.click('#pd-edit-btn');
       await page.fill('#pd-rename-input', '新的');
-      await page.click('#pd-rename-save');
+      await page.click('#pd-edit-save');
       await page.waitForFunction(() => document.getElementById('pd-rename-err').textContent !== '', null, { timeout: 4000 }).catch(() => {});
       ok('message', (await page.textContent('#pd-rename-err')).trim() === '專案名稱格式不正確（1–200 字）', await page.textContent('#pd-rename-err'));
-      ok('a PATCH went out; title unchanged; form still open; save re-enabled', patches(m).length === 1 && (await headTitle(page)) === '舊名字專案' && await shown(page, '#pd-rename-form') && !(await page.$eval('#pd-rename-save', e => e.disabled)));
+      ok('a PATCH went out; title unchanged; modal still open; save re-enabled', patches(m).length === 1 && (await headTitle(page)) === '舊名字專案' && await shown(page, '#pd-edit-modal') && !(await page.$eval('#pd-edit-save', e => e.disabled)));
       return out;
     },
     { before: m.attach, initScript: ADMIN_PLAIN });
@@ -108,14 +109,14 @@ const shown = (page, sel) => page.$eval(sel, e => e.getClientRects().length > 0 
     async page => {
       const { out, ok } = lines();
       await waitDetail(page);
-      await page.click('#pd-rename-btn');
+      await page.click('#pd-edit-btn');
       await page.fill('#pd-rename-input', '新的');
-      await page.click('#pd-rename-save');
+      await page.click('#pd-edit-save');
       await page.waitForFunction(() => document.getElementById('pd-rename-err').textContent !== '', null, { timeout: 4000 }).catch(() => {});
       ok('500 -> message', (await page.textContent('#pd-rename-err')).trim() === '儲存失敗，請再試一次', await page.textContent('#pd-rename-err'));
       ok('title unchanged', (await headTitle(page)) === '舊名字專案' && (await rowTitle(page)) === '舊名字專案');
       await page.route('**/api/admin/projects/proj-bk', r => r.request().method() === 'PATCH' ? r.abort() : r.fallback());
-      await page.click('#pd-rename-save');
+      await page.click('#pd-edit-save');
       await page.waitForFunction(() => document.getElementById('pd-rename-err').textContent === '儲存失敗，請再試一次', null, { timeout: 4000 }).catch(() => {});
       ok('network failure -> same message', (await page.textContent('#pd-rename-err')).trim() === '儲存失敗，請再試一次');
       return out;
@@ -130,8 +131,8 @@ const shown = (page, sel) => page.$eval(sel, e => e.getClientRects().length > 0 
     async page => {
       const { out, ok } = lines();
       await waitDetail(page);
-      ok('baseline: the project really is archived (badge shown)', (await page.textContent('#project-detail-body .pd-head')).includes('已封存'));
-      await page.click('#pd-rename-btn');
+      ok('baseline: the project really is archived (the status card says 已封存)', (await page.textContent('#pd-status-label')) === '已封存');
+      await page.click('#pd-edit-btn');
       await page.fill('#pd-rename-input', 'あ'.repeat(250));
       ok('the field stops at 200 characters', (await page.inputValue('#pd-rename-input')).length === 200);
       await page.press('#pd-rename-input', 'Enter');

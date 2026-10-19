@@ -5,6 +5,7 @@ import { base, suite } from '../lib/harness.mjs';
 import { ADMIN } from '../lib/auth-mocks.mjs';
 import { pickFakeWorker } from '../lib/pick-fake.mjs';
 import { ADMIN_BUCKET } from '../lib/delivery-helpers.mjs';
+import { moreClick, openMore } from '../lib/project-helpers.mjs';
 
 export default async function register() {
 
@@ -38,6 +39,7 @@ const cards = page => page.evaluate(() => [...document.querySelectorAll('.photo-
     `${base}/admin.html#project=proj-all`,
     async page => {
       const out = [], ok = okFn(out);
+      await openMore(page);   // 看全部毛片 is the first item of the ⋯ menu (project page 2026-10-19)
       await page.waitForSelector('#pd-view-all-btn', { timeout: 5000 });
       const r = await page.$eval('#pd-view-all-btn', a => ({ href: a.getAttribute('href'), target: a.getAttribute('target'), text: a.textContent.trim(), tag: a.tagName }));
       ok('a plain link reading 看全部毛片', r.tag === 'A' && r.text === '看全部毛片' && !r.target, JSON.stringify(r));
@@ -304,7 +306,7 @@ const deliverAndWait = async page => {
 
 {
   const m = dnWorld();
-  await suite('35 交件通知 — 已交件期間，交件區塊有小按鈕「複製交件通知文案」，複製同一段文字；尚未交件時沒有',
+  await suite('35 交件通知 — 已交件期間，⋯ 選單有「複製交件通知文案」，複製同一段文字；尚未交件時沒有',
     `${base}/admin.html#project=proj-dn`,
     async page => {
       const out = [], ok = okFn(out);
@@ -313,15 +315,15 @@ const deliverAndWait = async page => {
       await deliverAndWait(page);
       const first = await page.$eval('#dn-text', e => e.value);
       await page.click('#dn-close-btn');
-      await page.waitForSelector('#pd-copy-notice-btn', { timeout: 3000 });
+      await page.waitForSelector('#pd-copy-notice-btn', { state: 'attached', timeout: 3000 });
       const label = await page.$eval('#pd-copy-notice-btn', b => b.textContent);
-      ok('delivered: the button reads 複製交件通知文案', label === '複製交件通知文案', label);
-      await page.click('#pd-copy-notice-btn');
+      ok('delivered: the ⋯ menu item reads 複製交件通知文案', label === '複製交件通知文案', label);
+      await moreClick(page, '#pd-copy-notice-btn');
       await page.waitForFunction(() => document.getElementById('pd-copy-notice-status').textContent === '已複製', null, { timeout: 3000 });
       const clip = await page.evaluate(() => window.__clip);
       ok('it copies the same message as the dialog', clip.length === 1 && clip[0] === first, JSON.stringify(clip));
       page.once('dialog', d => d.accept());
-      await page.click('#pd-undeliver-btn');
+      await moreClick(page, '#pd-undeliver-btn');
       await page.waitForSelector('#pd-deliver-btn', { timeout: 3000 });
       ok('after 取消交件 the button is gone again', (await page.$('#pd-copy-notice-btn')) === null);
       return out;
@@ -349,37 +351,33 @@ const scanBadges = (page, scope) => page.evaluate(sel => {
 }, scope);
 
 const STATES = [
-  { name: '選片中', opts: { phase: 'picking' }, expect: { '選片中': 'st-progress' }, list: { '選片中': 'st-progress' } },
-  { name: '已送出（等攝影師）', opts: { phase: 'submitted' }, expect: { '已送出': 'st-action' }, list: { '已送出': 'st-action' } },
-  { name: '精修中', opts: { phase: 'retouching' }, expect: { '精修中': 'st-progress' }, list: { '精修中': 'st-progress' } },
+  { name: '選片中', opts: { phase: 'picking' }, card: '客人選片中', list: { '選片中': 'st-progress' } },
+  { name: '已送出（等攝影師）', opts: { phase: 'submitted' }, card: '選片完成・待精修', list: { '已送出': 'st-action' } },
+  { name: '精修中', opts: { phase: 'retouching' }, card: '精修中', list: { '精修中': 'st-progress' } },
   { name: '精修中 + 已交件', opts: { phase: 'retouching', deliveredAt: '2026-09-20T00:00:00.000Z', finalFolders: ['shoot/精修/'] },
-    expect: { '精修中': 'st-progress', '已交件': 'st-done' }, list: { '已交件': 'st-done' } },
+    card: '客人確認中', list: { '已交件': 'st-done' } },
   { name: '已交件 + 待修改 1', opts: { phase: 'retouching', deliveredAt: '2026-09-20T00:00:00.000Z', finalFolders: ['shoot/精修/'], revisions: [{ message: '背景路人' }] },
-    expect: { '精修中': 'st-progress', '已交件': 'st-done', '待修改 1': 'st-action' }, list: { '待修改 1': 'st-action' } },
+    card: '客人要求修改（第 1 輪）', list: { '待修改 1': 'st-action' } },
   { name: '客戶已確認', opts: { phase: 'retouching', deliveredAt: '2026-09-20T00:00:00.000Z', finalFolders: ['shoot/精修/'], confirmedAt: '2026-09-21T00:00:00.000Z' },
-    expect: { '已交件': 'st-done', '客戶已確認': 'st-done' }, list: { '客戶已確認': 'st-done' } },
+    card: '已完成', list: { '客戶已確認': 'st-done' } },
   { name: '已送出 + 已修改', opts: { phase: 'submitted' }, mutate: m => { m.state.project.modified_after_submit = 1; },
-    expect: { '已送出': 'st-action', '已修改': 'st-neutral' }, list: { '已送出': 'st-action' } },
+    card: '選片完成・待精修', note: '客人已修改，尚未重新送出', list: { '已送出': 'st-action' } },
   { name: '已標記完成', opts: { phase: 'retouching', deliveredAt: '2026-09-20T00:00:00.000Z', finalFolders: ['shoot/精修/'], confirmedAt: '2026-09-21T00:00:00.000Z', confirmedBy: 'photographer' },
-    expect: { '已交件': 'st-done', '已標記完成': 'st-done' }, list: { '已標記完成': 'st-done' } },
+    card: '已完成', list: { '已標記完成': 'st-done' } },
 ];
 for (const st of STATES) {
   const m = pickFakeWorker({ projectId: 'proj-st', ownerName: 'Zoe', folders: ['shoot/毛片/'], ...st.opts });
   if (st.mutate) st.mutate(m);
-  await suite(`35 狀態顏色 — ${st.name}：列表（每列只有一個徽章）與詳情標題（全部徽章）的每個徽章各有自己的顏色類別、文字對比 ≥ 4.5`,
+  // (project page 2026-10-19: the detail header has no badges any more — its status card carries ONE label; the list keeps its badge)
+  await suite(`35 狀態顏色 — ${st.name}：列表（每列只有一個徽章）的徽章有自己的顏色類別、文字對比 ≥ 4.5；詳情沒有徽章，狀態卡一個標籤`,
     `${base}/admin.html${/已確認|已標記完成/.test(st.name) ? '#tab=done' : ''}`,
     async page => {
       const out = [], ok = okFn(out);
       await page.waitForSelector('#proj-recent-list [data-project-row] .badge', { timeout: 5000 });
-      for (const [where, scope] of [['list row', '#proj-recent-list [data-project-row]'], ['detail header', '.pd-head']]) {
-        if (where === 'detail header') {
-          await page.click('[data-project-row] [data-open-project]');
-          await page.waitForSelector('.pd-head .badge', { timeout: 5000 });
-        }
+      for (const [where, scope] of [['list row', '#proj-recent-list [data-project-row]']]) {
         const bs = await scanBadges(page, scope);
-        const byText = Object.fromEntries(bs.map(b => [b.text, b]));
-        // the list row shows ONE badge (the most important state); the detail header keeps all of them
-        const expect = where === 'list row' ? st.list : st.expect;
+        // the list row shows ONE badge (the most important state)
+        const expect = st.list;
         ok(`${where}: floor — scanned at least the ${Object.keys(expect).length} expected badges`, bs.length >= Object.keys(expect).length, JSON.stringify(bs.map(b => b.text)));
         if (where === 'list row') ok('list row: exactly one badge', bs.length === 1, JSON.stringify(bs.map(b => b.text)));
         for (const [text, cls] of Object.entries(expect)) {
@@ -391,6 +389,12 @@ for (const st of STATES) {
         ok(`${where}: every badge text is >= 4.5:1 on its own background`, bs.every(b => b.ratio >= 4.5), JSON.stringify(bs.map(b => [b.text, b.ratio.toFixed(2)])));
         badgesScanned += bs.length;
       }
+      await page.click('[data-project-row] [data-open-project]');
+      await page.waitForSelector('#pd-status-label', { timeout: 5000 });
+      const d = await page.evaluate(() => ({ badges: document.querySelectorAll('.pd-head .badge, #pd-status .badge').length,
+        label: document.getElementById('pd-status-label').textContent, notes: [...document.querySelectorAll('.pd-head .pd-head-note')].map(e => e.textContent) }));
+      ok(`detail: no badge in the header or the card; the status card says 「${st.card}」`, d.badges === 0 && d.label === st.card, JSON.stringify(d));
+      if (st.note) ok(`detail: the header notes 「${st.note}」 as plain text`, d.notes.includes(st.note), JSON.stringify(d.notes));
       return out;
     },
     { before: m.attach, initScript: ADMIN });
@@ -398,28 +402,25 @@ for (const st of STATES) {
 
 {
   const m = pickFakeWorker({ projectId: 'proj-arch', ownerName: 'Zoe', folders: ['shoot/毛片/'], phase: 'picking', archivedAt: '2026-09-30T00:00:00.000Z' });
-  await suite('35 狀態顏色 — 已封存：灰色（中性），其他沒列到的徽章也是灰色',
+  // (the grey 已封存 header badge went with the header badges on 2026-10-19: the status card says 已封存 instead)
+  await suite('35 狀態顏色 — 已封存：詳情的狀態卡說「已封存」，不是徽章',
     `${base}/admin.html#project=proj-arch`,
     async page => {
       const out = [], ok = okFn(out);
-      await page.waitForSelector('.pd-head .badge', { timeout: 5000 });
-      const bs = await scanBadges(page, '.pd-head');
-      const arch = bs.find(b => b.text === '已封存');
-      ok('已封存 is st-neutral', !!arch && arch.cls === 'st-neutral', JSON.stringify(bs));
-      ok('contrast >= 4.5', !!arch && arch.ratio >= 4.5, arch && arch.ratio.toFixed(2));
-      if (arch) seenColours.grey.push({ color: arch.color, bg: arch.bg });
-      badgesScanned += bs.length;
+      await page.waitForSelector('#pd-status-label', { timeout: 5000 });
+      ok('the status card says 已封存 and the header has no badge', (await page.textContent('#pd-status-label')) === '已封存' && (await page.$$('.pd-head .badge')).length === 0);
       return out;
     },
     { before: m.attach, initScript: ADMIN });
 }
 
-await suite('35 狀態顏色 — 四組顏色（琥珀 / 珊瑚紅 / 綠 / 灰）的背景與文字計算色彼此都不同，且各組內一致',
+// (grey (st-neutral) was only ever on the detail header's 已封存 / 已修改 badges, gone since 2026-10-19; the list never shows it)
+await suite('35 狀態顏色 — 列表的三組顏色（琥珀 / 珊瑚紅 / 綠）的背景與文字計算色彼此都不同，且各組內一致',
   `${base}/admin.html`,
   async () => {
     const out = [], ok = okFn(out);
-    ok('floor: badges were scanned in the state suites above', badgesScanned >= 22, String(badgesScanned));
-    const groups = Object.keys(seenColours);
+    ok('floor: one badge per state was scanned in the state suites above', badgesScanned >= 8, String(badgesScanned));
+    const groups = Object.keys(seenColours).filter(g => g !== 'grey');
     for (const g of groups) {
       ok(`group ${g}: at least 2 badges seen`, seenColours[g].length >= 2, String(seenColours[g].length));
       ok(`group ${g}: one background and one text colour throughout`,
@@ -427,8 +428,8 @@ await suite('35 狀態顏色 — 四組顏色（琥珀 / 珊瑚紅 / 綠 / 灰�
     }
     const bgs = groups.map(g => seenColours[g][0] && seenColours[g][0].bg);
     const fgs = groups.map(g => seenColours[g][0] && seenColours[g][0].color);
-    ok('the four backgrounds are all different', new Set(bgs).size === 4 && bgs.every(Boolean), JSON.stringify(bgs));
-    ok('the four text colours are all different', new Set(fgs).size === 4 && fgs.every(Boolean), JSON.stringify(fgs));
+    ok('the three backgrounds are all different', new Set(bgs).size === 3 && bgs.every(Boolean), JSON.stringify(bgs));
+    ok('the three text colours are all different', new Set(fgs).size === 3 && fgs.every(Boolean), JSON.stringify(fgs));
     return out;
   },
   { initScript: ADMIN });

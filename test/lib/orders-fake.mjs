@@ -648,7 +648,8 @@ export const ADMIN_PICKS = m => {
 // 這一段用 ADMIN_PLAIN（沒有預存的展開偏好）來看預設；其他舊的 admin suite 用 ADMIN，
 // 它預存「全部展開」，等於一個已經把區塊都打開過的攝影師。
 // ═══════════════════════════════════════════════════════════════════════════
-export const SEC_NAMES = ['delivery', 'settings', 'selections', 'orders', 'submissions', 'people'];
+// 交件 is not a section since the project page redesign (2026-10-19): it is the status card (#pd-status)
+export const SEC_NAMES = ['settings', 'selections', 'orders', 'submissions', 'people'];
 export const secInfo = page => page.evaluate(names => Object.fromEntries(names.map(n => {
   const sec = document.getElementById('pd-sec-' + n), btn = document.getElementById(`pd-sec-${n}-btn`);
   const body = document.getElementById(`pd-sec-${n}-body`), sum = document.getElementById(`pd-sec-${n}-sum`);

@@ -137,7 +137,7 @@ await run('mobile pages 390 — admin 選片專案 list + create form', 'admin',
   ok('project row stays inside the screen', row.r <= 390 && row.sw <= row.cw + 1, JSON.stringify(row));
 });
 await run('mobile pages 390 — admin 專案詳情', 'detail', { shot: 'admin-detail' }, async (page, ok) => {
-  await page.waitForSelector('#pd-rename-btn', { timeout: 5000 });
+  await page.waitForSelector('#pd-edit-btn', { timeout: 5000 });   // the header's ✎ 編輯 (project page 2026-10-19)
   const m = await measure(page);
   phoneChecks(ok, m, 'detail', {});
   const btns = await page.$$eval('#project-detail-panel button, #project-detail-panel a.btn', els => els.filter(e => e.getClientRects().length).map(e => Math.round(e.getBoundingClientRect().right)));

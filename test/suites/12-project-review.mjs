@@ -231,7 +231,7 @@ await suite('index.html — 專案選片：沒有 ?project= 時，攝影師模�
       await page.waitForSelector('#pd-start-retouch-btn', { timeout: 5000 });
       await page.click('#pd-start-retouch-btn');
       await page.waitForFunction(
-        () => document.querySelector('.pd-head .badge')?.textContent === '精修中',
+        () => document.getElementById('pd-status-label')?.textContent === '精修中',   // the status card (2026-10-19)
         null, { timeout: 5000 });
       // the list is hidden while the detail is open (admin detail view) but is still kept
       // current; it is refreshed in the same step as the detail, so wait for it, not a fixed beat

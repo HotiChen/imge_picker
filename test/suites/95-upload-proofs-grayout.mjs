@@ -30,9 +30,10 @@ const btn = page => page.evaluate(() => {
       ok('it is not a link any more (no href)', !!b && b.href === null, JSON.stringify(b));
       ok('it is a disabled <button> (not focusable, announced as disabled)', !!b && b.tag === 'BUTTON' && b.disabled === 'true', JSON.stringify(b));
       ok('it looks grayed out (its own background, not-allowed cursor)', !!b && b.bg !== b.sibBg && b.cursor === 'not-allowed', JSON.stringify(b));
-      const geo = await page.evaluate(() => { const r = document.getElementById('pd-upload-proofs-btn').getBoundingClientRect(), f = document.getElementById('pd-download-btn').getBoundingClientRect();
+      // its row is the 照片 block's 毛片 row (project page 2026-10-19); the sibling there is that row's 看
+      const geo = await page.evaluate(() => { const r = document.getElementById('pd-upload-proofs-btn').getBoundingClientRect(), f = document.querySelector('#pd-photos [data-version="proofs"] [data-view]').getBoundingClientRect();
         return { w: r.width, dh: Math.abs(r.height - f.height), dTop: Math.abs(r.top - f.top) }; });
-      ok('same height as its sibling button and on the same row (the row does not jump)', geo.w > 20 && geo.dh <= 2 && geo.dTop < 40, JSON.stringify(geo));
+      ok('same height as its sibling button (毛片 row 看) and on the same row (the row does not jump)', geo.w > 20 && geo.dh <= 2 && geo.dTop < 40, JSON.stringify(geo));
       const look = () => page.$eval('#pd-upload-proofs-btn', e => { const c = getComputedStyle(e); return [c.backgroundColor, c.borderTopColor, c.color, c.opacity].join('|'); });
       const rest = await look();
       await page.hover('#pd-upload-proofs-btn', { force: true });

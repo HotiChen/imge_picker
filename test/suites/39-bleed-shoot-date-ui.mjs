@@ -258,21 +258,25 @@ const shown = (page, sel) => page.$eval(sel, e => e.offsetParent !== null && e.g
     `${base}/admin.html#project=proj-sd`,
     async page => {
       const out = [], ok = okFn(out);
-      await page.waitForSelector('#pd-shoot-input', { timeout: 5000 });
-      const head = () => page.$eval('#pd-shoot-text', e => ({ text: e.textContent, shown: e.getClientRects().length > 0, inHead: !!e.closest('.pd-head') }));
+      // project page 2026-10-19: the date is the first part of the header's meta line (titled 拍攝日期), edited in the ✎ 編輯 modal
+      await page.waitForSelector('#pd-edit-btn', { timeout: 5000 });
+      const head = () => page.$eval('#pd-shoot-text', e => ({ text: e.textContent, title: e.title, shown: e.getClientRects().length > 0, inHead: !!e.closest('.pd-head') }));
       let h = await head();
-      ok('the header shows 「拍攝日期 2026-09-21」, on screen, inside the header row', h.text === '拍攝日期 2026-09-21' && h.shown && h.inHead, JSON.stringify(h));
+      ok('the header shows 2026-09-21 (titled 拍攝日期), on screen, inside the header row', h.text === '2026-09-21' && h.title === '拍攝日期' && h.shown && h.inHead, JSON.stringify(h));
+      await page.click('#pd-edit-btn');
       ok('the input is a date input holding the stored day', (await page.$eval('#pd-shoot-input', e => e.type + '|' + e.value)) === 'date|2026-09-21');
       await page.fill('#pd-shoot-input', '2026-10-05');
-      await page.click('#pd-shoot-save');
+      await page.click('#pd-edit-save');
       await page.waitForFunction(() => document.getElementById('pd-shoot-text').textContent.includes('2026-10-05'), null, { timeout: 3000 });
       ok('PATCH {shoot_date: "2026-10-05"} and the header follows', patches().length === 1 && JSON.stringify(patches()[0].body) === '{"shoot_date":"2026-10-05"}', JSON.stringify(patches()[0]?.body));
       ok('the fake stored it', m.state.project.shoot_date === '2026-10-05');
+      await page.click('#pd-edit-btn');
       await page.fill('#pd-shoot-input', '');
-      await page.click('#pd-shoot-save');
+      await page.click('#pd-edit-save');
       await page.waitForFunction(() => document.getElementById('pd-shoot-text').getClientRects().length === 0, null, { timeout: 3000 });
       ok('an emptied field sends null and the header text goes away', JSON.stringify(patches()[1].body) === '{"shoot_date":null}' && m.state.project.shoot_date === null, JSON.stringify(patches()[1]?.body));
-      ok('the input is empty again', (await page.inputValue('#pd-shoot-input')) === '');
+      await page.click('#pd-edit-btn');
+      ok('reopened, the input is empty again', (await page.inputValue('#pd-shoot-input')) === '');
       return out;
     },
     { before: m.attach, initScript: ADMIN });
@@ -284,10 +288,11 @@ const shown = (page, sel) => page.$eval(sel, e => e.offsetParent !== null && e.g
     `${base}/admin.html#project=proj-sd2`,
     async page => {
       const out = [], ok = okFn(out);
-      await page.waitForSelector('#pd-shoot-input', { timeout: 5000 });
+      await page.waitForSelector('#pd-edit-btn', { timeout: 5000 });
+      await page.click('#pd-edit-btn');   // the date is edited in the ✎ 編輯 modal (project page 2026-10-19)
       ok('no date: the header text is not on screen (positive: the input is)', (await page.$eval('#pd-shoot-text', e => e.getClientRects().length)) === 0 && (await shown(page, '#pd-shoot-input')));
       await page.fill('#pd-shoot-input', '2026-10-05');
-      await page.click('#pd-shoot-save');
+      await page.click('#pd-edit-save');
       await waitText(page, '#pd-shoot-err', t => t.length > 0);
       const t = await T(page, '#pd-shoot-err');
       ok('「拍攝日期尚未啟用，請先執行 migration…」', t.includes('尚未啟用，請先執行 migration'), t);
