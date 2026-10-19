@@ -362,6 +362,11 @@ no longer uses the web album below; it looks and works like the 毛片 picking p
   `POST /api/pick/revision-round` with `expect` and the optional note), none → the 確認完成 dialog (`submit`, the same
   `POST /api/pick/confirm` with its stale-page guard). The strip's old 確認完成 / 送出修改 buttons are gone; the strip
   keeps the status, 上一輪的修改資訊 and, without the pins migration, the old 需要修改 text request.
+- **No button while a sent round waits (2026-10-19, Tim)**: with the pins migration, once a round is open
+  (`revision_open`) there is no action button at all: nothing new to send or accept until the photographer replaces the
+  finals (更換精修 resolves the round). Tim found 「精修完成」 there confusing. The old text-request fallback (migration
+  not run) keeps 確認完成. Suite 97 (also: the folder bar `#guestBar` is not sticky while the strip is on the page — both stuck at
+  `top: 56px` and overlapped, eating the top of the page; `body.has-delivery-strip`).
 - Unchanged: every Worker route and invariant (confirming resolves open requests; confirmed never coexists with an
   open request), the status texts' meaning, the 完成頁.
 - Tests: `test/suites/91-review-stage-grid.mjs`, `92-review-stage-pins.mjs`, `93-review-stage-action.mjs`

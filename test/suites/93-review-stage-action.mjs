@@ -62,7 +62,7 @@ export default async function register() {
   // ═════ 2. with pins: 送出（N 張） -> the round dialog -> a sent round; then 精修完成 again
   {
     const w = rsWorld({ drafts: SEED() });
-    await sx('驗收頁 action — with pins: 「送出（2 張）」 opens the round dialog; sending posts the round; afterwards 精修完成 (確認完成 dialog)',
+    await sx('驗收頁 action — with pins: 「送出（2 張）」 opens the round dialog; sending posts the round; afterwards no button',
       rsUrl,
       async (page, ok) => {
         await page.waitForSelector('#doneActionBtn', { timeout: 6000 });
@@ -78,9 +78,7 @@ export default async function register() {
         await page.click('#doneRoundSubmit');
         ok('sent: one POST with expect + note; the status says 已送出修改（2 張）', await rsUntil(async () => rsRounds(w).length === 1 && (await page.textContent('#deliveryDoneStatus')) === '已送出修改（2 張），攝影師處理中') &&
           JSON.stringify(rsRounds(w)[0].body) === JSON.stringify({ expect: [{ k: rsKey(1), n: 2 }, { k: rsKey(3), n: 1 }], note: '整體亮一點' }), JSON.stringify(rsRounds(w).map(c => c.body)));
-        ok('the button is now 精修完成 (no draft to send)', await rsUntil(async () => (await label(page)) === '精修完成'), await label(page));
-        await page.click('#doneActionBtn');
-        ok('and it opens the 確認完成 dialog', await rsModalActive(page, 'doneConfirmModal') && !(await rsModalActive(page, 'doneRoundModal')));
+        ok('the button is gone while the round waits for the photographer (nothing to send or accept; suite 97)', await rsUntil(async () => (await label(page)) === null), await label(page));
       },
       { before: w.before, initScript: RS_OWNER, contextOptions: ALB_DESK });
   }

@@ -110,7 +110,9 @@
                 if (actions.children.length) kids.push(actions);
                 this.ensureModals(pc);
                 // the finals only: the 毛片 download list (回到毛片) has nothing to confirm or mark there
-                if (pc.view === 'finals') this.renderAction(pc); else this.removeAction();
+                // (pins: not while a sent round waits for the photographer, there is nothing new to accept yet; the old text-request
+                // fallback, migration not run, keeps 確認完成 so a client can still say 算了這樣就好)
+                if (pc.view === 'finals' && !(revising && pins)) this.renderAction(pc); else this.removeAction();
             } else {
                 this.removeModals();
                 this.removeAction();
