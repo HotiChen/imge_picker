@@ -301,6 +301,12 @@
   /* status card */
   .pd-status { border: 1px solid var(--accent-dim); border-radius: 14px; background: var(--card); padding: 14px 16px; margin: 0 0 12px; }
   .pd-status-label { font-size: 17px; font-weight: 600; color: var(--ink-90); }
+  .pd-status-label, .pd-status-next { display: block; }
+  .pd-status-toggle { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; min-height: 44px; margin: -6px 0; padding: 6px 0; background: none; border: 0; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+  .pd-status-toggle-text { flex: 1 1 auto; min-width: 0; }
+  .pd-status-chev { flex: none; color: var(--ink-70); font-size: 14px; transition: transform .15s; }
+  .pd-status-toggle[aria-expanded="true"] .pd-status-chev { transform: rotate(180deg); }
+  #pd-status-body[hidden] { display: none !important; }
   .pd-status-next { color: var(--ink-70); font-size: 13px; margin-top: 2px; line-height: 1.6; }
   .pd-status-actions:empty { display: none; }
   .pd-status-actions { margin-top: 10px; }
@@ -1991,10 +1997,11 @@
       <div id="pd-action-err" class="err" role="alert"></div>
 
       <section class="pd-status" id="pd-status" aria-labelledby="pd-status-label">
-        <div class="pd-status-label" id="pd-status-label"></div>
-        <div class="pd-status-next" id="pd-status-next"></div>
-        <div class="pd-status-actions" id="pd-status-actions"></div>
-        <div id="pd-delivery"></div>
+        <div id="pd-status-head"><span class="pd-status-label" id="pd-status-label"></span><span class="pd-status-next" id="pd-status-next"></span></div>
+        <div id="pd-status-body">
+          <div class="pd-status-actions" id="pd-status-actions"></div>
+          <div id="pd-delivery"></div>
+        </div>
       </section>
 
       <section class="pd-card" id="pd-photos" aria-labelledby="pd-photos-h">
@@ -2357,6 +2364,31 @@
       default: return '';
     }
   }
+  // 已完成: the card shows only a header button (label + 客人已確認 line + chevron); the rest opens on tap.
+  // The open state lives here, per project id, so a refresh re-render does not flip it back mid-session.
+  let statusOpen = false, statusOpenFor = null;
+  function applyStatusCollapse(stage, p) {
+    const head = $id('pd-status-head'), body = $id('pd-status-body');
+    const label = $id('pd-status-label'), next = $id('pd-status-next');
+    if (statusOpenFor !== p.id) { statusOpenFor = p.id; statusOpen = false; }
+    let btn = $id('pd-status-toggle');
+    if (stage !== 'done') {
+      if (btn) { head.append(label, next); btn.remove(); }
+      body.hidden = false;
+      return;
+    }
+    if (!btn) {
+      btn = document.createElement('button');
+      btn.type = 'button'; btn.id = 'pd-status-toggle'; btn.className = 'pd-status-toggle';
+      btn.setAttribute('aria-controls', 'pd-status-body');
+      btn.innerHTML = '<span class="pd-status-toggle-text"></span><span class="pd-status-chev" aria-hidden="true">▾</span>';
+      btn.querySelector('.pd-status-toggle-text').append(label, next);
+      head.append(btn);
+      btn.addEventListener('click', () => { statusOpen = !statusOpen; applyStatusCollapse('done', currentProject); });
+    }
+    btn.setAttribute('aria-expanded', statusOpen ? 'true' : 'false');
+    body.hidden = !statusOpen;
+  }
   function renderStatusHead(stage, plan) {
     const card = $id('pd-status');
     const p = currentProject;
@@ -2372,6 +2404,7 @@
       : stage === 'archived' ? '<button id="pd-unarchive-btn" class="btn btn-accent" type="button" data-primary>取消封存</button>' : '';
     actions.querySelector('#pd-start-retouch-btn')?.addEventListener('click', () => projectAction('start-retouch'));
     actions.querySelector('#pd-unarchive-btn')?.addEventListener('click', () => projectAction('unarchive'));
+    applyStatusCollapse(stage, p);
   }
 
   // ── 照片: one row per version ──

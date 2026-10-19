@@ -96,6 +96,8 @@ for (const [name, o, want] of [
       }
     }
     if (want.deliverOff) ok('交件 is there, disabled, and not the primary', await page.$eval('#pd-status #pd-deliver-btn', b => b.disabled && !b.hasAttribute('data-primary')).catch(() => false));
+    // 已完成 is collapsed to its header (test/suites/99e-status-collapse.mjs): open it to reach what is inside
+    if (want.stage === 'done' && await page.$('#pd-status-toggle[aria-expanded="false"]')) await page.click('#pd-status-toggle');
     if (want.delivered) {
       ok('the card says when it was delivered (已交件 + the delivered folder)', await page.$eval('#pd-status [data-delivered-status]', e => e.textContent === '已交件').catch(() => false) &&
         (await page.$$eval('#pd-status #pd-delivered-folders [data-final-chip]', els => els.map(e => e.dataset.finalChip))).join() === 'shoot/精修/');

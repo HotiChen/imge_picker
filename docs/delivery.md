@@ -711,6 +711,9 @@ Frontend only; no Worker field was added. Top to bottom (`renderProjectDetail`):
   upload of `nextFinalFolder`). Unknown (older project, listing failed) → the unlocked ＋上傳精修 and
   更換精修資料夾. The 交件 chooser, the delivered folders, 更換精修資料夾, the rounds and 標記完成 live in
   the card (same ids as before). The detail page has no status badges any more; the list keeps them.
+  - 已完成 only is collapsed: a header `<button id="pd-status-toggle">` (label + 客人已確認 line + chevron, aria-expanded /
+    aria-controls `#pd-status-body`) and the rest of the card (`#pd-status-body`, `hidden`, still mounted) opens on tap. The
+    open state is a page variable per project id (`statusOpen` / `statusOpenFor`); every other stage is always open.
 - 照片: a row per version (毛片 with 看 = `?mode=all` and ＋上傳毛片; each 精修* with 看 =
   `?mode=finals&folder=<that folder>`; the delivered one marked 客人目前看的版本; an empty next-version row while a
   round waits), then 下載選片 / 下載需求表. No counts or dates: the page would need a listing per folder.

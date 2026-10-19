@@ -286,6 +286,7 @@ for (const [tag, ctx] of [['1280', DESKTOP], ['390', PHONE]]) {
       async page => {
         const out = [];
         const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
+        await page.waitForSelector('#pd-status[data-stage]', { timeout: 6000 }); if (await page.$('#pd-status-toggle[aria-expanded="false"]')) await page.click('#pd-status-toggle');   // 已完成 is collapsed to its header (99e): open it so the scan sees the content
         await page.waitForSelector('#pd-revisions .pd-rev', { timeout: 5000 });
         await page.waitForSelector('#pd-status-label', { timeout: 5000 });
         const open = state === 'open requests';

@@ -106,7 +106,7 @@ const admRevItems = page => page.$$eval('#pd-revisions .pd-rev', els => els.map(
       ok('updated in place: the detail was not fetched again', admDetailGets(m) === gets0, `${gets0} -> ${admDetailGets(m)}`);
       ok('更換精修資料夾 and 取消交件 are still offered', !!(await page.$('#pd-replace-final-btn')) && !!(await page.$('#pd-undeliver-btn')));
       await page.reload({ waitUntil: 'load' });
-      await page.waitForSelector('#pd-confirm-status', { timeout: 5000 });
+      await page.waitForSelector('#pd-confirm-status', { state: 'attached', timeout: 5000 });   // 已完成 is collapsed (99e): mounted, not painted
       ok('after a reload the Worker still says it (no button, same status)', (await page.$('#pd-mark-done-btn')) === null && /已標記完成/.test(await page.textContent('#pd-confirm-status')));
       if (process.env.SHOTS_DONE) await page.screenshot({ path: `${process.env.SHOTS_DONE}/admin-detail-marked.png`, fullPage: true });
       return out;

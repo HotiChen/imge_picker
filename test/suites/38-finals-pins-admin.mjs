@@ -58,7 +58,7 @@ const cards = page => page.$$eval('#pd-revisions .pd-rev', els => els.map(e => (
   resolved: e.classList.contains('resolved'), done: e.querySelector('.pd-rev-done')?.textContent ?? null,
   photos: e.querySelectorAll('.rrv-photos').length, rows: e.querySelectorAll('.rrv-photo').length,
   auto: !!e.querySelector('.rrv-auto'), csv: !!e.querySelector('.rrv-csv'), id: e.dataset.roundId || null })));
-const waitCards = page => page.waitForSelector('#pd-revisions .pd-rev', { timeout: 6000 });
+const waitCards = async page => { await page.waitForSelector('#pd-status[data-stage]', { timeout: 6000 }); if (await page.$('#pd-status-toggle[aria-expanded="false"]')) await page.click('#pd-status-toggle'); return page.waitForSelector('#pd-revisions .pd-rev', { timeout: 6000 }); };   // 已完成 is collapsed (99e): open it first
 const openPhotos = async (page, id) => {
   await page.evaluate(i => { const d = document.querySelector(`#pd-revisions .pd-rev[data-round-id="${i}"] .rrv-photos`); d.open = true; d.dispatchEvent(new Event('toggle')); }, id);
 };

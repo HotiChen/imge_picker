@@ -193,6 +193,7 @@ for (const [name, fake] of [['a dropped connection', { interestFail: 'net' }], [
   await sx('admin 客人興趣 — no interests: the block is not in the DOM, the detail is otherwise there',
     `${base}/admin.html#project=proj-1`, async (page, ok) => {
       await page.waitForSelector('#pd-title', { timeout: 6000 });
+      await page.waitForSelector('#pd-status[data-stage]', { timeout: 6000 }); if (await page.$('#pd-status-toggle[aria-expanded="false"]')) await page.click('#pd-status-toggle');   // 已完成 is collapsed (99e)
       await page.waitForSelector('#pd-delivery', { timeout: 3000 });
       ok('positive: the detail rendered (title + delivery block) and the Worker answered interests: []', !!(await page.$('#pd-delivery')) && Array.isArray(w.m.state.interests) && w.m.state.interests.length === 0);
       ok('no #pd-interests and no 客人興趣 text', (await page.$('#pd-interests')) === null && !(await page.textContent('#project-detail-body')).includes('客人興趣'));
