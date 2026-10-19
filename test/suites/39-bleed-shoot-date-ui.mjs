@@ -351,7 +351,7 @@ for (const [who, co] of [['390px', MOBILE], ['1280px', { viewport: { width: 1280
     async page => {
       const out = [], ok = okFn(out);
       await page.waitForSelector('#deliveryDone', { timeout: 5000 });
-      ok('positive: the 驗收頁 is up', (await page.$('#doneConfirmBtn')) !== null);
+      ok('positive: the 驗收頁 is up (its 精修完成 button)', (await page.$('#doneActionBtn')) !== null);
       ok('no completion page and no 拍攝日期 text anywhere', (await page.$('#completionPage')) === null && !(await page.evaluate(() => document.body.textContent.includes('拍攝日期'))));
       return out;
     },

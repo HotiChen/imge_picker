@@ -85,14 +85,16 @@ const move = (page, patch) => page.evaluate(p => { Object.assign(window.__vv, p)
   const m = pickFakeWorker({
     ownerName: 'Zoe', ownerKey: 'ZOE-KEY', phase: 'retouching', folders: ['shoot/毛片/'], finalFolders: ['shoot/精修/'],
     deliveredAt: '2026-09-20T00:00:00.000Z', pickFiles: ['shoot/毛片/a.jpg', ...files], title: '婚禮精修',
-    studio: { name: '光影工作室', booking_url: null, has_logo: true }, image: BIG_PHOTO });
-  await suite('visual viewport — the finals lightbox follows the visible area too',
+    studio: { name: '光影工作室', booking_url: null, has_logo: true }, image: BIG_PHOTO,
+    // the finals lightbox is the 完成頁's since the 驗收頁 became the 毛片 page (2026-10-19)
+    confirmedAt: '2026-09-21T03:00:00.000Z' });
+  await suite('visual viewport — the finals lightbox (完成頁) follows the visible area too',
     `${base}/index.html?t=TOK`,
     async page => {
       const out = [];
       const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
-      await page.waitForSelector('.fg-tile', { timeout: 5000 });
-      await page.locator('.fg-tile').first().click();
+      await page.waitForSelector('#completionPage .fg-tile', { timeout: 5000 });
+      await page.locator('#completionPage .fg-tile').first().click();
       await page.waitForSelector('#fgLightbox', { timeout: 3000 });
       const full = await page.evaluate(() => window.innerHeight);
       const rect = () => page.evaluate(() => { const r = document.getElementById('fgLightbox').getBoundingClientRect(); return { top: Math.round(r.top), h: Math.round(r.height) }; });

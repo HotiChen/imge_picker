@@ -343,6 +343,9 @@
             if (window.RevisionPins) RevisionPins.sync(this);   // first: the pin UI (syncPinUI) and the done block read it
             this._renderDeliveryBar();
             this._syncCompletion();
+            // the 驗收頁 (css/styles.css body.review-stage): the thin strip the web album had — no title (the header and
+            // the guest bar carry it), the bar only for 回到毛片
+            document.body.classList.toggle('review-stage', this.active && this.mode === 'delivered' && this.view === 'finals' && !this._completionWanted());
             this._syncFinals();
             this._renderDone();
             this._renderAlbumEntry();
@@ -374,8 +377,8 @@
             const titleEl = document.getElementById('deliveryTitle');
             const btn = document.getElementById('deliveryProofsBtn');
             if (this.mode !== 'delivered' || this._completionWanted()) { el.hidden = true; return; }
-            // in the finals gallery the bar is a thin strip, and only there when it
-            // carries the 下載毛片原檔 entry (the hero already has the title)
+            // on the 驗收頁 (body.review-stage) the bar is part of a thin strip, and only shown when it
+            // carries the 回到毛片 entry (the header and the phone guest bar carry the title)
             el.classList.toggle('fg-bar-proofs', this.allowProofDownload);
             const t = this.projectTitle ? ` · ${this.projectTitle}` : '';
             if (titleEl) titleEl.textContent = this.view === 'finals' ? `精修成品${t}` : `毛片${t}`;
@@ -392,8 +395,8 @@
         },
 
         // ── the finals gallery (js/finals-gallery.js, docs/delivery.md) ──────
-        // The delivered finish page as a web album: only in delivered mode and the
-        // finals view. Picking, an undelivered project (finals kept) and the
+        // The web album: only on the 完成頁 (a confirmed delivery; _syncFinals mounts it nowhere else).
+        // Picking, the 驗收頁, an undelivered project (finals kept) and the
         // 下載毛片原檔 list have none of it in the DOM. app.js's renderPhotoGrid
         // hands the photos over (renderFinals) instead of building cards.
         _finalsOn() {
@@ -430,8 +433,9 @@
                 hero: false,
                 theme: 'light',
             });
-            // a fresh gallery has no photos yet; the open folder's are already loaded (the cards go)
-            if (fresh && this.app && this.app.filteredPhotos) this._renderGrid();
+            // a fresh gallery has no photos yet; the open folder's are already loaded. app.js renderPhotoGrid hands
+            // them to the gallery (renderFinals) and empties the standard grid the 驗收頁 had
+            if (fresh && this.app && this.app.filteredPhotos) this.app.renderPhotoGrid();
         },
 
         // ── the 完成頁 (js/completion-page.js, docs/delivery.md) ─────────────

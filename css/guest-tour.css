@@ -44,3 +44,5 @@ html.cp-on .gt-help { display: none; }
 @media (prefers-reduced-motion: no-preference) {
   .gt-ring { transition: left .18s ease, top .18s ease, width .18s ease, height .18s ease; }
 }
+/* the 驗收頁's action button (css/styles.css .done-action-bar) owns the bottom: the ？ sits above it */
+body.done-action-on .gt-help { bottom: calc(76px + env(safe-area-inset-bottom)); }

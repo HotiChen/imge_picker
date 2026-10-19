@@ -115,25 +115,25 @@ for (const who of [
 ]) {
   const m = pickFakeWorker({ ...who.o, phase: 'retouching', folders: ['shoot/毛片/'], finalFolders: ['shoot/精修/'],
     deliveredAt: '2026-09-20T00:00:00.000Z', pickFiles: GUEST_FILES });
-  // REWRITTEN with the finals gallery: cards -> justified tiles (.fg-tile), the per-card 下載 link and the
-  // old preview modal (zoom included) -> the lightbox, the folder panel -> chips. What is kept as it was:
-  // finals only, nothing of the proofs read, no picking UI at all, the download URL and its saved file name.
-  await suite(`guest delivered — ${who.label} sees the 精修成品 gallery: finals only, no picking UI, 下載 in the lightbox`,
+  // REWRITTEN with the finals gallery, and again 2026-10-19: the 驗收頁 is the 毛片 page (docs/delivery.md) —
+  // the standard cards (each with its 下載), the standard preview (zoom included) with its 下載, the folder tree /
+  // <select>. What is kept as it was: finals only, nothing of the proofs read, no picking UI at all, the download
+  // URL and its saved file name.
+  await suite(`guest delivered — ${who.label} sees the 精修成品: finals only, no picking UI, 下載 on the card and in the preview`,
     `${base}/index.html?t=TOK`,
     async page => {
       const out = [];
       const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
-      await page.waitForSelector('.fg-tile', { timeout: 5000 });
-      const tiles = await page.$$eval('.fg-tile', ts => ts.map(c => c.dataset.photoId));
-      ok('the finals are listed (f1, f2)', JSON.stringify(tiles) === '["shoot/精修/f1.jpg","shoot/精修/f2.jpg"]', JSON.stringify(tiles));
-      ok('no old card and no photo preview modal is open', (await page.$('.photo-card')) === null && (await page.$('#photoModal.active')) === null);
+      await page.waitForSelector('#photoGrid .photo-card', { timeout: 5000 });
+      const cards = await guestCards(page);
+      ok('the finals are listed (f1, f2)', JSON.stringify(cards) === '["shoot/精修/f1.jpg","shoot/精修/f2.jpg"]', JSON.stringify(cards));
+      ok('no web-album gallery and no preview is open', (await page.$('#finalsGallery')) === null && (await page.$('#photoModal.active')) === null);
       ok('the claim overlay never appears, even with a free seat', (await page.$eval('#pickClaimOverlay', e => e.hidden)) === true);
       ok('the title says 精修成品', (await page.textContent('#deliveryTitle')).startsWith('精修成品') &&
         (await page.$eval('#deliveryBar', e => e.hidden)) === false);
       ok('only the finals folder was listed; the proofs never were', listed(m).length > 0 && listed(m).every(f => f.startsWith('shoot/精修/')), JSON.stringify(listed(m)));
-      const imgs = await page.$$eval('.fg-tile img', is => is.map(i => i.src));
-      ok('tile thumbnails are ?w=400 through the token', imgs.length === 2 && imgs.every(s => s.includes('?w=400') && s.includes('t=TOK') && s.includes('%E7%B2%BE%E4%BF%AE')), JSON.stringify(imgs));
-      ok('the cover is a bucket, never the original', /\?w=(400|1200|1600)&t=TOK$/.test(await page.$eval('#fgCover', i => i.src)));
+      const imgs = await page.$$eval('.photo-card img', is => is.map(i => i.src));
+      ok('card thumbnails are ?w=400 through the token', imgs.length === 2 && imgs.every(s => s.includes('?w=400') && s.includes('t=TOK') && s.includes('%E7%B2%BE%E4%BF%AE')), JSON.stringify(imgs));
       ok('no request touched a proof photo', !m.requests.some(r => decodeURIComponent(r.path).includes('毛片')));
       ok('no ♥, no submit, no counter, no filter bar, no picking banner',
         (await page.$('.pick-heart-btn')) === null && (await page.$('#submitJobBtn')) === null &&
@@ -144,34 +144,33 @@ for (const who of [
         (await page.$('#mobileActionBar')) === null &&
         !(await page.evaluate(() => /已選\s*\d/.test(document.body.innerText) || document.body.classList.contains('pick-active'))));
       ok('no over-limit modal element is open', await page.evaluate(() => !document.getElementById('pickOverModal').classList.contains('active')));
-      ok('no way to reach the proofs: no 下載毛片原檔 entry while the switch is off', (await page.$('#deliveryProofsBtn')) === null);
-      ok('no download link sits on a tile (and no card has one): the original is one press away, in the lightbox', (await page.$('.fg-tile [data-download], .fg-tile a')) === null && (await page.$('.photo-card [data-download]')) === null);
-      const chips = await page.$$eval('#fgChips .fg-chip', cs => cs.map(c => c.dataset.folder));
-      ok('the subfolder is a chip next to the finals folder', JSON.stringify(chips) === '["shoot/精修/","shoot/精修/sub/"]', JSON.stringify(chips));
+      ok('no way to reach the proofs: no 回到毛片 entry while the switch is off', (await page.$('#deliveryProofsBtn')) === null);
+      ok('each card has its 下載 (the finals are the deliverable)', JSON.stringify(await page.$$eval('.photo-card [data-download]', as => as.map(a => [decodeURI(a.href), a.textContent]))) ===
+        JSON.stringify([[DL('shoot/精修/f1.jpg'), '下載'], [DL('shoot/精修/f2.jpg'), '下載']]));
 
-      await page.click('.fg-tile');
-      await page.waitForSelector('#fgLightbox', { timeout: 5000 });
-      ok('the lightbox has no ♥ / note box / pin tools', (await page.$('#fgLightbox .pick-heart-btn')) === null && (await page.$('#fgLightbox #noteInputGroup')) === null && (await page.$('#pickModalTools')) === null);
-      ok('the lightbox 下載 has the photo’s URL and the label 下載',
-        (await page.$eval('#fgLbDownload', e => decodeURI(e.href))) === DL('shoot/精修/f1.jpg') && (await page.textContent('#fgLbDownload')) === '下載');
-      ok('the lightbox image is the ?w= bucket, not the original', /\?w=\d+/.test(await page.$eval('#fgLbImg', i => i.src)));
+      await page.click('#photoGrid .photo-card .photo-image');
+      await page.waitForSelector('#photoModal.active', { timeout: 5000 });
+      ok('the preview has no ♥ and no note box', (await page.$('#photoModal .pick-heart-btn')) === null && await page.$eval('#noteInputGroup', e => e.hidden));
+      ok('the preview 下載 has the photo’s URL and the label 下載',
+        (await page.$eval('#modalDownloadBtn', e => decodeURI(e.href))) === DL('shoot/精修/f1.jpg') && (await page.textContent('#modalDownloadBtn')) === '下載');
       await page.keyboard.press('ArrowRight');
-      await page.waitForFunction(() => document.getElementById('fgLbCount').textContent === '2 / 2', null, { timeout: 3000 });
-      ok('next photo works and the download link follows', (await page.$eval('#fgLbDownload', e => decodeURI(e.href))) === DL('shoot/精修/f2.jpg'));
-      const [dl] = await Promise.all([page.waitForEvent('download', { timeout: 5000 }), page.click('#fgLbDownload')]);
+      await page.waitForFunction(() => document.getElementById('photoCounter').textContent === '2 / 2', null, { timeout: 3000 });
+      ok('next photo works and the download link follows', (await page.$eval('#modalDownloadBtn', e => decodeURI(e.href))) === DL('shoot/精修/f2.jpg'));
+      const [dl] = await Promise.all([page.waitForEvent('download', { timeout: 5000 }), page.click('#modalDownloadBtn')]);
       ok('downloading a final saves f2.jpg', dl.suggestedFilename() === 'f2.jpg', dl.suggestedFilename());
       await page.keyboard.press('Escape');
 
-      // a subfolder opens like a proof subfolder does
-      await page.click('#fgChips .fg-chip[data-folder="shoot/精修/sub/"]');
-      await page.waitForFunction(() => document.querySelector('.fg-tile')?.dataset.photoId.includes('sub/'), null, { timeout: 5000 });
-      await page.click('#fgChips .fg-chip[data-folder="shoot/精修/"]');
-      await page.waitForFunction(() => document.querySelectorAll('.fg-tile').length === 2, null, { timeout: 5000 });
-      ok('the finals folder chip comes back to the finals gallery (2 photos)', true);
+      // a subfolder opens like a proof subfolder does (the sidebar tree on this 1280px page)
+      await page.click('aside.sidebar #folderTree .tree-row[data-folder="shoot/精修/sub/"]');
+      await page.waitForFunction(() => document.querySelector('#photoGrid .photo-card')?.dataset.photoId.includes('sub/'), null, { timeout: 5000 });
+      await page.click('aside.sidebar #folderTree .tree-row[data-folder="shoot/精修/"]');
+      await page.waitForFunction(() => document.querySelectorAll('#photoGrid .photo-card').length === 2, null, { timeout: 5000 });
+      ok('the finals folder comes back (2 photos)', true);
       ok('and no picking write was ever sent', !m.requests.some(r => r.path === '/api/pick/selections'));
       return out;
     },
     { before: m.attach, initScript: who.init || undefined });
+
 }
 
 {
@@ -182,10 +181,10 @@ for (const who of [
     async page => {
       const out = [];
       const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
-      // REWRITTEN: the finals are the gallery now (.fg-tile); the proofs list below is still the old cards
-      const finals = () => page.$$eval('.fg-tile', ts => ts.map(c => c.dataset.photoId));
-      await page.waitForSelector('.fg-tile', { timeout: 5000 });
-      ok('the gallery still opens on the finals', (await finals()).length === 2 && (await finals()).every(k => k.startsWith('shoot/精修/')));
+      // REWRITTEN 2026-10-19: the finals are the standard cards again (the 驗收頁 is the 毛片 page), like the proofs list
+      const finals = () => guestCards(page);
+      await page.waitForSelector('#photoGrid .photo-card', { timeout: 5000 });
+      ok('the page still opens on the finals', (await finals()).length === 2 && (await finals()).every(k => k.startsWith('shoot/精修/')));
       ok('the proofs were not listed yet', listed(m).every(f => f.startsWith('shoot/精修/')), JSON.stringify(listed(m)));
       ok('the entry is 回到毛片', (await page.textContent('#deliveryProofsBtn')) === '回到毛片' && !(await page.$eval('#deliveryProofsBtn', e => e.hidden)));
       await page.click('#deliveryProofsBtn');
@@ -204,9 +203,10 @@ for (const who of [
       ok('the card click did not also open the preview', (await page.$('#photoModal.active')) === null);
       ok('the button now leads back', (await page.textContent('#deliveryProofsBtn')) === '← 回精修成品');
       await page.click('#deliveryProofsBtn');
-      await page.waitForFunction(() => document.querySelector('.fg-tile')?.dataset.photoId.includes('精修'), null, { timeout: 5000 });
-      ok('back on the finals (the gallery, no cards)', JSON.stringify(await finals()) === '["shoot/精修/f1.jpg","shoot/精修/f2.jpg"]' && (await page.$('.photo-card')) === null);
-      ok('and the chips follow the view: finals folders only', (await page.$$eval('#fgChips .fg-chip', cs => cs.every(c => c.dataset.folder.includes('精修')))));
+      await page.waitForFunction(() => document.querySelector('.photo-card')?.dataset.photoId.includes('精修'), null, { timeout: 5000 });
+      ok('back on the finals (their 下載 links, no 下載原檔)', JSON.stringify(await finals()) === '["shoot/精修/f1.jpg","shoot/精修/f2.jpg"]' &&
+        (await page.$$eval('.photo-card [data-download]', as => as.every(a => a.textContent === '下載'))));
+      ok('and the folder tree follows the view: finals folders only', (await page.$$eval('aside.sidebar #folderTree .tree-row', rs => rs.length > 0 && rs.every(r => r.dataset.folder.includes('精修')))));
 
       // switch turned off while open: the proof download is refused politely
       await page.click('#deliveryProofsBtn');
@@ -227,34 +227,36 @@ for (const who of [
 {
   const m = pickFakeWorker({ ownerName: 'Zoe', ownerKey: 'ZOE-KEY', phase: 'retouching', folders: ['shoot/毛片/'], finalFolders: ['shoot/精修/'],
     deliveredAt: '2026-09-20T00:00:00.000Z', pickFiles: GUEST_FILES, allowProofDownload: true });
-  // REWRITTEN: the finals are the gallery; its download lives in the lightbox (swipe replaces the old preview
-  // swipe). The proofs list still has per-card 下載原檔 links, so the 44px check on those is kept too.
-  await suite('guest delivered gallery on a phone — no sideways scroll, 44px download targets, everything inside 390px',
+  // REWRITTEN 2026-10-19: the finals are the standard cards and preview again (the 驗收頁 is the 毛片 page): the card
+  // 下載 and the preview 下載 are checked, and the swipe of the standard preview; the proofs list check is kept.
+  await suite('guest delivered on a phone — no sideways scroll, 44px download targets, everything inside 390px',
     `${base}/index.html?t=TOK`,
     async page => {
       const out = [];
       const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
-      await page.waitForSelector('.fg-tile', { timeout: 5000 });
+      await page.waitForSelector('#photoGrid .photo-card', { timeout: 5000 });
       const geo = await page.evaluate(() => {
         const r = s => { const e = document.querySelector(s); if (!e) return null; const b = e.getBoundingClientRect(); return { w: b.width, h: b.height, l: b.left, r: b.right }; };
-        return { sw: document.documentElement.scrollWidth, iw: innerWidth, proofs: r('#deliveryProofsBtn'), bar: r('#deliveryBar'), share: r('#fgShare') };
+        return { sw: document.documentElement.scrollWidth, iw: innerWidth, proofs: r('#deliveryProofsBtn'), bar: r('#deliveryBar'), cardDl: r('.photo-card [data-download]') };
       });
       ok('the page does not scroll sideways', geo.sw <= geo.iw, JSON.stringify(geo));
-      ok('下載毛片原檔 is >= 44 tall and inside the phone', !!geo.proofs && geo.proofs.h >= 44 && geo.proofs.r <= geo.iw + 1, JSON.stringify(geo.proofs));
-      await page.click('.fg-tile');
-      await page.waitForSelector('#fgLightbox', { timeout: 5000 });
+      ok('回到毛片 is >= 44 tall and inside the phone', !!geo.proofs && geo.proofs.h >= 44 && geo.proofs.r <= geo.iw + 1, JSON.stringify(geo.proofs));
+      ok('the card 下載 is >= 44 tall and inside the phone', !!geo.cardDl && geo.cardDl.h >= 44 && geo.cardDl.r <= geo.iw + 1 && geo.cardDl.l >= 0, JSON.stringify(geo.cardDl));
+      await page.click('#photoGrid .photo-card .photo-image');
+      await page.waitForSelector('#photoModal.active', { timeout: 5000 });
+      await page.waitForFunction(() => annotationManager.imageElement && annotationManager.fitW > 0, null, { timeout: 5000 });
       const lb = await page.evaluate(() => {
-        const e = document.getElementById('fgLbDownload');
+        const e = document.getElementById('modalDownloadBtn');
         const b = e.getBoundingClientRect();
         return { h: b.height, l: b.left, r: b.right, vis: getComputedStyle(e).display !== 'none', iw: innerWidth };
       });
-      ok('the lightbox 下載 is visible, >= 44 tall and inside the phone', lb.vis && lb.h >= 44 && lb.r <= lb.iw + 1 && lb.l >= 0, JSON.stringify(lb));
-      const before = await page.textContent('#fgLbCount');
-      await swipeTouch(page, '#fgLbStage', 300, 400, 60, 410);
-      await page.waitForFunction(b => document.getElementById('fgLbCount').textContent !== b, before, { timeout: 3000 });
-      ok('swiping moves to the next final and the link follows', (await page.$eval('#fgLbDownload', e => decodeURI(e.href))) === DL('shoot/精修/f2.jpg'));
-      ok('still no sideways scroll with the lightbox open', await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
-      await page.click('#fgLbClose');
+      ok('the preview 下載 is visible, >= 44 tall and inside the phone', lb.vis && lb.h >= 44 && lb.r <= lb.iw + 1 && lb.l >= 0, JSON.stringify(lb));
+      const before = await page.textContent('#photoCounter');
+      await swipeTouch(page, '#photoCanvas', 300, 400, 60, 410);
+      await page.waitForFunction(b => document.getElementById('photoCounter').textContent !== b, before, { timeout: 3000 });
+      ok('swiping moves to the next final and the link follows', (await page.$eval('#modalDownloadBtn', e => decodeURI(e.href))) === DL('shoot/精修/f2.jpg'));
+      ok('still no sideways scroll with the preview open', await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+      await page.keyboard.press('Escape');
       await page.click('#deliveryProofsBtn');
       await page.waitForSelector('.photo-card [data-download]', { timeout: 5000 });
       const card = await page.evaluate(() => { const b = document.querySelector('.photo-card [data-download]').getBoundingClientRect(); return { h: b.height, l: b.left, r: b.right, iw: innerWidth }; });

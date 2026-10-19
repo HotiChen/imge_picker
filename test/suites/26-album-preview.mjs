@@ -37,17 +37,18 @@ for (const [label, co, init] of [['owner 1280px', ALB_DESK, ALB_OWNER], ['viewer
       const out = [];
       const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
       const owner = label.startsWith('owner');
-      await page.waitForSelector('.fg-tile', { timeout: 5000 });
+      // EDITED 2026-10-19: the 驗收頁 is the 毛片 page (standard .photo-card grid, one action button at the bottom)
+      await page.waitForSelector('#photoGrid .photo-card', { timeout: 5000 });
       await page.waitForTimeout(600);   // long enough for the shop answer / any late render to have added it
       const g = await page.evaluate(() => {
         const done = document.getElementById('deliveryDone');
-        return { tiles: document.querySelectorAll('.fg-tile').length, done: !!done, state: done?.dataset.state,
-          buttons: done ? [...done.querySelectorAll('button')].length : -1, cp: !!document.getElementById('completionPage'),
+        return { tiles: document.querySelectorAll('#photoGrid .photo-card').length, done: !!done, state: done?.dataset.state,
+          buttons: [document.getElementById('doneActionBtn'), ...(done ? done.querySelectorAll('button') : [])].filter(Boolean).length, cp: !!document.getElementById('completionPage'),
           entry: !!document.getElementById('albumPreviewEntry'), btn: !!document.getElementById('albumPreviewBtn'), viewer: !!document.getElementById('albumViewer') };
       });
       // positive controls first: this really is the delivered, unconfirmed page with its gallery
-      ok('control: the 驗收頁 is up with 6 tiles and its status block, not the 完成頁', g.tiles === 6 && g.done && g.state === 'open' && !g.cp, JSON.stringify(g));
-      ok(owner ? 'control: the owner has 確認完成 / 需要修改' : 'control: a viewer has the status block with no buttons', owner ? g.buttons === 2 : g.buttons === 0, JSON.stringify(g));
+      ok('control: the 驗收頁 is up with 6 photos and its status block, not the 完成頁', g.tiles === 6 && g.done && g.state === 'open' && !g.cp, JSON.stringify(g));
+      ok(owner ? 'control: the owner has 精修完成 / 需要修改' : 'control: a viewer has the status block with no buttons', owner ? g.buttons === 2 : g.buttons === 0, JSON.stringify(g));
       ok('no album entry, no button, no viewer', !g.entry && !g.btn && !g.viewer, JSON.stringify(g));
       const pre = await page.evaluate(() => ({ layouts: typeof LAYOUTS, auto: typeof AutoLayout, fn: typeof renderPageHTML, tpl: typeof SpreadTemplates }));
       ok('no layouts.js / spread_templates.js / auto_layout.js requested, no globals', albEngineLoads(w).length === 0 && pre.layouts === 'undefined' && pre.auto === 'undefined' && pre.fn === 'undefined' && pre.tpl === 'undefined', JSON.stringify([albEngineLoads(w), pre]));
@@ -56,7 +57,7 @@ for (const [label, co, init] of [['owner 1280px', ALB_DESK, ALB_OWNER], ['viewer
       await page.click('#deliveryProofsBtn');
       await page.waitForFunction(() => document.getElementById('deliveryTitle')?.textContent.startsWith('毛片'), null, { timeout: 4000 });
       await page.click('#deliveryProofsBtn');
-      await page.waitForSelector('.fg-tile', { timeout: 4000 });
+      await page.waitForFunction(() => document.querySelector('#photoGrid .photo-card')?.dataset.photoId.includes('精修'), null, { timeout: 4000 });
       ok('back on the finals there is still no entry', (await page.$('#albumPreviewEntry')) === null && (await page.$('#albumPreviewBtn')) === null);
       return out;
     },

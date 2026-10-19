@@ -68,14 +68,17 @@ const recordDownloads = async (page, log) => {
 }
 
 // ── 2. the 驗收頁: the button reads 回到毛片, shares a row with the status, and the strip stays put
+// (EDITED 2026-10-19: the 驗收頁 is the 毛片 page — the standard .photo-card grid scrolls inside .content as on the
+// picking page; the strip must stay under the header whether the photos or the page scroll)
+const scrollAll = page => page.evaluate(() => { document.querySelector('.content').scrollTo(0, 1500); window.scrollTo(0, 1500); });
+const scrolled = page => page.evaluate(() => Math.max(scrollY, document.querySelector('.content').scrollTop));
 for (const [label, co] of [['phone 390px', MOBILE], ['desktop 1280px', DESK]]) {
   const m = delivered({ allowProofDownload: true });
   await suite(`驗收頁 strip (${label}) — 回到毛片 beside the status, fixed under the header while scrolling`,
     `${base}/index.html?t=TOK`,
     async page => {
       const out = [], ok = line(out);
-      await page.waitForSelector('.fg-tile', { timeout: 6000 });
-      await page.waitForFunction(() => document.querySelectorAll('.fg-tile').length >= 30, null, { timeout: 6000 });
+      await page.waitForFunction(() => document.querySelectorAll('#photoGrid .photo-card').length >= 30, null, { timeout: 6000 });
       const geo = () => page.evaluate(() => {
         const r = s => { const e = document.querySelector(s); if (!e) return null; const b = e.getBoundingClientRect(); return { t: b.top, b: b.bottom, l: b.left, r: b.right, h: b.height }; };
         return { header: r('.header'), strip: r('#deliveryStrip'), btn: r('#deliveryProofsBtn'), status: r('#deliveryDoneStatus'), done: r('#deliveryDone'),
@@ -85,10 +88,11 @@ for (const [label, co] of [['phone 390px', MOBILE], ['desktop 1280px', DESK]]) {
       ok('the button says 回到毛片, and the old wording is gone', a.btnText === '回到毛片' && !(await page.evaluate(() => /下載毛片原檔/.test(document.body.innerText))), a.btnText);
       ok('the button and the status text are on one row: their vertical spans overlap and the button is left of the text', !!a.btn && !!a.status && a.btn.h > 0 && a.status.t < a.btn.b && a.btn.t < a.status.b && a.btn.r <= a.status.l + 1, JSON.stringify([a.btn, a.status]));
       ok('the strip is sticky and sits right under the header', a.pos === 'sticky' && Math.abs(a.strip.t - a.header.b) <= 1, JSON.stringify([a.pos, a.strip, a.header]));
-      await page.evaluate(() => window.scrollTo(0, 1500));
+      await scrollAll(page);
       await page.waitForTimeout(300);
       const b = await geo();
-      ok('control: the page really scrolled', b.sy >= 1000, String(b.sy));
+      const moved = await scrolled(page);
+      ok('control: the photos really scrolled', moved >= 1000, String(moved));
       ok('after scrolling the strip is still under the header, fully on screen, with its button and status', Math.abs(b.strip.t - b.header.b) <= 1 && b.strip.b > b.strip.t && b.btn.t >= b.header.b - 1 && b.status.t >= b.header.b - 1, JSON.stringify(b));
       ok('what a tap in the middle of the button hits is the button', await page.evaluate(() => { const e = document.getElementById('deliveryProofsBtn'); const r = e.getBoundingClientRect(); const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2); return hit === e || e.contains(hit); }));
       // the proofs view: title 毛片, the strip is still the strip
@@ -96,6 +100,7 @@ for (const [label, co] of [['phone 390px', MOBILE], ['desktop 1280px', DESK]]) {
       await page.waitForFunction(() => document.getElementById('deliveryTitle')?.textContent.startsWith('毛片'), null, { timeout: 5000 });
       const t = await page.evaluate(() => ({ title: document.getElementById('deliveryTitle').textContent, btn: document.getElementById('deliveryProofsBtn').textContent.trim() }));
       ok('in the 毛片 view the title is 毛片 (not 僅供下載) and the way back is named', /^毛片/.test(t.title) && !/僅供下載/.test(t.title) && /回精修成品/.test(t.btn), JSON.stringify(t));
+      ok('...and that title is shown there (only the 驗收頁 strip leaves it to the header)', await page.evaluate(() => { const e = document.getElementById('deliveryTitle'); return getComputedStyle(e).display !== 'none' && e.getBoundingClientRect().width > 0; }));
       return out;
     },
     { before: m.attach, initScript: OWNER, contextOptions: co });
@@ -106,13 +111,14 @@ for (const [label, co] of [['phone 390px', MOBILE], ['desktop 1280px', DESK]]) {
     `${base}/index.html?t=TOK`,
     async page => {
       const out = [], ok = line(out);
-      await page.waitForFunction(() => document.querySelectorAll('.fg-tile').length >= 30, null, { timeout: 6000 });
-      await page.evaluate(() => window.scrollTo(0, 1500));
+      await page.waitForFunction(() => document.querySelectorAll('#photoGrid .photo-card').length >= 30, null, { timeout: 6000 });
+      await scrollAll(page);
       await page.waitForTimeout(300);
+      ok('control: the photos really scrolled', (await scrolled(page)) >= 1000);
       const g = await page.evaluate(() => { const h = document.querySelector('.header').getBoundingClientRect(), d = document.getElementById('deliveryDone').getBoundingClientRect();
         return { btn: !!document.getElementById('deliveryProofsBtn'), hb: h.bottom, dt: d.top, db: d.bottom, text: document.getElementById('deliveryDoneStatus')?.textContent }; });
       ok('no 毛片 button in the DOM', !g.btn, JSON.stringify(g));
-      ok('the status block is under the header and on screen after scrolling', Math.abs(g.dt - g.hb) <= 1 && g.db > g.dt && /確認完成/.test(g.text || ''), JSON.stringify(g));
+      ok('the status block is under the header and on screen after scrolling', Math.abs(g.dt - g.hb) <= 1 && g.db > g.dt && /精修完成/.test(g.text || ''), JSON.stringify(g));
       return out;
     },
     { before: m.attach, initScript: OWNER, contextOptions: MOBILE });

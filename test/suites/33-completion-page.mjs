@@ -60,26 +60,27 @@ const TEXT_SCAN = `(() => {
 })()`;
 
 // ── 1. the unconfirmed delivered page is exactly what it was
+// (EDITED 2026-10-19: the 驗收頁 is the 毛片 page — standard .photo-card grid, 確認完成 is the bottom #doneActionBtn 精修完成)
 for (const [who, init, co] of [['owner 1280px', OWNER, ALB_DESK], ['viewer 390px', '', MOBILE]]) {
   const w = world({ fake: { confirmedAt: null } });
   await suite(`completion page — delivered but NOT confirmed (${who}): the 驗收頁 is unchanged, no completion page, no shop read`,
     `${base}/index.html?t=TOK`,
     async page => {
       const out = [], ok = line(out);
-      await page.waitForSelector('.fg-tile', { timeout: 5000 });
+      await page.waitForSelector('#photoGrid .photo-card', { timeout: 5000 });
       await page.waitForSelector('#deliveryDone', { timeout: 5000 });
       const owner = who.startsWith('owner');
       const s = await page.evaluate(`(() => { const L = ${lumOf}; return {
         cp: !!document.getElementById('completionPage'), on: document.documentElement.classList.contains('cp-on'),
-        confirm: !!document.getElementById('doneConfirmBtn'), revise: !!document.getElementById('doneReviseBtn'),
-        confirmDisp: document.getElementById('doneConfirmBtn') ? getComputedStyle(document.getElementById('doneConfirmBtn')).display : null,
+        confirm: !!document.getElementById('doneActionBtn'), revise: !!document.getElementById('doneReviseBtn'),
+        confirmDisp: document.getElementById('doneActionBtn') ? getComputedStyle(document.getElementById('doneActionBtn')).display : null,
         state: document.getElementById('deliveryDone').dataset.state,
-        hero: !!document.getElementById('fgHero'), body: L(getComputedStyle(document.body).backgroundColor),
+        hero: !document.getElementById('fgHero') && document.querySelectorAll('#photoGrid .photo-card').length > 0, body: L(getComputedStyle(document.body).backgroundColor),
         header: getComputedStyle(document.querySelector('header.header')).display,
         shopBox: !!document.getElementById('cpShop'), root: getComputedStyle(document.documentElement).getPropertyValue('--bg').trim() }; })()`);
       ok('no completion page root, no cp-on class, no shop section', !s.cp && !s.on && !s.shopBox, JSON.stringify(s));
-      ok('positive: the 驗收頁 is up — state open, the gallery hero is there', s.state === 'open' && s.hero, JSON.stringify(s));
-      ok(owner ? 'positive: 確認完成 and 需要修改 are in the DOM and displayed' : 'a viewer has the status line and no buttons',
+      ok('positive: the 驗收頁 is up — state open, the standard cards (no web-album hero)', s.state === 'open' && s.hero, JSON.stringify(s));
+      ok(owner ? 'positive: 精修完成 and 需要修改 are in the DOM and displayed' : 'a viewer has the status line and no buttons',
         owner ? s.confirm && s.revise && s.confirmDisp !== 'none' : !s.confirm && !s.revise, JSON.stringify(s));
       ok('still the dark client page (body dark, header shown, global --bg untouched)', s.body < 0.2 && s.header !== 'none' && s.root === '#15120d', JSON.stringify(s));
       await page.waitForTimeout(300);
@@ -118,7 +119,7 @@ for (const [who, init, co] of [['owner 390px', OWNER, MOBILE], ['viewer 390px', 
       ok('the dark chrome (header, sidebar, delivery bar / status block, banner, mobile bar, app footer) is gone or display:none with no box', chromeGone(chrome), JSON.stringify(chrome));
       ok('positive: the page itself is there and shown', await page.evaluate(() => { const e = document.getElementById('completionPage'); return getComputedStyle(e).display !== 'none' && e.getBoundingClientRect().height > 400; }));
       ok('the cp-on class is on <html>', await page.evaluate(() => document.documentElement.classList.contains('cp-on')));
-      ok('確認完成 / 需要修改 and the status block are absent for the owner too', (await page.$('#doneConfirmBtn')) === null && (await page.$('#doneReviseBtn')) === null && (await page.$('#deliveryDone')) === null && (await page.$('#doneConfirmModal')) === null);
+      ok('確認完成 / 需要修改 and the status block are absent for the owner too', (await page.$('#doneActionBtn')) === null && (await page.$('#doneReviseBtn')) === null && (await page.$('#deliveryDone')) === null && (await page.$('#doneConfirmModal')) === null);
       ok('the gallery\'s own dark hero is not on this page', (await page.$('#fgHero')) === null && (await page.$('.fg-hero')) === null);
       const d = await page.evaluate(() => {
         const t = id => document.getElementById(id)?.textContent ?? null;
@@ -191,18 +192,18 @@ for (const [label, co] of [['390px', MOBILE], ['1280px', ALB_DESK]]) {
     `${base}/index.html?t=TOK`,
     async page => {
       const out = [], ok = line(out);
-      await page.waitForSelector('#doneConfirmBtn', { timeout: 5000 });
-      await page.waitForSelector('.fg-tile', { timeout: 5000 });
-      ok('before: the 驗收頁 (no completion page)', (await page.$('#completionPage')) === null && (await page.$('#fgHero')) !== null);
+      await page.waitForSelector('#doneActionBtn', { timeout: 5000 });
+      await page.waitForSelector('#photoGrid .photo-card', { timeout: 5000 });
+      ok('before: the 驗收頁 (no completion page, the standard cards)', (await page.$('#completionPage')) === null && (await page.$$('#photoGrid .photo-card')).length === 12);
       await page.evaluate(() => { window.__marker = 'same-document'; window.scrollTo(0, 400); });
-      await page.click('#doneConfirmBtn');
+      await page.click('#doneActionBtn');
       await page.click('#doneConfirmSubmit');
       await cpReady(page);
       ok('the completion page is up with the confirmation date from the Worker', await page.evaluate(() => /^已確認完成（\d{4}\/\d{1,2}\/\d{1,2}）$/.test(document.getElementById('cpConfirmed').textContent)));
       ok('it was one confirm POST, and the document was not reloaded', donePosts(w.m, 'confirm').length === 1 && await page.evaluate(() => window.__marker) === 'same-document');
       const chrome = await chromeLook(page);
-      ok('the dark chrome is gone, 確認完成 is gone, the done modal is gone', chromeGone(chrome) && (await page.$('#doneConfirmBtn')) === null && (await page.$('#doneConfirmModal')) === null, JSON.stringify(chrome));
-      ok('the old gallery hero is gone and the rows are re-rendered inside the completion page (all 12)', (await page.$('#fgHero')) === null && await page.evaluate(() => document.querySelectorAll('#completionPage .fg-tile').length) === 12);
+      ok('the dark chrome is gone, 確認完成 is gone, the done modal is gone', chromeGone(chrome) && (await page.$('#doneActionBtn')) === null && (await page.$('#doneConfirmModal')) === null, JSON.stringify(chrome));
+      ok('the standard cards are gone and the photos are re-rendered inside the completion page (all 12)', (await page.$$('#photoGrid .photo-card')).length === 0 && await page.evaluate(() => document.querySelectorAll('#completionPage .fg-tile').length) === 12);
       ok('scrolled back to the top', await page.evaluate(() => window.scrollY) < 5);
       await page.waitForSelector('#cpShop', { timeout: 5000 });
       ok('the shop was read once, with the link token', w.m.requests.filter(r => r.path === '/api/pick/shop').length === 1 && w.m.requests.find(r => r.path === '/api/pick/shop').t === 'TOK');
@@ -216,12 +217,12 @@ for (const [label, co] of [['390px', MOBILE], ['1280px', ALB_DESK]]) {
     `${base}/index.html?t=TOK`,
     async page => {
       const out = [], ok = line(out);
-      await page.waitForSelector('#doneConfirmBtn', { timeout: 5000 });
-      await page.click('#doneConfirmBtn');
+      await page.waitForSelector('#doneActionBtn', { timeout: 5000 });
+      await page.click('#doneActionBtn');
       await page.click('#doneConfirmSubmit');
       await page.waitForFunction(() => document.getElementById('doneConfirmErr')?.textContent.trim().length > 0, null, { timeout: 5000 });
       ok('positive: the modal shows the error', (await page.textContent('#doneConfirmErr')).length > 0);
-      ok('no completion page, still the dark page with its 確認完成 button', (await page.$('#completionPage')) === null && (await page.$('#doneConfirmBtn')) !== null && !(await page.evaluate(() => document.documentElement.classList.contains('cp-on'))));
+      ok('no completion page, still the dark page with its 精修完成 button', (await page.$('#completionPage')) === null && (await page.$('#doneActionBtn')) !== null && !(await page.evaluate(() => document.documentElement.classList.contains('cp-on'))));
       return out;
     },
     { before: w.before, initScript: OWNER, contextOptions: ALB_DESK });
@@ -232,14 +233,14 @@ for (const [label, co] of [['390px', MOBILE], ['1280px', ALB_DESK]]) {
     `${base}/index.html?t=TOK`,
     async page => {
       const out = [], ok = line(out);
-      await page.waitForSelector('#doneConfirmBtn', { timeout: 5000 });
+      await page.waitForSelector('#doneActionBtn', { timeout: 5000 });
       w.m.state.project.client_confirmed_at = T0;
       w.m.state.project.client_confirmed_by = 'photographer';
-      await page.click('#doneConfirmBtn');
+      await page.click('#doneActionBtn');
       await page.click('#doneConfirmSubmit');
       await cpReady(page);
       ok('the completion page is up with the stamp that was already there', await page.evaluate(() => document.getElementById('cpConfirmed').textContent) === '已確認完成（2026/9/21）');
-      ok('the 驗收頁 is gone, and nothing was posted (the guard saw it)', (await page.$('#deliveryDone')) === null && (await page.$('#doneConfirmBtn')) === null && donePosts(w.m, 'confirm').length === 0);
+      ok('the 驗收頁 is gone, and nothing was posted (the guard saw it)', (await page.$('#deliveryDone')) === null && (await page.$('#doneActionBtn')) === null && donePosts(w.m, 'confirm').length === 0);
       return out;
     },
     { before: w.before, initScript: OWNER, contextOptions: ALB_DESK });
@@ -253,12 +254,12 @@ for (const [label, co] of [['390px', MOBILE], ['1280px', ALB_DESK]]) {
     `${base}/index.html?t=TOK`,
     async page => {
       const out = [], ok = line(out);
-      await page.waitForSelector('#doneConfirmBtn', { timeout: 5000 });
-      await page.click('#doneConfirmBtn');
+      await page.waitForSelector('#doneActionBtn', { timeout: 5000 });
+      await page.click('#doneActionBtn');
       await page.click('#doneConfirmSubmit');
       await cpReady(page);
       ok('the completion page is up with the photographer\'s stamp', await page.evaluate(() => document.getElementById('cpConfirmed').textContent) === '已確認完成（2026/9/21）');
-      ok('the 驗收頁 is gone', (await page.$('#deliveryDone')) === null && (await page.$('#doneConfirmBtn')) === null);
+      ok('the 驗收頁 is gone', (await page.$('#deliveryDone')) === null && (await page.$('#doneActionBtn')) === null);
       ok('positive: the injected 409 was really consumed', queue.length === 0);
       return out;
     },

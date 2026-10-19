@@ -2261,12 +2261,12 @@ span.pick-heart-btn { cursor: default; }
 }
 
 /* The 驗收頁 strip (Tim 2026-10-15): the 毛片 button and the status block on one row, fixed under the 56px header
-   (position: sticky, so it keeps its place in the page) instead of scrolling away. The gallery's own hero carries
-   the title, so the bar's title is not repeated there. */
+   (position: sticky, so it keeps its place in the page) instead of scrolling away. The header (and the phone's
+   guest bar) carry the title, so the bar's title is not repeated there. */
 .delivery-strip { position: sticky; top: 56px; z-index: 50; display: flex; flex-wrap: wrap; align-items: stretch; background: var(--surface); }
 .delivery-strip > .delivery-bar { flex: 0 0 auto; }
 .delivery-strip > .delivery-done { flex: 1 1 260px; min-width: 0; }
-body.fg-mode #deliveryTitle { display: none; }
+body.review-stage #deliveryTitle { display: none; }
 
 /* Delivery gallery (docs/delivery.md). [hidden] must beat .btn's display. */
 .delivery-bar .pick-banner-line { font-size: 15px; letter-spacing: .04em; }
@@ -2301,6 +2301,21 @@ body.fg-mode #deliveryTitle { display: none; }
 .done-err .done-reload { margin-left: 10px; padding: 4px 12px; font-size: 12px; min-height: 32px; }
 .done-modal .pick-over-content .pick-submit-actions .btn,
 .done-modal .pick-submit-actions .btn { min-height: 44px; }
+
+/* The 驗收頁's one action button (js/delivery-done.js renderAction): 精修完成 / 送出（N 張）. A bar across
+   the bottom on a phone or tablet (like the picking page's), a single pill bottom-right on a wide screen.
+   Under the photo preview (.modal is z-index 2000). */
+.done-action-bar {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 1000;
+  display: flex; padding: 8px 16px calc(8px + env(safe-area-inset-bottom));
+  background: var(--surface); border-top: 1px solid var(--border);
+}
+.done-action-bar > .btn { flex: 1; min-height: 48px; font-size: 16px; font-weight: 600; }
+body.done-action-on .content { padding-bottom: 96px; }
+@media (min-width: 1025px) {
+  .done-action-bar { left: auto; right: 24px; bottom: 24px; padding: 0; background: none; border: 0; }
+  .done-action-bar > .btn { flex: none; min-width: 180px; padding: 0 28px; border-radius: 26px; box-shadow: 0 4px 16px rgba(0, 0, 0, .45); }
+}
 
 /* The project-view banner's "← 回專案" and "複製選片連結" — real controls
    (an <a href>, a <button>), styled as ordinary .btn so they read as
@@ -2762,12 +2777,12 @@ body.fg-mode .content-header, body.fg-mode #photoGrid, body.fg-mode #emptyState,
 body.fg-mode #folderNav { display: none !important; }
 body.fg-mode .app-footer { margin-top: 0; }
 
-/* The 確認完成 block and the proofs entry become thin strips at the top. */
-body.fg-mode #deliveryBar:not(.fg-bar-proofs) { display: none !important; }
-body.fg-mode #deliveryBar { padding: 6px 16px; }
-body.fg-mode .delivery-done { padding: 6px 16px; gap: 6px 12px; flex-wrap: wrap; font-size: 13px; }
-body.fg-mode .delivery-done-status { flex: 1 1 150px; min-width: 0; line-height: 1.35; }
-body.fg-mode .delivery-done-actions { margin-left: auto; flex: 0 0 auto; }
+/* The 驗收頁 (body.review-stage, js/pick.js _applyView): the status block and the 回到毛片 entry are one thin strip. */
+body.review-stage #deliveryBar:not(.fg-bar-proofs) { display: none !important; }
+body.review-stage #deliveryBar { padding: 6px 16px; }
+body.review-stage .delivery-done { padding: 6px 16px; gap: 6px 12px; flex-wrap: wrap; font-size: 13px; }
+body.review-stage .delivery-done-status { flex: 1 1 150px; min-width: 0; line-height: 1.35; }
+body.review-stage .delivery-done-actions { margin-left: auto; flex: 0 0 auto; }
 
 .fg { --fg-pad: clamp(12px, 2.2vw, 32px); background: var(--bg); color: var(--ink); padding-bottom: 40px; }
 
@@ -2856,7 +2871,7 @@ html.fg-open, html.fg-open body { overflow: hidden; scrollbar-gutter: stable; }
 .fg-lb-next { right: 8px; }
 
 @media (max-width: 768px) {
-  body.fg-mode .delivery-done-actions .btn { padding: 8px 12px; }
+  body.review-stage .delivery-done-actions .btn { padding: 8px 12px; }
   .fg-hero { height: clamp(240px, 52vh, 460px); }
   .fg-share { top: 10px; }
   .fg .album-entry { margin-top: 20px; }

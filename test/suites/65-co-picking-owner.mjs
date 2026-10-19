@@ -466,9 +466,10 @@ const renewalWorld = () => world({ collaborators: [
     url,
     async page => {
       const out = [];
-      await page.waitForSelector('.fg-tile', { timeout: 5000 });
+      await page.waitForSelector('#doneActionBtn', { timeout: 5000 });
       await page.waitForTimeout(500);
-      out.push(`ok    (the page really is the delivered gallery: the finals tiles are up)`);
+      const finals = await page.$$eval('#photoGrid .photo-card', cs => cs.map(c => c.dataset.photoId));
+      out.push(`${finals.length === 2 && finals.every(k => k.includes('精修')) ? 'ok  ' : 'FAIL'}  (the page really is the delivered 驗收頁: the finals cards and 精修完成 are up)`);
       const dom = await page.evaluate(() => ['coPickEntry', 'coPanel'].filter(id => document.getElementById(id)));
       out.push(`${dom.length === 0 ? 'ok  ' : 'FAIL'}  not in the DOM when delivered${dom.length ? `  [${dom}]` : ''}`);
       const calls = m.requests.filter(r => /\/api\/pick\/collaborators/.test(r.path));

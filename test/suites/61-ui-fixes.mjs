@@ -179,7 +179,9 @@ for (const [name, url, sel, mk] of [
     ownerName: 'Zoe', ownerKey: 'ZOE-KEY', phase: 'retouching', folders: ['shoot/毛片/'], finalFolders: ['shoot/精修/'],
     deliveredAt: '2026-09-20T00:00:00.000Z', pickFiles: ['shoot/毛片/a.jpg', ...files], title: '婚禮精修',
     studio: { name: '光影工作室', booking_url: null, has_logo: true },
-    imageDelay: (key, w) => (w === '400' ? 0 : 900) });
+    imageDelay: (key, w) => (w === '400' ? 0 : 900),
+    // the web-album lightbox lives on the 完成頁 only since the 驗收頁 became the 毛片 page (2026-10-19)
+    confirmedAt: '2026-09-21T03:00:00.000Z' });
   await suite('成果相簿燈箱（手機）— a loading ring until the big file is in; a failed file clears it and says so',
     `${base}/index.html?t=TOK`,
     async page => {
@@ -191,8 +193,8 @@ for (const [name, url, sel, mk] of [
       });
       // f003's big file never arrives
       await page.route(/f003\.jpg\?w=(1200|1600)/, r => r.abort());
-      await page.waitForSelector('.fg-tile', { timeout: 5000 });
-      await page.locator('.fg-tile').first().click();
+      await page.waitForSelector('#completionPage .fg-tile', { timeout: 5000 });
+      await page.locator('#completionPage .fg-tile').first().click();
       await page.waitForSelector('#fgLightbox', { timeout: 3000 });
       await page.waitForTimeout(200);
       let s = await ring();

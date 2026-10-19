@@ -44,6 +44,8 @@ const tapAt = async (page, fx, fy) => { const p = await rsPoint(page, fx, fy); a
 const pinsOnScreen = rsMarks;
 const pinOn = page => page.click('#pickPinBtn');
 const closeLb = page => page.keyboard.press('Escape');
+// the 驗收頁's one action button (精修完成 / 送出（N 張）), spaces dropped
+const action = page => page.evaluate(() => document.getElementById('doneActionBtn')?.textContent.replace(/\s/g, '') ?? null);
 const doneStatus = page => page.evaluate(() => document.getElementById('deliveryDoneStatus')?.textContent ?? null);
 const roundCalls = w => w.calls.filter(c => c.method === 'POST' && c.path === '/api/pick/revision-round');
 const putCalls = w => w.calls.filter(c => c.method === 'PUT' && c.path === '/api/pick/revision-pins');
@@ -105,12 +107,12 @@ const modalActive = (page, id) => page.evaluate(i => { const e = document.getEle
 const SEED = () => [{ photo_key: K(1), marks: [pin(0.2, 0.3, '臉修瘦一點'), pin(0.6, 0.5, '')] }, { photo_key: K(3), marks: [pin(0.4, 0.4, 'x')] }];
 {
   const w = world({ drafts: SEED() });
-  await sx('finals pins — 送出修改 N 張: count, dialog (thumbnails, empty-note warning), flush first, expect, then 已送出 and a read-only lightbox',
+  await sx('finals pins — 送出（N 張）: count, dialog (thumbnails, empty-note warning), flush first, expect, then 已送出 and a read-only preview',
     pageUrl,
     async (page, ok) => {
-      await page.waitForSelector('#doneRoundBtn', { timeout: 6000 });
-      ok('positive: the owner has 確認完成 and 送出修改 2 張 (enabled); the old 需要修改 button is gone', (await page.textContent('#doneRoundBtn')).replace(/\s/g, '') === '送出修改2張' &&
-        !(await page.$eval('#doneRoundBtn', b => b.disabled)) && (await page.$('#doneConfirmBtn')) !== null && (await page.$('#doneReviseBtn')) === null && (await page.$('#doneReviseModal')) === null);
+      await page.waitForSelector('#doneActionBtn', { timeout: 6000 });
+      ok('positive: the owner\'s one button reads 送出（2 張）; the old 需要修改 button and its dialog are gone', (await action(page)) === '送出（2張）' &&
+        (await page.$('#doneReviseBtn')) === null && (await page.$('#doneReviseModal')) === null, await action(page));
       // an edit made just before the press must be flushed first: the PUT is slow, so a submit that did not
       // wait for it would reach the Worker before the draft did (draft_changed)
       w.ctl.delay.put = 700;
@@ -121,8 +123,8 @@ const SEED = () => [{ photo_key: K(1), marks: [pin(0.2, 0.3, '臉修瘦一點'),
       await page.keyboard.press('Enter');
       await closeLb(page);
       await sleep(50);
-      ok('the button already counts the fresh pin (3 photos)', (await page.textContent('#doneRoundBtn')).replace(/\s/g, '') === '送出修改3張', await page.textContent('#doneRoundBtn'));
-      await page.click('#doneRoundBtn');
+      ok('the button already counts the fresh pin (3 photos)', (await action(page)) === '送出（3張）', await action(page));
+      await page.click('#doneActionBtn');
       ok('the dialog opens: 送出 3 張照片的修改？', await modalActive(page, 'doneRoundModal') && (await page.textContent('#doneRoundModalTitle')) === '送出 3 張照片的修改？');
       const items = await page.$$eval('#doneRoundList .done-round-item', els => els.map(e => ({ text: e.textContent, src: e.querySelector('img') ? e.querySelector('img').src : null })));
       ok('one row per photo with its pin count and a 400 thumbnail', items.length === 3 && items[0].text.includes('IMG_0001.jpg') && items[0].text.includes('2 個標示') && items[1].text.includes('1 個標示') &&
@@ -139,7 +141,7 @@ const SEED = () => [{ photo_key: K(1), marks: [pin(0.2, 0.3, '臉修瘦一點'),
       ok('expect lists each photo with its pin count, sorted; note travels', posts[0].body.note === '整體亮一點' && JSON.stringify(posts[0].body.expect) === JSON.stringify([{ k: K(1), n: 2 }, { k: K(3), n: 1 }, { k: K(4), n: 1 }]) && Object.keys(posts[0].body).length === 2, JSON.stringify(posts[0].body));
       ok('headers only, no key in the URL', posts[0].headers.key === 'ZOE-KEY' && posts[0].headers.token === 'TOK' && !posts[0].url.includes('?'));
       ok('the server holds a frozen round with 3 photos and no draft', w.rounds.length === 1 && w.rounds[0].photos.length === 3 && w.drafts().size === 0);
-      ok('the submit button is gone, 確認完成 stays', (await page.$('#doneRoundBtn')) === null && (await page.$('#doneConfirmBtn')) !== null);
+      ok('the button now reads 精修完成 (nothing left to send; confirming stays possible)', (await action(page)) === '精修完成', await action(page));
       await openLb(page, 1);
       await until(async () => (await pinsOnScreen(page)).length === 2);
       ok('the preview shows the submitted pins of photo 1, read-only: no 標示修改', (await pinsOnScreen(page)).length === 2 && (await page.$('#pickPinBtn')) === null, JSON.stringify(await pinsOnScreen(page)));
@@ -155,20 +157,19 @@ const SEED = () => [{ photo_key: K(1), marks: [pin(0.2, 0.3, '臉修瘦一點'),
 }
 {
   const w = world();
-  await sx('finals pins — 送出修改 0 張 is disabled with the hint; the note is optional (none sent)',
+  await sx('finals pins — no pins yet: the button is 精修完成; one pin makes it 送出（1 張）; the note is optional (none sent)',
     pageUrl,
     async (page, ok) => {
-      await page.waitForSelector('#doneRoundBtn', { timeout: 6000 });
-      ok('0 photos: the button is there and disabled', (await page.textContent('#doneRoundBtn')).replace(/\s/g, '') === '送出修改0張' && await page.$eval('#doneRoundBtn', b => b.disabled));
-      ok('the hint points at the photos', (await page.textContent('#doneRoundHint')).includes('點照片進入標示修改'));
+      await page.waitForSelector('#doneActionBtn', { timeout: 6000 });
+      ok('0 photos: the button reads 精修完成', (await action(page)) === '精修完成', await action(page));
       await openLb(page, 1);
       await pinOn(page);
       await tapAt(page, 0.5, 0.5);
       await page.keyboard.type('痘痘');
       await page.keyboard.press('Enter');
       await closeLb(page);
-      ok('with one photo marked: enabled, the hint is gone from the DOM', await until(async () => !(await page.$eval('#doneRoundBtn', b => b.disabled)) && (await page.$('#doneRoundHint')) === null));
-      await page.click('#doneRoundBtn');
+      ok('with one photo marked: 送出（1 張）', await until(async () => (await action(page)) === '送出（1張）'), await action(page));
+      await page.click('#doneActionBtn');
       ok('every pin has a note: no warning', (await page.$('#doneRoundWarn')) === null || (await page.textContent('#doneRoundWarn')) === '');
       await page.click('#doneRoundSubmit');
       ok('submitted', await until(async () => roundCalls(w).length === 1 && (await doneStatus(page)) === '已送出修改（1 張），攝影師處理中'));
@@ -184,9 +185,9 @@ const SEED = () => [{ photo_key: K(1), marks: [pin(0.2, 0.3, '臉修瘦一點'),
   await sx('finals pins — draft_changed (another tab edited): the dialog refreshes to the server\'s drafts and the next press succeeds',
     pageUrl,
     async (page, ok) => {
-      await page.waitForSelector('#doneRoundBtn', { timeout: 6000 });
+      await page.waitForSelector('#doneActionBtn', { timeout: 6000 });
       w.ctl.beforeRound = () => w.setDrafts([...SEED(), { photo_key: K(4), marks: [pin(0.5, 0.5, '另一個分頁')] }]);
-      await page.click('#doneRoundBtn');
+      await page.click('#doneActionBtn');
       await page.click('#doneRoundSubmit');
       ok('the first press is refused: the dialog stays open with a plain message', await until(async () => (await page.textContent('#doneRoundErr')).includes('標示在別處被修改過')) && await modalActive(page, 'doneRoundModal'), await page.textContent('#doneRoundErr'));
       ok('the list now shows 3 photos (the server\'s drafts) and the title says 3', (await page.$$('#doneRoundList .done-round-item')).length === 3 && (await page.textContent('#doneRoundModalTitle')) === '送出 3 張照片的修改？');
@@ -205,8 +206,8 @@ const SEED = () => [{ photo_key: K(1), marks: [pin(0.2, 0.3, '臉修瘦一點'),
   await sx('finals pins — the submit answers every §13.1 error in plain Traditional Chinese; the dialog stays usable',
     pageUrl,
     async (page, ok) => {
-      await page.waitForSelector('#doneRoundBtn', { timeout: 6000 });
-      await page.click('#doneRoundBtn');
+      await page.waitForSelector('#doneActionBtn', { timeout: 6000 });
+      await page.click('#doneActionBtn');
       const cases = [
         [{ status: 409, body: { code: 'revision_cap', max: 50 } }, '修改次數已達上限（50 次）'],
         [{ status: 409, body: { code: 'marks_cap', max: 300 } }, '標示總數已達上限（300 個）'],
@@ -229,26 +230,26 @@ const SEED = () => [{ photo_key: K(1), marks: [pin(0.2, 0.3, '臉修瘦一點'),
         ok(`${inj.net ? 'network down' : `${inj.status} ${inj.body.code || ''}`} -> 「${text}」, dialog still open and re-usable`,
           shown && await modalActive(page, 'doneRoundModal') && !(await page.$eval('#doneRoundSubmit', b => b.disabled)), await page.textContent('#doneRoundErr'));
       }
-      ok('none of those created a round, and the page still offers the submit', w.rounds.length === 0 && (await page.$('#doneRoundBtn')) !== null);
+      ok('none of those created a round, and the page still offers the submit', w.rounds.length === 0 && (await action(page)) === '送出（2張）');
       // no_pins: the drafts are gone on the server -> the page refetches and has nothing to send
       w.ctl.failNext.push({ on: 'round', status: 409, body: { code: 'no_pins' }, effect: () => w.setDrafts([]) });
       await page.click('#doneRoundSubmit');
       ok('no_pins: plain message and the dialog list is refreshed to the server (empty -> the dialog closes)',
-        await until(async () => !(await modalActive(page, 'doneRoundModal'))) && (await page.$eval('#doneRoundBtn', b => b.disabled)), '');
+        await until(async () => !(await modalActive(page, 'doneRoundModal'))) && await until(async () => (await action(page)) === '精修完成'), String(await action(page)));
     },
     { before: w.before, initScript: OWNER, contextOptions: ALB_DESK });
 }
 {
   const w = world({ drafts: SEED() });
-  await sx('finals pins — revision_open (another tab sent first): the page shows the round as sent',
+  await sx('finals pins — revision_open (another tab sent first): the page shows the round as sent, the button reads 精修完成',
     pageUrl,
     async (page, ok) => {
-      await page.waitForSelector('#doneRoundBtn', { timeout: 6000 });
-      await page.click('#doneRoundBtn');
+      await page.waitForSelector('#doneActionBtn', { timeout: 6000 });
+      await page.click('#doneActionBtn');
       w.ctl.failNext.push({ on: 'round', status: 409, body: { code: 'revision_open' }, effect: () => w.submitDirect([K(1), K(3)]) });
       await page.click('#doneRoundSubmit');
       ok('the state is re-read: 已送出修改（2 張），攝影師處理中, the dialog is closed, no submit button',
-        await until(async () => (await doneStatus(page)) === '已送出修改（2 張），攝影師處理中' && !(await modalActive(page, 'doneRoundModal')) && (await page.$('#doneRoundBtn')) === null), String(await doneStatus(page)));
+        await until(async () => (await doneStatus(page)) === '已送出修改（2 張），攝影師處理中' && !(await modalActive(page, 'doneRoundModal')) && (await action(page)) === '精修完成'), String(await doneStatus(page)));
     },
     { before: w.before, initScript: OWNER, contextOptions: ALB_DESK });
 }
@@ -257,12 +258,12 @@ const SEED = () => [{ photo_key: K(1), marks: [pin(0.2, 0.3, '臉修瘦一點'),
   await sx('finals pins — already_confirmed (confirmed meanwhile): the 完成頁 replaces the page, with none of the pin UI',
     pageUrl,
     async (page, ok) => {
-      await page.waitForSelector('#doneRoundBtn', { timeout: 6000 });
-      await page.click('#doneRoundBtn');
+      await page.waitForSelector('#doneActionBtn', { timeout: 6000 });
+      await page.click('#doneActionBtn');
       w.ctl.failNext.push({ on: 'round', status: 409, body: { code: 'already_confirmed' }, effect: () => { w.m.state.project.client_confirmed_at = new Date().toISOString(); } });
       await page.click('#doneRoundSubmit');
       ok('the completion page is up', await until(async () => (await page.$('#completionPage')) !== null));
-      ok('no submit button, no dialogs, no status block in the DOM', (await page.$('#doneRoundBtn')) === null && (await page.$('#doneRoundModal')) === null && (await page.$('#deliveryDone')) === null);
+      ok('no action button, no dialogs, no status block in the DOM', (await page.$('#doneActionBtn')) === null && (await page.$('#doneRoundModal')) === null && (await page.$('#deliveryDone')) === null);
       await page.waitForSelector('#completionPage .fg-tile');
       await page.click('#completionPage .fg-tile');
       await page.waitForSelector('#fgLbImg.on');
@@ -277,8 +278,8 @@ const SEED = () => [{ photo_key: K(1), marks: [pin(0.2, 0.3, '臉修瘦一點'),
   await sx('finals pins — not_delivered (the photographer changed the delivery): 重新整理 offered',
     pageUrl,
     async (page, ok) => {
-      await page.waitForSelector('#doneRoundBtn', { timeout: 6000 });
-      await page.click('#doneRoundBtn');
+      await page.waitForSelector('#doneActionBtn', { timeout: 6000 });
+      await page.click('#doneActionBtn');
       w.ctl.failNext.push({ on: 'round', status: 409, body: { code: 'not_delivered' } });
       await page.click('#doneRoundSubmit');
       ok('plain message and a 重新載入 button', await until(async () => (await page.textContent('#doneRoundErr')).includes('攝影師已更新或收回成品，請重新整理頁面')) && (await page.$('#doneRoundErr .done-reload')) !== null);
@@ -328,43 +329,20 @@ const SEED = () => [{ photo_key: K(1), marks: [pin(0.2, 0.3, '臉修瘦一點'),
     { before: w.before, initScript: SPIES + OWNER, contextOptions: ALB_DESK });
 }
 
-// ═════ 7. the confirm dialog warns about unsent drafts
+// ═════ 7. with drafts the one button never opens 確認完成 (the old "unsent pins" warning had nothing left to guard)
 {
   const w = world({ drafts: SEED() });
-  await sx('finals pins — 確認完成 warns that unsent pins will not reach the photographer',
+  await sx('finals pins — with drafts the button sends them: the round dialog, never 確認完成; nothing is confirmed',
     pageUrl,
     async (page, ok) => {
-      await page.waitForSelector('#doneConfirmBtn', { timeout: 6000 });
-      await page.click('#doneConfirmBtn');
-      ok('the dialog says: you still have 2 photos with pins not sent, and that confirming drops them', (await page.textContent('#doneConfirmUnsent')) === '你還有 2 張照片的標示沒有送出。現在確認完成，這些標示會被丟掉，攝影師看不到。');
-      ok('the usual confirm text is still there', (await page.textContent('#doneConfirmModal')).includes('確認後攝影師會收到通知'));
-      const g = await page.evaluate(() => { const s = document.getElementById('doneConfirmSubmit'), b = document.getElementById('doneConfirmBack');
-        return { sub: s.textContent, subCls: s.className, back: b && b.textContent, backCls: b && b.className, sameRow: !!b && s.parentElement === b.parentElement, backAfter: !!b && s.nextElementSibling === b }; });
-      ok('going back to send is the main (green) button; confirming anyway is the quiet outline one, worded 仍要確認完成',
-        g.back === '回去送出修改（2 張）' && /btn-success/.test(g.backCls) && g.sub === '仍要確認完成' && /btn-outline/.test(g.subCls) && !/btn-success/.test(g.subCls) && g.sameRow && g.backAfter, JSON.stringify(g));
-      // 回去送出修改: the confirm dialog closes, the round dialog opens with the drafts, nothing was confirmed
-      await page.click('#doneConfirmBack');
-      ok('the round dialog is open and the confirm dialog is closed', await modalActive(page, 'doneRoundModal') && !(await modalActive(page, 'doneConfirmModal')));
-      ok('nothing was confirmed', donePosts(w.m, 'confirm').length === 0 && (await page.$('#completionPage')) === null);
+      await page.waitForSelector('#doneActionBtn', { timeout: 6000 });
+      await page.click('#doneActionBtn');
+      ok('the round dialog is open, the confirm dialog is not', await modalActive(page, 'doneRoundModal') && !(await modalActive(page, 'doneConfirmModal')));
       await page.click('#doneRoundCancel');
-      await page.click('#doneConfirmBtn');
-      ok('reopening the dialog shows the warning again (not a stale state)', await modalActive(page, 'doneConfirmModal') && (await page.$('#doneConfirmUnsent')) !== null && (await page.$$('#doneConfirmBack')).length === 1);
-      await page.click('#doneConfirmSubmit');
-      ok('confirming works as before: completion page', await until(async () => (await page.$('#completionPage')) !== null) && donePosts(w.m, 'confirm').length === 1);
+      ok('nothing was confirmed or sent', donePosts(w.m, 'confirm').length === 0 && roundCalls(w).length === 0 && (await page.$('#completionPage')) === null);
+      ok('the confirm dialog carries no unsent-pins line any more', (await page.$('#doneConfirmUnsent')) === null && (await page.$('#doneConfirmBack')) === null);
     },
     { before: w.before, initScript: OWNER, contextOptions: ALB_DESK });
-  const w2 = world();
-  await sx('finals pins — 確認完成 without drafts has no such warning (element not in the DOM)',
-    pageUrl,
-    async (page, ok) => {
-      await page.waitForSelector('#doneConfirmBtn', { timeout: 6000 });
-      await page.click('#doneConfirmBtn');
-      ok('positive: the dialog is open', await modalActive(page, 'doneConfirmModal'));
-      ok('no unsent-pins line, no 回去送出修改 button', (await page.$('#doneConfirmUnsent')) === null && (await page.$('#doneConfirmBack')) === null);
-      const s = await page.evaluate(() => { const b = document.getElementById('doneConfirmSubmit'); return { t: b.textContent, c: b.className }; });
-      ok('the plain 確認完成 stays the green main button', s.t === '確認完成' && /btn-success/.test(s.c), JSON.stringify(s));
-    },
-    { before: w2.before, initScript: OWNER, contextOptions: ALB_DESK });
 }
 
 // ═════ 8. what must not exist: the migration not run, viewers, the 完成頁
@@ -374,8 +352,8 @@ const SEED = () => [{ photo_key: K(1), marks: [pin(0.2, 0.3, '臉修瘦一點'),
     pageUrl,
     async (page, ok) => {
       await page.waitForSelector('#doneReviseBtn', { timeout: 6000 });
-      ok('positive: 確認完成 and 需要修改 are there', (await page.$('#doneConfirmBtn')) !== null && (await page.$('#doneReviseBtn')) !== null);
-      ok('no submit-pins button, hint, history button or round dialog in the DOM', (await page.$('#doneRoundBtn')) === null && (await page.$('#doneRoundHint')) === null && (await page.$('#doneHistoryBtn')) === null && (await page.$('#doneRoundModal')) === null);
+      ok('positive: 精修完成 and 需要修改 are there', (await action(page)) === '精修完成' && (await page.$('#doneReviseBtn')) !== null, await action(page));
+      ok('no history button and no round dialog in the DOM', (await page.$('#doneHistoryBtn')) === null && (await page.$('#doneRoundModal')) === null);
       await openLb(page, 1);
       ok('positive: the preview is open; it has no tools row, no pins, and no card has a badge', await page.evaluate(() => document.getElementById('photoModal').classList.contains('active')) &&
         (await page.$('#pickModalTools')) === null && (await pinsOnScreen(page)).length === 0 && (await page.$('.pv-pin-badge')) === null);
@@ -397,15 +375,15 @@ for (const [who, init] of [['owner', OWNER], ['viewer (no seat key)', '']]) {
       await sleep(300);
       const has = await page.evaluate(() => ({ toggle: !!document.getElementById('pickPinBtn'), tools: !!document.getElementById('pickModalTools'), pins: annotationManager.marks.length,
         badge: !!document.querySelector('.pv-pin-badge'),
-        round: !!document.getElementById('doneRoundBtn'), revise: !!document.getElementById('doneReviseBtn'), confirm: !!document.getElementById('doneConfirmBtn'),
+        action: document.getElementById('doneActionBtn')?.textContent.replace(/\s/g, '') ?? null, revise: !!document.getElementById('doneReviseBtn'),
         status: document.getElementById('deliveryDoneStatus')?.textContent ?? null }));
       if (who === 'owner') {
         await closeLb(page);
         await page.waitForSelector('#doneHistoryBtn', { timeout: 6000 });
-        ok('positive: 標示修改, the draft pins and the badge, submit button, 確認完成 and the history button', has.toggle && has.tools && has.pins === 2 && has.badge && has.round && has.confirm && (await page.$('#doneHistoryBtn')) !== null, JSON.stringify(has));
+        ok('positive: 標示修改, the draft pins and the badge, 送出（2 張） and the history button', has.toggle && has.tools && has.pins === 2 && has.badge && has.action === '送出（2張）' && (await page.$('#doneHistoryBtn')) !== null, JSON.stringify(has));
       } else {
         await sleep(600);
-        ok('no 標示修改, no tools row, no pins, no badge, no buttons; only the status line', !has.toggle && !has.tools && has.pins === 0 && !has.badge && !has.round && !has.revise && !has.confirm && has.status === '尚待選片人確認完成', JSON.stringify(has));
+        ok('no 標示修改, no tools row, no pins, no badge, no buttons; only the status line', !has.toggle && !has.tools && has.pins === 0 && !has.badge && has.action === null && !has.revise && has.status === '尚待選片人確認完成', JSON.stringify(has));
         ok('no history button and no draft / round route was ever called', (await page.$('#doneHistoryBtn')) === null && w.calls.length === 0, JSON.stringify(w.calls.map(c => c.path)));
         ok('no round dialog in the DOM', (await page.$('#doneRoundModal')) === null);
       }
@@ -519,7 +497,7 @@ const histWorld = (extra = {}) => world({
   await sx('finals pins — history: no rounds at all -> no history button (positive: the pin UI is up)',
     pageUrl,
     async (page, ok) => {
-      await page.waitForSelector('#doneRoundBtn', { timeout: 6000 });
+      await page.waitForSelector('#doneActionBtn', { timeout: 6000 });
       await until(() => w.calls.some(c => c.path === '/api/pick/rounds'));
       await sleep(300);
       ok('the list was read and was empty', w.calls.filter(c => c.path === '/api/pick/rounds').length >= 1);
@@ -544,11 +522,11 @@ const histWorld = (extra = {}) => world({
 // ═════ 10. an open round is shown as sent: the status, and the history's default is that round
 {
   const w = world({ rounds: [{ id: R2, kind: 'pins', created_at: '2026-09-23T04:00:00.000Z', open: true, note: null, photos: [{ key: K(1), pins: [pin(0.4, 0.4, '送出的標示')] }] }] });
-  await sx('finals pins — a round already open at load: 已送出修改（1 張），攝影師處理中; no submit button; its pins read-only in the preview; history opens on it',
+  await sx('finals pins — a round already open at load: 已送出修改（1 張），攝影師處理中; the button reads 精修完成; its pins read-only in the preview; history opens on it',
     pageUrl,
     async (page, ok) => {
-      await page.waitForSelector('#doneConfirmBtn', { timeout: 6000 });
-      ok('status says it was sent; 確認完成 still there; no submit button or 需要修改', (await doneStatus(page)) === '已送出修改（1 張），攝影師處理中' && (await page.$('#doneRoundBtn')) === null && (await page.$('#doneReviseBtn')) === null);
+      await page.waitForSelector('#doneActionBtn', { timeout: 6000 });
+      ok('status says it was sent; the button reads 精修完成 (confirming stays possible); no 需要修改', (await doneStatus(page)) === '已送出修改（1 張），攝影師處理中' && (await action(page)) === '精修完成' && (await page.$('#doneReviseBtn')) === null, await action(page));
       await openLb(page, 1);
       ok('photo 1 shows the sent pin, read-only, with its note listed', await until(async () => (await pinsOnScreen(page)).length === 1) && (await page.$('#pickPinBtn')) === null &&
         await until(async () => (await page.$$eval('#pickPinList .pick-pin-note', els => els.map(e => e.readOnly ? e.value : '!'))).join() === '送出的標示'));

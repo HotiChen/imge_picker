@@ -27,7 +27,6 @@
 
 /* ── the status block and the round dialog ──────────────────────────────────── */
 .delivery-done-save { flex-basis: 100%; order: 4; font-size: 12px; color: var(--review); }
-.delivery-done-hint { align-self: center; font-size: 12px; color: var(--ink-55); }
 .done-round-list { list-style: none; margin: 8px 0; padding: 0; display: flex; flex-direction: column; gap: 6px; max-height: 32dvh; overflow-y: auto; }
 .done-round-item { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .done-round-item img { flex: 0 0 auto; width: 56px; height: 40px; object-fit: cover; background: var(--bg-deep); border-radius: 3px; }

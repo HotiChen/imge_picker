@@ -315,46 +315,48 @@ for (const [label, co, proofs] of [['390px', MOBILE, false], ['390px + proofs sw
   const FILES = ['shoot/毛片/a.jpg', 'shoot/毛片/b.jpg', 'shoot/精修/f1.jpg', 'shoot/精修/f2.jpg', 'shoot/精修/sub/f3.jpg'];
   const m = pickFakeWorker({ ownerName: 'Zoe', ownerKey: 'ZOE-KEY', phase: 'retouching', folders: ['shoot/毛片/'], finalFolders: ['shoot/精修/'],
     deliveredAt: '2026-09-20T00:00:00.000Z', pickFiles: FILES, allowProofDownload: proofs, title: 'D 專案' });
-  // REWRITTEN with the finals gallery (docs/delivery.md "web album"): the finals view no longer has
-  // the #guestBar folder <select> or the sidebar tree — its folders are chips under the hero; the
-  // proofs view (下載毛片原檔) is untouched and keeps asserting the old selector / tree.
-  await suite(`guest UI delivered ${label} — folder chips only: no filter, no ♥, no submit, no counter`,
+  // REWRITTEN with the finals gallery (docs/delivery.md "web album"), and again 2026-10-19: the 驗收頁 is the 毛片
+  // page (docs/delivery.md) — the finals are the standard cards, their folders the same #guestBar <select> (phone)
+  // or sidebar tree (desktop) the 毛片 list uses; still no filter, no ♥, no picking bar.
+  await suite(`guest UI delivered ${label} — the folder selector / tree only: no filter, no ♥, no submit, no counter`,
     `${base}/index.html?t=TOK`,
     async page => {
       const out = [];
       const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
       const narrow = label.startsWith('390');
-      const tiles = () => page.$$eval('.fg-tile', ts => ts.map(t => t.dataset.photoId));
-      await page.waitForSelector('.fg-tile', { timeout: 5000 });
-      ok('the finals view has no #guestBar / folder <select> and no sidebar on screen: its folders are chips',
-        !(await guiVisible(page, '#guestBar')) && !(await guiVisible(page, '#guestFolderSelect')) && !(await guiVisible(page, 'aside.sidebar')) && (await page.$$('#fgChips .fg-chip')).length > 0);
-      const chips = await page.$$eval('#fgChips .fg-chip', cs => cs.map(c => [c.dataset.folder, c.getAttribute('aria-pressed')]));
-      ok('the chips are the finals folder (pressed) and its subfolder', JSON.stringify(chips) === '[["shoot/精修/","true"],["shoot/精修/sub/","false"]]', JSON.stringify(chips));
-      ok('the finals folder shows its own photos', JSON.stringify(await tiles()) === '["shoot/精修/f1.jpg","shoot/精修/f2.jpg"]', JSON.stringify(await tiles()));
-      await page.click('#fgChips .fg-chip[data-folder="shoot/精修/sub/"]');
-      await page.waitForFunction(() => document.querySelector('.fg-tile')?.dataset.photoId.includes('sub/'), null, { timeout: 5000 });
-      ok('pressing the subfolder chip switches the gallery', JSON.stringify(await tiles()) === '["shoot/精修/sub/f3.jpg"]', JSON.stringify(await tiles()));
+      await page.waitForSelector('#photoGrid .photo-card', { timeout: 5000 });
+      ok('no web-album gallery and no chips', (await page.$('#finalsGallery')) === null && (await page.$('.fg-chip')) === null);
+      ok('the finals folder shows its own photos', JSON.stringify(await guiIds(page)) === '["shoot/精修/f1.jpg","shoot/精修/f2.jpg"]', JSON.stringify(await guiIds(page)));
+      if (narrow) {
+        const opts = await page.$$eval('#guestFolderSelect option', os => os.map(o => o.value));
+        ok('phone: the #guestBar folder <select> lists the finals folder and its subfolder', await guiVisible(page, '#guestFolderSelect') && JSON.stringify(opts) === '["shoot/精修/","shoot/精修/sub/"]', JSON.stringify(opts));
+        await page.selectOption('#guestFolderSelect', 'shoot/精修/sub/');
+      } else {
+        const rows = await page.$$eval('aside.sidebar #folderTree .tree-row', rs => rs.map(r => r.dataset.folder));
+        ok('desktop: the sidebar tree lists the finals folder and its subfolder', await guiVisible(page, 'aside.sidebar') && JSON.stringify(rows) === '["shoot/精修/","shoot/精修/sub/"]', JSON.stringify(rows));
+        await page.click('aside.sidebar #folderTree .tree-row[data-folder="shoot/精修/sub/"]');
+      }
+      await page.waitForFunction(() => document.querySelector('#photoGrid .photo-card')?.dataset.photoId.includes('sub/'), null, { timeout: 5000 });
+      ok('choosing the subfolder shows its photos', JSON.stringify(await guiIds(page)) === '["shoot/精修/sub/f3.jpg"]', JSON.stringify(await guiIds(page)));
       ok('no horizontal scroll', await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
-      await page.click('#fgChips .fg-chip[data-folder="shoot/精修/"]');
-      await page.waitForFunction(() => document.querySelectorAll('.fg-tile').length === 2, null, { timeout: 5000 });
       if (process.env.SHOTS && label === '390px') await page.screenshot({ path: `${process.env.SHOTS}/delivered-390.png` });
       ok('the filter bar and its section are removed from the DOM (not hidden)',
         (await page.$('#pickFilterBar')) === null && (await page.$('[data-pick-filter]')) === null && (await page.$('#pickFilterSection')) === null);
-      ok('no ♥, no submit (either), no counter, no bottom bar',
+      ok('no ♥, no submit (either), no counter, no picking bottom bar',
         (await page.$('.pick-heart-btn')) === null && (await page.$('#submitJobBtn')) === null && (await page.$('#pickSubmitBtn')) === null &&
         (await page.$('#pickCounter')) === null && (await page.$('#mobileActionBar')) === null);
+      ok('positive: the 驗收頁 action button is there instead', (await page.textContent('#doneActionBtn')) === '精修完成');
       if (proofs) {
         ok('回到毛片 entry still there', (await page.textContent('#deliveryProofsBtn')) === '回到毛片');
         await page.click('#deliveryProofsBtn');
         await page.waitForFunction(() => document.querySelector('.photo-card')?.dataset.photoId.includes('毛片'), null, { timeout: 5000 });
         ok('it switches to the proofs (old card list); still no filter', (await page.$('#pickFilterBar')) === null && JSON.stringify(await guiIds(page)) === '["shoot/毛片/a.jpg","shoot/毛片/b.jpg"]');
-        ok('the gallery is gone from the DOM in the proofs list', (await page.$('#finalsGallery')) === null && (await page.$('.fg-tile')) === null);
-        if (narrow) ok('the folder <select> is back for the proofs list and lists the proofs folder', await page.$$eval('#guestFolderSelect option', os => os.map(o => o.value).includes('shoot/毛片/')));
-        else ok('the sidebar tree is back for the proofs list', await page.evaluate(() => !!document.querySelector('aside.sidebar #folderTree .tree-row') && !document.querySelector('aside.sidebar .pick-filter-bar') && !document.getElementById('pickFilterSection')));
+        if (narrow) ok('the folder <select> lists the proofs folder', await page.$$eval('#guestFolderSelect option', os => os.map(o => o.value).includes('shoot/毛片/')));
+        else ok('the sidebar tree lists the proofs folder', await page.evaluate(() => !!document.querySelector('aside.sidebar #folderTree .tree-row[data-folder="shoot/毛片/"]') && !document.querySelector('aside.sidebar .pick-filter-bar') && !document.getElementById('pickFilterSection')));
         ok('← 回精修成品 comes back', (await page.textContent('#deliveryProofsBtn')) === '← 回精修成品');
         await page.click('#deliveryProofsBtn');
-        await page.waitForFunction(() => document.querySelector('.fg-tile')?.dataset.photoId.includes('精修'), null, { timeout: 5000 });
-        ok('the finals gallery is back', (await tiles()).every(k => k.includes('精修')) && (await page.$('.photo-card')) === null);
+        await page.waitForFunction(() => document.querySelector('.photo-card')?.dataset.photoId.includes('精修'), null, { timeout: 5000 });
+        ok('the finals are back', (await guiIds(page)).every(k => k.includes('精修')) && (await page.$('#finalsGallery')) === null);
       }
       return out;
     },

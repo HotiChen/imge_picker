@@ -35,6 +35,10 @@ export const rsPoint = (page, fx, fy) => page.evaluate(([fx, fy]) => {
 // what the canvas holds for the photo on show
 export const rsMarks = page => page.evaluate(() => window.annotationManager.marks.map(m => ({ ...m })));
 
+// ── the action button and its dialogs (suite 93 onwards)
+export const rsRounds = w => w.calls.filter(c => c.method === 'POST' && c.path === '/api/pick/revision-round');
+export const rsModalActive = (page, id) => page.evaluate(i => { const e = document.getElementById(i); return !!e && e.classList.contains('active') && getComputedStyle(e).display !== 'none'; }, id);
+
 export const rsSettled = (page, i) => page.waitForFunction(k => {
   const a = window.annotationManager;
   return !!a && a.currentPhoto && a.currentPhoto.id === k && a.imageElement && a.imageElement.naturalWidth > 0 && a.fitW > 0 && !a.canvas.parentElement.classList.contains('photo-loading') &&
