@@ -2265,6 +2265,8 @@ span.pick-heart-btn { cursor: default; }
    guest bar) carry the title, so the bar's title is not repeated there. */
 .delivery-strip { position: sticky; top: 56px; z-index: 50; display: flex; flex-wrap: wrap; align-items: stretch; background: var(--surface); }
 .delivery-strip > .delivery-bar { flex: 0 0 auto; }
+/* two sticky bars at the top overlapped and ate the page: with the strip the folder bar scrolls away with the page */
+body.has-delivery-strip .guest-bar { position: static; }
 .delivery-strip > .delivery-done { flex: 1 1 260px; min-width: 0; }
 body.review-stage #deliveryTitle { display: none; }
 

@@ -141,7 +141,7 @@ const SEED = () => [{ photo_key: K(1), marks: [pin(0.2, 0.3, '臉修瘦一點'),
       ok('expect lists each photo with its pin count, sorted; note travels', posts[0].body.note === '整體亮一點' && JSON.stringify(posts[0].body.expect) === JSON.stringify([{ k: K(1), n: 2 }, { k: K(3), n: 1 }, { k: K(4), n: 1 }]) && Object.keys(posts[0].body).length === 2, JSON.stringify(posts[0].body));
       ok('headers only, no key in the URL', posts[0].headers.key === 'ZOE-KEY' && posts[0].headers.token === 'TOK' && !posts[0].url.includes('?'));
       ok('the server holds a frozen round with 3 photos and no draft', w.rounds.length === 1 && w.rounds[0].photos.length === 3 && w.drafts().size === 0);
-      ok('the button now reads 精修完成 (nothing left to send; confirming stays possible)', (await action(page)) === '精修完成', await action(page));
+      ok('the action button is gone (a round is waiting for the photographer; nothing to send or accept yet)', await until(async () => (await action(page)) === null), String(await action(page)));
       await openLb(page, 1);
       await until(async () => (await pinsOnScreen(page)).length === 2);
       ok('the preview shows the submitted pins of photo 1, read-only: no 標示修改', (await pinsOnScreen(page)).length === 2 && (await page.$('#pickPinBtn')) === null, JSON.stringify(await pinsOnScreen(page)));
@@ -241,7 +241,7 @@ const SEED = () => [{ photo_key: K(1), marks: [pin(0.2, 0.3, '臉修瘦一點'),
 }
 {
   const w = world({ drafts: SEED() });
-  await sx('finals pins — revision_open (another tab sent first): the page shows the round as sent, the button reads 精修完成',
+  await sx('finals pins — revision_open (another tab sent first): the page shows the round as sent, no action button',
     pageUrl,
     async (page, ok) => {
       await page.waitForSelector('#doneActionBtn', { timeout: 6000 });
@@ -249,7 +249,7 @@ const SEED = () => [{ photo_key: K(1), marks: [pin(0.2, 0.3, '臉修瘦一點'),
       w.ctl.failNext.push({ on: 'round', status: 409, body: { code: 'revision_open' }, effect: () => w.submitDirect([K(1), K(3)]) });
       await page.click('#doneRoundSubmit');
       ok('the state is re-read: 已送出修改（2 張），攝影師處理中, the dialog is closed, no submit button',
-        await until(async () => (await doneStatus(page)) === '已送出修改（2 張），攝影師處理中' && !(await modalActive(page, 'doneRoundModal')) && (await action(page)) === '精修完成'), String(await doneStatus(page)));
+        await until(async () => (await doneStatus(page)) === '已送出修改（2 張），攝影師處理中' && !(await modalActive(page, 'doneRoundModal')) && (await action(page)) === null), String(await doneStatus(page)));
     },
     { before: w.before, initScript: OWNER, contextOptions: ALB_DESK });
 }
@@ -522,11 +522,11 @@ const histWorld = (extra = {}) => world({
 // ═════ 10. an open round is shown as sent: the status, and the history's default is that round
 {
   const w = world({ rounds: [{ id: R2, kind: 'pins', created_at: '2026-09-23T04:00:00.000Z', open: true, note: null, photos: [{ key: K(1), pins: [pin(0.4, 0.4, '送出的標示')] }] }] });
-  await sx('finals pins — a round already open at load: 已送出修改（1 張），攝影師處理中; the button reads 精修完成; its pins read-only in the preview; history opens on it',
+  await sx('finals pins — a round already open at load: 已送出修改（1 張），攝影師處理中; no action button; its pins read-only in the preview; history opens on it',
     pageUrl,
     async (page, ok) => {
-      await page.waitForSelector('#doneActionBtn', { timeout: 6000 });
-      ok('status says it was sent; the button reads 精修完成 (confirming stays possible); no 需要修改', (await doneStatus(page)) === '已送出修改（1 張），攝影師處理中' && (await action(page)) === '精修完成' && (await page.$('#doneReviseBtn')) === null, await action(page));
+      await page.waitForSelector('#deliveryDoneStatus', { timeout: 6000 });
+      ok('status says it was sent; no action button (waiting for the photographer); no 需要修改', (await doneStatus(page)) === '已送出修改（1 張），攝影師處理中' && (await action(page)) === null && (await page.$('#doneReviseBtn')) === null, await action(page));
       await openLb(page, 1);
       ok('photo 1 shows the sent pin, read-only, with its note listed', await until(async () => (await pinsOnScreen(page)).length === 1) && (await page.$('#pickPinBtn')) === null &&
         await until(async () => (await page.$$eval('#pickPinList .pick-pin-note', els => els.map(e => e.readOnly ? e.value : '!'))).join() === '送出的標示'));

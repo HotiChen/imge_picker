@@ -376,7 +376,9 @@
             if (!el) return;
             const titleEl = document.getElementById('deliveryTitle');
             const btn = document.getElementById('deliveryProofsBtn');
-            if (this.mode !== 'delivered' || this._completionWanted()) { el.hidden = true; return; }
+            // the folder bar must not stick under the strip (css/styles.css .has-delivery-strip): the class follows the strip
+            if (this.mode !== 'delivered' || this._completionWanted()) { el.hidden = true; document.body.classList.remove('has-delivery-strip'); return; }
+            document.body.classList.add('has-delivery-strip');
             // on the 驗收頁 (body.review-stage) the bar is part of a thin strip, and only shown when it
             // carries the 回到毛片 entry (the header and the phone guest bar carry the title)
             el.classList.toggle('fg-bar-proofs', this.allowProofDownload);
