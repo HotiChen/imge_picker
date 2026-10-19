@@ -332,7 +332,9 @@
   .pd-step-mark { width: 1.2em; flex: none; text-align: center; }
   .pd-steps li[data-state="done"] .pd-step-mark { color: var(--success); }
   .pd-steps li[data-state="current"] .pd-step-mark { color: var(--accent-ink); }
-  .pd-step-date { color: var(--ink-70); font-weight: 400; font-family: 'IBM Plex Mono', monospace; font-size: 12px; }
+  .pd-step-date { color: var(--ink-70); font-weight: 400; font-family: 'IBM Plex Mono', monospace; font-size: 12px; flex: none; white-space: nowrap; }
+  /* a logged line can name long folders (改交精修二（原本是精修三）): it wraps, the time stays whole */
+  .pd-step-label { min-width: 0; overflow-wrap: anywhere; }
   .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
   /* ✎ 編輯 modal */
   .pd-edit-box { padding: 16px 18px; gap: 12px; max-height: 90vh; overflow-y: auto; }
@@ -1522,6 +1524,8 @@
       detailShownId = id;
       body.innerHTML = '<div class="empty">載入中…</div>';
     }
+    // the activity log, in parallel: 進度 draws without it first and again once it is here
+    const eventsP = fetchProjectEvents(id);
     try {
       const r = await fetch(`${WORKER_URL}/api/admin/projects/${encodeURIComponent(id)}`, {
         headers: { 'Authorization': `Bearer ${getToken()}` },
@@ -1539,6 +1543,7 @@
       const data = await r.json();
       if (seq !== openSeq || !detailMode) return;
       renderProjectDetail(data);
+      await drawProjectLog(id, seq, eventsP);
     } catch (e) {
       if (seq !== openSeq || !detailMode) return;
       body.innerHTML = '<div class="empty">無法連線到 Worker</div>';
@@ -2424,6 +2429,83 @@
     }));
   }
 
+  // ── 活動紀錄 (docs/delivery.md, "Activity log"): GET .../events, oldest first. Any failure (no table yet,
+  // an old Worker, offline) is [] and 進度 draws exactly as without it. ──
+  // 進度 again once the log is here, unless another project was opened (or 返回 pressed) meanwhile
+  async function drawProjectLog(id, seq, eventsP) {
+    const events = await eventsP;
+    if (seq !== openSeq || !detailMode || !currentProject || currentProject.id !== id) return;
+    currentEvents = { projectId: id, list: events };
+    renderProgress();
+  }
+  async function fetchProjectEvents(id) {
+    try {
+      const r = await fetch(`${WORKER_URL}/api/admin/projects/${encodeURIComponent(id)}/events`, {
+        headers: { 'Authorization': `Bearer ${getToken()}` },
+      });
+      if (!r.ok) return [];
+      const d = await r.json();
+      return Array.isArray(d && d.events) ? d.events.filter(e => e && typeof e.at === 'string' && typeof e.kind === 'string') : [];
+    } catch (e) {
+      return [];
+    }
+  }
+  const folderNames = fs => (Array.isArray(fs) ? fs.map(leafName).filter(Boolean).join('、') : '');
+  // one event's line, or null for a kind this page does not know
+  function eventLabel(e) {
+    const d = e.data && typeof e.data === 'object' ? e.data : {};
+    const names = folderNames(d.final_folders);
+    if (e.kind === 'deliver') {
+      if (d.repeat) {
+        const prev = folderNames(d.previous);
+        if (Array.isArray(d.previous) && String(d.final_folders) === String(d.previous)) return names ? `重新交件（${names}）` : '重新交件';
+        return `改交${names || '精修'}${prev ? `（原本是${prev}）` : ''}`;
+      }
+      return names ? `交件（${names}）` : '交件';
+    }
+    if (e.kind === 'undeliver') return '取消交件';
+    if (e.kind === 'reopen') return '開放修改';
+    if (e.kind === 'retouch') return '開始精修';
+    if (e.kind === 'confirm') return e.actor === 'client' ? '客人確認完成' : '已標記完成（代客人）';
+    return null;
+  }
+  // 進度 with the log merged in: the derived steps that are done and every logged event, by time, then the steps
+  // still ahead in their usual order. Deduped: the first 交件 whose time is delivered_at is the 交件 step (it takes
+  // the event's line, with the folder), the confirmation whose time is client_confirmed_at is the 客人確認 step, and
+  // the latest 開始精修 dates the 開始精修 step. No events: exactly progressSteps.
+  function progressTimeline(p, submissions, revisions, events) {
+    const steps = progressSteps(p, submissions, revisions);
+    if (!events.length) return { rows: steps, timed: false };
+    const evs = events.map(e => ({ e, label: eventLabel(e) })).filter(x => x.label);
+    const take = pred => { const i = evs.findIndex(pred); return i < 0 ? null : evs.splice(i, 1)[0]; };
+    const lastRetouch = evs.filter(x => x.e.kind === 'retouch').pop();
+    const done = [], ahead = [];
+    for (const s of steps) {
+      let row = { ...s };
+      if (s.step === 'delivered' && s.done && s.at) {
+        const ev = take(x => x.e.kind === 'deliver' && x.e.at === s.at);
+        if (ev) row.label = ev.label;
+      } else if (s.step === 'confirmed' && s.done && s.at) {
+        take(x => x.e.kind === 'confirm' && x.e.at === s.at);
+      } else if (s.step === 'retouch' && s.done && !s.at && lastRetouch) {
+        take(x => x === lastRetouch);
+        row.at = lastRetouch.e.at;
+      } else if (s.round && s.photos > 0) {
+        // with the log the round line says how many photos a pins round marked
+        row.label = `客人要求修改（第 ${s.round} 輪，${s.photos} 張）`;
+      }
+      (s.done ? done : ahead).push(row);
+    }
+    // by time (parsed, so no string format is assumed); a done step with no time keeps its place after the
+    // dated step before it; ties keep their order
+    const ms = at => { const t = Date.parse(at); return Number.isFinite(t) ? t : 0; };
+    let key = 0;
+    const keyed = done.map(row => { if (row.at) key = ms(row.at); return { row, key }; });
+    evs.forEach((x, i) => keyed.push({ row: { step: `ev-${x.e.id ?? i}`, kind: x.e.kind, label: x.label, done: true, at: x.e.at, state: 'done' }, key: ms(x.e.at) }));
+    keyed.sort((a, b) => a.key - b.key);   // stable: ties keep their order
+    return { rows: keyed.map(k => k.row).concat(ahead), timed: true };
+  }
+
   // ── 進度: ✓ done / ● the first step not done / ○ the rest. Dates only where the page has one. ──
   function progressSteps(p, submissions, revisions) {
     const delivered = !!p.delivered_at;
@@ -2433,19 +2515,35 @@
       { step: 'retouch', label: '開始精修', done: p.phase === 'retouching' || delivered, at: null },
       { step: 'delivered', label: '交件', done: delivered, at: p.delivered_at || null },
     ];
-    revisions.slice().reverse().forEach((r, i) => steps.push({ step: `round-${i + 1}`, label: `客人要求修改（第 ${i + 1} 輪）`, done: !!r.resolved_at, at: r.created_at }));
+    revisions.slice().reverse().forEach((r, i) => steps.push({ step: `round-${i + 1}`, label: `客人要求修改（第 ${i + 1} 輪）`, done: !!r.resolved_at, at: r.created_at, round: i + 1, photos: Number(r.photo_count) || 0 }));
     steps.push({ step: 'confirmed', label: p.client_confirmed_by === 'photographer' ? '已標記完成（代客人）' : '客人確認', done: !!p.client_confirmed_at, at: p.client_confirmed_at || null });
     const cur = steps.findIndex(s => !s.done);
     return steps.map((s, i) => ({ ...s, state: s.done ? 'done' : (i === cur ? 'current' : 'next') }));
   }
   const STEP_MARK = { done: ['✓', '已完成'], current: ['●', '目前'], next: ['○', '還沒到'] };
+  // the log of the open project only (a project opened before it arrived draws without it)
+  let currentEvents = { projectId: null, list: [] };
   function renderProgress() {
     const list = $id('pd-steps');
     const p = currentProject;
     if (!list || !p) return;
-    list.innerHTML = progressSteps(p, currentSubmissions, currentRevisions).map(s => `<li data-step="${s.step}" data-state="${s.state}">
-      <span class="pd-step-mark" aria-hidden="true">${STEP_MARK[s.state][0]}</span><span class="sr-only">${STEP_MARK[s.state][1]}：</span>
-      <span class="pd-step-label">${escHtml(s.label)}</span><span class="pd-step-date">${escHtml(s.at ? fmtDay(s.at) : '')}</span></li>`).join('');
+    const events = currentEvents.projectId === p.id ? currentEvents.list : [];
+    const { rows, timed } = progressTimeline(p, currentSubmissions, currentRevisions, events);
+    // textContent, not an escHtml template: the log's lines carry folder names from the bucket, and this list is
+    // the one place on the page that shows them from stored data (docs/delivery.md, "Activity log")
+    const span = (cls, text) => { const el = document.createElement('span'); el.className = cls; el.textContent = text; return el; };
+    list.replaceChildren(...rows.map(s => {
+      const li = document.createElement('li');
+      li.dataset.step = s.step;
+      li.dataset.state = s.state;
+      if (s.kind) li.dataset.kind = s.kind;
+      const mark = span('pd-step-mark', STEP_MARK[s.state][0]);
+      mark.setAttribute('aria-hidden', 'true');
+      // with the log a day can hold several lines: the time too
+      li.append(mark, span('sr-only', `${STEP_MARK[s.state][1]}：`), span('pd-step-label', s.label),
+        span('pd-step-date', s.at ? (timed ? fmtTime(s.at) : fmtDay(s.at)) : ''));
+      return li;
+    }));
   }
 
   // POST deliver with these finals (a first 交件, 確定更換, or 交付精修二), then redraw and show the 交件通知
