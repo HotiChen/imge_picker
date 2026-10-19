@@ -18,6 +18,9 @@
     // The one photo to open straight into preview — admin.html's per-row
     // link — same key format as a normal photo id (js/drive.js).
     const photoKey = params.get('photo') || '';
+    // ?mode=finals&folder=<folder>: one finals version (the project page's 看 on that version's row). Taken only
+    // when it is one of this project's own finals candidates (_checkFolderParam); anything else is dropped.
+    const folderParam = params.get('folder') || '';
 
     const ProjectViewController = {
         active: !!projectId,
@@ -34,6 +37,9 @@
         finalError: false,
         finalPick: null,         // a folder chosen on this tab for looking only (not saved)
         finalCandidates: [],
+        folderParam,             // the asked-for version, until _checkFolderParam accepts or drops it
+        viewFolder: null,        // the accepted version this tab shows instead of the default finals
+        deliveredAt: null,       // delivered_at: the project is delivered only when this is set (final_folders is not)
         proofFolders: [],
         allPhotos: null,        // every proof, once listed (null = not loaded yet)
         _selByKey: new Map(),   // photo_key -> the client's selection row
@@ -140,6 +146,7 @@
             try {
                 const u = new URL(location.href);
                 if (mode !== 'picks') u.searchParams.set('mode', mode); else u.searchParams.delete('mode');
+                if (mode === 'finals' && this.viewFolder) u.searchParams.set('folder', this.viewFolder); else u.searchParams.delete('folder');
                 history.replaceState(history.state, '', u.pathname + u.search + u.hash);
             } catch (e) { /* the address is a convenience only */ }
             if (mode === 'all') await this._ensureAllLoaded();
@@ -207,9 +214,13 @@
             const seq = this._finalSeq = (this._finalSeq || 0) + 1;
             this.finalCandidates = [];
             try {
+                if (this.folderParam) {
+                    await this._checkFolderParam();
+                    if (seq !== this._finalSeq) return;
+                }
                 // nothing chosen on the project yet (it is not delivered): look beside the proof folders. One folder
                 // named 精修 is taken as the finals; otherwise the photographer picks one. Viewing only, nothing saved.
-                if (!this.finalFolders.length && !this.finalPick) {
+                if (!this.viewFolder && !this.finalFolders.length && !this.finalPick) {
                     const found = await this._findFinalCandidates();
                     if (seq !== this._finalSeq) return;
                     const named = found.filter(f => f.includes('精修'));
@@ -226,7 +237,63 @@
             }
         },
 
-        _finalRoots() { return this.finalFolders.length ? this.finalFolders : (this.finalPick || []); },
+        _finalRoots() {
+            if (this.viewFolder) return [this.viewFolder];
+            return this.finalFolders.length ? this.finalFolders : (this.finalPick || []);
+        },
+
+        // The ?folder= of one version is listed only when it is one of this project's own finals candidates: a
+        // folder of its finals snapshot (final_folders) or a folder beside its proof folders (_findFinalCandidates,
+        // the 精修 tab's own chooser set, proof folders excluded). Exact match, so no parent, proof folder or other
+        // prefix gets listed. Refused (or the listing failed): dropped, and the tab works as it always did.
+        async _checkFolderParam() {
+            const want = this.folderParam;
+            this.folderParam = '';
+            let ok = this.finalFolders.includes(want);
+            if (!ok) {
+                try { ok = (await this._findFinalCandidates()).includes(want); } catch (e) { ok = false; }
+            }
+            this.viewFolder = ok ? want : null;
+            if (!ok) {
+                try {
+                    const u = new URL(location.href);
+                    u.searchParams.delete('folder');
+                    history.replaceState(history.state, '', u.pathname + u.search + u.hash);
+                } catch (e) { /* the address is a convenience only */ }
+            }
+        },
+
+        // Under the banner while one version is on screen: is it the one the client sees now? Delivered means
+        // delivered_at is set (final_folders stays after 取消交件). Names go through textContent only.
+        renderVersionNote() {
+            document.getElementById('pvVersionNote')?.remove();
+            if (this.mode !== 'finals' || !this.viewFolder) return;
+            const banner = document.getElementById('projectViewBanner');
+            if (!banner) return;
+            const leaf = f => String(f).replace(/\/$/, '').split('/').pop() || f;
+            const live = this.deliveredAt ? this.finalFolders : [];
+            const name = leaf(this.viewFolder);
+            let state, text;
+            if (live.includes(this.viewFolder)) { state = 'current'; text = '客人目前看的版本'; }
+            else if (!live.length) { state = 'undelivered'; text = '這一版尚未交給客人'; }
+            else {
+                const PF = window.ProjectFolders;
+                const n = PF ? PF.parseFinalVersion(name) : null;
+                const ns = PF ? live.map(f => PF.parseFinalVersion(leaf(f))) : [];
+                const newer = n !== null && ns.length && ns.every(x => x !== null && x < n);
+                state = newer ? 'newer' : 'old';
+                text = `這是 ${name}（${newer ? '新版，還沒交給客人' : '舊版'}），客人現在看的是 ${live.map(leaf).join('、')}`;
+            }
+            const el = document.createElement('div');
+            el.id = 'pvVersionNote';
+            el.dataset.state = state;
+            el.setAttribute('role', 'status');
+            el.textContent = text;
+            el.style.cssText = state === 'current'
+                ? 'margin:8px 16px;padding:10px 14px;border-radius:10px;font-size:14px;font-weight:600;background:#d6f0e3;color:#1f4d3a;'
+                : 'margin:8px 16px;padding:10px 14px;border-radius:10px;font-size:15px;font-weight:700;background:#ffe2b8;color:#4a2a00;border:2px solid #e0952b;';
+            banner.after(el);
+        },
 
         // The folders next to each proof folder (same parent), minus the proof folders and thumbnails.
         async _findFinalCandidates() {
@@ -270,6 +337,7 @@
         },
 
         _applyState(data) {
+            this.deliveredAt = data.project && data.project.delivered_at ? data.project.delivered_at : null;
             this.finalFolders = data.project && Array.isArray(data.project.final_folders)
                 ? data.project.final_folders.filter(f => typeof f === 'string' && f) : [];
             this.ownerName = data.owner ? data.owner.name : null;
@@ -637,6 +705,7 @@
             }
             if (link) link.href = `admin.html#project=${encodeURIComponent(this.projectId)}`;
             el.hidden = false;
+            this.renderVersionNote();
         },
 
         // ── 修改標示 (docs/revision-pins.md 6.2): the client's pins on the delivered finals ──

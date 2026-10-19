@@ -2403,7 +2403,7 @@
     for (const f of finalRowsOf(p)) {
       rows.push(`<div class="pd-ver" data-version="${escHtml(f)}"><span class="pd-ver-name">${escHtml(leafName(f))}</span>
         ${delivered.includes(f) ? '<span class="pd-ver-current" data-current-version>客人目前看的版本</span>' : ''}
-        <span class="pd-ver-actions"><a class="btn btn-outline" data-view href="index.html?project=${id}&amp;mode=finals">看</a></span></div>`);
+        <span class="pd-ver-actions"><a class="btn btn-outline" data-view href="index.html?project=${id}&amp;mode=finals&amp;folder=${escHtml(encodeURIComponent(f))}">看</a></span></div>`);
     }
     if (stage === 'revising' && plan.kind === 'upload' && plan.folder) {
       rows.push(`<div class="pd-ver" data-version="${escHtml(plan.folder)}" data-empty><span class="pd-ver-name">${escHtml(plan.name)}</span>
