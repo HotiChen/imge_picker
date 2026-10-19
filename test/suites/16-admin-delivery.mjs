@@ -371,17 +371,9 @@ const pfFiles = names => [`${PF_ROOT}/毛片/IMG_1.jpg`, ...names.map(n => `${PF
       await pfWaitFinalsLink(page);
       const line = await page.$eval('#pd-folder-line', e => ({ text: e.textContent.trim(), shown: getComputedStyle(e).display !== 'none' })).catch(() => null);
       ok('the detail says 資料夾：<root>/', line && line.shown && line.text === `資料夾：${PF_ROOT}/`, JSON.stringify(line));
-      const up = await page.$('.pd-actions #pd-upload-proofs-btn');
-      ok('＋上傳毛片 is a link in the top action row', !!up);
-      if (!up) return out;
-      ok('its text says ＋上傳毛片', (await up.textContent()).trim() === '＋上傳毛片', await up.textContent());
-      const a = await pfLink(page, '#pd-upload-proofs-btn');
-      ok('it goes to upload.html on <root>/毛片/, for this project, locked',
-        a.file === 'upload.html' && a.folder === `${PF_ROOT}/毛片/` && a.project === 'proj-new' && a.lock === '1' && JSON.stringify(a.keys) === '["folder","project","lock"]', JSON.stringify(a));
-      const look = await page.evaluate(() => { const l = document.getElementById('pd-upload-proofs-btn'), r = l.getBoundingClientRect(), s = getComputedStyle(l);
-        const sib = document.getElementById('pd-download-btn').getBoundingClientRect();
-        return { deco: s.textDecorationLine, display: s.display, w: r.width, dh: Math.abs(r.height - sib.height), sameRow: Math.abs(r.top - sib.top) < 40 }; });
-      ok('rendered like its sibling buttons: no underline, shown, same height', look.deco === 'none' && look.display !== 'none' && look.w > 20 && look.dh <= 2, JSON.stringify(look));
+      // in 精修 the button is still in the top action row but grayed out (suite 95 covers it and the link before 精修)
+      ok('＋上傳毛片 is in the top action row, grayed out in 精修 (no link)',
+        await page.$eval('.pd-actions #pd-upload-proofs-btn', e => e.getAttribute('href') === null && e.disabled === true).catch(() => false));
       const f = await pfLink(page, '#pd-upload-final-btn');
       ok('＋上傳精修 goes to <root>/精修/, for this project, locked',
         f.file === 'upload.html' && f.folder === `${PF_ROOT}/精修/` && f.project === 'proj-new' && f.lock === '1' && f.target === 'ready' &&
@@ -390,9 +382,6 @@ const pfFiles = names => [`${PF_ROOT}/毛片/IMG_1.jpg`, ...names.map(n => `${PF
       ok('it listed the project root (<root>/) with the admin token to see what exists',
         pfLists(m).some(c => c.prefix === `${PF_ROOT}/` && c.auth === 'Bearer adm'), JSON.stringify(pfLists(m)));
       if (process.env.SHOTS_A) await page.screenshot({ path: `${process.env.SHOTS_A}/project-detail-folders-1500.png`, fullPage: true });
-      await page.goto(await page.$eval('#pd-upload-proofs-btn', l => l.href), { waitUntil: 'load' });
-      ok('following ＋上傳毛片 lands on the upload page with the target locked on 毛片',
-        (await page.$eval('#targetDisplay', e => e.textContent)) === `${PF_ROOT}/毛片/` && (await page.$eval('#targetBar', e => e.dataset.locked)) === '1');
       return out;
     },
     { before: m.attach, initScript: ADMIN });

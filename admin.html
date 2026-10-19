@@ -132,6 +132,7 @@
   .btn { padding: 5px 12px; border-radius: 999px; border: none; cursor: pointer; font-size: 12px; font-weight: 600; font-family: inherit; transition: opacity 0.15s; }
   .btn:hover { opacity: 0.85; }
   .btn:disabled { opacity: .5; cursor: not-allowed; }
+  .btn-locked:disabled, .btn-locked:disabled:hover { opacity: 1; background: var(--rule); border-color: var(--rule); color: var(--ink-70); }
   .btn:focus-visible, .btn-logout:focus-visible { outline: 2px solid var(--ink-90); outline-offset: 2px; }
   .btn-accent { background: var(--accent); color: var(--ink-90); }
   /* danger sits on white, not peach: --danger on --peach is only 4.1:1 */
@@ -2009,7 +2010,12 @@
   function proofsUploadHtml(project) {
     const info = PF.rootOfProject(project);
     if (!info || !info.proofShaped) return '';
-    return `<a id="pd-upload-proofs-btn" class="btn btn-outline" href="${escHtml(PF.uploadHref(project.id, info.proofFolder, true))}">＋上傳毛片</a>`;
+    // in 精修 proofs are not uploaded any more: the button stays (the row does not jump) but is disabled, and says why in
+    // its text (a disabled button has no focus and may show no tooltip)
+    const locked = project.phase === 'retouching';
+    return locked
+      ? '<button type="button" id="pd-upload-proofs-btn" class="btn btn-outline btn-locked" disabled title="已進入精修階段，不再上傳毛片">＋上傳毛片（已進入精修）</button>'
+      : `<a id="pd-upload-proofs-btn" class="btn btn-outline" href="${escHtml(PF.uploadHref(project.id, info.proofFolder, true))}">＋上傳毛片</a>`;
   }
 
   // 看全部毛片: the review view (index.html?project=) in its all-proofs mode — every photo in
