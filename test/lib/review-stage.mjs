@@ -22,6 +22,19 @@ export async function rsOpen(page, i) {
   await page.waitForSelector('#photoModal.active', { timeout: 5000 });
   await rsSettled(page, i);
 }
+// ── pins (suite 92 onwards)
+export const rsPin = (x, y, note = '') => ({ x, y, note });
+export const rsUntil = async (fn, ms = 4000) => { const t = Date.now(); while (Date.now() - t < ms) { if (await fn()) return true; await rsSleep(40); } return false; };
+export const rsPuts = w => w.calls.filter(c => c.method === 'PUT' && c.path === '/api/pick/revision-pins');
+// The screen point of a fraction of the photo as the canvas shows it now (zoom and pan included).
+export const rsPoint = (page, fx, fy) => page.evaluate(([fx, fy]) => {
+  const a = window.annotationManager;
+  const r = a.canvas.getBoundingClientRect();
+  return { x: r.left + a.offsetX + a.panX + a.zoom * fx * a.fitW, y: r.top + a.offsetY + a.panY + a.zoom * fy * a.fitH };
+}, [fx, fy]);
+// what the canvas holds for the photo on show
+export const rsMarks = page => page.evaluate(() => window.annotationManager.marks.map(m => ({ ...m })));
+
 export const rsSettled = (page, i) => page.waitForFunction(k => {
   const a = window.annotationManager;
   return !!a && a.currentPhoto && a.currentPhoto.id === k && a.imageElement && a.imageElement.naturalWidth > 0 && a.fitW > 0 && !a.canvas.parentElement.classList.contains('photo-loading') &&

@@ -913,9 +913,9 @@ class App {
                 ? `<button type="button" class="pick-heart-btn${isPicked ? ' on' : ''}" title="選">♥</button>`
                 : `<span class="pick-heart-btn${isPicked ? ' on' : ''}" title="選">♥</span>`)
             : (projectMode ? (isPicked ? `<span class="pick-heart-btn on" title="已選">♥</span>` : '') : '');
-        const pinCount = projectMode && Array.isArray(photo.marks) ? photo.marks.length : 0;
-        const pinBadge = pinCount > 0
-            ? `<span class="pv-pin-badge" title="有 ${pinCount} 個標示">📍${pinCount}</span>` : '';
+        // 📍N: the photographer's view of the guest's pins, or the 驗收頁's own draft pins (js/pick.js pinBadgeCount)
+        const pinCount = projectMode && Array.isArray(photo.marks) ? photo.marks.length
+            : (pickMode ? PickController.pinBadgeCount(photo) : 0);
         const noteMarker = projectMode && photo.note
             ? '<span class="pv-note-badge" title="有備註">💬</span>' : '';
         const dlTag = gallery && PickController.canDownload()
@@ -927,7 +927,7 @@ class App {
                 <div class="photo-overlay">
                     ${photo.hasAnnotations ? '<span class="photo-badge">✎</span>' : ''}
                 </div>
-                ${heartTag}${noteMarker}${pinBadge}
+                ${heartTag}${noteMarker}${pinCount > 0 ? this.pinBadge(pinCount) : ''}
                 ${(!heartTag && canEdit) ? '<div class="select-toggle-btn" title="選取此照片"></div>' : ''}
             </div>
             <div class="photo-info-section">
@@ -992,6 +992,12 @@ class App {
             }
         });
         return card;
+    }
+
+    // 📍N on a card: the photographer's view of the guest's pins, the 驗收頁's draft pins (js/pick.js refreshPinBadges)
+    // (markup: n is a count, a number, never text from outside)
+    pinBadge(n) {
+        return `<span class="pv-pin-badge" title="有 ${Number(n)} 個標示">📍${Number(n)}</span>`;
     }
 
     // Guest picking: the one place a heart toggle actually changes anything.
@@ -1393,7 +1399,7 @@ class App {
     }
 
     closeModal() {
-        if (window.PickController && PickController.active) PickController._exitPinMode(true);
+        if (window.PickController && PickController.active) PickController.onPreviewClose();
         this.saveCurrentNote();
         document.getElementById('photoModal').classList.remove('active');
         this.markCurrent(this._currentPhotoId, true, true);

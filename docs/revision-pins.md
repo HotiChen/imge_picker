@@ -374,12 +374,12 @@ Body：`{note?: string, expect: [{k: photo_key, n: 標示數}]}`。`expect` 是�
 
 | 部分 | 內容 | 重用 / 新寫 |
 |---|---|---|
-| 燈箱標示模式 | `FinalsGallery` 燈箱工具列多一個「標示修改」。開啟後：點照片 = 加一個標示；下方抽屜列出 ①②③ 與說明輸入（≤100 字、計數）、× 刪除；左右滑動在標示模式中停用（‹ › 鍵仍可換張）；「完成」離開 | 燈箱、計數規則重用；疊圖層用新的 `js/pin-layer.js`（§7）；抽屜仿 `pick.js` `_renderPinList` 但新寫 |
+| 標示模式（2026-10-19 改：驗收頁就是毛片頁） | 標準的照片格 + 標準預覽（可縮放平移），和毛片挑片同一套「標示修改」：點照片 = 加一個標示、上方說明輸入框、「備註・標示」清單（≤100 字、計數、× 刪除）；標示模式中滑動不換張；換張或「完成」離開。每張精修都能標（不用 ♥）。標示畫在 annotation canvas 上，跟著縮放 | `js/pick.js` 的 `syncPinUI` 等全部重用；只有存放處不同：驗收頁時 `marksOf` / `_saveMarks` 讀寫 `RevisionPins`（草稿），不寫 selections |
 | 自動存檔 | 每張照片 600 ms debounce，`PUT /api/pick/revision-pins`；失敗 0/429/5xx 保留重試，4xx 顯示錯誤；`pagehide` 用 keepalive 送出 | 仿 `pick.js` 的 autosave 佇列（不共用程式，避免碰 selections 邏輯） |
-| 照片牆標記 | 有草稿的照片右下角一個數字徽章（標示數），純 CSS | 新：`FinalsGallery` 加 `tileBadge(photo)` hook |
+| 照片牆標記 | 有草稿的照片卡片上一個「📍N」（和攝影師檢視同一個 `.pv-pin-badge`） | `js/app.js` `pinBadge` + `js/pick.js` `pinBadgeCount` / `refreshPinBadges` |
 | 狀態列 | 「確認完成」+「送出修改（N 張）」（N=0 時 disabled，提示「點照片進入標示修改」）；觀看者看不到按鈕，只看到狀態字 | 改 `js/delivery-done.js`（從 pick.js 搬出，§7） |
 | 送出對話框 | 標題「送出 N 張照片的修改？」；N 張小縮圖 + 每張標示數；可選總說明（≤1000 字）；若有標示沒寫說明：「有 K 個標示沒有寫說明，攝影師只看得到位置」；說明「送出後這一輪就不能再改，攝影師更新照片後會再通知你」；送出前先 flush 存檔佇列，再重讀 state（沿用 `_doneGuard` 的「頁面過期」判斷） | 對話框殼重用 `_ensureDoneModals` 的樣式 |
-| 送出後 | 狀態「已送出修改（N 張），攝影師處理中」；標示模式消失；燈箱裡該輪的標示以唯讀顯示（§11 Q6） | 新 |
+| 送出後 | 狀態「已送出修改（N 張），攝影師處理中」；「標示修改」消失；預覽裡該輪的標示以唯讀顯示（依檔名對應，§11 Q6） | 新 |
 | 確認對話框 | 若有未送出草稿：「你還有 N 張照片的標示沒有送出，確認完成後不會送給攝影師」 | 改既有文字 |
 | 歷史面板 | 「上一輪的修改資訊」按鈕 → 全螢幕面板：標題（「挑片時的標示 · 日期」或「第 k 輪修改 · 日期」），總說明（若有），照片格（400 縮圖，`fetch`→blob，IntersectionObserver 延遲載入，關閉時 `revokeObjectURL`）；點一張 → 唯讀大圖（1200）+ `PinLayer` 唯讀 + 說明列表；下方「更早的輪次」列表 | 新；文字一律 `textContent` |
 | 空/錯/離線 | 沒有任何輪次：按鈕不出現。列表讀失敗：「暫時無法載入，重試」。縮圖 404：灰底「照片已不在雲端」。離線存檔：狀態列「尚未儲存，連線後會自動送出」。送出時 409 `draft_changed`：重讀草稿後重新顯示對話框；`revision_open`：重讀 state 顯示「已送出」；`not_delivered`：沿用「攝影師剛更新了照片，請重新整理」 | 新 |
@@ -439,14 +439,12 @@ window.PinLayer = {
   2. 新功能（燈箱、歷史、admin）只用 `PinLayer.attach`。
   3. **不**把 `annotation.js` 的 canvas 標示改成 DOM（它要跟縮放/平移，風險高，不屬於本功能）。
 
-### 7.2 `FinalsGallery` 的掛勾（`js/finals-gallery.js`）
+### 7.2 ~~`FinalsGallery` 的掛勾~~（2026-10-19 移除）
 
-保持它不知道「標示」是什麼。`mount(content, opts)` 多兩個可選項：
-
-- `lightboxExtras: { toolbar(barEl, api), onShow(photo, stage, img), onClose(), blockSwipe() }`
-- `tileBadge(photo) → string | null`
-
-沒給就完全是現在的行為（`28-finals-gallery.mjs` 必須不改一行就綠）。
+原本驗收頁是 `FinalsGallery` 網頁相簿，標示接在它的燈箱（`lightboxExtras`）與照片牆徽章（`tileBadge`）上。
+Tim 要驗收頁和毛片一樣（標準照片格 + 可縮放的預覽），標示改用 `js/pick.js` 的毛片標示 UI，這兩個掛勾與
+`js/revision-pins.js` 的燈箱程式一起刪掉；`FinalsGallery` 只剩完成頁在用（docs/delivery.md
+「The 驗收頁 is the 毛片 page」）。
 
 ### 7.3 `js/delivery-done.js`（新，從 `js/pick.js` 搬出）
 
@@ -699,7 +697,7 @@ Tim 要手動做的：
   對應 `PUT /api/pick/revision-pins`）、`js/pin-layer.js`（pin 資料規則與疊在 `<img>` 上的 pin 圖層，也被毛片標示共用）、
   `js/revision-history.js`（「上一輪的修改資訊」唯讀面板，pin 畫在舊照片上，縮圖走 `GET /api/pick/rounds/:id/photo`）、
   `js/delivery-done.js`（確認完成／「送出修改（N 張）」按鈕，從 `js/pick.js` 搬出；送出前會重讀 state，
-  攝影師剛換過精修就擋下並請客人重新整理），`js/finals-gallery.js` 的 lightbox 掛勾；樣式 `css/revision-pins.css`。
+  攝影師剛換過精修就擋下並請客人重新整理）；放標示的 UI 是毛片的那一套（`js/pick.js` `syncPinUI`，標準預覽）；樣式 `css/revision-pins.css`。
 - 攝影師：`js/revision-rounds-view.js`（一輪一張卡片：第 k 輪、標示 N 張、時間、客人、未處理／已處理、總說明；
   可摺疊的照片清單，pin 唯讀；點照片看 1200px；「下載此輪需求表 (CSV)」），`admin.html` 的交件區與
   `js/project-view.js`（`index.html?project=<id>`）共用；樣式 `css/revision-rounds-view.css`。

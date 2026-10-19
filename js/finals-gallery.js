@@ -18,13 +18,6 @@
 // on the page) and `theme: 'light'` puts `fg--light` on the root and `fg-lightbox--light` on
 // the lightbox, the hooks css/completion-page.css styles. Without them nothing changes.
 //
-// Two optional hooks of mount() let a page add to the gallery without it knowing what for
-// (docs/revision-pins.md §7.2; none given = exactly the gallery above):
-//   tileBadge(photo) -> string | null          a small badge on a tile (refreshBadges() re-reads them)
-//   lightboxExtras: { toolbar(barEl, api), onShow(photo, stage, img), onClose(), blockSwipe() }
-//     toolbar: once per lightbox, to put a button in the bar; onShow: every time a photo is shown;
-//     onClose: when the lightbox goes; blockSwipe: true = a touch on the stage does not turn the page.
-//
 // Every string that came from outside (file and folder names, title, studio
 // name) only reaches the DOM through textContent / setAttribute / property
 // assignment — no innerHTML in this file.
@@ -267,22 +260,9 @@
                 img.addEventListener('error', () => t.classList.add('fg-tile--broken'));
                 img.src = d.getImageUrl(photo, bucket);
                 t.append(img);
-                this._badge(t, photo);
                 t.addEventListener('click', () => this.openLightbox(i, t));
                 return t;
             });
-        },
-
-        // the tileBadge hook: a number in the corner of a tile (outside strings: textContent)
-        _badge(tile, photo) {
-            const text = this.ctx && this.ctx.tileBadge ? this.ctx.tileBadge(photo) : null;
-            let b = tile.querySelector('.fg-badge');
-            if (text == null || text === '') { if (b) b.remove(); return; }
-            if (!b) { b = el('span', 'fg-badge'); tile.append(b); }
-            b.textContent = String(text);
-        },
-        refreshBadges() {
-            this.tiles.forEach((t, i) => { if (this.photos[i]) this._badge(t, this.photos[i]); });
         },
 
         // a thumbnail loaded: remember its shape; a shape other than the one the
@@ -398,8 +378,6 @@
             const close = btn('fgLbClose', 'fg-lb-btn fg-lb-close', '✕', '關閉');
             close.addEventListener('click', () => this.closeLightbox());
             bar.append(el('span', 'fg-lb-count', null, 'fgLbCount'), el('span', 'fg-lb-name', null, 'fgLbName'), dl, close);
-            const extras = this.ctx && this.ctx.lightboxExtras;
-            if (extras && extras.toolbar) extras.toolbar(bar, { photo: () => this.photos[lb.i], root });
             const stage = el('div', 'fg-lb-stage', null, 'fgLbStage');
             const prev = btn('fgLbPrev', 'fg-lb-nav fg-lb-prev', '‹', '上一張');
             const next = btn('fgLbNext', 'fg-lb-nav fg-lb-next', '›', '下一張');
@@ -431,8 +409,6 @@
             root.focus({ preventScroll: true });
         },
 
-        _extras() { return (this.ctx && this.ctx.lightboxExtras) || null; },
-
         // the lightbox shows the 1200 / 1600 bucket for the screen it is on
         _lbUrl(photo) {
             const d = this._drive();
@@ -459,8 +435,6 @@
             img.onload = () => { if (tok === lb.tok) { img.classList.add('on'); lb.stage.classList.remove('loading'); } };
             img.onerror = () => { if (tok === lb.tok) { msg.hidden = false; lb.stage.classList.remove('loading'); } };
             img.src = this._lbUrl(photo);
-            const ex = this._extras();
-            if (ex && ex.onShow) ex.onShow(photo, lb.stage, img);
             // the neighbours, so a flip does not wait for the network
             lb.preload = [lb.i - 1, lb.i + 1].filter(k => k >= 0 && k < n).map(k => { const im = new Image(); im.src = this._lbUrl(this.photos[k]); return im; });
             // a disabled button cannot keep the focus
@@ -482,8 +456,6 @@
             const lb = this.lb;
             if (!lb) return;
             this.lb = null;
-            const ex = this._extras();
-            if (ex && ex.onClose) ex.onClose();
             lb.off.splice(0).forEach(f => f());
             lb.tok++;
             lb.img.onload = lb.img.onerror = null;
@@ -523,8 +495,6 @@
             const lb = this.lb;
             if (!lb) return;
             lb.touch = null;
-            const ex = this._extras();
-            if (ex && ex.blockSwipe && ex.blockSwipe()) return;   // e.g. pin mode: a touch places a pin
             if (e.touches.length !== 1) return;
             const t = e.touches[0];
             if (t.clientX < EDGE || t.clientX > window.innerWidth - EDGE) return;   // the system's back gesture

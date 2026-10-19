@@ -1,13 +1,15 @@
 // Browser suites: pins on the delivered finals, client side (docs/revision-pins.md §6.1, §13.1):
-// the lightbox pin mode with autosaved drafts, 「送出修改 N 張」 and its dialog, every error code in plain
-// Chinese, the read-only history 「上一輪的修改資訊」, and everything that must NOT exist (viewers, the
-// migration not run, the 完成頁). The fake Worker mirrors the real routes (test/lib/revision-pins-fake.mjs).
+// pins placed in the standard preview (the 驗收頁 is the 毛片 page, docs/delivery.md; the pin UI itself
+// is suite 92) with autosaved drafts, the round dialog, every error code in plain Chinese, the read-only
+// history 「上一輪的修改資訊」, and everything that must NOT exist (viewers, the migration not run, the
+// 完成頁). The fake Worker mirrors the real routes (test/lib/revision-pins-fake.mjs).
 // Registered by test/run.mjs in file-name order; see test/README.md.
 import { base, suite } from '../lib/harness.mjs';
 import { MOBILE } from '../lib/env.mjs';
 import { ALB_DESK, albKeys } from '../lib/album-world.mjs';
 import { donePosts } from '../lib/delivery-helpers.mjs';
 import { pinsWorld } from '../lib/revision-pins-fake.mjs';
+import { rsOpen, rsPoint, rsMarks } from '../lib/review-stage.mjs';
 
 export default async function register() {
 
@@ -36,17 +38,12 @@ const SPIES = `(() => {
   window.fetch = (u, init) => { window.__fetches.push({ url: String(u), method: (init && init.method) || 'GET', keepalive: !!(init && init.keepalive), body: init && init.body ? String(init.body) : null, headers: init && init.headers ? Object.assign({}, init.headers) : {} }); return f(u, init); };
 })();`;
 
-const tile = (page, i) => page.click(`.fg-tile[data-photo-id="${K(i)}"]`);
-const openLb = async (page, i) => {
-  await page.waitForSelector('.fg-tile', { timeout: 6000 });
-  await tile(page, i);
-  await page.waitForSelector('#fgLbImg.on', { timeout: 6000 });
-  await page.waitForFunction(() => document.getElementById('fgLbImg').naturalWidth > 0);
-};
-const imgRect = page => page.evaluate(() => { const r = PinLayer.contentRect(document.getElementById('fgLbImg')); return { left: r.left, top: r.top, width: r.width, height: r.height }; });
-const tapAt = async (page, fx, fy) => { const r = await imgRect(page); await page.mouse.click(r.left + fx * r.width, r.top + fy * r.height); return r; };
-const pinsOnScreen = page => page.$$eval('#fgLightbox .pin-layer-pin', els => els.map(e => { const b = e.getBoundingClientRect(); return { n: e.textContent, cx: b.left + b.width / 2, cy: b.top + b.height / 2, label: e.getAttribute('aria-label') }; }));
-const layerState = page => page.evaluate(() => { const l = document.querySelector('#fgLightbox .pin-layer'); return l ? l.dataset.readonly : null; });
+// the standard preview (test/lib/review-stage.mjs): open photo i, tap a fraction of it, the pins it holds
+const openLb = (page, i) => rsOpen(page, i);
+const tapAt = async (page, fx, fy) => { const p = await rsPoint(page, fx, fy); await page.mouse.click(p.x, p.y); return p; };
+const pinsOnScreen = rsMarks;
+const pinOn = page => page.click('#pickPinBtn');
+const closeLb = page => page.keyboard.press('Escape');
 const doneStatus = page => page.evaluate(() => document.getElementById('deliveryDoneStatus')?.textContent ?? null);
 const roundCalls = w => w.calls.filter(c => c.method === 'POST' && c.path === '/api/pick/revision-round');
 const putCalls = w => w.calls.filter(c => c.method === 'PUT' && c.path === '/api/pick/revision-pins');
@@ -57,106 +54,51 @@ const keyLeak = async (page, w) => {
 };
 const modalActive = (page, id) => page.evaluate(i => { const e = document.getElementById(i); return !!e && e.classList.contains('active') && getComputedStyle(e).display !== 'none'; }, id);
 
-// ═════ 1. pin mode in the lightbox: place, edit, delete, autosave, reload
+// ═════ 1. pins in the preview: the black bars, deleting a photo's last pin, the key, reload
+// (placing, notes, the debounce, zoom and the phone tap / swipe are suite 92)
 {
   const w = world();
-  await sx('finals pins — owner: lightbox pin mode places, edits, deletes; drafts autosave (debounced) and survive a reload',
+  await sx('finals pins — owner: a tap beside the photo places nothing; removing the last pin saves marks: []; the key stays out of URLs and the DOM; a reload brings the drafts back',
     pageUrl,
     async (page, ok) => {
       await openLb(page, 1);
-      ok('positive: the 標示修改 toggle is in the lightbox bar (the seat holder, migration run)', (await page.textContent('#rpPinToggle')) === '標示修改');
-      ok('the pin layer is there but read-only until the mode is on; no drawer yet', (await layerState(page)) === 'true' && (await page.$('#rpDrawer')) === null);
-      await page.click('#rpPinToggle');
-      ok('pin mode on: toggle pressed, drawer up, layer editable, hint says 0/10',
-        (await page.getAttribute('#rpPinToggle', 'aria-pressed')) === 'true' && (await page.$('#rpDrawer')) !== null && (await layerState(page)) === 'false' &&
-        (await page.textContent('#rpHint')).includes('這張已標 0/10'));
+      ok('positive: 標示修改 is in the preview (the seat holder, migration run)', (await page.textContent('#pickPinBtn')) === '標示修改');
+      await pinOn(page);
       await tapAt(page, 0.25, 0.4);
-      let pins = await pinsOnScreen(page);
-      const r1 = await imgRect(page);
-      ok('a tap places pin ① exactly where it was tapped (centre within 2px); the photo did not move under the finger', pins.length === 1 && pins[0].n === '1' &&
-        Math.abs(pins[0].cx - (r1.left + 0.25 * r1.width)) < 2 && Math.abs(pins[0].cy - (r1.top + 0.4 * r1.height)) < 2, JSON.stringify([pins, r1]));
-      ok('its note input has the focus at once (the tap is the gesture that raises the phone keyboard)', await page.evaluate(() => document.activeElement && document.activeElement.classList.contains('rp-note')));
-      await tapAt(page, 0.7, 0.6);
-      ok('a second tap: ② and a second row; hint says 2/10', (await pinsOnScreen(page)).length === 2 && (await page.$$('#rpDrawer .rp-row')).length === 2 && (await page.textContent('#rpHint')).includes('已標 2/10'));
       await page.keyboard.type('去掉路人');
-      ok('typing changes the note of the focused pin (②); the pin names it for assistive tech', (await pinsOnScreen(page))[1].label === '標示 2：去掉路人');
-      ok('nothing is sent while typing (debounced)', putCalls(w).length === 0);
-      ok('the autosave fires once after ~600 ms', await until(() => putCalls(w).length === 1) && (await sleep(900), putCalls(w).length === 1), String(putCalls(w).length));
-      const put = putCalls(w)[0];
-      ok('PUT carries the full pin list of the photo, in order, with the typed note', put && put.body.items.length === 1 && put.body.items[0].photo_key === K(1) &&
-        put.body.items[0].marks.length === 2 && put.body.items[0].marks[1].note === '去掉路人' && Math.abs(put.body.items[0].marks[0].x - 0.25) < 0.002 && Math.abs(put.body.items[0].marks[1].y - 0.6) < 0.002, JSON.stringify(put && put.body));
-      ok('the link token and the picker key travel as headers, never in the URL', put.headers.token === 'TOK' && put.headers.key === 'ZOE-KEY' && !put.url.includes('?') && !put.url.includes('ZOE-KEY'), put.url);
-      const left = await page.evaluate(() => { const l = document.getElementById('fgLbStage').getBoundingClientRect(); return l.left; });
+      await page.keyboard.press('Enter');
+      ok('the draft lands with its note', await until(() => w.drafts().has(K(1)) && w.drafts().get(K(1))[0].note === '去掉路人'));
       // the portrait photo: black bars left and right of it
-      await page.click('#fgLbNext');
-      await page.waitForFunction(() => document.getElementById('fgLbCount').textContent.startsWith('2 /') && document.getElementById('fgLbImg').naturalWidth === 400);
-      await page.waitForSelector('#fgLbImg.on');
-      const r2 = await imgRect(page);
-      ok('fixture: the portrait photo leaves real black bars in the stage (wide enough to tap beside the ‹ button)', r2.left - left > 200, JSON.stringify(r2));
-      await page.mouse.click(left + 150, r2.top + r2.height / 2);
-      ok('a tap in the black bar places nothing', (await pinsOnScreen(page)).length === 0 && putCalls(w).length === 1, JSON.stringify([await pinsOnScreen(page), putCalls(w).length, left, r2]));
-      await page.mouse.click(r2.left + r2.width / 2, r2.top + r2.height / 2);
-      ok('positive: a tap on the same photo does place a pin (pin mode stayed on across photos)', (await pinsOnScreen(page)).length === 1, JSON.stringify(await pinsOnScreen(page)));
-      await page.click('#rpDrawer .rp-del');
-      ok('× removes it', (await pinsOnScreen(page)).length === 0 && (await page.$$('#rpDrawer .rp-row')).length === 0);
-      ok('the delete is saved as marks: [] for that photo', await until(() => putCalls(w).some(c => c.body.items[0].photo_key === K(2) && c.body.items[0].marks.length === 0)));
+      await page.click('#nextPhotoBtn');
+      await page.waitForFunction(k => annotationManager.currentPhoto.id === k && annotationManager.fitW > 0 && !annotationManager.canvas.parentElement.classList.contains('photo-loading'), K(2));
+      const bar = await page.evaluate(() => { const a = annotationManager, r = a.canvas.getBoundingClientRect(); return { x: r.left + a.offsetX - 40, y: r.top + a.offsetY + a.fitH / 2, off: a.offsetX }; });
+      ok('fixture: the portrait photo leaves real black bars beside it', bar.off > 80, JSON.stringify(bar));
+      ok('as on the 毛片 page, flipping to another photo leaves pin mode', (await page.$('#pickPinBtn')) !== null && !(await page.evaluate(() => annotationManager.pinMode)));
+      await pinOn(page);
+      const before = putCalls(w).length;
+      await page.mouse.click(bar.x, bar.y);
+      await sleep(800);
+      ok('a tap in the black bar places nothing and saves nothing', (await pinsOnScreen(page)).length === 0 && putCalls(w).length === before, JSON.stringify(await pinsOnScreen(page)));
+      await tapAt(page, 0.5, 0.5);
+      await page.keyboard.press('Enter');
+      ok('positive: a tap on the photo does place a pin', (await pinsOnScreen(page)).length === 1);
+      await page.click('#pickPinList .pick-pin-del');
+      ok('× removes it', (await pinsOnScreen(page)).length === 0);
+      ok('the delete is saved as marks: [] for that photo', await until(() => putCalls(w).some(c => c.body.items.some(i => i.photo_key === K(2) && i.marks.length === 0))));
       ok('the server holds only photo 1\'s draft', w.drafts().size === 1 && w.drafts().has(K(1)));
-      await page.click('#rpPinToggle');
-      ok('leaving the mode removes the drawer from the DOM and makes the layer read-only', (await page.$('#rpDrawer')) === null && (await layerState(page)) === 'true');
-      await page.click('#fgLbPrev');
-      await page.waitForFunction(() => document.getElementById('fgLbCount').textContent.startsWith('1 /'));
-      ok('photo 1 still shows both pins outside pin mode', (await pinsOnScreen(page)).length === 2);
-      await page.click('#fgLbClose');
-      const badge = await page.$$eval('.fg-tile .fg-badge', els => els.map(e => [e.closest('.fg-tile').dataset.photoId, e.textContent]));
-      ok('the tile of photo 1 wears a badge with its pin count; no other tile does', JSON.stringify(badge) === JSON.stringify([[K(1), '2']]), JSON.stringify(badge));
+      await closeLb(page);
       const leak = await keyLeak(page, w);
       ok('the picker key is in no URL and no DOM attribute', !leak.dom && !leak.url, JSON.stringify(leak));
       await page.reload({ waitUntil: 'load' });
       await openLb(page, 1);
-      pins = await pinsOnScreen(page);
-      ok('after a reload the drafts come back from the state: both pins, ② with its note', pins.length === 2 && pins[1].label === '標示 2：去掉路人', JSON.stringify(pins));
+      const pins = await pinsOnScreen(page);
+      ok('after a reload the drafts come back from the state: the pin with its note', pins.length === 1 && pins[0].note === '去掉路人', JSON.stringify(pins));
       ok('PinLayer helpers: cleanPinMarks is PinLayer.clean; fractions outside the photo are null; notes lose control characters',
         await page.evaluate(() => window.cleanPinMarks === PinLayer.clean && PinLayer.toFraction({ left: 0, top: 0, right: 100, bottom: 50, width: 100, height: 50 }, 101, 10) === null &&
           JSON.stringify(PinLayer.toFraction({ left: 0, top: 0, right: 100, bottom: 50, width: 100, height: 50 }, 25, 25)) === '{"x":0.25,"y":0.5}' && PinLayer.sanitize('a\u0000b\u2028c') === 'abc' &&
           PinLayer.clean([{ x: 2, y: 0 }, { x: 0.1, y: 0.2, note: 5 }]).length === 1));
     },
     { before: w.before, initScript: OWNER, contextOptions: ALB_DESK });
-}
-
-// ═════ 2. a phone: pin mode blocks the swipe, a real tap places a pin
-{
-  const w = world();
-  await sx('finals pins — phone: swipe is off in pin mode (and on outside it); a real tap places a pin',
-    pageUrl,
-    async (page, ok) => {
-      await openLb(page, 1);
-      const swipe = async dx => {
-        await page.evaluate(dx => {
-          const el = document.getElementById('fgLbStage');
-          const t = (type, x) => el.dispatchEvent(new TouchEvent(type, { bubbles: true, cancelable: true,
-            touches: type === 'touchend' ? [] : [new Touch({ identifier: 1, target: el, clientX: x, clientY: 300 })],
-            changedTouches: [new Touch({ identifier: 1, target: el, clientX: x, clientY: 300 })] }));
-          t('touchstart', 200);
-          for (let i = 1; i <= 6; i++) t('touchmove', 200 + dx * i / 6);
-          t('touchend', 200 + dx);
-        }, dx);
-        await sleep(150);
-      };
-      const count = () => page.textContent('#fgLbCount');
-      await page.click('#rpPinToggle');
-      await swipe(-150);
-      ok('pin mode: a left swipe does not turn the page', (await count()).startsWith('1 /'), await count());
-      await page.click('#rpPinToggle');
-      await swipe(-150);
-      ok('positive: outside pin mode the same swipe goes to the next photo', (await count()).startsWith('2 /'), await count());
-      await page.click('#fgLbPrev');
-      await page.click('#rpPinToggle');
-      const r = await imgRect(page);
-      await page.touchscreen.tap(r.left + r.width * 0.5, r.top + r.height * 0.5);
-      ok('a real finger tap on the photo places a pin', (await pinsOnScreen(page)).length === 1, JSON.stringify(await pinsOnScreen(page)));
-      ok('the pin button is at least 24px (a finger can reach it)', await page.$eval('#fgLightbox .pin-layer-pin', e => { const b = e.getBoundingClientRect(); return b.width >= 24 && b.height >= 24; }));
-    },
-    { before: w.before, initScript: OWNER, contextOptions: MOBILE });
 }
 
 // ═════ 3. the submit button, the dialog, the round, and what the page shows afterwards
@@ -173,10 +115,11 @@ const SEED = () => [{ photo_key: K(1), marks: [pin(0.2, 0.3, '臉修瘦一點'),
       // wait for it would reach the Worker before the draft did (draft_changed)
       w.ctl.delay.put = 700;
       await openLb(page, 4);
-      await page.click('#rpPinToggle');
+      await pinOn(page);
       await tapAt(page, 0.5, 0.5);
       await page.keyboard.type('背景');
-      await page.click('#fgLbClose');
+      await page.keyboard.press('Enter');
+      await closeLb(page);
       await sleep(50);
       ok('the button already counts the fresh pin (3 photos)', (await page.textContent('#doneRoundBtn')).replace(/\s/g, '') === '送出修改3張', await page.textContent('#doneRoundBtn'));
       await page.click('#doneRoundBtn');
@@ -198,13 +141,13 @@ const SEED = () => [{ photo_key: K(1), marks: [pin(0.2, 0.3, '臉修瘦一點'),
       ok('the server holds a frozen round with 3 photos and no draft', w.rounds.length === 1 && w.rounds[0].photos.length === 3 && w.drafts().size === 0);
       ok('the submit button is gone, 確認完成 stays', (await page.$('#doneRoundBtn')) === null && (await page.$('#doneConfirmBtn')) !== null);
       await openLb(page, 1);
-      await page.waitForFunction(() => document.querySelectorAll('#fgLightbox .pin-layer-pin').length === 2, null, { timeout: 4000 }).catch(() => {});
-      ok('the lightbox shows the submitted pins of photo 1, read-only: no toggle, layer read-only', (await pinsOnScreen(page)).length === 2 && (await page.$('#rpPinToggle')) === null && (await layerState(page)) === 'true', JSON.stringify(await pinsOnScreen(page)));
-      const r = await imgRect(page);
-      await page.mouse.click(r.left + r.width * 0.8, r.top + r.height * 0.8);
+      await until(async () => (await pinsOnScreen(page)).length === 2);
+      ok('the preview shows the submitted pins of photo 1, read-only: no 標示修改', (await pinsOnScreen(page)).length === 2 && (await page.$('#pickPinBtn')) === null, JSON.stringify(await pinsOnScreen(page)));
+      await tapAt(page, 0.8, 0.8);
       await sleep(900);
       ok('tapping the photo changes nothing (no pin, no PUT after the submit)', (await pinsOnScreen(page)).length === 2 && putCalls(w).every(c => w.calls.indexOf(c) < w.calls.indexOf(posts[0])));
-      ok('the notes are listed read-only (text, no input)', (await page.$$('#rpDrawer .rp-text')).length === 2 && (await page.$$('#rpDrawer input')).length === 0);
+      const notes = await page.$$eval('#pickPinList .pick-pin-note', els => els.map(e => ({ v: e.value, ro: e.readOnly })));
+      ok('the notes are listed read-only (no ×)', notes.length === 2 && notes.every(n => n.ro) && notes[0].v === '臉修瘦一點' && (await page.$$('#pickPinList .pick-pin-del')).length === 0, JSON.stringify(notes));
       const leak = await keyLeak(page, w);
       ok('the picker key is in no URL and no DOM attribute', !leak.dom && !leak.url, JSON.stringify(leak));
     },
@@ -219,10 +162,11 @@ const SEED = () => [{ photo_key: K(1), marks: [pin(0.2, 0.3, '臉修瘦一點'),
       ok('0 photos: the button is there and disabled', (await page.textContent('#doneRoundBtn')).replace(/\s/g, '') === '送出修改0張' && await page.$eval('#doneRoundBtn', b => b.disabled));
       ok('the hint points at the photos', (await page.textContent('#doneRoundHint')).includes('點照片進入標示修改'));
       await openLb(page, 1);
-      await page.click('#rpPinToggle');
+      await pinOn(page);
       await tapAt(page, 0.5, 0.5);
       await page.keyboard.type('痘痘');
-      await page.click('#fgLbClose');
+      await page.keyboard.press('Enter');
+      await closeLb(page);
       ok('with one photo marked: enabled, the hint is gone from the DOM', await until(async () => !(await page.$eval('#doneRoundBtn', b => b.disabled)) && (await page.$('#doneRoundHint')) === null));
       await page.click('#doneRoundBtn');
       ok('every pin has a note: no warning', (await page.$('#doneRoundWarn')) === null || (await page.textContent('#doneRoundWarn')) === '');
@@ -322,7 +266,9 @@ const SEED = () => [{ photo_key: K(1), marks: [pin(0.2, 0.3, '臉修瘦一點'),
       await page.waitForSelector('#completionPage .fg-tile');
       await page.click('#completionPage .fg-tile');
       await page.waitForSelector('#fgLbImg.on');
-      ok('the lightbox of the 完成頁 has no pin toggle and no pin layer', (await page.$('#rpPinToggle')) === null && (await page.$('#fgLightbox .pin-layer')) === null);
+      ok('the 完成頁 has none of the pin UI: the store is off, its lightbox has buttons but no 標示修改, no badge', await page.evaluate(() => RevisionPins.enabled === false &&
+        document.querySelectorAll('#fgLightbox button').length > 0 && [...document.querySelectorAll('#fgLightbox button')].every(b => !b.textContent.includes('標示')) &&
+        !document.querySelector('.pv-pin-badge') && !document.getElementById('pickModalTools')));
     },
     { before: w.before, initScript: OWNER, contextOptions: ALB_DESK });
 }
@@ -346,18 +292,21 @@ const SEED = () => [{ photo_key: K(1), marks: [pin(0.2, 0.3, '臉修瘦一點'),
   await sx('finals pins — autosave: a dropped connection / 5xx keeps the draft and retries; a 4xx shows its message and stops',
     pageUrl,
     async (page, ok) => {
+      // (the line inside the preview is suite 92; this is the page-level status under it, and the PUT count)
+      const pageSave = () => page.evaluate(() => (document.getElementById('deliveryDone')?.textContent || ''));
       await openLb(page, 1);
-      await page.click('#rpPinToggle');
+      await pinOn(page);
       w.ctl.failNext.push({ on: 'put', net: true }, { on: 'put', status: 503, body: { error: 'x' } });
       await tapAt(page, 0.3, 0.3);
-      ok('offline: the status line says it is not saved yet, and will be', await until(async () => (await page.textContent('#rpStatus')).includes('尚未儲存，連線後會自動送出')), await page.textContent('#rpStatus'));
-      ok('the page-level status shows it too', (await doneStatus(page)) !== null && await page.evaluate(() => (document.getElementById('deliveryDone').textContent || '').includes('尚未儲存')));
+      await page.keyboard.press('Enter');
+      ok('offline: the page-level status says it is not saved yet, and will be', await until(async () => (await pageSave()).includes('尚未儲存，連線後會自動送出')), await pageSave());
       ok('it retries by itself and the draft lands (3 PUTs: net, 503, ok)', await until(() => w.drafts().has(K(1)) && putCalls(w).length >= 3, 8000), String(putCalls(w).length));
-      ok('the status clears once saved', await until(async () => (await page.textContent('#rpStatus')) === ''));
+      ok('the status clears once saved', await until(async () => !(await pageSave()).includes('尚未儲存')));
       const n = putCalls(w).length;
       w.ctl.failNext.push({ on: 'put', status: 400, body: { code: 'invalid_marks' } });
       await tapAt(page, 0.6, 0.6);
-      ok('a 4xx: its message is shown', await until(async () => (await page.textContent('#rpStatus')).includes('標示內容不正確')), await page.textContent('#rpStatus'));
+      await page.keyboard.press('Enter');
+      ok('a 4xx: its message is shown', await until(async () => (await pageSave()).includes('標示內容不正確')), await pageSave());
       await sleep(1500);
       ok('and it is NOT retried by itself', putCalls(w).length === n + 1, String(putCalls(w).length - n));
     },
@@ -369,7 +318,7 @@ const SEED = () => [{ photo_key: K(1), marks: [pin(0.2, 0.3, '臉修瘦一點'),
     pageUrl,
     async (page, ok) => {
       await openLb(page, 1);
-      await page.click('#rpPinToggle');
+      await pinOn(page);
       await tapAt(page, 0.3, 0.3);
       await page.evaluate(() => window.dispatchEvent(new Event('pagehide')));
       const ka = await page.evaluate(() => window.__fetches.filter(f => f.method === 'PUT'));
@@ -428,8 +377,9 @@ const SEED = () => [{ photo_key: K(1), marks: [pin(0.2, 0.3, '臉修瘦一點'),
       ok('positive: 確認完成 and 需要修改 are there', (await page.$('#doneConfirmBtn')) !== null && (await page.$('#doneReviseBtn')) !== null);
       ok('no submit-pins button, hint, history button or round dialog in the DOM', (await page.$('#doneRoundBtn')) === null && (await page.$('#doneRoundHint')) === null && (await page.$('#doneHistoryBtn')) === null && (await page.$('#doneRoundModal')) === null);
       await openLb(page, 1);
-      ok('the lightbox has no toggle, no layer, no badge on the tiles', (await page.$('#rpPinToggle')) === null && (await page.$('#fgLightbox .pin-layer')) === null && (await page.$('.fg-badge')) === null);
-      await page.click('#fgLbClose');
+      ok('positive: the preview is open; it has no tools row, no pins, and no card has a badge', await page.evaluate(() => document.getElementById('photoModal').classList.contains('active')) &&
+        (await page.$('#pickModalTools')) === null && (await pinsOnScreen(page)).length === 0 && (await page.$('.pv-pin-badge')) === null);
+      await closeLb(page);
       await page.click('#doneReviseBtn');
       await page.fill('#doneReviseText', '請把 f1 調亮');
       await page.click('#doneReviseSubmit');
@@ -443,19 +393,20 @@ for (const [who, init] of [['owner', OWNER], ['viewer (no seat key)', '']]) {
   await sx(`finals pins — ${who}: ${who === 'owner' ? 'the pin UI and the history button exist' : 'no pin UI, no history, no calls to the new routes'}`,
     pageUrl,
     async (page, ok) => {
-      await page.waitForSelector('.fg-tile', { timeout: 6000 });
       await openLb(page, 1);
-      const has = await page.evaluate(() => ({ toggle: !!document.getElementById('rpPinToggle'), layer: !!document.querySelector('#fgLightbox .pin-layer'),
+      await sleep(300);
+      const has = await page.evaluate(() => ({ toggle: !!document.getElementById('pickPinBtn'), tools: !!document.getElementById('pickModalTools'), pins: annotationManager.marks.length,
+        badge: !!document.querySelector('.pv-pin-badge'),
         round: !!document.getElementById('doneRoundBtn'), revise: !!document.getElementById('doneReviseBtn'), confirm: !!document.getElementById('doneConfirmBtn'),
         status: document.getElementById('deliveryDoneStatus')?.textContent ?? null }));
       if (who === 'owner') {
-        await page.click('#fgLbClose');
+        await closeLb(page);
         await page.waitForSelector('#doneHistoryBtn', { timeout: 6000 });
-        ok('positive: toggle, layer, submit button, 確認完成 and the history button', has.toggle && has.layer && has.round && has.confirm && (await page.$('#doneHistoryBtn')) !== null, JSON.stringify(has));
+        ok('positive: 標示修改, the draft pins and the badge, submit button, 確認完成 and the history button', has.toggle && has.tools && has.pins === 2 && has.badge && has.round && has.confirm && (await page.$('#doneHistoryBtn')) !== null, JSON.stringify(has));
       } else {
         await sleep(600);
-        ok('no toggle, no layer, no buttons; only the status line', !has.toggle && !has.layer && !has.round && !has.revise && !has.confirm && has.status === '尚待選片人確認完成', JSON.stringify(has));
-        ok('no history button and no draft / round route was ever called', (await page.$('#doneHistoryBtn')) === null && (await page.$('.fg-badge')) === null && w.calls.length === 0, JSON.stringify(w.calls.map(c => c.path)));
+        ok('no 標示修改, no tools row, no pins, no badge, no buttons; only the status line', !has.toggle && !has.tools && has.pins === 0 && !has.badge && !has.round && !has.revise && !has.confirm && has.status === '尚待選片人確認完成', JSON.stringify(has));
+        ok('no history button and no draft / round route was ever called', (await page.$('#doneHistoryBtn')) === null && w.calls.length === 0, JSON.stringify(w.calls.map(c => c.path)));
         ok('no round dialog in the DOM', (await page.$('#doneRoundModal')) === null);
       }
     },
@@ -471,7 +422,9 @@ for (const [who, init] of [['owner', OWNER], ['viewer (no seat key)', '']]) {
       await page.click('#completionPage .fg-tile');
       await page.waitForSelector('#fgLbImg.on');
       await sleep(500);
-      ok('no pin UI in its lightbox, none on the tiles, no history entry', (await page.$('#rpPinToggle')) === null && (await page.$('#fgLightbox .pin-layer')) === null && (await page.$('.fg-badge')) === null && (await page.$('#doneHistoryBtn')) === null && (await page.$('#revHistory')) === null);
+      ok('no pin UI: the store is off, its lightbox has buttons but no 標示修改, no badge, no history entry', await page.evaluate(() => RevisionPins.enabled === false &&
+        document.querySelectorAll('#fgLightbox button').length > 0 && [...document.querySelectorAll('#fgLightbox button')].every(b => !b.textContent.includes('標示')) &&
+        !document.querySelector('.pv-pin-badge') && !document.getElementById('pickModalTools')) && (await page.$('#doneHistoryBtn')) === null && (await page.$('#revHistory')) === null);
       ok('the new routes were never called', w.calls.length === 0, JSON.stringify(w.calls.map(c => c.path)));
     },
     { before: w.before, initScript: OWNER, contextOptions: ALB_DESK });
@@ -591,18 +544,18 @@ const histWorld = (extra = {}) => world({
 // ═════ 10. an open round is shown as sent: the status, and the history's default is that round
 {
   const w = world({ rounds: [{ id: R2, kind: 'pins', created_at: '2026-09-23T04:00:00.000Z', open: true, note: null, photos: [{ key: K(1), pins: [pin(0.4, 0.4, '送出的標示')] }] }] });
-  await sx('finals pins — a round already open at load: 已送出修改（1 張），攝影師處理中; no submit button; its pins read-only in the lightbox; history opens on it',
+  await sx('finals pins — a round already open at load: 已送出修改（1 張），攝影師處理中; no submit button; its pins read-only in the preview; history opens on it',
     pageUrl,
     async (page, ok) => {
       await page.waitForSelector('#doneConfirmBtn', { timeout: 6000 });
       ok('status says it was sent; 確認完成 still there; no submit button or 需要修改', (await doneStatus(page)) === '已送出修改（1 張），攝影師處理中' && (await page.$('#doneRoundBtn')) === null && (await page.$('#doneReviseBtn')) === null);
       await openLb(page, 1);
-      ok('photo 1 shows the sent pin, read-only, with its note listed', await until(async () => (await pinsOnScreen(page)).length === 1) && (await page.$('#rpPinToggle')) === null &&
-        await until(async () => (await page.$$eval('#rpDrawer .rp-text', els => els.map(e => e.textContent))).join() === '送出的標示'));
-      await page.click('#fgLbNext');
-      await page.waitForFunction(() => document.getElementById('fgLbCount').textContent.startsWith('2 /'));
-      ok('positive/negative: photo 2 has no pins and offers none', (await pinsOnScreen(page)).length === 0 && (await page.$('#rpPinToggle')) === null);
-      await page.click('#fgLbClose');
+      ok('photo 1 shows the sent pin, read-only, with its note listed', await until(async () => (await pinsOnScreen(page)).length === 1) && (await page.$('#pickPinBtn')) === null &&
+        await until(async () => (await page.$$eval('#pickPinList .pick-pin-note', els => els.map(e => e.readOnly ? e.value : '!'))).join() === '送出的標示'));
+      await page.click('#nextPhotoBtn');
+      await page.waitForFunction(() => document.getElementById('photoCounter').textContent.startsWith('2 /'));
+      ok('positive/negative: photo 2 has no pins and offers none', (await pinsOnScreen(page)).length === 0 && (await page.$('#pickPinBtn')) === null);
+      await closeLb(page);
       await page.click('#doneHistoryBtn');
       ok('the history opens on that round', await until(async () => (await page.textContent('#revHistoryTitle')).startsWith('第 1 輪修改')));
     },
