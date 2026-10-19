@@ -45,7 +45,8 @@
                 this.remove();
                 return;
             }
-            const pins = pinsOn();
+            // pins wording follows the migration (revisionDrafts is an array), not pinsOn() (the pin UI: finals view only)
+            const pins = pinsOn() || (pc.isOwner && Array.isArray(pc.revisionDrafts));
             if (pins && window.RevisionHistory) RevisionHistory.probe(pc);
             if (!el) {
                 el = document.createElement('div');
@@ -74,11 +75,13 @@
                 kids.push(text('delivery-done-status', 'deliveryDoneStatus', pc.isOwner ? sent : '攝影師修改中'));
                 if (pc.isOwner && pc.revisionMessage) kids.push(text('delivery-done-msg', 'deliveryDoneMsg', pc.revisionMessage));
             } else {
+                // the 毛片 view has neither the button nor the marking: it points back to the finals
+                const pinsHint = pc.view === 'finals' ? '滿意的話請按「精修完成」；要修改就點照片按「標示修改」，標好後按「送出」' : '要確認或標示修改，請先回到精修成品';
                 kids.push(text('delivery-done-status', 'deliveryDoneStatus',
-                    pc.isOwner ? (pins ? '滿意的話請按「精修完成」；要修改就點照片按「標示修改」，標好後按「送出」' : '滿意的話請按「精修完成」，需要調整請按「需要修改」') : '尚待選片人確認完成'));
+                    pc.isOwner ? (pins ? pinsHint : '滿意的話請按「精修完成」，需要調整請按「需要修改」') : '尚待選片人確認完成'));
             }
             // a draft that is not saved yet (offline / refused): said here too, not only in the lightbox
-            if (pins && !confirmed && RevisionPins.status) {
+            if (pins && !confirmed && window.RevisionPins && RevisionPins.status) {
                 const save = text('delivery-done-save', 'deliveryDoneSave', RevisionPins.statusText);
                 save.setAttribute('role', 'status');
                 kids.push(save);

@@ -1460,6 +1460,12 @@
             this.renderFolderPanel();
         },
 
+        // A chooser needs something to choose: more than one folder, or a folder that has subfolders (those are only
+        // known once listed, so the chooser appears as soon as they are seen). One folder and nothing under it: none.
+        _hasFolderChoice(roots) {
+            return roots.length > 1 || (roots.length === 1 && (this.folderChildren.get(roots[0]) || []).length > 0);
+        },
+
         // The <select> in #guestBar: same rows as the desktop tree (roots +
         // every subfolder seen so far, indented), same click target
         // (handleLoadPhotos), only present while the bar is.
@@ -1468,7 +1474,7 @@
             const row = document.getElementById('guestFolderRow');
             if (!sel || !row) return;
             const roots = this.viewFolders();
-            row.hidden = !roots.length;
+            row.hidden = !this._hasFolderChoice(roots);
             const current = (typeof driveManager !== 'undefined') ? driveManager.currentFolderId : '';
             sel.textContent = '';
             const add = (folder, depth) => {
@@ -1908,7 +1914,7 @@
             const list = document.getElementById('folderTree');
             if (!container || !list) return;
             const roots = this.viewFolders();
-            if (!roots.length) { container.style.display = 'none'; return; }
+            if (!this._hasFolderChoice(roots)) { container.style.display = 'none'; return; }
             container.style.display = 'block';
             const current = (typeof driveManager !== 'undefined') ? driveManager.currentFolderId : '';
             list.innerHTML = '';
