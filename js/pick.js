@@ -401,19 +401,25 @@
                 !!window.FinalsGallery && FinalsGallery.isMounted();
         },
 
+        // Only the 完成頁 (a confirmed delivery, its own light page) has the web-album gallery. The 驗收頁 (delivered,
+        // not confirmed) is the 毛片 page: app.js's standard grid and preview (zoom, pins through syncPinUI), Tim
+        // 2026-10-19 「精修要修改的方式跟毛片一樣」 (docs/delivery.md, "The 驗收頁 is the 毛片 page").
         _syncFinals() {
             if (!window.FinalsGallery) return;
-            const want = this.active && this.mode === 'delivered' && this.view === 'finals';
-            if (!want) { FinalsGallery.unmount(); return; }
-            // the confirmed delivery has its own light page: the gallery is mounted into it (no hero of
-            // its own, light theme); otherwise into the dark page's content column, as always
-            const cp = this._completionWanted() && CompletionPage.isMounted();
-            const content = cp ? CompletionPage.galleryHost() : document.querySelector('main.main-content > .content');
+            const cp = this.active && this.mode === 'delivered' && this.view === 'finals' &&
+                this._completionWanted() && CompletionPage.isMounted();
+            if (!cp) {
+                if (FinalsGallery.isMounted()) {
+                    FinalsGallery.unmount();
+                    // the gallery held the photos: the standard grid gets them back. Any view that is not the 完成頁
+                    // shows the standard grid (picking, 毛片, the 驗收頁), so this is the right render for each of them
+                    if (this.active && this.app && this.app.filteredPhotos) this._renderGrid();
+                }
+                return;
+            }
+            const content = CompletionPage.galleryHost();
             if (!content) return;
-            // the other kind of host (a confirmation just came in, or went): rebuild the gallery there
-            const switched = FinalsGallery.isMounted() && this._finalsInCp !== cp;
-            if (switched) FinalsGallery.unmount();
-            this._finalsInCp = cp;
+            const fresh = !FinalsGallery.isMounted();
             const studio = this.studio || {};
             FinalsGallery.mount(content, {
                 title: this.projectTitle,
@@ -421,13 +427,11 @@
                 drive: driveManager,
                 onDownload: (e, photo) => this.download(e, photo),
                 onFolder: folder => this.app && this.app.handleLoadPhotos(folder),
-                ...(cp ? { hero: false, theme: 'light' } : {}),
-                // pins on the finals (js/revision-pins.js): nothing unless that feature is on for this page
-                ...(!cp && window.RevisionPins ? RevisionPins.galleryOpts() : {}),
+                hero: false,
+                theme: 'light',
             });
-            if (FinalsGallery.refreshBadges) FinalsGallery.refreshBadges();
-            // a fresh gallery has no photos yet; the open folder's are already loaded
-            if (switched && this.app && this.app.filteredPhotos) this.renderFinals(this.app.filteredPhotos);
+            // a fresh gallery has no photos yet; the open folder's are already loaded (the cards go)
+            if (fresh && this.app && this.app.filteredPhotos) this._renderGrid();
         },
 
         // ── the 完成頁 (js/completion-page.js, docs/delivery.md) ─────────────

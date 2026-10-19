@@ -115,11 +115,6 @@
             this._teardownLb();
         },
 
-        // The gallery options (js/finals-gallery.js mount): nothing at all while off.
-        galleryOpts() {
-            return this.enabled ? { lightboxExtras: this.extras, tileBadge: photo => this.badge(photo) } : {};
-        },
-
         // Replace the drafts with the server's (a fresh state read): local unsaved edits are dropped.
         adopt(list) {
             const next = new Map();
