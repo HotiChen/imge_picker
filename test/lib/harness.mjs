@@ -66,14 +66,19 @@ export async function suite(name, url, run, { initScript, before, contextOptions
   const pageErrors = [];
   page.on('pageerror', e => pageErrors.push(String(e).split('\n')[0]));
   if (before) await before(page);
-  await page.goto(url, { waitUntil: 'load' });
+  // a page that never reaches `load` fails this suite only, not the rest of its file
+  let gotoError = null;
+  try { await page.goto(url, { waitUntil: 'load' }); } catch (e) { gotoError = e; }
 
   console.log(`\n# ${name}`);
   let lines;
-  try {
-    lines = await run(page);
-  } catch (e) {
-    lines = [`FAIL  suite threw: ${e.message}`];
+  if (gotoError) lines = [`FAIL  page.goto(${url}) failed: ${String(gotoError.message).split('\n')[0]}`];
+  else {
+    try {
+      lines = await run(page);
+    } catch (e) {
+      lines = [`FAIL  suite threw: ${e.message}`];
+    }
   }
   for (const l of lines) {
     if (l.startsWith('FAIL')) stats.failed++;
