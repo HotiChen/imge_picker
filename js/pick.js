@@ -38,7 +38,9 @@
         if (!by || typeof by !== 'object') return null;
         const role = by.role === 'owner' || by.role === 'collaborator' ? by.role : 'other';
         const name = role !== 'other' && typeof by.name === 'string' && by.name.trim() ? by.name : null;
-        return { role, name };
+        // `id` (a picker id the server sends) only tells two people with the same name apart in the owner's stats
+        const id = typeof by.id === 'string' && by.id ? by.id : null;
+        return { role, name, id };
     };
 
     const PickController = {
@@ -90,6 +92,8 @@
         // 'all' and 'unselected' read the current folder's grid; 'selected'
         // is built straight from `selections`, across every permitted folder.
         filterMode: 'all',
+        // owner only: the stats chip key (see collabStats) whose hearts are shown; filterMode is 'selected' meanwhile
+        personFilter: null,
         _saveTimer: null,
         _pendingUpsert: new Map(),
         _pendingDelete: new Set(),
@@ -957,7 +961,7 @@
         buildFilteredPhotos(currentPhotos) {
             if (this.filterMode === 'selected') {
                 return Array.from(this.selections.entries())
-                    .filter(([, s]) => s.rating > 0)
+                    .filter(([, s]) => s.rating > 0 && (!this.personFilter || this._personKey(s.by) === this.personFilter))
                     .map(([photo_key, s]) => this._photoFromKey(photo_key, s))
                     .sort((a, b) => a.id.localeCompare(b.id));
             }
@@ -996,11 +1000,103 @@
         },
 
         _setFilterMode(mode) {
-            if (this.filterMode === mode) return;
+            // a person chip is a narrowing of 已選; the existing buttons always end it
+            const hadPerson = !!this.personFilter;
+            this.personFilter = null;
+            if (this.filterMode === mode && !hadPerson) return;
             this.filterMode = mode;
             document.querySelectorAll('#pickFilterBar [data-pick-filter]').forEach(b => {
                 b.classList.toggle('active', b.dataset.pickFilter === mode);
             });
+            this.renderCollabStats();
+            this.rerenderGrid();
+        },
+
+        // ── owner-only collaborator stats (docs/co-picking.md): who hearted how many ──
+        // The key of a heart's author: the owner is one person; a collaborator is told apart by the picker id the state
+        // read sends (two people may type the same name), else by name; everyone else ('other') is one group.
+        _personKey(by) {
+            if (!by) return null;
+            if (by.role === 'owner') return 'owner';
+            if (by.role === 'other') return 'other';
+            return by.id ? `c:${by.id}` : `n:${by.name || ''}`;
+        },
+
+        // [{key, label, count}] for the chips, or [] unless someone but the owner has hearted something.
+        collabStats() {
+            if (!this.active || !this.isOwner || this.isGallery()) return [];
+            const by = new Map();
+            for (const s of this.selections.values()) {
+                if (!(s.rating > 0) || !s.by) continue;
+                const key = this._personKey(s.by);
+                const e = by.get(key) || { key, role: s.by.role, name: s.by.name || '', count: 0 };
+                e.count++;
+                by.set(key, e);
+            }
+            if (![...by.values()].some(e => e.role !== 'owner')) return [];
+            const collabs = [...by.values()].filter(e => e.role === 'collaborator')
+                .sort((a, b) => a.name.localeCompare(b.name) || a.key.localeCompare(b.key));
+            const seen = new Map();
+            const out = [];
+            if (by.has('owner')) out.push({ key: 'owner', label: '我', count: by.get('owner').count });
+            for (const e of collabs) {
+                const base = e.name || '協作者';
+                const n = (seen.get(base) || 0) + 1;
+                seen.set(base, n);
+                out.push({ key: e.key, label: n > 1 ? `${base} (${n})` : base, count: e.count });
+            }
+            if (by.has('other')) out.push({ key: 'other', label: '先前的選片人', count: by.get('other').count });
+            return out;
+        },
+
+        // Built only for the seat owner (removed, not hidden, for anybody else), inside #pickFilterBar so it moves with the
+        // bar between the sidebar and #guestBar. Names are people's input: textContent only.
+        renderCollabStats() {
+            const bar = document.getElementById('pickFilterBar');
+            const stats = this.collabStats();
+            let box = document.getElementById('pickCollabStats');
+            if (!bar || !stats.length) {
+                box?.remove();
+                bar?.classList.remove('has-collab-stats');
+                if (this.personFilter) {      // the person is gone from the stats: fall back to plain 已選
+                    this.personFilter = null;
+                    this.rerenderGrid();
+                }
+                return;
+            }
+            if (this.personFilter && !stats.some(e => e.key === this.personFilter)) {
+                this.personFilter = null;
+                this.rerenderGrid();
+            }
+            if (!box) {
+                box = document.createElement('div');
+                box.id = 'pickCollabStats';
+                box.className = 'pick-collab-stats';
+                box.setAttribute('role', 'group');
+                box.setAttribute('aria-label', '各人選了幾張');
+                bar.appendChild(box);
+            }
+            bar.classList.add('has-collab-stats');
+            box.textContent = '';
+            for (const e of stats) {
+                const b = document.createElement('button');
+                b.type = 'button';
+                b.className = 'pick-collab-chip' + (this.personFilter === e.key ? ' active' : '');
+                b.dataset.collabKey = e.key;
+                b.setAttribute('aria-pressed', this.personFilter === e.key ? 'true' : 'false');
+                b.textContent = `${e.label} ${e.count}`;
+                b.addEventListener('click', () => this._setPersonFilter(e.key));
+                box.appendChild(b);
+            }
+        },
+
+        _setPersonFilter(key) {
+            if (this.personFilter === key) { this.personFilter = null; this.filterMode = 'all'; }
+            else { this.personFilter = key; this.filterMode = 'selected'; }
+            document.querySelectorAll('#pickFilterBar [data-pick-filter]').forEach(b => {
+                b.classList.toggle('active', !this.personFilter && b.dataset.pickFilter === this.filterMode);
+            });
+            this.renderCollabStats();
             this.rerenderGrid();
         },
 
@@ -1939,6 +2035,7 @@
         renderCounter() {
             const badgeEl = document.getElementById('pickFilterSelectedCount');
             if (badgeEl) badgeEl.textContent = String(this._selectedCount());
+            this.renderCollabStats();
 
             const bar = document.getElementById('mobileActionBar');
             const status = document.getElementById('mobileActionStatus');

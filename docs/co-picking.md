@@ -169,7 +169,14 @@ and no names**, exactly the `{photo_key, rating}` list a viewer gets today.
 3. **Join + collaborator mode** (sonnet): on a seat-taken link, 「我有邀請碼」 → code + name → collaborator; a banner 「你是協作者，有效到 …」;
    hearts/notes/pins work, 完成提交 and the invite panel are hidden; a `not_yours` photo is put back with a toast.
 4. **Photographer's view** (sonnet): who picked each photo in the project view (list and grid), the collaborator list in the detail.
-5. Later, if wanted: a colour and initial per person; a notification when someone joins.
+5. **Owner's collaborator stats** (sonnet, built; `js/pick.js` `collabStats` / `renderCollabStats`, suite 96): Tim: 「協作者統計給主人看就好」.
+   Only the seat owner (not the delivery gallery) gets a chip row inside `#pickFilterBar`: 「我 12」「Mia 5」「Ben 3」「先前的選片人 1」
+   (owner first, collaborators by name, `other` grouped last). Counts = photos currently hearted whose `by` is that person. The row exists only when
+   somebody other than the owner has a heart; a collaborator or viewer has no such element in the DOM (never created). Tap a chip = the 已選 view
+   restricted to that person (`personFilter`, `filterMode` stays `selected`); tap it again, or 全部 / 已選 / 未選, clears it. A person who drops to 0 loses
+   the chip and the filter ends. Two people with the same name stay apart by the picker `id` in `by` (kept by `cleanBy`), label 「Mia (2)」.
+   Stats reflect the selections the page holds; it does not poll (live refresh of collaborators' hearts on the owner page is a separate item).
+6. Later, if wanted: a colour and initial per person; a notification when someone joins.
 
 ## Not decided here
 

@@ -229,6 +229,9 @@ Guest link only (owner and viewers); the photographer's own index.html keeps eve
   - Guest writes → High tier: TDD + security review. ~1.5 days.
   - Build together with the guest pick page UI changes above.
 
+> 2026-10-19: 主人看協作者統計 built (docs/co-picking.md build order 5): per-person heart chips + tap-to-filter on the owner's pick page,
+> owner only. Still open: the owner page does not live-refresh collaborators' hearts.
+
 ## Co-picking / collaborators (decided with Tim 2026-09-30 — design to be rewritten, not built)
 Replaces the seat-passing proposal in docs/pick-handover.md §3+ (kept only as history).
 - **Two people by default** (the first person + one collaborator, a couple);
