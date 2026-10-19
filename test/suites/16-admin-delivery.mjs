@@ -438,8 +438,8 @@ for (const fail of [500, 'net']) {
       ok('failed state: no folder, no lock, only ?project=', f.target === 'failed' && f.folder === null && f.lock === null && f.project === 'proj-new', JSON.stringify(f));
       const note = await page.$eval('#pd-upload-final-note', e => ({ text: e.textContent, shown: getComputedStyle(e).display !== 'none' })).catch(() => null);
       ok('a note says it could not read the folders and to choose one on the upload page', note && note.shown && /無法|讀不到/.test(note.text) && /自己選|上傳頁/.test(note.text), JSON.stringify(note));
-      const p = await pfLink(page, '#pd-upload-proofs-btn');
-      ok('＋上傳毛片 needs no listing and stays locked on 毛片', p.folder === `${PF_ROOT}/毛片/` && p.lock === '1', JSON.stringify(p));
+      // in 精修 ＋上傳毛片 is disabled whatever the listing did (the link and its lock: suite 95)
+      ok('＋上傳毛片 is not offered as a link in 精修, listing or not', await page.$eval('#pd-upload-proofs-btn', e => e.disabled === true && e.getAttribute('href') === null));
       ok('nothing is preselected for 交件 and it is disabled', (await page.$('#pd-final-chips [data-final-chip]')) === null && await page.$eval('#pd-deliver-btn', b => b.disabled));
       return out;
     },
