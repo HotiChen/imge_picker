@@ -2,7 +2,7 @@
 //   picking   — ♥ on a photo, then the tour REALLY opens that photo (the card's own click, no fake modal) and
 //               walks the enlarged view: left/right/swipe, its ♥, 標示修改, 完成; then closes what it opened and
 //               points at the submit button. The tour never taps, swipes, hearts or pins for the guest.
-//   delivered — the finals, how to mark a change, 確認完成 (delivered and not yet confirmed)
+//   delivered — the finals, how to mark a change, the bottom 精修完成 / 送出 button (delivered, not yet confirmed)
 // No tour for viewers, on the 完成頁 (html.cp-on), and none STARTS while a dialog / the lightbox / the claim
 // overlay is open. A running picking tour allows the pick page's own lightbox (#photoModal): the one it opened and
 // one the guest opens; only the first is closed when the tour ends.
@@ -40,16 +40,17 @@
             { id: 'submit', text: '選好了，按這裡送出。', target: () => first('#mobileActionBar:not(.pick-bar-off) #pickSubmitBtn') },
         ],
         delivered: [
-            { text: '這是攝影師交件的精修成品。', target: () => first('#fgRows .fg-tile') },
-            { text: '有要修改的地方？\n① 點照片放大，按「標示修改」\n② 點照片上要修的位置，寫下怎麼修\n③ 標完按「完成」，全部標好再按「送出修改」', target: () => first('#fgRows .fg-tile') },
-            { text: '都滿意就按「確認完成」。', target: () => first('#doneConfirmBtn') },
+            // the 驗收頁 is the 毛片 page (docs/delivery.md): the standard cards and the one action button at the bottom
+            { text: '這是攝影師交件的精修成品。', target: () => first('.photo-card') },
+            { text: '有要修改的地方？\n① 點照片放大，按「標示修改」\n② 點照片上要修的位置，寫下怎麼修\n③ 標完按「完成」，全部標好再按下面的「送出」', target: () => first('.photo-card') },
+            { text: '都滿意就按這裡的「精修完成」；標了修改，這裡會變成「送出」。', target: () => first('#doneActionBtn') },
         ],
     };
 
     // the page is ready for a tour when these all resolve (a tour must not start on a half-loaded grid)
     const READY = {
         picking: ['.photo-card .pick-heart-btn', '#mobileActionBar:not(.pick-bar-off) #pickSubmitBtn'],
-        delivered: ['#fgRows .fg-tile', '#doneConfirmBtn'],
+        delivered: ['.photo-card', '#doneActionBtn'],
     };
 
     function visible(el) {

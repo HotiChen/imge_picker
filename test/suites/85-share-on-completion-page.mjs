@@ -23,15 +23,16 @@ for (const [who, init, co] of [['owner', "localStorage.setItem('pick_key:TOK', '
     `${base}/index.html?t=TOK`,
     async page => {
       const out = [], ok = line(out);
-      await page.waitForFunction(() => document.querySelectorAll('#fgRows .fg-tile').length === 6, null, { timeout: 8000 });
+      // EDITED 2026-10-19: the 驗收頁 is the 毛片 page (the standard cards, no web album)
+      await page.waitForFunction(() => document.querySelectorAll('#photoGrid .photo-card').length === 6, null, { timeout: 8000 });
       await page.waitForTimeout(400);
       const s = await page.evaluate(() => ({
-        gallery: !!document.getElementById('finalsGallery'), hero: !!document.getElementById('fgHero'), cp: !!document.getElementById('completionPage'),
+        gallery: !document.getElementById('finalsGallery') && document.querySelectorAll('#photoGrid .photo-card').length === 6, hero: !document.getElementById('fgHero'), cp: !!document.getElementById('completionPage'),
         done: document.getElementById('deliveryDone')?.dataset.state,
         shares: document.querySelectorAll('#fgShare, #cpShare, .fg-share, [aria-label="分享這個相簿"]').length,
         shareText: [...document.querySelectorAll('button, a')].filter(b => /分享/.test(b.textContent)).map(b => b.textContent.trim()),
       }));
-      ok('control: the delivered, unconfirmed page is up (gallery, hero, status block open), not the 完成頁', s.gallery && s.hero && !s.cp && s.done === 'open', JSON.stringify(s));
+      ok('control: the delivered, unconfirmed page is up (the 6 cards, no web album, status block open), not the 完成頁', s.gallery && s.hero && !s.cp && s.done === 'open', JSON.stringify(s));
       ok('no share button of any kind, by id, class, label or text', s.shares === 0 && s.shareText.length === 0, JSON.stringify(s));
       return out;
     },

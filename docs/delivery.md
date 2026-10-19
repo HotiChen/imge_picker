@@ -79,13 +79,16 @@ separated before he can run real shoots through the studio.
   saves the bytes: `js/pick.js` `_downloadKeyed`); such a response varies on `X-Picker-Key`.
   Tests: `worker/test/proof-owner-gate.test.mjs`. The 毛片 view's button is 「回到毛片」 and
   reads the proofs as thumbnails; the download buttons exist for the owner only.
-- **確認完成 with unsent pins is guarded** (2026-10-18; a client marked photos, then pressed 確認完成 instead of
-  送出修改): the dialog says the marks will be dropped, 「回去送出修改（N 張）」 is the main button and
-  「仍要確認完成」 the quiet one (`js/delivery-done.js` `fillConfirm`). Confirming anyway stays possible (a client may
-  mean it); with no drafts the dialog is unchanged.
+- ~~**確認完成 with unsent pins is guarded**~~ (2026-10-18, removed 2026-10-19): with the one action button below,
+  pins waiting to be sent turn the button into 「送出（N 張）」, so 確認完成 is never pressed over unsent drafts; the
+  「回去送出修改」 / 「仍要確認完成」 dialog had nothing left to guard and is gone. To confirm without sending, the
+  client removes the pins first (Tim to confirm that is acceptable).
 - **The 驗收頁 strip** (`#deliveryStrip`): the 回到毛片 button and the status block share one row
-  and stay under the 56px header while scrolling (`position: sticky`). No share button here: sharing
+  and stay under the 56px header while scrolling (`position: sticky`; on the 驗收頁 `body.review-stage` keeps it a
+  thin strip without the title, which the header / phone guest bar carry). No share button here: sharing
   and the album preview belong to the 完成頁 (after 確認完成).
+- **The 驗收頁 is the 毛片 page** (Tim 2026-10-19: 「精修要修改的方式跟毛片一樣」; only the 完成頁 keeps its own light
+  page). See the section of that name below.
 - The shop (guest add-ons, B) and the album chain later hang off the
   delivery gallery, not the picking view.
 
@@ -339,7 +342,37 @@ page case below.
 - Revision-request emails have no time throttle: flooding needs the owner's
   picker key, and the 50-per-project cap bounds it to 50 emails.
 
-## The finish page as a web album (built 2026-10-04)
+## The 驗收頁 is the 毛片 page (2026-10-19)
+
+A delivered, **not yet confirmed** project (the 驗收頁: `mode === 'delivered'`, the finals view, no `confirmed_at`)
+no longer uses the web album below; it looks and works like the 毛片 picking page:
+
+- **Grid and preview**: `js/app.js`'s standard photo cards (each with its 下載) and the standard preview with zoom /
+  pan / swipe, the folder tree (desktop) or the `#guestBar` folder `<select>` (phone). No ♥ anywhere (a heart means
+  "picked", picking only). `js/pick.js` `_syncFinals` mounts `FinalsGallery` only into the 完成頁.
+- **Pins**: the picking pin UI (`syncPinUI`: 標示修改 / 完成, the note editor at the top of the photo, the 修改標示 list
+  in 備註・標示), pins drawn on the annotation canvas so they follow the zoom. Every final can take pins (no ♥ needed).
+  The store is the revision drafts (`js/revision-pins.js`, `PUT /api/pick/revision-pins`, unchanged), never the
+  selections: `marksOf` / `_saveMarks` branch on `_reviewPins()`. A sent (open) round is shown read-only (its pins
+  matched by file name). Cards wear 📍N for their draft pins. Flipping photos leaves pin mode, as on the 毛片 page.
+- **One action button** fixed at the bottom (`#doneActionBar` / `#doneActionBtn`, `js/delivery-done.js`
+  `renderAction`; a bar across the bottom up to 1024px, a pill bottom-right on a wider screen; seat holder only,
+  the finals view only — not in the 毛片 download list): 「精修完成」 when no draft pin can be sent, 「送出（N 張）」
+  when N photos have draft pins. It always asks first: pins → the round dialog (`submitRound`, the same
+  `POST /api/pick/revision-round` with `expect` and the optional note), none → the 確認完成 dialog (`submit`, the same
+  `POST /api/pick/confirm` with its stale-page guard). The strip's old 確認完成 / 送出修改 buttons are gone; the strip
+  keeps the status, 上一輪的修改資訊 and, without the pins migration, the old 需要修改 text request.
+- Unchanged: every Worker route and invariant (confirming resolves open requests; confirmed never coexists with an
+  open request), the status texts' meaning, the 完成頁.
+- Tests: `test/suites/91-review-stage-grid.mjs`, `92-review-stage-pins.mjs`, `93-review-stage-action.mjs`
+  (shared helpers `test/lib/review-stage.mjs`); 14, 15, 18, 26, 28, 33, 37, 39, 47, 61, 62, 65, 85, 87 updated.
+- Not verified on a real phone: iPhone Safari / LINE in-app browser — pinch-zoom then placing a pin, the bottom bar
+  above the home indicator (safe-area), the keyboard over the note editor.
+
+## The finish page as a web album (built 2026-10-04; since 2026-10-19 on the 完成頁 only)
+
+(Written for the 驗收頁, which is the 毛片 page now — see above. What follows still describes the gallery the 完成頁
+mounts with `hero: false`, `theme: 'light'`; the hero, the 確認完成 strip and the pin hooks below no longer apply.)
 
 Only the delivered **finals** view (`mode === 'delivered'`, `view === 'finals'`)
 changed; picking, a delivery taken back (finals kept, `delivered_at` null) and
@@ -396,7 +429,7 @@ the 下載毛片原檔 list keep the card grid and the sidebar. Files:
 
 What the same link shows once the delivery is **confirmed** (`mode === 'delivered'`,
 `confirmed_at` set, by the guest or the photographer; owner and viewers alike). An
-unconfirmed delivery keeps the dark 驗收頁 with the 確認完成 bar. Files:
+unconfirmed delivery keeps the dark 驗收頁 (the 毛片 page, with the 精修完成 / 送出 button). Files:
 `js/completion-page.js` (the page, `window.CompletionPage`), `css/completion-page.css`
 (light cream theme, everything under `.cp`; the client pages stay dark and
 `css/styles.css`'s `:root` is never changed), driven by `js/pick.js`; the gallery is

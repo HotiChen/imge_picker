@@ -359,10 +359,11 @@ for (const reduce of [true, false]) {
     }, { before: m.attach, initScript: seed(true, false), contextOptions: MOBILE });
 }
 
-// ═════ B. delivered
+// ═════ B. delivered (EDITED 2026-10-19: the 驗收頁 is the 毛片 page — the standard .photo-card grid and the one action
+// button #doneActionBtn 精修完成 / 送出 at the bottom, docs/delivery.md)
 {
   const w = delWorld();
-  await sx('guest tour (390px) — delivered, not confirmed, owner: 3 steps pointing at the finals and 確認完成; seen is its own key',
+  await sx('guest tour (390px) — delivered, not confirmed, owner: 3 steps pointing at the finals and the 精修完成 button; seen is its own key',
     URL_, async (page, ok) => {
       await gridReady(page);
       ok('positive: the tour appears', await waitCard(page));
@@ -373,11 +374,11 @@ for (const reduce of [true, false]) {
         seen.push(i.text);
         ok(`step ${s}: ${s}/3, inside viewport, ring present and the card does not cover it`, i.count === `${s}/3` && inside(i) && !!i.ring && !overlap(i.card, i.ring), JSON.stringify(i));
         await sleep(300);
-        const what = await page.evaluate(() => { const r = document.querySelector('.gt-ring').getBoundingClientRect(); const cx = r.left + r.width / 2, cy = r.top + r.height / 2; const el = document.elementsFromPoint(cx, cy).find(e => !e.className.toString().startsWith('gt-')); return el ? (el.closest('.fg-tile') ? 'tile' : el.closest('#doneConfirmBtn') ? 'confirm' : el.tagName) : null; });
-        ok(`step ${s}: the ring sits on ${s < 3 ? 'a finals tile' : '確認完成'}`, what === (s < 3 ? 'tile' : 'confirm'), String(what));
+        const what = await page.evaluate(() => { const r = document.querySelector('.gt-ring').getBoundingClientRect(); const cx = r.left + r.width / 2, cy = r.top + r.height / 2; const el = document.elementsFromPoint(cx, cy).find(e => !e.className.toString().startsWith('gt-')); return el ? (el.closest('.photo-card') ? 'tile' : el.closest('#doneActionBtn') ? 'confirm' : el.tagName) : null; });
+        ok(`step ${s}: the ring sits on ${s < 3 ? 'a finals card' : 'the 精修完成 button'}`, what === (s < 3 ? 'tile' : 'confirm'), String(what));
         if (s < 3) await nextBtn(page);
       }
-      ok('texts: 精修成品 / 標示修改 / 確認完成', seen[0].includes('精修') && seen[1].includes('標示修改') && seen[1].includes('位置') && seen[1].includes('送出修改') && seen[2].includes('確認完成'), JSON.stringify(seen));
+      ok('texts: 精修成品 / 標示修改 … 送出 / 精修完成', seen[0].includes('精修') && seen[1].includes('標示修改') && seen[1].includes('位置') && seen[1].includes('「送出」') && seen[2].includes('精修完成'), JSON.stringify(seen));
       await nextBtn(page);
       ok('完成 closes', await until(async () => !(await page.$('.gt-card'))));
       ok('delivered key set, picking key untouched', (await storeVal(page, KB)) === '1' && (await storeVal(page, KA)) === null);
@@ -389,7 +390,7 @@ for (const reduce of [true, false]) {
   await sx('guest tour (390px) — delivered, viewer: none; positive: the finals are listed',
     URL_, async (page, ok) => {
       await gridReady(page);
-      ok('positive: tiles present', (await page.$$('.fg-tile')).length > 0);
+      ok('positive: the finals cards are present', (await page.$$('#photoGrid .photo-card')).length > 0);
       ok('no tour, no ？', await noCardFor(page) && !(await page.$('.gt-help')));
     }, { before: w.before, contextOptions: MOBILE });
 }
@@ -401,7 +402,11 @@ for (const reduce of [true, false]) {
       ok('positive: the 完成頁 is mounted (html.cp-on)', true);
       ok('no tour, no ？', await noCardFor(page) && !(await page.$('.gt-help')) && (await storeVal(page, KB)) === null);
       // the module's own gate: even with every target present, cp-on blocks it; without cp-on the same call starts it
-      await page.evaluate(() => { const b = document.createElement('button'); b.id = 'doneConfirmBtn'; b.textContent = 'x'; b.style.cssText = 'position:fixed;top:300px;left:20px;width:80px;height:50px'; document.body.append(b); GuestTour.maybeStart({ phase: 'delivered', isOwner: true }); });
+      await page.evaluate(() => {
+        const b = document.createElement('button'); b.id = 'doneActionBtn'; b.textContent = 'x'; b.style.cssText = 'position:fixed;top:300px;left:20px;width:80px;height:50px'; document.body.append(b);
+        const c = document.createElement('div'); c.className = 'photo-card'; c.style.cssText = 'position:fixed;top:120px;left:20px;width:120px;height:120px'; document.body.append(c);
+        GuestTour.maybeStart({ phase: 'delivered', isOwner: true });
+      });
       ok('cp-on set and every target present: still no tour', await noCardFor(page, 1200));
       await page.evaluate(() => { document.documentElement.classList.remove('cp-on'); });
       ok('positive: without cp-on the same state starts the tour', await waitCard(page));
@@ -412,12 +417,12 @@ for (const reduce of [true, false]) {
   await sx('guest tour (390px) — delivered: a lightbox open at start blocks it; closing it lets it start',
     URL_, async (page, ok) => {
       await gridReady(page);
-      await page.click('.fg-tile');
-      await page.waitForSelector('#fgLightbox');
+      await page.click('#photoGrid .photo-card');
+      await page.waitForSelector('#photoModal.active');
       await page.evaluate(({ a }) => { localStorage.removeItem(a); PickController._syncTour(); }, { a: KB });
-      ok('lightbox open: no tour', await noCardFor(page, 1200));
+      ok('the preview open: no tour', await noCardFor(page, 1200));
       await page.keyboard.press('Escape');
-      await page.evaluate(() => document.getElementById('fgLbClose')?.click());
+      ok('fixture: Esc closed the preview', await until(async () => !(await page.$('#photoModal.active'))));
       ok('positive: closing it starts the tour', await waitCard(page));
     }, { before: w.before, initScript: seed(false, true), contextOptions: MOBILE });
 }

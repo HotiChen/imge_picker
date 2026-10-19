@@ -1,17 +1,18 @@
-// Browser suites: finals gallery: hero, rows, lightbox, chips, share, escaping.
+// Browser suites: finals gallery (on the 完成頁 since 2026-10-19: the 驗收頁 is the 毛片 page): rows, lightbox, chips, escaping.
 // Registered by test/run.mjs in file-name order; see test/README.md.
 import zlib from 'node:zlib';
 import { base, suite } from '../lib/harness.mjs';
 import { MOBILE, swipeTouch } from '../lib/env.mjs';
-import { DL, LUM, donePosts, listed, modalShown } from '../lib/delivery-helpers.mjs';
+import { DL, listed } from '../lib/delivery-helpers.mjs';
 import { pickFakeWorker } from '../lib/pick-fake.mjs';
 
 export default async function register() {
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Finals gallery — the delivered finish page as a web album (js/finals-gallery.js,
-// js/pick.js _renderFinals): hero, justified rows, lightbox, folder chips, share.
-// The picking view and the 下載毛片原檔 list keep their own look (suites above).
+// Finals gallery — the web album (js/finals-gallery.js, js/pick.js renderFinals): justified rows, lightbox,
+// folder chips. REWRITTEN 2026-10-19: it lives only on the 完成頁 (a confirmed delivery: hero: false, light),
+// so the worlds below are confirmed by default and the gallery's own hero / the 驗收頁 strip suites are gone
+// (the 驗收頁 is the 毛片 page: suites 91–93; the 完成頁's own hero: suites 33, 73).
 // ═══════════════════════════════════════════════════════════════════════════
 
 // real PNGs of a given shape (only the ratio matters; kept tiny), so the page
@@ -53,7 +54,7 @@ const FG_PROOFS = ['shoot/毛片/a.jpg', 'shoot/毛片/b.jpg'];
 const fgWorld = (files, o = {}) => pickFakeWorker({
   ownerName: 'Zoe', ownerKey: 'ZOE-KEY', phase: 'retouching', folders: ['shoot/毛片/'], finalFolders: ['shoot/精修/'],
   deliveredAt: '2026-09-20T00:00:00.000Z', pickFiles: [...FG_PROOFS, ...files], title: '婚禮精修', imageFor: fgImage,
-  studio: { name: '光影工作室', booking_url: null, has_logo: true }, ...o });
+  studio: { name: '光影工作室', booking_url: null, has_logo: true }, confirmedAt: '2026-09-21T03:00:00.000Z', ...o });
 const FG_DESK = { viewport: { width: 1280, height: 900 } };
 // listeners on document/window by type: a test can show a lightbox leaves none behind
 const FG_LISTENERS = () => {
@@ -109,11 +110,11 @@ const fgW = r => new URLSearchParams(r.search).get('w');
 const fgName = r => decodeURIComponent(r.path).split('/').pop();
 const fgRowsOk = (g, tol = 1.5) => g.rows.slice(0, -1).every(r => Math.abs(r.span - g.W) <= tol && Math.max(...r.hs) - Math.min(...r.hs) <= 1);
 
-// ── 1. desktop: hero, justified rows, order, buckets (no album entry: that is the 完成頁's)
+// ── 1. desktop: justified rows, order, buckets (the 完成頁's own hero, studio, cover and album entry: suites 33, 26, 73)
 {
   const files = fgFiles(40);
   const m = fgWorld(files);
-  await suite('finals gallery 1280px — hero, even rows, data order, thumbnails only, 相本預覽 under the last row',
+  await suite('finals gallery 1280px — on the 完成頁: even rows, data order, thumbnails only, no hero of its own',
     `${base}/index.html?t=TOK`,
     async page => {
       const out = [];
@@ -122,23 +123,17 @@ const fgRowsOk = (g, tol = 1.5) => g.rows.slice(0, -1).every(r => Math.abs(r.spa
       const st = await fgSettle(page);
       ok('control: the layout settled (no endless reflow)', st.ms >= 0, JSON.stringify(st));
       const dom = await page.evaluate(() => ({
-        hero: !!document.getElementById('fgHero'), title: document.getElementById('fgTitle')?.textContent,
-        studio: document.querySelector('#fgStudio .fg-studio-name')?.textContent, logo: document.querySelector('#fgStudio img')?.src || null,
-        cover: document.getElementById('fgCover')?.src || null, coverKey: document.getElementById('fgCover')?.dataset.photoId || null,
+        inCp: !!document.querySelector('#completionPage #finalsGallery'), hero: !!document.getElementById('fgHero'),
         oldCards: document.querySelectorAll('.photo-card').length, oldGrid: getComputedStyle(document.getElementById('photoGrid')).display,
-        sidebar: getComputedStyle(document.querySelector('aside.sidebar')).display, bodyCls: document.body.classList.contains('fg-mode'),
-        share: !!document.getElementById('fgShare'), chips: !!document.getElementById('fgChips'),
-        heroH: document.getElementById('fgHero').getBoundingClientRect().height,
+        bodyCls: document.body.classList.contains('fg-mode'), share: !!document.getElementById('fgShare'), chips: !!document.getElementById('fgChips'),
         galleries: document.querySelectorAll('#finalsGallery').length,
       }));
-      ok('one gallery with a hero: the project title and the studio name + logo', dom.galleries === 1 && dom.hero && dom.title === '婚禮精修' && dom.studio === '光影工作室' && /\/api\/pick\/logo\?t=TOK$/.test(dom.logo || ''), JSON.stringify(dom));
-      ok('the cover is the first final in gallery order, as a ?w= bucket through the token', dom.coverKey === files[0] && /\?w=(1200|1600)&t=TOK$/.test(dom.cover || '') && dom.cover.includes(encodeURI(files[0])), dom.cover);
-      ok('the old card grid was never built (no .photo-card) and is not shown; no sidebar', dom.oldCards === 0 && dom.oldGrid === 'none' && dom.sidebar === 'none' && dom.bodyCls, JSON.stringify(dom));
-      ok('no share button on the 驗收頁 (sharing is the 完成頁\'s); no folder chips for one folder', !dom.share && !dom.chips);
-      ok('the hero is tall but leaves the first row on screen', dom.heroH >= 240 && dom.heroH <= 560, dom.heroH);
+      ok('one gallery, inside the 完成頁, with no hero of its own (the 完成頁 has its own)', dom.galleries === 1 && dom.inCp && !dom.hero, JSON.stringify(dom));
+      ok('the standard card grid was not built (no .photo-card) and is not shown', dom.oldCards === 0 && dom.oldGrid === 'none' && dom.bodyCls, JSON.stringify(dom));
+      ok('no gallery share button (the 完成頁 has its own); no folder chips for one folder', !dom.share && !dom.chips);
       const g = await fgGeom(page);
       ok('no horizontal scroll', g.sw <= g.iw, JSON.stringify([g.sw, g.iw]));
-      ok('rows exist (40 photos make several)', g.rows.length >= 6 && g.rows.every(r => r.n >= 1), g.rows.length);
+      ok('rows exist (40 photos make several)', g.rows.length >= 4 && g.rows.every(r => r.n >= 1), g.rows.length);
       ok('tiles are in data order (the old gallery sorted by name): row after row, left to right',
         JSON.stringify(g.rows.flatMap(r => r.ids)) === JSON.stringify(files), JSON.stringify(g.rows.flatMap(r => r.ids)).slice(0, 120));
       ok('every row: all tiles on one line, one height (±1px)', g.rows.every(r => Math.max(...r.tops) - Math.min(...r.tops) <= 1 && Math.max(...r.hs) - Math.min(...r.hs) <= 1),
@@ -146,30 +141,21 @@ const fgRowsOk = (g, tol = 1.5) => g.rows.slice(0, -1).every(r => Math.abs(r.spa
       const full = g.rows.slice(0, -1);
       ok('every row but the last fills the width: tiles + gaps = the container (±1.5px)', full.every(r => Math.abs(r.span - g.W) <= 1.5), JSON.stringify(full.map(r => [Math.round(r.span), g.W])));
       ok('gaps are about 6px', g.rows.every(r => r.gaps.every(x => Math.abs(x - 6) <= 1)), JSON.stringify(g.rows.map(r => r.gaps.map(Math.round))));
-      ok('row heights stay near the 320px target (200..420)', full.every(r => r.h >= 200 && r.h <= 420), JSON.stringify(full.map(r => Math.round(r.h))));
+      ok('row heights stay near the target (160..420)', full.every(r => r.h >= 160 && r.h <= 420), JSON.stringify(full.map(r => Math.round(r.h))));
       const last = g.rows[g.rows.length - 1];
       ok('the last row is not stretched: it is at most the target height and stops short of the width', last.h <= 321 && last.span < g.W - 1, JSON.stringify([last.h, last.span, g.W]));
       const known = g.rows.flatMap(r => r.ratios).filter(([, b]) => b), unknown = g.rows.flatMap(r => r.ratios).filter(([, b]) => !b);
-      ok('every loaded tile has its photo\'s own shape (tile w/h = natural w/h, ±0.5%: gaps are taken out of the width before the height is chosen); the first 36 are loaded', known.length >= 36 && known.every(([a, b]) => Math.abs(a / b - 1) < 0.005), JSON.stringify([known.length, known.filter(([a, b]) => Math.abs(a / b - 1) >= 0.005).slice(0, 4)]));
+      ok('every loaded tile has its photo\'s own shape (tile w/h = natural w/h, ±0.5%); the first 36 are loaded', known.length >= 36 && known.every(([a, b]) => Math.abs(a / b - 1) < 0.005), JSON.stringify([known.length, known.filter(([a, b]) => Math.abs(a / b - 1) >= 0.005).slice(0, 4)]));
       ok('a not-yet-loaded (lazy) tile holds the 3:2 placeholder shape', unknown.every(([a]) => Math.abs(a / 1.5 - 1) < 0.005), JSON.stringify(unknown));
       ok('control: portraits and landscapes are both there', g.rows.some(r => r.ratios.some(([a]) => a < 0.9)) && g.rows.some(r => r.ratios.some(([a]) => a > 1.4)));
       // requests: thumbnails only
       const reqs = fgReqs(m).filter(r => decodeURIComponent(r.path).includes('精修'));
-      ok('control: the page asked for the finals (cover + tiles)', new Set(reqs.map(r => r.path)).size >= 38, reqs.length);
+      ok('control: the page asked for the finals', new Set(reqs.map(r => r.path)).size >= 36, reqs.length);
       ok('every photo read is a ?w= bucket (400 / 1200 / 1600) — no original, no download=1',
         reqs.every(r => ['400', '1200', '1600'].includes(fgW(r)) && !r.search.includes('download')), JSON.stringify(reqs.filter(r => !['400', '1200', '1600'].includes(fgW(r))).slice(0, 3)));
-      ok('1280px / DPR1: tiles ask the 400 bucket, only the cover a big one', reqs.filter(r => fgW(r) !== '400').every(r => fgName(r) === 'f001.jpg') && reqs.some(r => fgW(r) === '400'), JSON.stringify(reqs.filter(r => fgW(r) !== '400').map(r => r.path + r.search)));
+      const srcs = await page.$$eval('#fgRows .fg-tile img', is => is.map(i => i.src));
+      ok('1280px / DPR1: every tile asks the 400 bucket', srcs.length === 40 && srcs.every(s => /\?w=400&t=TOK$/.test(s)), JSON.stringify(srcs.slice(0, 2)));
       ok('nothing of the proofs was read', !m.requests.some(r => decodeURIComponent(r.path).includes('毛片') || decodeURIComponent(r.search).includes('毛片')));
-      // the album entry belongs to the 完成頁 (after 確認完成): none on this 驗收頁, and the rows are the last thing
-      const e = await page.evaluate(() => ({ entry: document.querySelectorAll('#albumPreviewEntry').length, btn: document.querySelectorAll('#albumPreviewBtn').length, rows: !!document.getElementById('fgRows') }));
-      ok('no 相本預覽 entry here (it is on the 完成頁 only); control: the rows are there', e.rows && e.entry === 0 && e.btn === 0, JSON.stringify(e));
-      if (process.env.SHOTS) {
-        await page.evaluate(() => window.scrollTo(0, 0));
-        await page.screenshot({ path: `${process.env.SHOTS}/desktop-top.png` });
-        await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
-        await page.waitForTimeout(300);
-        await page.screenshot({ path: `${process.env.SHOTS}/desktop-bottom.png` });
-      }
       return out;
     },
     { before: m.attach, initScript: FG_OWNER, contextOptions: FG_DESK });
@@ -179,7 +165,7 @@ const fgRowsOk = (g, tol = 1.5) => g.rows.slice(0, -1).every(r => Math.abs(r.spa
 {
   const files = fgFiles(40);
   const m = fgWorld(files, { title: '一個很長很長的專案名稱用來測試手機上會不會把版面撐出螢幕之外的情況' });
-  await suite('finals gallery 390px — hero, ~200px rows, the 確認完成 strip is thin and above the hero, no sideways scroll',
+  await suite('finals gallery 390px — on the 完成頁: ~200px rows, no sideways scroll, 1200 tiles on a DPR3 phone',
     `${base}/index.html?t=TOK`,
     async page => {
       const out = [];
@@ -194,34 +180,9 @@ const fgRowsOk = (g, tol = 1.5) => g.rows.slice(0, -1).every(r => Math.abs(r.spa
       ok('row heights near the 200px phone target (130..280)', full.every(r => r.h >= 130 && r.h <= 280), JSON.stringify(full.map(r => Math.round(r.h))));
       ok('gaps about 6px', g.rows.every(r => r.gaps.every(x => Math.abs(x - 6) <= 1)));
       ok('data order', JSON.stringify(g.rows.flatMap(r => r.ids)) === JSON.stringify(files));
-      const p = await page.evaluate(() => {
-        const R = id => { const e = document.getElementById(id); if (!e) return null; const r = e.getBoundingClientRect(); return { t: r.top + scrollY, b: r.bottom + scrollY, h: r.height, l: r.left, r: r.right }; };
-        const cs = id => getComputedStyle(document.getElementById(id));
-        return { done: R('deliveryDone'), hero: R('fgHero'), bar: R('deliveryBar'), doneBtns: [...document.querySelectorAll('#deliveryDone button')].map(b => { const r = b.getBoundingClientRect(); return [b.id, Math.round(r.height), r.right <= innerWidth]; }),
-          pos: [cs('deliveryDone').position, cs('fgHero').position], title: R('fgTitle'), vh: innerHeight,
-          cover: document.getElementById('fgCover')?.src, share: R('fgShare'), order: document.getElementById('deliveryDone').compareDocumentPosition(document.getElementById('fgHero')) & Node.DOCUMENT_POSITION_FOLLOWING };
-      });
-      ok('the confirmation strip is above the hero, not over it, not fixed', !!p.done && p.done.b <= p.hero.t + 1 && p.pos[0] !== 'fixed' && p.pos[0] !== 'sticky' && !!p.order, JSON.stringify(p));
-      ok('the strip is thin on a phone (<= 96px)', p.done.h <= 96, p.done.h);
-      ok('its buttons are still there, tappable (>= 40px) and inside the phone', p.doneBtns.length === 2 && p.doneBtns.every(([, h, inside]) => h >= 40 && inside), JSON.stringify(p.doneBtns));
-      ok('no delivery bar taking room when the proofs switch is off', p.bar.h === 0, JSON.stringify(p.bar));
-      ok('the hero fits the phone: shorter than 62% of the screen, and the long title stays inside', p.hero.h <= p.vh * 0.62 && p.title.r <= 390 + 0.5 && p.title.l >= 0, JSON.stringify([p.hero, p.title]));
-      ok('no share button on the 驗收頁', p.share === null, JSON.stringify(p.share));
-      ok('390px / DPR3: the cover is a 1200 bucket', /\?w=1200&t=TOK$/.test(p.cover || ''), p.cover);
-      const reqs = fgReqs(m).filter(r => decodeURIComponent(r.path).includes('精修'));
-      ok('tiles on a DPR3 phone ask the 1200 bucket (still never an original)', reqs.length >= 10 && reqs.every(r => fgW(r) === '1200' && !r.search.includes('download')), JSON.stringify(reqs.slice(0, 2)));
-      const e = await page.evaluate(() => ({ entry: document.querySelectorAll('#albumPreviewEntry').length, rows: !!document.getElementById('fgRows') }));
-      ok('no album entry here; control: the rows are there', e.rows && e.entry === 0, JSON.stringify(e));
-      if (process.env.SHOTS) {
-        await page.evaluate(() => window.scrollTo(0, 0));
-        await page.screenshot({ path: `${process.env.SHOTS}/phone-top.png` });
-        await page.evaluate(() => window.scrollTo(0, 700));
-        await page.waitForTimeout(300);
-        await page.screenshot({ path: `${process.env.SHOTS}/phone-rows.png` });
-        await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
-        await page.waitForTimeout(300);
-        await page.screenshot({ path: `${process.env.SHOTS}/phone-bottom.png` });
-      }
+      const srcs = await page.$$eval('#fgRows .fg-tile img', is => is.map(i => i.src));
+      ok('tiles on a DPR3 phone ask the 1200 bucket (still never an original)', srcs.length === 40 && srcs.every(s => /\?w=1200&t=TOK$/.test(s)), JSON.stringify(srcs.slice(0, 2)));
+      ok('no 驗收頁 strip on the 完成頁', (await page.$('#deliveryDone')) === null);
       return out;
     },
     { before: m.attach, initScript: FG_OWNER, contextOptions: MOBILE });
@@ -253,27 +214,29 @@ for (const [name, opts] of [
     { before: m.attach, initScript: FG_OWNER, contextOptions: FG_DESK });
 }
 {
-  const m = fgWorld(fgFiles(6), { allowProofDownload: true });
-  await suite('finals gallery — the 下載毛片原檔 list is the old card list; back on the finals the gallery is built once, not twice',
+  // the 驗收頁 (delivered, not confirmed) is the 毛片 page since 2026-10-19 (docs/delivery.md): neither its finals nor its
+  // 毛片 list build the gallery; a confirmation then builds it once, inside the 完成頁
+  const m = fgWorld(fgFiles(6), { allowProofDownload: true, confirmedAt: null });
+  await suite('finals gallery — the 驗收頁 (finals and 毛片 list) never builds it; confirming builds it once, inside the 完成頁',
     `${base}/index.html?t=TOK`,
     async page => {
       const out = [];
       const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
-      await fgReady(page, 6);
-      ok('control: the finals gallery is up first', !!(await page.$('#fgHero')) && (await page.$$('.photo-card')).length === 0);
-      const bar = await page.evaluate(() => { const b = document.getElementById('deliveryBar'); return { shown: b.getBoundingClientRect().height > 20, hidden: b.hidden, btn: document.getElementById('deliveryProofsBtn').textContent }; });
-      ok('the thin bar with 回到毛片 is visible when the switch is on', bar.shown && !bar.hidden && bar.btn === '回到毛片', JSON.stringify(bar));
+      const none = () => page.evaluate(() => !document.getElementById('finalsGallery') && !document.querySelector('.fg-tile') && !document.body.classList.contains('fg-mode'));
+      await page.waitForFunction(() => document.querySelectorAll('#photoGrid .photo-card').length === 6, null, { timeout: 5000 });
+      ok('the finals: 6 standard cards, no gallery', await none());
       await page.click('#deliveryProofsBtn');
       await page.waitForFunction(() => document.querySelector('.photo-card')?.dataset.photoId.includes('毛片'), null, { timeout: 5000 });
-      const s = await page.evaluate(() => ({ g: !!document.getElementById('finalsGallery'), hero: !!document.getElementById('fgHero'), tile: !!document.querySelector('.fg-tile'), share: !!document.getElementById('fgShare'),
-        entry: !!document.getElementById('albumPreviewEntry'), cls: document.body.classList.contains('fg-mode'), grid: getComputedStyle(document.getElementById('photoGrid')).display,
-        side: getComputedStyle(document.querySelector('aside.sidebar')).display, dl: document.querySelectorAll('.photo-card [data-download]').length, done: !!document.getElementById('deliveryDone') }));
-      ok('proofs view: no gallery, no hero, no album entry — the old cards with 下載原檔, sidebar back, confirmation block kept', !s.g && !s.hero && !s.tile && !s.share && !s.entry && !s.cls && s.grid !== 'none' && s.side !== 'none' && s.dl === 2 && s.done, JSON.stringify(s));
+      ok('the 毛片 list: cards, no gallery', await none());
       await page.click('#deliveryProofsBtn');
+      await page.waitForFunction(() => document.querySelector('#photoGrid .photo-card')?.dataset.photoId.includes('精修'), null, { timeout: 5000 });
+      ok('back on the finals: still no gallery', await none());
+      await page.click('#doneActionBtn');
+      await page.click('#doneConfirmSubmit');
       await fgReady(page, 6);
-      const t = await page.evaluate(() => ({ g: document.querySelectorAll('#finalsGallery').length, hero: document.querySelectorAll('#fgHero').length, share: document.querySelectorAll('#fgShare').length,
-        entry: document.querySelectorAll('#albumPreviewEntry').length, cards: document.querySelectorAll('.photo-card').length, tiles: document.querySelectorAll('.fg-tile').length }));
-      ok('back on the finals: one gallery, one hero, no share, no entry, 6 tiles, no cards', t.g === 1 && t.hero === 1 && t.share === 0 && t.entry === 0 && t.tiles === 6 && t.cards === 0, JSON.stringify(t));
+      const t = await page.evaluate(() => ({ g: document.querySelectorAll('#finalsGallery').length, inCp: !!document.querySelector('#completionPage #finalsGallery'),
+        hero: document.querySelectorAll('#fgHero').length, cards: document.querySelectorAll('.photo-card').length, tiles: document.querySelectorAll('.fg-tile').length }));
+      ok('confirmed: one gallery inside the 完成頁, no hero of its own, 6 tiles, no cards', t.g === 1 && t.inCp && t.hero === 0 && t.tiles === 6 && t.cards === 0, JSON.stringify(t));
       return out;
     },
     { before: m.attach, initScript: FG_OWNER, contextOptions: FG_DESK });
@@ -291,50 +254,26 @@ for (const [name, opts] of [
       await fgReady(page, 5);
       const ids = await fgTiles(page);
       ok('f1, f10, f2, f20, f3 — what app.js sorts to (control: natural order would be f1 f2 f3 f10 f20)', JSON.stringify(ids.map(k => k.split('/').pop())) === '["f1.jpg","f10.jpg","f2.jpg","f20.jpg","f3.jpg"]', JSON.stringify(ids));
-      ok('the cover is the first of them', (await page.$eval('#fgCover', i => i.dataset.photoId)) === 'shoot/精修/f1.jpg');
       return out;
     },
     { before: m.attach, initScript: FG_OWNER, contextOptions: FG_DESK });
 }
 {
   const m = fgWorld([]);
-  await suite('finals gallery — an empty finals folder: the hero stays, no cover, a plain sentence, no errors',
+  await suite('finals gallery — an empty finals folder: no tiles, a plain sentence, no errors',
     `${base}/index.html?t=TOK`,
     async page => {
       const out = [];
       const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
       await page.waitForSelector('#fgEmpty', { timeout: 5000 });
-      const s = await page.evaluate(() => ({ text: document.getElementById('fgEmpty').textContent, cover: !!document.getElementById('fgCover'), tiles: document.querySelectorAll('.fg-tile').length,
-        title: document.getElementById('fgTitle')?.textContent }));
-      ok('says the folder has no photos yet', s.text === '這裡還沒有照片', JSON.stringify(s));
-      ok('no cover image, no tiles, the title is still there', !s.cover && s.tiles === 0 && s.title === '婚禮精修', JSON.stringify(s));
+      const s = await page.evaluate(() => ({ text: document.getElementById('fgEmpty').textContent, tiles: document.querySelectorAll('.fg-tile').length, inCp: !!document.querySelector('#completionPage #fgEmpty') }));
+      ok('says the folder has no photos yet, inside the 完成頁, with no tiles', s.text === '這裡還沒有照片' && s.tiles === 0 && s.inCp, JSON.stringify(s));
       return out;
     },
     { before: m.attach, initScript: FG_OWNER, contextOptions: FG_DESK });
 }
 
-// ── 5. the hero does not jump while its photo loads, and starts dark
-{
-  const m = fgWorld(fgFiles(8), { imageDelay: key => (key.endsWith('f001.jpg') ? 900 : 0) });
-  await suite('finals gallery — the hero is a dark box of its final height before the cover arrives: no jump',
-    `${base}/index.html?t=TOK`,
-    async page => {
-      const out = [];
-      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
-      await page.waitForSelector('#fgCover', { state: 'attached', timeout: 5000 });
-      await page.waitForSelector('.fg-tile', { timeout: 5000 });
-      const before = await page.evaluate(`(() => { const L = ${LUM}; const h = document.getElementById('fgHero'); const r = h.getBoundingClientRect(); const media = h.querySelector('.fg-hero-media');
-        const img = document.getElementById('fgCover'); return { h: r.height, top: r.top, bg: L(getComputedStyle(media).backgroundColor), loaded: !!img && img.complete && img.naturalWidth > 0, tileTop: document.querySelector('.fg-tile')?.getBoundingClientRect().top }; })()`);
-      ok('control: the cover has not arrived yet (the Worker holds it)', !before.loaded, JSON.stringify(before));
-      ok('the placeholder is dark (not a white flash)', before.bg < 0.25, before.bg);
-      await page.waitForFunction(() => { const i = document.getElementById('fgCover'); return i && i.complete && i.naturalWidth > 0; }, null, { timeout: 6000 });
-      await page.waitForTimeout(400);
-      const after = await page.evaluate(() => ({ h: document.getElementById('fgHero').getBoundingClientRect().height, tileTop: document.querySelector('.fg-tile')?.getBoundingClientRect().top }));
-      ok('the hero kept its height, and the first row did not move (±1px)', Math.abs(after.h - before.h) <= 1 && Math.abs(after.tileTop - before.tileTop) <= 1, JSON.stringify([before, after]));
-      return out;
-    },
-    { before: m.attach, initScript: FG_OWNER, contextOptions: FG_DESK });
-}
+// ── 5. (the gallery's own hero was the 驗收頁's; the 驗收頁 is the 毛片 page now and the 完成頁 has its own hero)
 
 // ── 6. 300 photos: no stall, a bounded number of reflows, resize reflows once, lazy below the fold
 {
@@ -526,7 +465,7 @@ for (const [name, opts] of [
 {
   const files = [...fgFiles(6, 'shoot/精修/'), ...fgFiles(4, 'shoot/精修二/')];
   const m = fgWorld(files, { finalFolders: ['shoot/精修/', 'shoot/精修二/'] });
-  await suite('finals gallery 1280px — several finals folders: chips under the hero switch them; the cover stays',
+  await suite('finals gallery 1280px — several finals folders: chips above the rows switch them',
     `${base}/index.html?t=TOK`,
     async page => {
       const out = [];
@@ -534,17 +473,15 @@ for (const [name, opts] of [
       await fgReady(page, 6);
       const chips = () => page.$$eval('#fgChips .fg-chip', cs => cs.map(c => [c.textContent, c.getAttribute('aria-pressed'), c.dataset.folder]));
       ok('two chips, 精修 pressed', JSON.stringify(await chips()) === '[["精修","true","shoot/精修/"],["精修二","false","shoot/精修二/"]]', JSON.stringify(await chips()));
-      const pos = await page.evaluate(() => ({ hero: document.getElementById('fgHero').getBoundingClientRect().bottom, chips: document.getElementById('fgChips').getBoundingClientRect(), rows: document.getElementById('fgRows').getBoundingClientRect().top }));
-      ok('the chips sit between the hero and the rows', pos.chips.top >= pos.hero - 0.5 && pos.rows >= pos.chips.bottom - 0.5 && pos.chips.height >= 40, JSON.stringify(pos));
-      const cover = await page.$eval('#fgCover', i => i.src);
+      const pos = await page.evaluate(() => ({ chips: document.getElementById('fgChips').getBoundingClientRect(), rows: document.getElementById('fgRows').getBoundingClientRect().top }));
+      ok('the chips sit right above the rows', pos.rows >= pos.chips.bottom - 0.5 && pos.chips.height >= 40, JSON.stringify(pos));
       await page.click('#fgChips .fg-chip[data-folder="shoot/精修二/"]');
       await page.waitForFunction(() => [...document.querySelectorAll('.fg-tile')].every(t => t.dataset.photoId.includes('精修二')) && document.querySelectorAll('.fg-tile').length === 4, null, { timeout: 5000 });
       ok('the second chip shows its own 4 photos', JSON.stringify((await fgTiles(page)).map(k => k.split('/').pop())) === '["f001.jpg","f002.jpg","f003.jpg","f004.jpg"]');
       ok('...it is the pressed one now, and the first is not', JSON.stringify((await chips()).map(c => c[1])) === '["false","true"]');
-      ok('the cover did not change (it is the first photo of the first folder)', (await page.$eval('#fgCover', i => i.src)) === cover && (await page.$eval('#fgCover', i => i.dataset.photoId)) === 'shoot/精修/f001.jpg');
       ok('the folder was listed through the token like any other read', listed(m).includes('shoot/精修二/'));
       const g = await fgGeom(page);
-      ok('rows are right for the second folder, and there is still no album entry', fgRowsOk(g) && (await page.$('#albumPreviewEntry')) === null);
+      ok('rows are right for the second folder', fgRowsOk(g));
       if (process.env.SHOTS) { await page.waitForTimeout(800); await page.screenshot({ path: `${process.env.SHOTS}/desktop-chips.png` }); }
       await page.click('#fgChips .fg-chip[data-folder="shoot/精修/"]');
       await fgReady(page, 6);
@@ -579,50 +516,7 @@ for (const [name, opts] of [
     { before: m.attach, initScript: FG_OWNER, contextOptions: MOBILE });
 }
 
-// ── 10. the 確認完成 block: same ids and behaviour, now a thin strip at the top
-for (const [label, co, init] of [['owner 1280px', FG_DESK, FG_OWNER], ['viewer 390px', MOBILE, `localStorage.removeItem('pick_key:TOK');`]]) {
-  const m = fgWorld(fgFiles(8));
-  await suite(`finals gallery — the 確認完成 strip (${label}): ids and flow unchanged, above the hero, not over the photos`,
-    `${base}/index.html?t=TOK`,
-    async page => {
-      const out = [];
-      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
-      const owner = label.startsWith('owner');
-      await fgReady(page, 8);
-      await fgSettle(page);
-      const r = await page.evaluate(() => {
-        const R = id => { const e = document.getElementById(id); if (!e) return null; const b = e.getBoundingClientRect(); return { t: b.top + scrollY, b: b.bottom + scrollY, h: b.height }; };
-        const done = document.getElementById('deliveryDone');
-        return { ids: ['deliveryDone', 'deliveryDoneStatus', 'doneConfirmBtn', 'doneReviseBtn'].map(i => [i, !!document.getElementById(i)]), done: R('deliveryDone'), hero: R('fgHero'), pos: getComputedStyle(done).position,
-          status: document.getElementById('deliveryDoneStatus')?.textContent, state: done.dataset.state, firstTile: R('fgRows'),
-          before: !!(document.getElementById('deliveryDone').compareDocumentPosition(document.getElementById('fgHero')) & Node.DOCUMENT_POSITION_FOLLOWING) };
-      });
-      ok(owner ? 'ids unchanged: deliveryDone, deliveryDoneStatus, doneConfirmBtn, doneReviseBtn' : 'viewer: the status line is there, the buttons are not',
-        owner ? r.ids.every(([, v]) => v) : (r.ids[0][1] && r.ids[1][1] && !r.ids[2][1] && !r.ids[3][1]), JSON.stringify(r.ids));
-      ok('the wording is unchanged', r.status === (owner ? '滿意的話請按「確認完成」，需要調整請按「需要修改」' : '尚待選片人確認完成') && r.state === 'open', JSON.stringify(r));
-      ok('a strip above the hero: it ends where the hero starts, never over it, and is not fixed or sticky', r.done.b <= r.hero.t + 1 && r.pos !== 'fixed' && r.pos !== 'sticky' && r.before, JSON.stringify(r));
-      ok('thin: <= 72px on a desktop, <= 96px on a phone', r.done.h <= (label.includes('390') ? 96 : 72), r.done.h);
-      if (process.env.SHOTS) await page.screenshot({ path: `${process.env.SHOTS}/${label.includes('390') ? 'phone' : 'desktop'}-strip.png` });
-      if (owner) {
-        await page.click('#doneReviseBtn');
-        ok('需要修改 opens its modal over the gallery', await modalShown(page, 'doneReviseModal'));
-        await page.keyboard.press('Escape');
-        await page.waitForFunction(() => !document.getElementById('doneReviseModal').classList.contains('active'));
-        await page.click('#doneConfirmBtn');
-        ok('確認完成 opens its modal', await modalShown(page, 'doneConfirmModal'));
-        await page.click('#doneConfirmSubmit');
-        // EDITED with the 完成頁 (suite 33): confirming now switches to the light completion page in place; the
-        // 驗收頁's ✓ status block is gone, the gallery (same 8 photos) lives on inside the new page.
-        await page.waitForSelector('#completionPage', { timeout: 5000 });
-        await page.waitForFunction(() => document.querySelectorAll('#completionPage .fg-tile').length === 8, null, { timeout: 5000 });
-        const c = await page.evaluate(() => ({ status: document.getElementById('cpConfirmed').textContent, btns: document.querySelectorAll('#doneConfirmBtn, #doneReviseBtn, #deliveryDone').length, tiles: document.querySelectorAll('.fg-tile').length }));
-        ok('confirming works end to end: 已確認完成 on the completion page, no 驗收頁 block left, the gallery carried over', /^已確認完成/.test(c.status) && c.btns === 0 && c.tiles === 8, JSON.stringify(c));
-        ok('exactly one POST /api/pick/confirm', donePosts(m, 'confirm').length === 1);
-      }
-      return out;
-    },
-    { before: m.attach, initScript: init, contextOptions: co });
-}
+// ── 10. (the 確認完成 strip over the gallery was the 驗收頁's: its button is the bottom #doneActionBtn now, suites 15, 33, 93)
 
 // ── 11. (the share tests moved with the button: test/suites/85-share-on-completion-page.mjs)
 
@@ -646,10 +540,10 @@ for (const [label, co, init] of [['owner 1280px', FG_DESK, FG_OWNER], ['viewer 3
       await page.click(`.fg-tile[data-photo-id="${tileId.replace(/"/g, '\\"')}"]`);
       await page.waitForSelector('#fgLightbox');
       const r = await page.evaluate(() => ({ xss: window.__xss ?? null, stray: !!document.querySelector('img[src="x"]'),
-        on: [...document.querySelectorAll('#finalsGallery *, #fgLightbox *, #deliveryBar *')].filter(e => [...e.attributes].some(a => /^on/i.test(a.name))).length,
-        title: document.getElementById('fgTitle').textContent, lbName: document.getElementById('fgLbName').textContent, chips: document.getElementById('fgChips')?.textContent || '',
-        aria: [...document.querySelectorAll('.fg-tile')].map(t => t.getAttribute('aria-label')).join('|'), studio: document.querySelector('#fgStudio .fg-studio-name')?.textContent,
-        scripts: document.querySelectorAll('#finalsGallery script, #fgLightbox script').length }));
+        on: [...document.querySelectorAll('#completionPage *, #fgLightbox *')].filter(e => [...e.attributes].some(a => /^on/i.test(a.name))).length,
+        title: document.getElementById('cpTitle').textContent, lbName: document.getElementById('fgLbName').textContent, chips: document.getElementById('fgChips')?.textContent || '',
+        aria: [...document.querySelectorAll('.fg-tile')].map(t => t.getAttribute('aria-label')).join('|'), studio: document.getElementById('cpStudio')?.textContent,
+        scripts: document.querySelectorAll('#completionPage script, #fgLightbox script').length }));
       ok('no handler ran, no stray <img src=x>, no on* attribute, no script', r.xss === null && !r.stray && r.on === 0 && r.scripts === 0, JSON.stringify(r));
       ok('the title, studio name, file name and chip label show the markup as plain text', r.title.includes('<img src=x onerror=window.__xss=2>') && r.studio.includes('<img') && r.lbName.includes('<img src=x onerror=window.__xss=1>9.jpg') && r.chips.includes('<img src=x onerror=window.__xss=1>精修三'), JSON.stringify(r));
       ok('the tile labels carry the name as text too', r.aria.includes('<img src=x onerror=window.__xss=1>9.jpg'), r.aria);

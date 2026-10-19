@@ -12,51 +12,55 @@ const stateGets = m => m.requests.filter(r => r.method === 'GET' && r.path === '
 // EDITED with the 完成頁 (suite 33): a confirmed delivery no longer shows the 驗收頁's status block but the
 // light completion page, so for that state this reads the page's 已確認完成（date） line as the same
 // "state confirmed, ✓ status, no buttons" (the 完成頁 itself is asserted in 33-completion-page.mjs).
+// EDITED 2026-10-19 (the 驗收頁 is the 毛片 page, docs/delivery.md): 確認完成 is the one action button at the
+// bottom (#doneActionBtn 「精修完成」, js/delivery-done.js renderAction); `buttons` lists it first, then the
+// strip's own (需要修改 here: these worlds have no revision_drafts, the pins are off). The finals are the
+// standard .photo-card grid.
 const doneBlock = page => page.evaluate(() => {
   const el = document.getElementById('deliveryDone');
   if (!el) {
     const cp = document.getElementById('completionPage');
     if (!cp) return null;
     return { state: 'confirmed', status: `✓ ${document.getElementById('cpConfirmed').textContent}`, msg: null, msgEl: false,
-      buttons: [...document.querySelectorAll('#doneConfirmBtn, #doneReviseBtn')].map(b => b.textContent) };
+      buttons: [...document.querySelectorAll('#doneActionBtn, #doneReviseBtn')].map(b => b.textContent) };
   }
   return { state: el.dataset.state, status: document.getElementById('deliveryDoneStatus')?.textContent ?? null,
     msg: document.getElementById('deliveryDoneMsg')?.textContent ?? null,
     msgEl: !!document.getElementById('deliveryDoneMsg'),
-    buttons: [...el.querySelectorAll('button')].map(b => b.textContent) };
+    buttons: [document.getElementById('doneActionBtn'), ...el.querySelectorAll('button')].filter(Boolean).map(b => b.textContent) };
 });
 
 // ── owner: block, buttons, confirm modal, confirmed state — desktop and phone
 for (const [label, co] of [['1280px', { viewport: { width: 1280, height: 900 } }], ['390px', MOBILE]]) {
   const m = pickFakeWorker(doneOpts());
-  await suite(`guest 確認完成 ${label} — owner: block + two buttons, confirm modal, then ✓ 已確認完成 with no buttons`,
+  await suite(`guest 確認完成 ${label} — owner: block + 精修完成 / 需要修改, confirm modal, then ✓ 已確認完成 with no buttons`,
     `${base}/index.html?t=TOK`,
     async page => {
       const out = [];
       const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
       const narrow = label === '390px';
-      await page.waitForSelector('#deliveryDone .btn', { timeout: 5000 });
+      await page.waitForSelector('#doneActionBtn', { timeout: 5000 });
       ok('fixture: delivered, not confirmed, owner seat', m.state.project.delivered_at !== null && m.state.project.client_confirmed_at === null);
       const b0 = await doneBlock(page);
-      ok('the block shows in the open state with 確認完成 and 需要修改', b0.state === 'open' && JSON.stringify(b0.buttons) === '["確認完成","需要修改"]', JSON.stringify(b0));
-      ok('the status line tells what the buttons are for', /確認完成/.test(b0.status) && /需要修改/.test(b0.status), b0.status);
+      ok('the block shows in the open state; the buttons are 精修完成 (the bottom one) and 需要修改', b0.state === 'open' && JSON.stringify(b0.buttons) === '["精修完成","需要修改"]', JSON.stringify(b0));
+      ok('the status line tells what the buttons are for', /精修完成/.test(b0.status) && /需要修改/.test(b0.status), b0.status);
       ok('block sits right under the delivery bar, in the page (not hidden, inside the viewport width)',
         await page.evaluate(() => {
           const bar = document.getElementById('deliveryBar'), el = document.getElementById('deliveryDone');
           const r = el.getBoundingClientRect();
           return bar.nextElementSibling === el && r.height > 20 && r.left >= 0 && r.right <= innerWidth + 0.5;
         }));
-      const geo = await page.evaluate(() => [...document.querySelectorAll('#deliveryDone button')].map(b => {
+      const geo = await page.evaluate(() => [...document.querySelectorAll('#doneActionBtn, #deliveryDone button')].map(b => {
         const r = b.getBoundingClientRect(); return { w: r.width, h: r.height, d: getComputedStyle(b).display };
       }));
-      ok('both buttons are rendered, tappable size', geo.length === 2 && geo.every(g => g.d !== 'none' && g.w > 60 && g.h >= (narrow ? 44 : 38)), JSON.stringify(geo));
+      ok('both buttons (bottom + strip) are rendered, tappable size', geo.length === 2 && geo.every(g => g.d !== 'none' && g.w > 60 && g.h >= (narrow ? 44 : 38)), JSON.stringify(geo));
       ok('the page is still the dark client theme: dark body, dark block, light text',
         await page.evaluate(`(() => { const L = ${LUM}; const cs = s => getComputedStyle(document.querySelector(s));
           return L(cs('body').backgroundColor) < 0.2 && L(cs('#deliveryDone').backgroundColor) < 0.25 && L(cs('#deliveryDoneStatus').color) > 0.6; })()`));
       ok('the confirm modal is closed to begin with', !(await modalShown(page, 'doneConfirmModal')));
       if (narrow) ok('no horizontal scroll', await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
 
-      await page.click('#doneConfirmBtn');
+      await page.click('#doneActionBtn');
       ok('确認 modal opens', await modalShown(page, 'doneConfirmModal'));
       const mt = await page.textContent('#doneConfirmModal');
       ok('it says the photographer is notified and later changes go through the photographer', /攝影師會收到通知/.test(mt) && /聯絡攝影師/.test(mt), mt);
@@ -67,7 +71,7 @@ for (const [label, co] of [['1280px', { viewport: { width: 1280, height: 900 } }
       await page.click('#doneConfirmCancel');
       ok('取消 closes it and sends nothing', !(await modalShown(page, 'doneConfirmModal')) && donePosts(m, 'confirm').length === 0);
 
-      await page.click('#doneConfirmBtn');
+      await page.click('#doneActionBtn');
       await page.click('#doneConfirmSubmit');
       await page.waitForFunction(CONFIRMED_UP, null, { timeout: 5000 });
       const posts = donePosts(m, 'confirm');
@@ -76,7 +80,7 @@ for (const [label, co] of [['1280px', { viewport: { width: 1280, height: 900 } }
       const b1 = await doneBlock(page);
       ok('the status reads ✓ 已確認完成（date）', /^✓ 已確認完成（\d{4}\/\d{1,2}\/\d{1,2}）$/.test(b1.status), b1.status);
       ok('no button is left in the block, and the button ids are gone from the DOM', b1.buttons.length === 0 &&
-        (await page.$('#doneConfirmBtn')) === null && (await page.$('#doneReviseBtn')) === null);
+        (await page.$('#doneActionBtn')) === null && (await page.$('#doneReviseBtn')) === null);
       ok('the modals are removed from the DOM, not just closed', (await page.$('#doneConfirmModal')) === null && (await page.$('#doneReviseModal')) === null);
       ok('the Worker recorded it as the guest\'s', m.state.project.client_confirmed_by === 'guest');
       await page.reload({ waitUntil: 'load' });
@@ -99,7 +103,7 @@ if (process.env.SHOTS_DONE) {
         const dir = process.env.SHOTS_DONE;
         await page.waitForSelector('#deliveryDone .btn', { timeout: 5000 });
         await page.screenshot({ path: `${dir}/guest-initial-${label}.png` });
-        await page.click('#doneConfirmBtn');
+        await page.click('#doneActionBtn');
         await page.waitForTimeout(400);
         await page.screenshot({ path: `${dir}/guest-confirm-modal-${label}.png` });
         await page.click('#doneConfirmCancel');
@@ -130,10 +134,11 @@ for (const [name, extra, expectState, statusRe] of [
       const out = [];
       const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
       await page.waitForSelector('#deliveryDone, #completionPage', { timeout: 5000 });
-      await page.waitForSelector('.fg-tile', { timeout: 5000 });   // the finals gallery (was .photo-card)
+      // the finals grid (.photo-card again since the 驗收頁 is the 毛片 page); the 完成頁 has its own gallery
+      await page.waitForSelector(name === 'confirmed' ? '#completionPage .fg-tile' : '.photo-card', { timeout: 5000 });
       const b = await doneBlock(page);
       ok(`block in state ${expectState} with the status text`, b.state === expectState && statusRe.test(b.status), JSON.stringify(b));
-      ok('a viewer has no button at all, and no modal in the DOM', b.buttons.length === 0 && (await page.$('#doneConfirmBtn')) === null &&
+      ok('a viewer has no button at all, and no modal in the DOM', b.buttons.length === 0 && (await page.$('#doneActionBtn')) === null &&
         (await page.$('#doneReviseBtn')) === null && (await page.$('#doneConfirmModal')) === null && (await page.$('#doneReviseModal')) === null);
       ok('no message element is reserved, and the guest\'s text is nowhere on the page',
         b.msgEl === false && !(await page.evaluate(() => document.body.innerText.includes('SECRET-TEXT'))));
@@ -173,7 +178,7 @@ for (const [name, extra, expectState, statusRe] of [
       await page.waitForSelector('#deliveryDone', { timeout: 5000 });
       const b = await doneBlock(page);
       ok('owner: 已通知攝影師，修改中 and the text', b.state === 'revising' && b.status === '已通知攝影師，修改中' && b.msg === '請把 f1.jpg 修亮一點 OWNER-TEXT', JSON.stringify(b));
-      ok('owner still has both buttons (算了這樣就好 / ask again)', JSON.stringify(b.buttons) === '["確認完成","需要修改"]');
+      ok('owner still has both buttons (算了這樣就好 / ask again)', JSON.stringify(b.buttons) === '["精修完成","需要修改"]', JSON.stringify(b.buttons));
       const asViewer = await page.evaluate(async () => {
         const r = await fetch(`${CONFIG.WORKER_URL}/api/pick/state`, { headers: { 'X-Share-Token': 'TOK' } });
         const d = await r.json();
@@ -204,7 +209,7 @@ for (const [name, o] of [
       if (name.startsWith('undelivered')) ok('fixture: the project row still carries final_folders and a confirmation stamp', m.state.project.final_folders !== null && m.state.project.client_confirmed_at !== null);
       ok('picking page is really up (hearts, filter)', (await page.$$('.pick-heart-btn')).length > 0 && (await page.$('#pickFilterBar')) !== null);
       ok('#deliveryDone is not in the DOM', (await page.$('#deliveryDone')) === null);
-      ok('no confirm/revise button or modal is in the DOM', (await page.$$('#doneConfirmBtn, #doneReviseBtn, #doneConfirmModal, #doneReviseModal, .delivery-done')).length === 0);
+      ok('no confirm/revise button or modal is in the DOM', (await page.$$('#doneActionBtn, #doneReviseBtn, #doneConfirmModal, #doneReviseModal, .delivery-done')).length === 0);
       return out;
     },
     { before: m.attach, initScript: AS_OWNER });
@@ -261,7 +266,7 @@ for (const [label, co] of [['1280px', { viewport: { width: 1280, height: 900 } }
       ok('the modal closed; the textarea is empty again', !(await modalShown(page, 'doneReviseModal')) && (await page.$eval('#doneReviseText', e => e.value)) === '');
       const b = await doneBlock(page);
       ok('state 修改中: 已通知攝影師，修改中 with the stored text', b.status === '已通知攝影師，修改中' && b.msg === msg, JSON.stringify(b));
-      ok('the owner may still 確認完成 or ask again', JSON.stringify(b.buttons) === '["確認完成","需要修改"]');
+      ok('the owner may still 確認完成 (精修完成) or ask again', JSON.stringify(b.buttons) === '["精修完成","需要修改"]', JSON.stringify(b.buttons));
       ok('the Worker has one open request', m.state.revisions.length === 1 && m.state.revisions[0].resolved_at === null);
       ok('the message block keeps the line break (pre-wrap) and wraps', await page.$eval('#deliveryDoneMsg', e => getComputedStyle(e).whiteSpace === 'pre-wrap'));
       await page.reload({ waitUntil: 'load' });
@@ -270,7 +275,7 @@ for (const [label, co] of [['1280px', { viewport: { width: 1280, height: 900 } }
       ok('after a reload the 修改中 state and the text come back from the Worker', b2.state === 'revising' && b2.msg === msg, JSON.stringify(b2));
 
       // 算了，這樣就好
-      await page.click('#doneConfirmBtn');
+      await page.click('#doneActionBtn');
       await page.click('#doneConfirmSubmit');
       await page.waitForFunction(CONFIRMED_UP, null, { timeout: 5000 });
       const b3 = await doneBlock(page);
@@ -334,11 +339,11 @@ for (const [label, co] of [['1280px', { viewport: { width: 1280, height: 900 } }
     async page => {
       const out = [];
       const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
-      await page.waitForSelector('#doneConfirmBtn', { timeout: 5000 });
+      await page.waitForSelector('#doneActionBtn', { timeout: 5000 });
       for (const [kind, inj, re, reload] of cases) {
         const rev = kind === 'revision';
         o.failNextPick = [inj];
-        await page.click(rev ? '#doneReviseBtn' : '#doneConfirmBtn');
+        await page.click(rev ? '#doneReviseBtn' : '#doneActionBtn');
         if (rev) await page.fill('#doneReviseText', '請修一下');
         await page.click(rev ? '#doneReviseSubmit' : '#doneConfirmSubmit');
         const errSel = rev ? '#doneReviseErr' : '#doneConfirmErr';
@@ -355,7 +360,7 @@ for (const [label, co] of [['1280px', { viewport: { width: 1280, height: 900 } }
       }
       ok('after all that, nothing was ever recorded', m.state.revisions.length === 0 && m.state.project.client_confirmed_at === null);
       ok('and a success afterwards still goes through', await (async () => {
-        await page.click('#doneConfirmBtn'); await page.click('#doneConfirmSubmit');
+        await page.click('#doneActionBtn'); await page.click('#doneConfirmSubmit');
         await page.waitForFunction(CONFIRMED_UP, null, { timeout: 5000 });
         return m.state.project.client_confirmed_at !== null;
       })());
@@ -406,8 +411,8 @@ for (const [label, co] of [['1280px', { viewport: { width: 1280, height: 900 } }
     async page => {
       const out = [];
       const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
-      await page.waitForSelector('#doneConfirmBtn', { timeout: 5000 });
-      await page.click('#doneConfirmBtn');
+      await page.waitForSelector('#doneActionBtn', { timeout: 5000 });
+      await page.click('#doneActionBtn');
       const r = await page.evaluate(() => {
         const b = document.getElementById('doneConfirmSubmit');
         b.click(); const afterFirst = b.disabled; b.click(); b.click();
@@ -438,11 +443,11 @@ for (const [name, mutate, seed] of [
       async page => {
         const out = [];
         const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
-        await page.waitForSelector('#doneConfirmBtn', { timeout: 5000 });
+        await page.waitForSelector('#doneActionBtn', { timeout: 5000 });
         const before = stateGets(m);
         mutate(m);
         const rev = kind === 'revision';
-        await page.click(rev ? '#doneReviseBtn' : '#doneConfirmBtn');
+        await page.click(rev ? '#doneReviseBtn' : '#doneActionBtn');
         if (rev) await page.fill('#doneReviseText', '請修一下');
         await page.click(rev ? '#doneReviseSubmit' : '#doneConfirmSubmit');
         await page.waitForSelector(`${rev ? '#doneReviseErr' : '#doneConfirmErr'} .done-reload`, { timeout: 5000 });
@@ -453,8 +458,8 @@ for (const [name, mutate, seed] of [
         ok('the modal stays open (the guest decides) and the block is unchanged', await modalShown(page, rev ? 'doneReviseModal' : 'doneConfirmModal') && (await doneBlock(page)).state !== 'confirmed');
         if (name.startsWith('the finals') && !rev) {
           await Promise.all([page.waitForNavigation({ waitUntil: 'load' }), page.click(`#doneConfirmErr .done-reload`)]);
-          await page.waitForSelector('.fg-tile', { timeout: 5000 });   // the finals gallery (was .photo-card)
-          const tileIds = () => page.$$eval('.fg-tile', ts => ts.map(t => t.dataset.photoId));
+          await page.waitForSelector('.photo-card', { timeout: 5000 });   // the finals grid
+          const tileIds = () => page.$$eval('.photo-card', ts => ts.map(t => t.dataset.photoId));
           ok('重新載入 reloads the page: the new finals folder is what is listed', (await tileIds()).every(id => id.startsWith('shoot/精修二/')) && (await tileIds()).length > 0, JSON.stringify(await tileIds()));
           ok('and the block is back in its open state', (await doneBlock(page)).state === 'open');
         }
@@ -472,10 +477,10 @@ for (const [name, mutate, seed] of [
     async page => {
       const out = [];
       const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
-      await page.waitForSelector('#doneConfirmBtn', { timeout: 5000 });
+      await page.waitForSelector('#doneActionBtn', { timeout: 5000 });
       m.state.project.client_confirmed_at = '2026-09-22T01:00:00.000Z';
       m.state.project.client_confirmed_by = 'photographer';
-      await page.click('#doneConfirmBtn');
+      await page.click('#doneActionBtn');
       await page.click('#doneConfirmSubmit');
       await page.waitForFunction(CONFIRMED_UP, null, { timeout: 5000 });
       const b = await doneBlock(page);

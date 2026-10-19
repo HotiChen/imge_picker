@@ -1,14 +1,16 @@
-// The client's answer on a delivered project: the status block under the delivery bar and its
-// modals — 確認完成 and 需要修改 (docs/delivery.md, client confirmation; docs/revision-pins.md §7.3).
+// The client's answer on a delivered project: the status block under the delivery bar, the one
+// action button at the bottom of the 驗收頁 and their modals — 確認完成, the round and 需要修改
+// (docs/delivery.md, client confirmation and "The 驗收頁 is the 毛片 page"; docs/revision-pins.md §7.3).
 //
 // Moved out of js/pick.js. pick.js keeps what the page state is (mode, view, confirmedAt, the
 // header-carrying fetch) and calls DeliveryDone.render(pc) whenever the view is re-applied; this
-// file owns the block, its modals and the two requests' flow. `pc` is the PickController.
+// file owns the block, the button, its modals and the requests' flow. `pc` is the PickController.
 //
-// With pins on the finals (js/revision-pins.js is on: the seat holder, `revision_drafts` an array)
-// the 需要修改 text box gives way to 「送出修改 N 張」 and its dialog, and the 「上一輪的修改資訊」
-// button (js/revision-history.js) appears; without them (migration not run, old Worker) the text
-// flow below is untouched.
+// The button (seat holder, not confirmed, the finals view) reads 「精修完成」 -> the 確認完成 dialog,
+// or, with pins waiting to be sent (js/revision-pins.js is on: `revision_drafts` an array),
+// 「送出（N 張）」 -> the round dialog. With pins on, the strip offers 「上一輪的修改資訊」
+// (js/revision-history.js); without them (migration not run, old Worker) it offers the old 需要修改
+// text request, untouched.
 //
 // Only in the delivered mode: outside it neither the block nor its modals exist (removed, never
 // hidden). Every string that came from the server (the revision text) goes through textContent.
@@ -30,6 +32,7 @@
         remove() {
             document.getElementById('deliveryDone')?.remove();
             this.removeModals();
+            this.removeAction();
             if (window.RevisionHistory) RevisionHistory.close(true);
         },
 
@@ -72,7 +75,7 @@
                 if (pc.isOwner && pc.revisionMessage) kids.push(text('delivery-done-msg', 'deliveryDoneMsg', pc.revisionMessage));
             } else {
                 kids.push(text('delivery-done-status', 'deliveryDoneStatus',
-                    pc.isOwner ? (pins ? '滿意的話請按「確認完成」，需要調整請點照片標示後按「送出修改」' : '滿意的話請按「確認完成」，需要調整請按「需要修改」') : '尚待選片人確認完成'));
+                    pc.isOwner ? (pins ? '滿意的話請按「精修完成」；要修改就點照片按「標示修改」，標好後按「送出」' : '滿意的話請按「精修完成」，需要調整請按「需要修改」') : '尚待選片人確認完成'));
             }
             // a draft that is not saved yet (offline / refused): said here too, not only in the lightbox
             if (pins && !confirmed && RevisionPins.status) {
@@ -80,34 +83,12 @@
                 save.setAttribute('role', 'status');
                 kids.push(save);
             }
-            // buttons: the seat holder only, and none once confirmed
+            // the seat holder only, and nothing once confirmed: the one action button at the bottom (renderAction) and,
+            // in the strip, the history entry (pins) or the old 需要修改 text request (migration not run)
             if (pc.isOwner && !confirmed) {
                 const actions = document.createElement('div');
                 actions.className = 'delivery-done-actions';
-                const ok = document.createElement('button');
-                ok.id = 'doneConfirmBtn';
-                ok.type = 'button';
-                ok.className = 'btn btn-success';
-                ok.textContent = '確認完成';
-                ok.addEventListener('click', () => this.openModal(pc, 'confirm'));
-                actions.append(ok);
                 if (pins) {
-                    // a sent round is frozen and only one is open at a time: no second submit until the photographer delivers again
-                    if (!revising) {
-                        const n = RevisionPins.photoCount();
-                        const send = document.createElement('button');
-                        send.id = 'doneRoundBtn';
-                        send.type = 'button';
-                        send.className = 'btn btn-outline';
-                        send.textContent = `送出修改 ${n} 張`;
-                        send.disabled = n === 0;
-                        send.addEventListener('click', () => this.openModal(pc, 'round'));
-                        actions.append(send);
-                        if (n === 0) {
-                            const hint = text('delivery-done-hint', 'doneRoundHint', '點照片進入標示修改');
-                            actions.append(hint);
-                        }
-                    }
                     if (window.RevisionHistory && RevisionHistory.visible()) {
                         const hist = document.createElement('button');
                         hist.id = 'doneHistoryBtn';
@@ -126,12 +107,45 @@
                     rev.addEventListener('click', () => this.openModal(pc, 'revision'));
                     actions.append(rev);
                 }
-                kids.push(actions);
+                if (actions.children.length) kids.push(actions);
                 this.ensureModals(pc);
+                // the finals only: the 毛片 download list (回到毛片) has nothing to confirm or mark there
+                if (pc.view === 'finals') this.renderAction(pc); else this.removeAction();
             } else {
                 this.removeModals();
+                this.removeAction();
             }
             el.replaceChildren(...kids);
+        },
+
+        // The 驗收頁's one action button, fixed at the bottom (desktop: bottom-right; css/styles.css .done-action-bar).
+        // Pins waiting to be sent: 「送出（N 張）」 -> the round dialog; none: 「精修完成」 -> the 確認完成 dialog.
+        // It always asks first; the dialogs and their requests are the ones below (submitRound / submit).
+        // N counts only drafts that can still be sent (a sent round is frozen: RevisionPins.editable).
+        draftPhotos() {
+            return pinsOn() && RevisionPins.editable ? RevisionPins.photoCount() : 0;
+        },
+        renderAction(pc) {
+            let bar = document.getElementById('doneActionBar');
+            if (!bar) {
+                bar = document.createElement('div');
+                bar.id = 'doneActionBar';
+                bar.className = 'done-action-bar';
+                const b = document.createElement('button');
+                b.id = 'doneActionBtn';
+                b.type = 'button';
+                b.className = 'btn btn-success';
+                b.addEventListener('click', () => this.openModal(this.pc, this.draftPhotos() ? 'round' : 'confirm'));
+                bar.append(b);
+                document.body.append(bar);
+                document.body.classList.add('done-action-on');
+            }
+            const n = this.draftPhotos();
+            bar.firstChild.textContent = n ? `送出（${n} 張）` : '精修完成';
+        },
+        removeAction() {
+            document.getElementById('doneActionBar')?.remove();
+            document.body.classList.remove('done-action-on');
         },
 
         removeModals() {
@@ -250,42 +264,9 @@
             const m = this.modalEl(kind);
             if (!m) return;
             this.showErr(kind, '');
-            if (kind === 'confirm') this.fillConfirm();
             if (kind === 'round') this.fillRound();
             m.classList.add('active');
             if (kind === 'revision') setTimeout(() => document.getElementById('doneReviseText')?.focus(), 30);
-        },
-
-        // 確認完成 with drafts still unsent (a client who marked photos and pressed the wrong button): say so, and make
-        // the way forward — going back to send them — the main button; confirming anyway is the quiet one. Always
-        // rebuilt from the drafts as they are now, so reopening the dialog never keeps an old state.
-        fillConfirm() {
-            document.getElementById('doneConfirmUnsent')?.remove();
-            document.getElementById('doneConfirmBack')?.remove();
-            const submit = document.getElementById('doneConfirmSubmit');
-            if (!submit) return;
-            const n = pinsOn() ? RevisionPins.photoCount() : 0;
-            // with unsent drafts confirming is the quiet choice (outline), else the green main button
-            submit.textContent = n ? '仍要確認完成' : '確認完成';
-            submit.classList.toggle('btn-success', !n);
-            submit.classList.toggle('btn-outline', !!n);
-            if (!n) return;
-            const p = document.createElement('p');
-            p.id = 'doneConfirmUnsent';
-            p.className = 'pick-over-line done-round-warn';
-            p.textContent = `你還有 ${n} 張照片的標示沒有送出。現在確認完成，這些標示會被丟掉，攝影師看不到。`;
-            document.getElementById('doneConfirmErr')?.before(p);
-            const back = document.createElement('button');
-            back.id = 'doneConfirmBack';
-            back.type = 'button';
-            back.className = 'btn btn-success';
-            back.textContent = `回去送出修改（${n} 張）`;
-            back.addEventListener('click', () => {
-                if (this.busy) return;
-                this.closeModal('confirm');
-                this.openModal(this.pc, 'round');
-            });
-            submit.after(back);
         },
 
         // the round dialog's title, rows and empty-note warning, from the drafts as they are now

@@ -1,5 +1,5 @@
 /* Pins on the delivered finals (js/revision-pins.js, js/revision-history.js, js/pin-layer.js;
-   docs/revision-pins.md §6.1). The 驗收頁 and its lightbox are the dark client page: tokens from
+   docs/revision-pins.md §6.1). The 驗收頁 is the dark client page: tokens from
    css/styles.css only, no new :root. Every rule is scoped to a class these files create. */
 
 /* ── the pin layer: numbered pins over an <img> (PinLayer.attach) ───────────── */
@@ -17,51 +17,16 @@
 .pin-layer-pin:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
 
 /* guest strings: shown as text, isolated from the surrounding direction */
-.rp-note, .rp-text, .rh-note, .rh-name, .rh-pinnote, .done-round-name { unicode-bidi: isolate; overflow-wrap: anywhere; }
+.rh-note, .rh-name, .rh-pinnote, .done-round-name { unicode-bidi: isolate; overflow-wrap: anywhere; }
 
-/* ── tile badge ─────────────────────────────────────────────────────────────── */
-.fg-badge {
-  position: absolute; right: 6px; bottom: 6px; z-index: 1; min-width: 22px; height: 22px; padding: 0 6px; border-radius: 11px;
-  display: inline-flex; align-items: center; justify-content: center; pointer-events: none;
-  background: var(--accent); color: #1a1408; font: 600 12px/1 var(--font-sans); font-variant-numeric: tabular-nums;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, .5);
-}
-
-/* ── the lightbox: toggle and drawer ────────────────────────────────────────── */
-.rp-toggle { border-color: var(--ink-35); }
-.rp-toggle[aria-pressed="true"] { background: var(--accent); color: #1a1408; border-color: var(--accent); }
-.rp-drawer {
-  flex: 0 0 auto; height: min(190px, 36%); overflow-y: auto; padding: 8px 16px 10px;   /* fixed: the photo must not move under a tapping finger */ background: var(--surface);
-  border-bottom: 1px solid var(--border); color: var(--ink); font-size: 14px;
-}
-.rp-hint { color: var(--ink-70); font-size: 13px; margin-bottom: 6px; }
-.rp-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
-.rp-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.rp-row[aria-current="true"] .rp-num { background: #fff; }
+/* the pin number in the round history's large view (js/revision-history.js) */
 .rp-num {
   flex: 0 0 auto; width: 24px; height: 24px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center;
   background: var(--accent); color: #1a1408; font: 600 12px/1 var(--font-sans);
 }
-.rp-note {
-  flex: 1 1 auto; min-width: 0; min-height: 40px; padding: 6px 10px; font: inherit; font-size: 16px;   /* 16px: iOS does not zoom */
-  background: var(--bg); color: var(--ink); border: 1px solid var(--border); border-radius: 4px;
-}
-.rp-note:focus { outline: 2px solid var(--accent); outline-offset: 0; }
-.rp-text { flex: 1 1 auto; min-width: 0; color: var(--ink); white-space: pre-wrap; }
-.rp-count { flex: 0 0 auto; color: var(--ink-55); font: 12px var(--font-mono); }
-.rp-del {
-  flex: 0 0 auto; width: 40px; height: 40px; padding: 0; background: transparent; color: var(--ink-70);
-  border: 1px solid var(--border); border-radius: 4px; font-size: 18px; cursor: pointer;
-}
-.rp-del:hover { color: var(--ink); border-color: var(--ink-55); }
-.rp-status { min-height: 0; margin-top: 6px; font-size: 12px; color: var(--ink-55); }
-.rp-status:empty { display: none; }
-.rp-status[data-kind="error"] { color: var(--reject); }
-.rp-status[data-kind="offline"] { color: var(--review); }
 
 /* ── the status block and the round dialog ──────────────────────────────────── */
 .delivery-done-save { flex-basis: 100%; order: 4; font-size: 12px; color: var(--review); }
-.delivery-done-hint { align-self: center; font-size: 12px; color: var(--ink-55); }
 .done-round-list { list-style: none; margin: 8px 0; padding: 0; display: flex; flex-direction: column; gap: 6px; max-height: 32dvh; overflow-y: auto; }
 .done-round-item { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .done-round-item img { flex: 0 0 auto; width: 56px; height: 40px; object-fit: cover; background: var(--bg-deep); border-radius: 3px; }
@@ -111,7 +76,6 @@ html.rh-open, html.rh-open body { overflow: hidden; }
 .rh-pinnote { flex: 1 1 auto; min-width: 0; white-space: pre-wrap; }
 
 @media (max-width: 768px) {
-  .rp-drawer { height: min(180px, 40%); padding: 6px 12px 8px; }
   .rh-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (prefers-reduced-motion: reduce) { .pin-layer-pin { transition: none; } }

@@ -1,15 +1,17 @@
 // Pins on the delivered finals — the draft side (docs/revision-pins.md §4.2, §6.1, §13.1).
 //
-// The seat holder of a delivered, unconfirmed project taps a photo in the finals lightbox, places
-// numbered pins and writes a note on each; the drafts autosave to PUT /api/pick/revision-pins and
-// come back from GET /api/pick/state (`revision_drafts`). js/delivery-done.js turns the drafts into
-// a round (「送出修改 N 張」); js/revision-history.js shows the earlier rounds.
+// The seat holder of a delivered, unconfirmed project opens a photo in the standard preview (the
+// 驗收頁 is the 毛片 page, docs/delivery.md), places numbered pins and writes a note on each with the
+// same 標示修改 / note editor / list as picking (js/pick.js syncPinUI, which reads and writes through
+// this store); the drafts autosave to PUT /api/pick/revision-pins and come back from GET
+// /api/pick/state (`revision_drafts`). js/delivery-done.js turns the drafts into a round (the
+// bottom 「送出（N 張）」); js/revision-history.js shows the earlier rounds.
 //
 // This file owns: the draft store and its save queue (debounced, retried, flushed on leaving),
-// the lightbox hooks js/finals-gallery.js calls (toolbar toggle, pin layer, note drawer), the tile
-// badge, and the plain-Chinese texts for every error code of the contract.
+// the pins of an open (sent) round for the read-only preview, the card badge count, and the
+// plain-Chinese texts for every error code of the contract.
 //
-// Off (every hook gone, nothing in the DOM) unless: the seat holder, delivered mode, not confirmed,
+// Off (nothing of it on the page) unless: the seat holder, delivered mode, not confirmed,
 // and `revision_drafts` is an ARRAY — null means the migration has not run, absent means a viewer
 // or an old Worker; both keep the old 需要修改 text flow. Every string that came from outside (a
 // note, a file name) reaches the DOM through textContent / .value / setAttribute only.
@@ -23,14 +25,7 @@
     // the codes after which the page's own picture is stale: re-read the state instead of retrying
     const STALE_CODES = ['revision_open', 'already_confirmed', 'not_delivered'];
 
-    const el = (tag, cls, txt) => {
-        const e = document.createElement(tag);
-        if (cls) e.className = cls;
-        if (txt != null) e.textContent = txt;
-        return e;
-    };
     const byCodePoint = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
-    const note = text => { if (typeof toast !== 'undefined') toast.info(text); };
 
     const RevisionPins = {
         pc: null,
@@ -46,11 +41,8 @@
         chain: Promise.resolve(),
         status: '',                  // '' | 'offline' | 'error'
         statusText: '',
-        round: null,                 // the open round's pins by file name, for the read-only lightbox
+        round: null,                 // the open round's pins by file name, for the read-only preview
         roundFor: '',
-        pinMode: false,
-        selected: -1,
-        lb: null,                    // the open lightbox: { bar, root, toggle, stage, img, photo, layer, drawer }
         _hooked: false,
 
         // ── texts ─────────────────────────────────────────────────────────
@@ -86,7 +78,7 @@
         },
 
         // ── when the pin UI exists ─────────────────────────────────────────
-        // Called by js/pick.js each time the view is applied (before the gallery is mounted).
+        // Called by js/pick.js each time the view is applied.
         sync(pc) {
             this.pc = pc;
             this._hook();
@@ -98,9 +90,8 @@
             this.sig = sig;
             if (!this.loaded) this.adopt(pc.revisionDrafts);
             this.editable = !pc.revisionOpen;
-            if (!this.editable && this.pinMode) { this.pinMode = false; this.selected = -1; }
             this._syncRound();
-            this.refreshLb();
+            this._preview();
         },
 
         reset() {
@@ -111,13 +102,14 @@
             this.marks = new Map(); this.ver = new Map(); this.dirty = new Set();
             this.status = ''; this.statusText = '';
             this.round = null; this.roundFor = '';
-            this.pinMode = false; this.selected = -1;
-            this._teardownLb();
+            this._changed();
+            this._preview();
         },
 
-        // The gallery options (js/finals-gallery.js mount): nothing at all while off.
-        galleryOpts() {
-            return this.enabled ? { lightboxExtras: this.extras, tileBadge: photo => this.badge(photo) } : {};
+        // the open preview (js/pick.js) re-reads what it shows: the photo's pins, editable or not
+        _preview() {
+            const pc = this.pc;
+            if (pc && pc.syncPinUI) pc.syncPinUI();
         },
 
         // Replace the drafts with the server's (a fresh state read): local unsaved edits are dropped.
@@ -134,7 +126,7 @@
             this.loaded = true;
             this.setStatus('', '');
             this._changed();
-            if (this.lb) this._paint();
+            this._preview();
         },
 
         // ── the numbers ───────────────────────────────────────────────────
@@ -150,13 +142,16 @@
             return [...this.marks.entries()].sort((a, b) => byCodePoint(a[0], b[0])).map(([k, list]) => ({ k, n: list.length }));
         },
         keys() { return [...this.marks.keys()].sort(byCodePoint); },
-        badge(photo) {
-            if (!this.enabled || !this.editable) return null;
-            const list = this.marks.get(photo.id);
-            return list && list.length ? String(list.length) : null;
+        // the card badge: the draft pins of a photo (0 = none, and none at all while a sent round is open)
+        badgeCount(key) {
+            if (!this.enabled || !this.editable) return 0;
+            const list = this.marks.get(key);
+            return list ? list.length : 0;
         },
-        _changed() {
-            if (window.FinalsGallery && FinalsGallery.refreshBadges) FinalsGallery.refreshBadges();
+        // `key`: only that photo's pins changed (its card alone is redrawn); none: all of them may have
+        _changed(key) {
+            const pc = this.pc;
+            if (pc && pc.refreshPinBadges) pc.refreshPinBadges(key);
             if (window.DeliveryDone && DeliveryDone.refresh) DeliveryDone.refresh();
         },
 
@@ -168,26 +163,11 @@
             this.dirty.add(key);
             if (this.status === 'error') this.setStatus('', '');
             this.schedule();
-            this._changed();
+            this._changed(key);
         },
-        addPin(key, x, y) {
-            const cur = this.marksOf(key);
-            if (cur.length >= PinLayer.PIN_MAX) { note(`每張照片最多標示 ${PinLayer.PIN_MAX} 個位置`); return -1; }
-            cur.push({ x, y, note: '' });
-            this._commit(key, cur);
-            return cur.length - 1;
-        },
-        setNote(key, i, text) {
-            const cur = this.marksOf(key);
-            if (!cur[i]) return;
-            cur[i].note = text;
-            this._commit(key, cur);
-        },
-        removePin(key, i) {
-            const cur = this.marksOf(key);
-            if (!cur[i]) return;
-            cur.splice(i, 1);
-            this._commit(key, cur);
+        // a photo's FULL pin list, in order (js/pick.js _saveMarks: the same shape the picking pins use)
+        setMarks(key, list) {
+            this._commit(key, PinLayer.clean(list, PinLayer.PIN_MAX));
         },
 
         // ── saving ────────────────────────────────────────────────────────
@@ -237,8 +217,7 @@
         setStatus(kind, text) {
             this.status = kind;
             this.statusText = text || '';
-            const s = document.getElementById('rpStatus');
-            if (s) { s.textContent = this.statusText; s.dataset.kind = kind; }
+            if (this.pc && this.pc.renderPinStatus) this.pc.renderPinStatus();   // the line in the open preview
             if (window.DeliveryDone && DeliveryDone.refresh) DeliveryDone.refresh();
         },
         // leaving the page: what is still unsent goes out with keepalive (the answer is not awaited)
@@ -287,202 +266,11 @@
             // a file name two photos share cannot be matched to one of them: no pins shown for it
             r.data.photos.forEach(p => { if (count.get(p.name) === 1) byName.set(p.name, PinLayer.clean(p.pins, PinLayer.PIN_MAX)); });
             this.round = { byName };
-            if (this.lb) this._paint();
+            this._preview();
         },
-        pinsFor(photo) {
-            if (!photo) return [];
-            if (this.editable) return this.marksOf(photo.id);
-            return (this.round && this.round.byName.get(photo.name)) || [];
-        },
-
-        // ── the lightbox ──────────────────────────────────────────────────
-        extras: {
-            toolbar(bar, api) {
-                const rp = RevisionPins;
-                rp.lb = { bar, root: api.root, toggle: null, stage: null, img: null, photo: null, layer: null, drawer: null };
-                rp._ensureToggle();
-            },
-            onShow(photo, stage, img) {
-                const rp = RevisionPins, lb = rp.lb;
-                if (!lb) return;
-                lb.photo = photo; lb.stage = stage; lb.img = img;
-                if (!lb.layer) {
-                    lb.layer = PinLayer.attach(stage, img, {
-                        max: PinLayer.PIN_MAX, readOnly: true,
-                        onAdd: (x, y) => rp._onAdd(x, y),
-                        onSelect: i => rp._onSelect(i),
-                        onFull: () => note(`每張照片最多標示 ${PinLayer.PIN_MAX} 個位置`),
-                    });
-                }
-                // the new photo's pins wait for its own picture (the old one's box is not theirs)
-                lb.layer.layer.style.visibility = 'hidden';
-                const show = () => { img.removeEventListener('load', show); img.removeEventListener('error', show); if (lb.layer) { lb.layer.refresh(); lb.layer.layer.style.visibility = ''; } };
-                img.addEventListener('load', show);
-                img.addEventListener('error', show);
-                rp.selected = -1;
-                rp._paint();
-                if (img.complete && img.naturalWidth > 0) show();
-            },
-            onClose() {
-                const rp = RevisionPins;
-                rp._teardownLb();
-                rp.pinMode = false;
-                rp.selected = -1;
-                if (rp.dirty.size) rp.flush();          // what is typed is on its way now, not in 600 ms
-            },
-            blockSwipe() { return RevisionPins.pinMode && RevisionPins.editable; },
-        },
-
-        _teardownLb() {
-            const lb = this.lb;
-            if (!lb) return;
-            this.lb = null;
-            if (lb.layer) lb.layer.destroy();
-            if (lb.drawer) lb.drawer.remove();
-            if (lb.toggle) lb.toggle.remove();
-        },
-
-        _ensureToggle() {
-            const lb = this.lb;
-            if (!lb) return;
-            const want = this.enabled && this.editable;
-            if (!want) { if (lb.toggle) { lb.toggle.remove(); lb.toggle = null; } return; }
-            if (lb.toggle) return;
-            const b = el('button', 'fg-lb-btn rp-toggle', '標示修改');
-            b.id = 'rpPinToggle';
-            b.type = 'button';
-            b.setAttribute('aria-pressed', 'false');
-            b.addEventListener('click', () => this.setPinMode(!this.pinMode));
-            lb.bar.insertBefore(b, lb.bar.querySelector('#fgLbDownload'));
-            lb.toggle = b;
-            this._syncToggle();
-        },
-        _syncToggle() {
-            const t = this.lb && this.lb.toggle;
-            if (!t) return;
-            t.textContent = this.pinMode ? '完成' : '標示修改';
-            t.setAttribute('aria-pressed', this.pinMode ? 'true' : 'false');
-        },
-        setPinMode(on) {
-            if (on && !(this.enabled && this.editable)) return;
-            this.pinMode = !!on;
-            this.selected = -1;
-            this._syncToggle();
-            this._paint();
-        },
-        refreshLb() {
-            if (!this.lb) return;
-            this._ensureToggle();
-            this._syncToggle();
-            if (this.lb.layer) this._paint();
-        },
-
-        // pins on the picture + the drawer, for the photo on show
-        _paint() {
-            const lb = this.lb;
-            if (!lb || !lb.layer) return;
-            const pins = this.pinsFor(lb.photo);
-            lb.layer.set(pins);
-            if (this.selected >= pins.length) this.selected = -1;
-            lb.layer.select(this.selected);
-            lb.layer.setReadOnly(!(this.pinMode && this.editable));
-            this._drawer(pins);
-        },
-        _onAdd(x, y) {
-            const lb = this.lb;
-            if (!lb || !lb.photo || !this.pinMode || !this.editable) return;
-            const i = this.addPin(lb.photo.id, x, y);
-            if (i < 0) return;
-            this.selected = i;
-            this._paint();
-            // the tap that placed the pin is the gesture that may raise the phone keyboard: focus now
-            const input = lb.drawer && lb.drawer.querySelectorAll('.rp-note')[i];
-            if (input) input.focus({ preventScroll: true });
-        },
-        _onSelect(i) {
-            const lb = this.lb;
-            if (!lb) return;
-            if (this.editable && !this.pinMode) this.setPinMode(true);
-            this.selected = i;
-            this._paint();
-            const input = lb.drawer && lb.drawer.querySelectorAll('.rp-note')[i];
-            if (input) input.focus({ preventScroll: true });
-        },
-
-        // The drawer sits between the bar and the photo (a phone keyboard rises from the bottom, so the
-        // note input is never under it). Editable in pin mode; read-only when a sent round has pins here.
-        _drawer(pins) {
-            const lb = this.lb;
-            const show = this.editable ? this.pinMode : pins.length > 0;
-            if (!show) { if (lb.drawer) { lb.drawer.remove(); lb.drawer = null; } return; }
-            if (!lb.drawer) {
-                lb.drawer = el('div', 'rp-drawer');
-                lb.drawer.id = 'rpDrawer';
-                lb.root.insertBefore(lb.drawer, lb.stage);
-            }
-            const key = lb.photo && lb.photo.id;
-            const hint = el('div', 'rp-hint', this.editable
-                ? `點照片上要修改的位置（這張已標 ${pins.length}/${PinLayer.PIN_MAX}）`
-                : '已送出的修改標示（唯讀）');
-            hint.id = 'rpHint';
-            const list = el('ol', 'rp-list');
-            pins.forEach((m, i) => {
-                const row = el('li', 'rp-row');
-                if (i === this.selected) row.setAttribute('aria-current', 'true');
-                const num = el('span', 'rp-num', String(i + 1));
-                row.append(num);
-                if (this.editable) {
-                    const input = el('input', 'rp-note');
-                    input.type = 'text';
-                    input.maxLength = PinLayer.NOTE_MAX;
-                    input.value = m.note;
-                    input.placeholder = '這裡要修改什麼？例：這裡痘痘';
-                    input.enterKeyHint = 'done';
-                    input.setAttribute('dir', 'auto');
-                    input.setAttribute('autocomplete', 'off');
-                    input.setAttribute('aria-label', `標示 ${i + 1} 的備註`);
-                    const count = el('span', 'rp-count', `${PinLayer.len(m.note)}/${PinLayer.NOTE_MAX}`);
-                    input.addEventListener('input', () => {
-                        const clean = PinLayer.sanitize(input.value);
-                        if (clean !== input.value) input.value = clean;
-                        count.textContent = `${PinLayer.len(clean)}/${PinLayer.NOTE_MAX}`;
-                        this.setNote(key, i, clean);
-                        if (lb.layer) lb.layer.set(this.pinsFor(lb.photo));   // the pin's accessible name follows
-                        if (lb.layer) lb.layer.select(this.selected);
-                    });
-                    input.addEventListener('focus', () => {
-                        this.selected = i;
-                        if (lb.layer) lb.layer.select(i);
-                        list.querySelectorAll('.rp-row').forEach((r, k) => { if (k === i) r.setAttribute('aria-current', 'true'); else r.removeAttribute('aria-current'); });
-                    });
-                    input.addEventListener('keydown', e => {
-                        if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229) { e.preventDefault(); input.blur(); }
-                    });
-                    const del = el('button', 'rp-del', '×');
-                    del.type = 'button';
-                    del.setAttribute('aria-label', `刪除標示 ${i + 1}`);
-                    del.addEventListener('click', () => { this.removePin(key, i); this.selected = -1; this._paint(); });
-                    row.append(input, count, del);
-                } else {
-                    const t = el('span', 'rp-text', m.note || '（沒有說明）');
-                    t.setAttribute('dir', 'auto');
-                    row.append(t);
-                }
-                list.append(row);
-            });
-            const status = el('div', 'rp-status', this.statusText);
-            status.id = 'rpStatus';
-            status.setAttribute('role', 'status');
-            status.dataset.kind = this.status;
-            // rebuilt in place; a note being typed keeps its focus only when nothing structural changed
-            const keep = document.activeElement;
-            const keepIndex = keep && keep.classList && keep.classList.contains('rp-note') && lb.drawer.contains(keep)
-                ? [...lb.drawer.querySelectorAll('.rp-note')].indexOf(keep) : -1;
-            lb.drawer.replaceChildren(hint, list, status);
-            if (keepIndex >= 0 && keepIndex < pins.length && this.selected !== -1) {
-                const again = lb.drawer.querySelectorAll('.rp-note')[keepIndex];
-                if (again) again.focus({ preventScroll: true });
-            }
+        // the open round's pins of the photo called `name` (copies), [] when it has none or none is open
+        roundPins(name) {
+            return ((this.round && this.round.byName.get(name)) || []).map(m => ({ x: m.x, y: m.y, note: m.note }));
         },
     };
 

@@ -4,8 +4,8 @@
 //   - the pin data rules that used to be spread over annotation.js and pick.js: the one shape guard
 //     (`clean`), the note rules the Worker enforces (`sanitize`, `len`, the limits), and
 //   - a DOM overlay (`attach`) that draws numbered pins over an <img> shown with object-fit: contain —
-//     the finals lightbox and the round history. The picking stage keeps drawing its pins on the
-//     annotation canvas (it follows zoom and pan); only the data rules are shared with it.
+//     the round history. The picking stage and the 驗收頁 draw their pins on the annotation canvas
+//     (it follows zoom and pan); only the data rules are shared with them.
 //
 // Pins are `{x, y, note}`, x/y as 0–1 fractions of the PHOTO (not of the box it is shown in). Every
 // string that came from outside reaches the DOM through textContent / setAttribute only.

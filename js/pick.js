@@ -340,9 +340,12 @@
                 document.getElementById('pickModalTools')?.remove();
                 this._galleryUIRemoved = true;
             }
-            if (window.RevisionPins) RevisionPins.sync(this);   // before the gallery is mounted: it asks for the hooks
+            if (window.RevisionPins) RevisionPins.sync(this);   // first: the pin UI (syncPinUI) and the done block read it
             this._renderDeliveryBar();
             this._syncCompletion();
+            // the 驗收頁 (css/styles.css body.review-stage): the thin strip the web album had — no title (the header and
+            // the guest bar carry it), the bar only for 回到毛片
+            document.body.classList.toggle('review-stage', this.active && this.mode === 'delivered' && this.view === 'finals' && !this._completionWanted());
             this._syncFinals();
             this._renderDone();
             this._renderAlbumEntry();
@@ -374,8 +377,8 @@
             const titleEl = document.getElementById('deliveryTitle');
             const btn = document.getElementById('deliveryProofsBtn');
             if (this.mode !== 'delivered' || this._completionWanted()) { el.hidden = true; return; }
-            // in the finals gallery the bar is a thin strip, and only there when it
-            // carries the 下載毛片原檔 entry (the hero already has the title)
+            // on the 驗收頁 (body.review-stage) the bar is part of a thin strip, and only shown when it
+            // carries the 回到毛片 entry (the header and the phone guest bar carry the title)
             el.classList.toggle('fg-bar-proofs', this.allowProofDownload);
             const t = this.projectTitle ? ` · ${this.projectTitle}` : '';
             if (titleEl) titleEl.textContent = this.view === 'finals' ? `精修成品${t}` : `毛片${t}`;
@@ -392,8 +395,8 @@
         },
 
         // ── the finals gallery (js/finals-gallery.js, docs/delivery.md) ──────
-        // The delivered finish page as a web album: only in delivered mode and the
-        // finals view. Picking, an undelivered project (finals kept) and the
+        // The web album: only on the 完成頁 (a confirmed delivery; _syncFinals mounts it nowhere else).
+        // Picking, the 驗收頁, an undelivered project (finals kept) and the
         // 下載毛片原檔 list have none of it in the DOM. app.js's renderPhotoGrid
         // hands the photos over (renderFinals) instead of building cards.
         _finalsOn() {
@@ -401,19 +404,25 @@
                 !!window.FinalsGallery && FinalsGallery.isMounted();
         },
 
+        // Only the 完成頁 (a confirmed delivery, its own light page) has the web-album gallery. The 驗收頁 (delivered,
+        // not confirmed) is the 毛片 page: app.js's standard grid and preview (zoom, pins through syncPinUI), Tim
+        // 2026-10-19 「精修要修改的方式跟毛片一樣」 (docs/delivery.md, "The 驗收頁 is the 毛片 page").
         _syncFinals() {
             if (!window.FinalsGallery) return;
-            const want = this.active && this.mode === 'delivered' && this.view === 'finals';
-            if (!want) { FinalsGallery.unmount(); return; }
-            // the confirmed delivery has its own light page: the gallery is mounted into it (no hero of
-            // its own, light theme); otherwise into the dark page's content column, as always
-            const cp = this._completionWanted() && CompletionPage.isMounted();
-            const content = cp ? CompletionPage.galleryHost() : document.querySelector('main.main-content > .content');
+            const cp = this.active && this.mode === 'delivered' && this.view === 'finals' &&
+                this._completionWanted() && CompletionPage.isMounted();
+            if (!cp) {
+                if (FinalsGallery.isMounted()) {
+                    FinalsGallery.unmount();
+                    // the gallery held the photos: the standard grid gets them back. Any view that is not the 完成頁
+                    // shows the standard grid (picking, 毛片, the 驗收頁), so this is the right render for each of them
+                    if (this.active && this.app && this.app.filteredPhotos) this._renderGrid();
+                }
+                return;
+            }
+            const content = CompletionPage.galleryHost();
             if (!content) return;
-            // the other kind of host (a confirmation just came in, or went): rebuild the gallery there
-            const switched = FinalsGallery.isMounted() && this._finalsInCp !== cp;
-            if (switched) FinalsGallery.unmount();
-            this._finalsInCp = cp;
+            const fresh = !FinalsGallery.isMounted();
             const studio = this.studio || {};
             FinalsGallery.mount(content, {
                 title: this.projectTitle,
@@ -421,13 +430,12 @@
                 drive: driveManager,
                 onDownload: (e, photo) => this.download(e, photo),
                 onFolder: folder => this.app && this.app.handleLoadPhotos(folder),
-                ...(cp ? { hero: false, theme: 'light' } : {}),
-                // pins on the finals (js/revision-pins.js): nothing unless that feature is on for this page
-                ...(!cp && window.RevisionPins ? RevisionPins.galleryOpts() : {}),
+                hero: false,
+                theme: 'light',
             });
-            if (FinalsGallery.refreshBadges) FinalsGallery.refreshBadges();
-            // a fresh gallery has no photos yet; the open folder's are already loaded
-            if (switched && this.app && this.app.filteredPhotos) this.renderFinals(this.app.filteredPhotos);
+            // a fresh gallery has no photos yet; the open folder's are already loaded. app.js renderPhotoGrid hands
+            // them to the gallery (renderFinals) and empties the standard grid the 驗收頁 had
+            if (fresh && this.app && this.app.filteredPhotos) this.app.renderPhotoGrid();
         },
 
         // ── the 完成頁 (js/completion-page.js, docs/delivery.md) ─────────────
@@ -1411,12 +1419,71 @@
             if (deskHead) deskHead.textContent = '備註・標示';
         },
 
+        // ── pins on the 驗收頁 (docs/delivery.md "The 驗收頁 is the 毛片 page") ──
+        // The same preview, buttons, note editor and list as picking; only the store differs: the revision drafts
+        // (js/revision-pins.js, PUT /api/pick/revision-pins), never the selections. On exactly where RevisionPins is
+        // on: the seat holder, delivered, the finals view, not confirmed, the migration run.
+        _reviewPins() {
+            return this.active && this.mode === 'delivered' && this.view === 'finals' && !!window.RevisionPins && RevisionPins.enabled;
+        },
+        // may pins on `key` be added / changed / removed now (picking: a ♥ photo while picking is open; the 驗收頁:
+        // any final, unless a sent round is open — that one is read-only)
+        _pinEditable(key) {
+            if (!key) return false;
+            if (this._reviewPins()) return RevisionPins.editable;
+            const s = this.selections.get(key);
+            return this.canEdit() && !!s && s.rating > 0;
+        },
+        // does `key` have a pin list at all (picking: only a ♥ photo; the 驗收頁: every final)
+        _pinVisible(key) {
+            if (!key) return false;
+            if (this._reviewPins()) return true;
+            const s = this.selections.get(key);
+            return !!s && s.rating > 0;
+        },
+        // the 📍N badge of a card (js/app.js createPhotoCard): the 驗收頁's draft pins only
+        pinBadgeCount(photo) {
+            return photo && this._reviewPins() ? RevisionPins.badgeCount(photo.id) : 0;
+        },
+        // `key`: only that photo's card; none: every card (a fresh state read, a reset)
+        refreshPinBadges(key) {
+            const sel = key ? `#photoGrid .photo-card[data-photo-id="${CSS.escape(key)}"]` : '#photoGrid .photo-card';
+            document.querySelectorAll(sel).forEach(card => {
+                const n = this.pinBadgeCount({ id: card.dataset.photoId });
+                const old = card.querySelector('.pv-pin-badge');
+                if (!n || !this.app) { old?.remove(); return; }
+                if (old) old.outerHTML = this.app.pinBadge(n);
+                else card.querySelector('.photo-image-container')?.insertAdjacentHTML('beforeend', this.app.pinBadge(n));
+            });
+        },
+        // the draft save state (尚未儲存… / a refusal) in the open preview: the strip under it is covered there
+        renderPinStatus() {
+            const cc = document.querySelector('.canvas-container');
+            let el = document.getElementById('rpStatus');
+            const text = this._reviewPins() ? RevisionPins.statusText : '';
+            if (!text || !cc) { el?.remove(); return; }
+            if (!el) {
+                el = document.createElement('div');
+                el.id = 'rpStatus';
+                el.className = 'pick-pin-status';
+                el.setAttribute('role', 'status');
+                cc.appendChild(el);
+            }
+            el.textContent = text;
+            el.dataset.kind = RevisionPins.status;
+        },
+        // js/app.js closeModal: leave pin mode; on the 驗收頁 what was typed goes out now, not in 600 ms
+        onPreviewClose() {
+            this._exitPinMode(true);
+            if (this._reviewPins() && RevisionPins.dirty.size) RevisionPins.flush();
+        },
+
         // The row of buttons over the photo, built on demand and only for the
         // seat owner (a viewer has neither notes nor pins to work with).
         _ensureToolsRow() {
             const cc = document.querySelector('.canvas-container');
             if (!cc) return null;
-            const wanted = this.isPicker() && !this.isGallery();
+            const wanted = (this.isPicker() && !this.isGallery()) || this._reviewPins();
             let row = document.getElementById('pickModalTools');
             if (!wanted) { row?.remove(); this._exitPinMode(true); return null; }
             if (row) return row;
@@ -1462,9 +1529,7 @@
         },
 
         _enterPinMode() {
-            if (!this.canEdit() || !this._pinPhotoId) return;
-            const sel = this.selections.get(this._pinPhotoId);
-            if (!sel || !(sel.rating > 0)) return;
+            if (!this._pinEditable(this._pinPhotoId)) return;
             this.pinMode = true;
             document.getElementById('modalSidebar')?.classList.remove('active');
             annotationManager.setPinMode(true);
@@ -1491,9 +1556,8 @@
             }
             const id = this._pinPhotoId;
             const row = this._ensureToolsRow();
-            const sel = id ? this.selections.get(id) : null;
-            const hearted = !!sel && sel.rating > 0;
-            const editable = this.canEdit() && hearted;
+            const visible = this._pinVisible(id);
+            const editable = this._pinEditable(id);
             if (!editable && this.pinMode) this._exitPinMode(true);
             // the note editor lives only while its pin does, on this photo, editable
             const ed = this._pinEd;
@@ -1504,10 +1568,11 @@
                 if (editable) left.appendChild(this.pinMode ? this._pinDoneBtn : this._pinBtn);
             }
             this._renderPinHint();
-            const marks = hearted ? this.marksOf(id) : [];
+            this.renderPinStatus();
+            const marks = visible ? this.marksOf(id) : [];
             const cur = this._currentPinPhoto();
             if (cur && window.annotationManager) annotationManager.setMarks(marks);
-            this._renderPinList(hearted, editable, marks);
+            this._renderPinList(visible, editable, marks);
         },
 
         _renderPinHint() {
@@ -1530,7 +1595,7 @@
         _renderPinList(visible, editable, marks) {
             const group = document.getElementById('noteInputGroup');
             let sec = document.getElementById('pickPinsSection');
-            if (!visible || !group || !this.isPicker()) { sec?.remove(); return; }
+            if (!visible || !group || !(this.isPicker() || this._reviewPins())) { sec?.remove(); return; }
             if (!sec) {
                 sec = document.createElement('div');
                 sec.id = 'pickPinsSection';
@@ -1593,22 +1658,28 @@
 
         // ── pin data (all writes go through queueUpsert, full list each time) ─
         marksOf(key) {
+            if (this._reviewPins()) {
+                if (RevisionPins.editable) return RevisionPins.marksOf(key);
+                // a sent round is matched by file name: the listed photo's own name (the Worker names round photos
+                // and listings alike, key.split('/').pop())
+                const p = this.app && this.app.photos.find(x => x.id === key);
+                return RevisionPins.roundPins(p ? p.name : String(key).split('/').pop());
+            }
             const s = this.selections.get(key);
             return s && s.rating > 0 && Array.isArray(s.marks)
                 ? s.marks.map(m => ({ x: m.x, y: m.y, note: m.note })) : [];
         },
 
         _saveMarks(key, marks) {
+            if (this._reviewPins()) { RevisionPins.setMarks(key, marks); return; }
             const s = this.selections.get(key);
             if (!s || !(s.rating > 0)) return;
             this.queueUpsert(key, s.rating, s.note, marks);
         },
 
         addPin(key, x, y) {
-            if (!this.canEdit()) return;
+            if (!this._pinEditable(key)) return;
             const cur = this.marksOf(key);
-            const s = this.selections.get(key);
-            if (!s || !(s.rating > 0)) return;
             if (cur.length >= PIN_MAX) {
                 if (typeof toast !== 'undefined') toast.info(`每張照片最多標示 ${PIN_MAX} 個位置`);
                 return;
@@ -1630,7 +1701,7 @@
             const cc = document.querySelector('.canvas-container');
             const key = this._pinPhotoId;
             const mark = this.marksOf(key)[index];
-            if (!cc || !mark || !this.pinMode || !this.canEdit()) return;
+            if (!cc || !mark || !this.pinMode || !this._pinEditable(key)) return;
             this.closePinEditor(true);
             const ed = document.createElement('div');
             ed.id = 'pickPinEditor';
@@ -1687,12 +1758,11 @@
         // just put in the list), or rebuild it if the pin count differs.
         _refreshPinList() {
             const id = this._pinPhotoId;
-            const sel = id ? this.selections.get(id) : null;
-            const hearted = !!sel && sel.rating > 0;
-            const marks = hearted ? this.marksOf(id) : [];
+            const visible = this._pinVisible(id);
+            const marks = visible ? this.marksOf(id) : [];
             const rows = document.querySelectorAll('#pickPinList .pick-pin-item');
             if (rows.length !== marks.length || !rows.length) {
-                this._renderPinList(hearted, this.canEdit() && hearted, marks);
+                this._renderPinList(visible, this._pinEditable(id), marks);
                 return;
             }
             rows.forEach((li, i) => {
@@ -1704,7 +1774,7 @@
         },
 
         setPinNote(key, index, note) {
-            if (!this.canEdit()) return;
+            if (!this._pinEditable(key)) return;
             const cur = this.marksOf(key);
             if (!cur[index]) return;
             cur[index].note = note;
@@ -1712,7 +1782,7 @@
         },
 
         removePin(key, index) {
-            if (!this.canEdit()) return;
+            if (!this._pinEditable(key)) return;
             const cur = this.marksOf(key);
             if (!cur[index]) return;
             cur.splice(index, 1);

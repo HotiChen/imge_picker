@@ -303,7 +303,13 @@ Still open:
 - Link a registered client account to a pick seat (`pickers.user_id`).
 - Storage usage tracking per photographer (limit by GB, not album count).
 - Cap the number of photo keys listed in the change-notification email.
-- 精修（交件後的成品圖庫）lightbox 要有跟毛片一樣的放大／縮小（Tim 2026-10-15，iPhone 實測：
+- ✅ 已做 2026-10-19（`claude/retouch-stage` 分支上的 agent 工作，未合併，待 Tim 實機驗）：**驗收頁就是毛片頁**
+  （Tim：「精修要修改的方式跟毛片一樣」）。交件、未確認時用標準照片格＋標準預覽（可縮放／平移，沒有 ♥），
+  標示用毛片同一套（標示修改／完成、上方說明框、備註・標示清單），存進修改草稿（`PUT /api/pick/revision-pins`，
+  Worker 不動）；底部一顆按鈕：沒標示「精修完成」→ 確認完成對話框，有標示「送出（N 張）」→ 送出對話框。
+  完成頁不動。`docs/delivery.md`「The 驗收頁 is the 毛片 page」；測試 91–93（新）與 14、15、18、26、28、33、37、
+  39、47、61、62、65、85、87（改）。下一條（精修 lightbox 放大縮小）因此一併解決。
+- ~~精修（交件後的成品圖庫）lightbox 要有跟毛片一樣的放大／縮小~~（2026-10-19 由上一條解決）（Tim 2026-10-15，iPhone 實測：
   看精修圖要刻意放大縮小，現在沒辦法順手看細節）。毛片預覽的 pinch / − + / 平移已有
   （`js/app.js` 預覽、`js/visual-viewport.js`）；交件圖庫（`js/pick.js` delivery gallery）
   只有上一張／下一張＋下載。待討論：直接共用毛片的縮放模組 vs. 另做；注意交件圖庫只
