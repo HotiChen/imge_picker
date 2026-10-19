@@ -8,6 +8,7 @@ import { base, suite } from '../lib/harness.mjs';
 import { MOBILE } from '../lib/env.mjs';
 import { ADMIN_PLAIN } from '../lib/auth-mocks.mjs';
 import { pickFakeWorker } from '../lib/pick-fake.mjs';
+import { measureWithTextPush, compareToBaseline } from '../lib/layout-baseline.mjs';
 
 export default async function register() {
 const lines = () => { const out = []; return { out, ok: (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`) }; };
@@ -26,10 +27,13 @@ const snap = page => page.evaluate(() => {
   }
   return out;
 });
-const sameAsBase = (now, baseline) => {
-  const bad = [];
-  for (const k of Object.keys(baseline)) if (JSON.stringify(now[k]) !== JSON.stringify(baseline[k])) bad.push(k + ' ' + JSON.stringify(now[k]) + ' vs ' + JSON.stringify(baseline[k]));
-  return bad;
+// Text set in the machine's fallback fonts moves text-sized boxes by a px or so between machines (lib/layout-baseline.mjs):
+// a value that moves when the text metrics are pushed is compared with ±TEXT_TOL px, everything else exactly.
+const TEXT_TOL = 2;
+const vsBase = async (page, baseline) => {
+  const { now, pushed } = await measureWithTextPush(page, () => snap(page));
+  const r = compareToBaseline(baseline, now, pushed, TEXT_TOL);
+  return { now, bad: r.bad, loose: r.loose };
 };
 
 const metrics = page => page.evaluate(() => {
@@ -178,10 +182,9 @@ const BASE_GUEST_1280 = {".header-left":{"shown":true,"l":0,"t":17,"w":280,"h":2
       const { out, ok } = lines();
       await page.waitForSelector('#photoGrid .photo-card, #photoGrid > *', { timeout: 5000 }).catch(() => {});
       await page.waitForTimeout(600);
-      const now = await snap(page);
+      const { now, bad } = await vsBase(page, BASE_GUEST_390);
       if (process.env.DUMP) console.log('DUMP_GUEST_390 ' + JSON.stringify(now));
       ok('floor: >= 6 header elements measured', Object.keys(now).length >= 6, String(Object.keys(now).length));
-      const bad = sameAsBase(now, BASE_GUEST_390);
       ok(`every header element equals the baseline (${Object.keys(BASE_GUEST_390).length} compared)`, Object.keys(BASE_GUEST_390).length >= 6 && bad.length === 0, bad.join(' | '));
       ok('返回後台 not shown for a guest', !now['#backToAdminLink'] || !now['#backToAdminLink'].shown);
       const g = await metrics(page);
@@ -199,9 +202,8 @@ const BASE_GUEST_1280 = {".header-left":{"shown":true,"l":0,"t":17,"w":280,"h":2
     async page => {
       const { out, ok } = lines();
       await page.waitForTimeout(800);
-      const now = await snap(page);
+      const { now, bad } = await vsBase(page, BASE_GUEST_1280);
       if (process.env.DUMP) console.log('DUMP_GUEST_1280 ' + JSON.stringify(now));
-      const bad = sameAsBase(now, BASE_GUEST_1280);
       ok(`every header element equals the baseline (${Object.keys(BASE_GUEST_1280).length} compared, floor 6)`, Object.keys(BASE_GUEST_1280).length >= 6 && bad.length === 0, bad.join(' | '));
       return out;
     },
@@ -218,9 +220,9 @@ const BASE_GUEST_1280 = {".header-left":{"shown":true,"l":0,"t":17,"w":280,"h":2
       // The studio-name label (js/studio-who.js, suite 81) now sits before 登出 and shifts everything left of it by its
       // own width: that is the intended change, so this old-layout baseline is taken with the label hidden (suite 81 tests the label).
       await page.addStyleTag({ content: '.studio-who { display: none !important; }' });
-      const now = await snap(page);
+      const { now, bad, loose } = await vsBase(page, BASE_ADMIN_1280);
       if (process.env.DUMP) console.log('DUMP_ADMIN_1280 ' + JSON.stringify(now));
-      const bad = sameAsBase(now, BASE_ADMIN_1280);
+      ok('positive control: the text push did find text-sized values (else the tolerance is never in play)', loose > 0, String(loose));
       ok(`every header element equals the baseline (${Object.keys(BASE_ADMIN_1280).length} compared, floor 8)`, Object.keys(BASE_ADMIN_1280).length >= 8 && bad.length === 0, bad.join(' | '));
       ok('positive control: 上傳 / 相本書 / 登出 are still in the header at 1280', ['#uploadPageBtn', '#openBookEditorBtn', '#studio-logout'].every(k => now[k] && now[k].shown));
       ok('返回後台 hidden at 1280', !now['#backToAdminLink'] || !now['#backToAdminLink'].shown);

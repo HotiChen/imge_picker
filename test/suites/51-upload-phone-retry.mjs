@@ -11,6 +11,7 @@ import { base, suite } from '../lib/harness.mjs';
 import { MOBILE, PIXEL } from '../lib/env.mjs';
 import { ADMIN_PLAIN, adminMock } from '../lib/auth-mocks.mjs';
 import { uploadFake } from '../lib/upload-fake.mjs';
+import { measureWithTextPush, compareToBaseline } from '../lib/layout-baseline.mjs';
 
 export default async function register() {
 const lines = () => { const out = []; return { out, ok: (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`) }; };
@@ -364,15 +365,18 @@ const fixture = () => {
       const { out, ok } = lines();
       await page.waitForSelector('.sb-node', { timeout: 5000 });
       await page.evaluate(() => { queue.push({ id: 'x1', file: { name: 'a.jpg', size: 1000 }, path: 'a.jpg', state: 'pending', progress: 0, error: null }); renderQueue(); document.getElementById('queueSection').style.display = ''; });
-      const now = await page.evaluate(([SEL, PROPS]) => Object.fromEntries(SEL.map(s => { const e = document.querySelector(s); const c = getComputedStyle(e); const r = e.getBoundingClientRect(); return [s, { ...Object.fromEntries(PROPS.map(p => [p, c[p]])), rect: [Math.round(r.left), Math.round(r.top), Math.round(r.width), Math.round(r.height)] }]; })), [BASE.SEL, BASE.PROPS]);
-      let cmp = 0; const diffs = [];
-      for (const s of BASE.SEL) for (const p of [...BASE.PROPS, 'rect']) {
-        // the back link's text (and so its width and the logo's x) changes on purpose
-        if (s === '.back-btn' && (p === 'width' || p === 'rect')) continue;
-        cmp++;
-        if (JSON.stringify(now[s][p]) !== JSON.stringify(BASE.out[s][p])) diffs.push(`${s} ${p}: ${JSON.stringify(BASE.out[s][p])} -> ${JSON.stringify(now[s][p])}`);
-      }
-      ok(`${cmp} (floor >= 300) computed values compared, all equal`, cmp >= 300 && diffs.length === 0, diffs.slice(0, 6).join(' | '));
+      const measure = () => page.evaluate(([SEL, PROPS]) => Object.fromEntries(SEL.map(s => { const e = document.querySelector(s); const c = getComputedStyle(e); const r = e.getBoundingClientRect(); return [s, { ...Object.fromEntries(PROPS.map(p => [p, c[p]])), rect: [Math.round(r.left), Math.round(r.top), Math.round(r.width), Math.round(r.height)] }]; })), [BASE.SEL, BASE.PROPS]);
+      // the baseline was recorded on another machine: a value that moves when the text metrics are pushed is set by the
+      // fallback fonts and gets ±TEXT_TOL px (lib/layout-baseline.mjs); every other value is compared exactly.
+      // TEXT_TOL: here the text-sized boxes differ by up to 7px (.drop-btns top: three text lines above it), so 8.
+      const TEXT_TOL = 8;
+      const { now, pushed } = await measureWithTextPush(page, measure);
+      // the back link's text (and so its width and the logo's x) changes on purpose
+      const skip = (s, p) => s === '.back-btn' && (p === 'width' || p === 'rect');
+      const base0 = Object.fromEntries(BASE.SEL.map(s => [s, Object.fromEntries([...BASE.PROPS, 'rect'].map(p => [p, BASE.out[s][p]]))]));
+      const { compared: cmp, loose, bad: diffs } = compareToBaseline(base0, now, pushed, TEXT_TOL, skip);
+      ok(`${cmp} (floor >= 300) computed values compared, all equal (${loose} text-sized ones within ±${TEXT_TOL}px)`, cmp >= 300 && diffs.length === 0, diffs.slice(0, 8).join(' | '));
+      ok('positive control: some values are exact (not text-sized), and the text push found text-sized ones', loose > 0 && cmp - loose >= 250, `${loose} of ${cmp}`);
       ok('tree is a 230px column left of main (positive)', now['.sidebar'].width === '230px' && now['.sidebar'].rect[0] === 0 && now['.main'].rect[0] === 230, JSON.stringify([now['.sidebar'].rect, now['.main'].rect]));
       ok('target text on desktop still points left', /左側/.test(await page.textContent('#targetDisplay')));
       return out;
