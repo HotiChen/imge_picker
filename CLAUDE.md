@@ -67,7 +67,18 @@ jobs end to end first; no new big feature outside that list.
 2. Implement until green.
 3. Mutation-test the new code (syntax-check each mutant first — see the worker
    command below). Every mutant killed or explained as equivalent.
-4. While developing run only related tests; **run everything before commit/merge.**
+4. While developing run only related tests (`ONLY=` for the browser, the worker suite takes seconds).
+   Before commit/merge run what the change's risk calls for (table below), not always everything.
+
+### Which tests before commit/merge
+| What changed | Run |
+|---|---|
+| text, style, one small page fix | the related suites + the worker suite |
+| an ordinary feature (one page / one flow) | the related suites + their neighbours + the worker suite |
+| shared files (`css/styles.css`, `js/app.js`, `test/lib/`, the harness), the Worker, permissions, tokens, data writes, money | the full browser suite via `run-parallel` + the worker suite |
+
+The full suite runs at most once per merge, only through `run-parallel` (never the old
+single-process run, never hand-split groups). Never skip or delete a test to get green.
 
 Commands:
 - Worker (seconds): `node --test "worker/test/*.test.mjs"`, and
@@ -77,8 +88,10 @@ Commands:
 - Album layout engine (seconds, CI does not run it): `node --test book_editor/test/auto_layout.test.mjs`
 - Album spread templates + planner (seconds, CI does not run it): `node --test book_editor/test/spread_templates.test.mjs book_editor/test/plan_spreads.test.mjs`
   (all three: `node --test book_editor/test/*.test.mjs`); PNG overview of the library: `node book_editor/test/render-templates.mjs <outDir>`
-- Browser (minutes): `NODE_PATH=/tmp/pwinstall/node_modules node test/run.mjs` (suites 01–56, no 44; `test/README.md`)
-  - Only matching suites: `ONLY=<text in suite name> ...` (a filter matching nothing fails)
+- Browser, related suites (fast): `NODE_PATH=/tmp/pwinstall/node_modules ONLY=<text in suite name> node test/run.mjs`
+  (a filter matching nothing fails; `test/README.md`)
+- Browser, full suite (~10 min, 3 parallel workers): `NODE_PATH=/tmp/pwinstall/node_modules node test/run-parallel.mjs`
+  (`JOBS=4` is faster but less proven; a file that throws or hangs is reported as FAIL and the run goes on)
   - Playwright lives outside the repo; Chromium at /opt/pw-browsers. In the cloud
     session `/tmp/pwinstall` does not exist: use `NODE_PATH=/opt/node-tools/node_modules`.
 - CI runs the worker suite only, not the browser suite.
@@ -91,6 +104,9 @@ Known false-pass shapes — assert the positive case too:
 - fixture refused by an earlier guard, so the guard under test never runs
 - test fake diverging from the real API (the 206 bug) — fakes mirror real responses
 
+Suites 36, 50, 51 and 52 used to fail on every run; fixed at the root in 98eaec9 (36), f78b0b0 (50/51),
+0efe67f + a71e81d (52), and two full `run-parallel` runs after that were all green (106 files, 1301 suites). If one
+of them fails now, treat it as a regression, not as a known flake.
 Known flaky: book_editor "no token is minted for an empty folder set" fails under load.
 Also seen under load, green alone (3/3 on HEAD): admin "plan 編輯方案…" and admin
 "the list row picks up 精修中 too, not just the detail panel".
