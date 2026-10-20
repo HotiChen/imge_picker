@@ -494,6 +494,7 @@ class App {
                 if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') this.navigatePhoto(-1);
                 if (e.key === 'ArrowRight' || e.key === 'ArrowDown') this.navigatePhoto(1);
                 if (e.key === 'Escape') this.closeModal();
+                if (this._spacePick(e, true)) e.preventDefault();
                 if (e.key >= '0' && e.key <= '5') {
                     const rating = parseInt(e.key);
                     const photo = this.filteredPhotos[this.currentPhotoIndex];
@@ -502,7 +503,7 @@ class App {
                         if (starsContainer) ratingManager.setRating(starsContainer, rating, photo.id);
                     }
                 }
-            } else if (this._gridKeyNav(e)) {
+            } else if (this._gridKeyNav(e) || this._spacePick(e, false)) {
                 e.preventDefault();
             } else if (this.selectedPhotoIds.size > 0) {
                 // 如果 Modal 沒開但有選取照片，執行批量操作
@@ -816,6 +817,11 @@ class App {
         this.markCurrent(this._currentPhotoId);
     }
 
+    // Focus is on something with its own keys: a select, an editable box, a dialog, or the folder picker is open.
+    _foreignKeyTarget(t) {
+        return t.tagName === 'SELECT' || t.isContentEditable || !!t.closest('[role="dialog"]') || !!document.querySelector('.picker-overlay');
+    }
+
     // 照片區的方向鍵（viewer 關著、焦點不在輸入框 / select / 對話框）：←→ 一張、↑↓ 一排，
     // 目前那張發光、預覽區跟著換、捲進畫面；Enter 開啟。是這個鍵就回傳 true。
     _gridKeyNav(e) {
@@ -825,8 +831,7 @@ class App {
         if (!grid || !grid.children.length || !photos.length) return false;
         // select / 可編輯框 / 對話框有自己的方向鍵；按鈕和連結（含 ♥）的 Enter 也是它們自己的
         const t = e.target;
-        if (t.tagName === 'SELECT' || t.isContentEditable || t.closest('[role="dialog"]')) return false;
-        if (document.querySelector('.picker-overlay')) return false;
+        if (this._foreignKeyTarget(t)) return false;
         const i = photos.findIndex(p => p.id === this._currentPhotoId);
         if (e.key === 'Enter') {
             if (i < 0 || t.closest('button, a, [role="button"]')) return false;
@@ -851,6 +856,37 @@ class App {
             this.updatePreviewPane(photos[next]);
             this.markCurrent(photos[next].id, true, true);
         }
+        return true;
+    }
+
+    // Guest picking, keyboard: Space = the ♥ of "the current photo" (the grid's glowing card, or the open viewer's photo).
+    // It clicks that photo's own ♥ element, so the click handler runs (togglePickHeart with all its guards, or the 修圖中
+    // notice) exactly as for the mouse; nothing here touches a rating. Returns true only when it handled the key (the caller
+    // then preventDefaults, so an unhandled Space keeps scrolling the page). Not handled: the photographer's review view,
+    // a delivery gallery, modifier keys, auto-repeat (a held key toggles once), a focused button/link (the browser already
+    // clicks it on Space), inputs/selects/dialogs/the folder picker.
+    _spacePick(e, inModal) {
+        if (e.key !== ' ' || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return false;
+        if (!window.PickController || !PickController.active || PickController.isGallery()) return false;
+        if (window.ProjectViewController && ProjectViewController.active) return false;
+        const t = e.target;
+        if (!t || !t.closest) return false;
+        // (inputs and textareas never get here: the keydown listener returns for them first)
+        if (this._foreignKeyTarget(t) || t.closest('button, a, [role="button"]')) return false;
+        let heart;
+        if (inModal) {
+            if (!this.filteredPhotos[this.currentPhotoIndex]) return false;
+            heart = document.querySelector('#modalPhotoRating .pick-heart-btn');
+        } else {
+            const id = this._currentPhotoId;
+            if (!id || !this.filteredPhotos.some(p => p.id === id)) return false;
+            heart = document.querySelector(`.photo-card[data-photo-id="${CSS.escape(id)}"] .pick-heart-btn`);
+        }
+        if (!heart) return false;
+        // a read-only ♥ (a span: someone else's seat) has no click handler, so Space stays the browser's; except while
+        // picking is closed, where tapping it opens the 精修中 notice (js/app.js createPhotoCard) and so does Space
+        if (heart.tagName !== 'BUTTON' && PickController.phase !== 'retouching') return false;
+        if (!e.repeat) heart.click();
         return true;
     }
 
@@ -910,7 +946,7 @@ class App {
         const gallery = pickMode && PickController.isGallery();
         const heartTag = gallery ? '' : pickMode
             ? (canEdit
-                ? `<button type="button" class="pick-heart-btn${isPicked ? ' on' : ''}" title="選">♥</button>`
+                ? `<button type="button" class="pick-heart-btn${isPicked ? ' on' : ''}" title="選（空白鍵）">♥</button>`
                 : `<span class="pick-heart-btn${isPicked ? ' on' : ''}" title="選">♥</span>`)
             : (projectMode ? (isPicked ? `<span class="pick-heart-btn on" title="已選">♥</span>` : '') : '');
         // 📍N: the photographer's view of the guest's pins, or the 驗收頁's own draft pins (js/pick.js pinBadgeCount)
@@ -1069,7 +1105,7 @@ class App {
         const btn = document.createElement('button');
         btn.type = 'button';
         btn.className = 'pick-heart-btn pick-heart-static' + ((photo.rating || 0) > 0 ? ' on' : '');
-        btn.title = '選';
+        btn.title = '選（空白鍵）';
         btn.dataset.photoKey = photo.id;
         btn.textContent = '♥';
         btn.addEventListener('click', () => this.togglePickHeart(photo, btn));

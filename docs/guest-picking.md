@@ -190,6 +190,11 @@ Frontend facts that the Worker contract below does not say (`js/pick.js`, `js/ap
 - **Counter**: one counter at the bottom-left; the plan cap is only shown as a warning at submit
   (409 `pick_cap` → a dialog saying how many to remove).
 - **Desktop**: the bottom pill (count + submit) is stacked inside the sidebar column.
+- **Keyboard (desktop)**: arrow keys move the current photo, Enter opens the enlarged view, **Space picks / un-picks the
+  current photo** (grid and enlarged view), Esc closes the enlarged view. Space clicks that photo's own ♥ (`_spacePick` in
+  `js/app.js`), so every guard of a mouse click applies (viewer, locked, 精修中 notice); ignored while a button, link,
+  input or dialog has focus, with Ctrl/Alt/Shift/Cmd, on key repeat (a held Space toggles once), and on the photographer's
+  review view (`?project=`).
 - **Phone, photographer's picker header** (when the photographer opens the picker on a phone): back-to-admin
   link and a menu section, the sidebar opens by itself, empty-state copy.
 - **First-visit tour** (`js/guest-tour.js`, `css/guest-tour.css`): seat owner only, never for viewers or on
