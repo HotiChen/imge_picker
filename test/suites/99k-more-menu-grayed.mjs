@@ -65,8 +65,12 @@ for (const [name, o0, want] of CASES) {
     ok('every item >= 44px (positive: 8 items)', items.filter(i => i.id).length === 8 && items.filter(i => i.id).every(i => i.h >= 44), JSON.stringify(items.map(i => i.h)));
     const offs = items.filter(i => i.off), ons = items.filter(i => i.id && !i.off);
     const red = byId(items, 'pd-archive-btn').color;
+    // text-only gray (Tim): no fill on a grayed item; contrast is measured against the menu's own surface
+    const menuBg = await page.$eval('#pd-more-menu', e => getComputedStyle(e).backgroundColor);
+    ok('grayed items have no fill of their own and a lighter text colour than an active item (as many grayed as expected)', offs.length === Object.values(want).filter(Boolean).length &&
+      offs.every(i => i.bg === 'rgba(0, 0, 0, 0)' && lum(i.color) > lum(byId(items, 'pd-settings-btn').color)), JSON.stringify(offs.map(i => [i.label, i.color, i.bg])));
     ok('grayed items use the gray (never the danger red, contrast >= 4.5); active danger items stay red', offs.length === Object.values(want).filter(Boolean).length &&
-      red !== byId(items, 'pd-settings-btn').color && offs.every(i => i.color !== red && contrast(i.color, i.bg) >= 4.5) &&
+      red !== byId(items, 'pd-settings-btn').color && offs.every(i => i.color !== red && contrast(i.color, menuBg) >= 4.5) &&
       ons.filter(i => ['pd-reset-seat-btn', 'pd-archive-btn', 'pd-delete-btn'].includes(i.id)).every(i => i.color === red),
       JSON.stringify(items.map(i => [i.label, i.color, i.bg])));
     ok('grayed is not an opacity trick (fully opaque)', await page.$$eval('#pd-more-menu .is-off', els => els.every(e => getComputedStyle(e).opacity === '1')));
