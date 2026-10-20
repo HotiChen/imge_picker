@@ -4,6 +4,7 @@ import { base, suite } from '../lib/harness.mjs';
 import { ADMIN } from '../lib/auth-mocks.mjs';
 import { ADMIN_BUCKET, ADM_REVS, admDelivered, adminDropDefaultFinal, adminPickFinals, chipTexts } from '../lib/delivery-helpers.mjs';
 import { pickFakeWorker } from '../lib/pick-fake.mjs';
+import { openSettings } from '../lib/project-helpers.mjs';
 
 export default async function register() {
 const admConfirmPosts = m => m.requests.filter(r => r.method === 'POST' && /\/api\/admin\/projects\/[^/]+\/confirm$/.test(r.path));
@@ -128,7 +129,7 @@ for (const [name, o, re, wantBtn, wantReqs] of [
       const out = [];
       const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
       await page.waitForSelector('.pd-head', { timeout: 5000 });
-      await page.waitForSelector('#pd-plan #pd-plan-save', { timeout: 5000 });
+      await page.waitForSelector('#pd-plan #pd-plan-save', { state: 'attached', timeout: 5000 });   // (the plan lives in the closed 設定 modal since 2026-10-20: a page-is-drawn wait)
       if (re) {
         ok('the status line', re.test(await page.textContent('#pd-confirm-status')), await page.textContent('#pd-confirm-status'));
         ok('the guest\'s confirmation is told apart from the photographer\'s', name.includes('guest') ? !/攝影師代為確認/.test(await page.textContent('#pd-confirm-status')) : true);
@@ -354,7 +355,8 @@ await suite('upload — 沒有 ?project=（或空值）：返回鍵是「← 返
     async page => {
       const out = [];
       const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
-      await page.waitForSelector('#pd-allow-proof-dl', { timeout: 5000 });
+      await page.waitForSelector('#pd-allow-proof-dl', { state: 'attached', timeout: 5000 });
+      await openSettings(page);   // the switch is in the ⋯ → 設定 modal (2026-10-20)
       const patches = () => m.requests.filter(r => r.method === 'PATCH').map(r => r.body);
       ok('the switch is present in 選片中 (any phase) and off by default',
         (await page.$eval('#pd-allow-proof-dl', i => i.checked)) === false);
@@ -366,7 +368,8 @@ await suite('upload — 沒有 ?project=（或空值）：返回鍵是「← 返
       ok('the switch stays on', await page.$eval('#pd-allow-proof-dl', i => i.checked));
       ok('and the server has it', m.state.project.allow_proof_download === true);
       await page.reload({ waitUntil: 'load' });
-      await page.waitForSelector('#pd-allow-proof-dl', { timeout: 5000 });
+      await page.waitForSelector('#pd-allow-proof-dl', { state: 'attached', timeout: 5000 });
+      await openSettings(page);
       ok('reopening the detail shows it on (state comes from the project)', await page.$eval('#pd-allow-proof-dl', i => i.checked));
       await page.click('#pd-allow-proof-dl');
       await page.waitForFunction(() => !document.getElementById('pd-allow-proof-dl').disabled, null, { timeout: 3000 });
@@ -384,7 +387,8 @@ await suite('upload — 沒有 ?project=（或空值）：返回鍵是「← 返
     async page => {
       const out = [];
       const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
-      await page.waitForSelector('#pd-allow-proof-dl', { timeout: 5000 });
+      await page.waitForSelector('#pd-allow-proof-dl', { state: 'attached', timeout: 5000 });
+      await openSettings(page);
       await page.click('#pd-allow-proof-dl');
       await page.waitForFunction(() => document.getElementById('pd-proofdl-err').textContent !== '', null, { timeout: 3000 });
       ok('the server message is shown', /allow_proof_download/.test(await page.textContent('#pd-proofdl-err')));
@@ -400,7 +404,8 @@ await suite('upload — 沒有 ?project=（或空值）：返回鍵是「← 返
   await suite('admin — 專案本來就開著開關時，畫面一打開就是開的',
     `${base}/admin.html#project=proj-sw-on`,
     async page => {
-      await page.waitForSelector('#pd-allow-proof-dl', { timeout: 5000 });
+      await page.waitForSelector('#pd-allow-proof-dl', { state: 'attached', timeout: 5000 });
+      await openSettings(page);   // (open, so the state is read from what the photographer sees)
       return [(await page.$eval('#pd-allow-proof-dl', i => i.checked)) ? 'ok    switch reads allow_proof_download from the project' : 'FAIL  switch not checked'];
     },
     { before: m.attach, initScript: ADMIN });

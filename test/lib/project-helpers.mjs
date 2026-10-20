@@ -51,3 +51,10 @@ export async function moreClick(page, sel) {
 }
 // the detail page is drawn (the header's ⋯ is there): what suites used to wait on #pd-reset-seat-btn for
 export const waitProjectPage = page => page.waitForSelector('#pd-more-btn', { timeout: 5000 });
+
+// admin.html project page (2026-10-20): 設定 (the 專案設定 modal, with the old edit form as 一般設定) is the first item of the ⋯ menu (the header's ✎ 編輯 button is gone).
+// openSettings opens the menu, presses it and waits for the modal (the menu closes and focus goes to ⋯ meanwhile).
+export async function openSettings(page) {
+  await moreClick(page, '#pd-settings-btn');
+  await page.waitForSelector('#pd-edit-modal', { state: 'visible', timeout: 3000 });
+}

@@ -258,7 +258,7 @@ await suite('index.html — 專案選片：沒有 ?project= 時，攝影師模�
       const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
       await page.waitForSelector('[data-open-project]', { timeout: 5000 });
       await page.click('[data-open-project]');
-      await page.waitForSelector('#pd-submissions .pd-submission');
+      await page.waitForSelector('#pd-steps .pd-submission', { state: 'attached' });   // 送出紀錄 is part of 進度 since 2026-10-20 (closed details)
       const r = await page.evaluate(() => ({
         submission: document.querySelector('.pd-submission').textContent,
         selectionRow: document.querySelector('#project-detail-body table tbody tr').textContent,

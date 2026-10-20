@@ -6,7 +6,7 @@
 import { base, suite } from '../lib/harness.mjs';
 import { ADMIN_PLAIN } from '../lib/auth-mocks.mjs';
 import { pickFakeWorker } from '../lib/pick-fake.mjs';
-import { openCreateForm } from '../lib/project-helpers.mjs';
+import { openCreateForm, openSettings, waitProjectPage } from '../lib/project-helpers.mjs';
 
 export default async function register() {
 const ADMIN_URL = `${base}/admin.html`;
@@ -159,7 +159,7 @@ const setStatus = async (page, v, n) => { await page.selectOption('#pl-status', 
       await page.fill('#pl-q', ''); await page.selectOption('#pl-type', 'all'); await page.selectOption('#pl-status', 'picking');
       await waitRows(page, 3);
       await page.click('[data-project-row="proj-A"] [data-open-project]');
-      await page.waitForSelector('#pd-sec-settings', { timeout: 5000 });
+      await page.waitForSelector('#pd-sec-selections', { timeout: 5000 });   // any section: the page is drawn (設定 became a modal 2026-10-20)
       const dh = new URLSearchParams((await hash(page)).slice(1));
       ok('detail hash has project=proj-A AND keeps status=picking', dh.get('project') === 'proj-A' && dh.get('status') === 'picking', await hash(page));
       ok('detail is up, list hidden', (await shown(page, '#project-detail-panel')) && !(await shown(page, '#proj-recent-list')));
@@ -171,7 +171,7 @@ const setStatus = async (page, v, n) => { await page.selectOption('#pl-status', 
 
       // whole-row click + browser back
       await page.click('[data-project-row="proj-A"] .pd-owner');
-      await page.waitForSelector('#pd-sec-settings', { timeout: 5000 });
+      await page.waitForSelector('#pd-sec-selections', { timeout: 5000 });   // any section: the page is drawn (設定 became a modal 2026-10-20)
       ok('the whole-row click still opens the detail', (await hash(page)).includes('project=proj-A'), await hash(page));
       await page.goBack();
       await waitList(page);
@@ -188,7 +188,7 @@ const setStatus = async (page, v, n) => { await page.selectOption('#pl-status', 
     `${ADMIN_URL}#project=proj-A&status=picking&q=%E7%8E%8B`,
     async page => {
       const { out, ok } = lines();
-      await page.waitForSelector('#pd-sec-settings', { timeout: 5000 });
+      await page.waitForSelector('#pd-sec-selections', { timeout: 5000 });   // any section: the page is drawn (設定 became a modal 2026-10-20)
       ok('the detail of proj-A opened from the combined hash', (await page.textContent('.pd-head h3')) === '王小明 婚紗');
       await page.click('#pd-back-btn');
       await waitList(page);
@@ -282,8 +282,8 @@ const setStatus = async (page, v, n) => { await page.selectOption('#pl-status', 
       await page.waitForFunction(() => document.getElementById('proj-create-result').style.display === 'block', null, { timeout: 4000 });
       ok('create without one still works (positive control)', (await page.$eval('#proj-create-err', x => x.textContent.trim())) === '');
       await page.click('[data-open-project]');
-      await page.waitForSelector('#pd-edit-btn', { timeout: 5000 });
-      await page.click('#pd-edit-btn');   // 攝影類別 is in the ✎ 編輯 modal (project page 2026-10-19)
+      await waitProjectPage(page);
+      await openSettings(page);   // 攝影類別 is in the ⋯ → 設定 modal, 一般設定 (project page 2026-10-20)
       await page.waitForSelector('#pd-type-select', { timeout: 5000 });
       await page.selectOption('#pd-type-select', '親子');
       await page.click('#pd-edit-save');
@@ -305,8 +305,8 @@ const setStatus = async (page, v, n) => { await page.selectOption('#pl-status', 
       const { out, ok } = lines();
       await waitList(page);
       await page.click('[data-project-row="proj-A"] [data-open-project]');
-      await page.waitForSelector('#pd-edit-btn', { timeout: 5000 });
-      await page.click('#pd-edit-btn');   // 攝影類別 is in the ✎ 編輯 modal (project page 2026-10-19)
+      await waitProjectPage(page);
+      await openSettings(page);   // 攝影類別 is in the ⋯ → 設定 modal, 一般設定 (project page 2026-10-20)
       await page.waitForSelector('#pd-type-select', { timeout: 5000 });
       ok('the select shows the stored 婚紗', (await page.inputValue('#pd-type-select')) === '婚紗');
       ok('header tag shows 婚紗', (await page.textContent('#pd-type-tag')).trim() === '婚紗');
@@ -317,7 +317,7 @@ const setStatus = async (page, v, n) => { await page.selectOption('#pl-status', 
       ok('stored in the fake and the header tag follows the echo', m.state.project.project_type === '親子');
       ok('a successful 儲存 closes the modal', !(await shown(page, '#pd-edit-modal')));
 
-      await page.click('#pd-edit-btn');
+      await openSettings(page);
       await page.selectOption('#pd-type-select', '其他');
       ok('其他 shows the typed box', await shown(page, '#pd-type-other'));
       await page.fill('#pd-type-other', '');
@@ -334,8 +334,8 @@ const setStatus = async (page, v, n) => { await page.selectOption('#pl-status', 
       ok('back on the list the row tag is the new category (no reload)', tag === '寵物', tag);
 
       await page.click('[data-project-row="proj-A"] [data-open-project]');
-      await page.waitForSelector('#pd-edit-btn', { timeout: 5000 });
-      await page.click('#pd-edit-btn');   // 攝影類別 is in the ✎ 編輯 modal (project page 2026-10-19)
+      await waitProjectPage(page);
+      await openSettings(page);   // 攝影類別 is in the ⋯ → 設定 modal, 一般設定 (project page 2026-10-20)
       await page.waitForSelector('#pd-type-select', { timeout: 5000 });
       ok('reopened: select is 其他 with the typed value in the box', (await page.inputValue('#pd-type-select')) === '其他' && (await page.inputValue('#pd-type-other')) === '寵物');
       await page.selectOption('#pd-type-select', '');

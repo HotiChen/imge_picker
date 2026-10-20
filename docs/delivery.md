@@ -700,12 +700,16 @@ removed anything from R2. Worker only (the button comes later); no migration.
 ## The photographer's project page (admin.html, redesigned 2026-10-19)
 
 Frontend only; no Worker field was added. Top to bottom (`renderProjectDetail`):
-- Header: title, one meta line (拍攝日期 · 攝影類別 · 挑選人), 「✎ 編輯」 and 「⋯」 (更多).
+- Header: title, one meta line (拍攝日期 · 攝影類別 · 挑選人) and 「⋯」 (更多) only (2026-10-20: the ✎ 編輯 button is gone; no element has id `pd-edit-btn` any more).
 - Status card (`#pd-status`, `data-stage`): ONE label, one 下一步 line, at most one accent button
   (`[data-primary]`). `projectStage`: 已封存 (archived_at, primary 取消封存) > 已完成 (client_confirmed_at)
   > 客人要求修改（第 N 輪） (delivered + an open request; N counts the rounds, oldest = 1) > 客人確認中
   (delivered) > 精修中 (primary ＋上傳精修 while nothing is chosen, else 交件) > 選片完成・待精修
-  (primary 開始精修) > 客人選片中. In a round, `roundPlan` reads the 精修* folders under the root: a
+  (primary 開始精修) > 準備中 > 客人選片中. 準備中 (`'new'`, 2026-10-20) is a project nobody could pick from yet: phase picking,
+  no selection, no submission, and the listing of its root (`startFinalsTarget`, a folder exists in R2 only once something is
+  in it) says the `<root>/毛片/` folder is absent; next line 「下一步：上傳毛片，再把連結給客人」, and 進度 starts with a current
+  「上傳毛片」 step. Unknown is never 準備中 (older folder layout, listing failed): it stays 客人選片中; while the first listing is
+  on its way the card says 載入中… (a refresh keeps the last listing, so it does not flash). In a round, `roundPlan` reads the 精修* folders under the root: a
   version newer than the delivered one exists → 「交付精修二」 (a repeat deliver of just that folder,
   after a confirm; the Worker resolves the round as with 更換精修), else 「＋上傳精修二」 (the locked
   upload of `nextFinalFolder`). Unknown (older project, listing failed) → the unlocked ＋上傳精修 and
@@ -728,12 +732,19 @@ Frontend only; no Worker field was added. Top to bottom (`renderProjectDetail`):
     confirm (客人將改看 X; a confirmation is cleared; open requests are closed; the client's unsent draft pins on the
     current version do not carry over) it sends the same `deliverFolders([folder])` as 交付精修二 — a repeat deliver
     of that one folder (keeps the first `delivered_at`). Not shown before the first delivery or after 取消交件.
-- 進度: ✓ / ● / ○ from what the page has (latest submission, delivered_at, rounds, confirmation);
-  開始精修 has no date (none is stored). Since 2026-10-19 merged with the activity log (below) when it has rows.
-- 「✎ 編輯」 modal: 專案名稱 / 拍攝日期 / 攝影類別 and the read-only 資料夾 line; 儲存 sends one PATCH
-  per changed field (the old requests and messages). 「⋯」 menu: 看全部毛片, 複製交件通知文案 and 取消交件
-  (delivered), 開放修改, then 重設主人, 封存, 刪除 (no submissions) in the danger colour.
-- The collapsible sections (設定, 目前選取, 訂單, 送出紀錄, 挑選人與連結) follow unchanged; 交件 is no
+- 進度: ✓ / ● / ○ from what the page has (submissions, delivered_at, rounds, confirmation); 開始精修 has no date (none is
+  stored). Since 2026-10-19 merged with the activity log (below) when it has rows. Since 2026-10-20 it also holds 送出紀錄:
+  one row per submission (oldest first: 客人送出選片, then 客人再次送出選片; ids `picked`, `picked-2` …), each with a 詳情 toggle
+  that opens `#pd-sub-<step>` (who, relationship, email, count, 未寄信, what changed since the submission before it; closed
+  by default, kept open across a redraw). There is no separate 送出紀錄 section and no `#pd-submissions`.
+- 設定 (first item of ⋯, id `pd-settings-btn`; replaces both the ✎ 編輯 button and the 設定 section): opens the 「專案設定」
+  modal (`#pd-edit-modal`; focus trap, Esc / backdrop / 關閉 close it, focus returns to ⋯; inside it scrolls, never sideways).
+  一般設定 = the old edit form (專案名稱 / 拍攝日期 / 攝影類別 and the read-only 資料夾 line; its own 儲存 sends one PATCH per
+  changed field, then closes). 專案設定 = `#pd-proofdl` (毛片下載 switch) and `#pd-plan` (方案), same behaviour as before, drawn
+  when the modal opens. A page refresh while it is open (a plan save re-reads the project) carries the open modal over, so what
+  is typed in 一般設定 is not lost. The rest of the menu: 看全部毛片, 複製交件通知文案 and 取消交件 (delivered), 開放修改, then
+  重設主人, 封存, 刪除 (no submissions) in the danger colour.
+- The collapsible sections are now 目前選取, 訂單 and 挑選人與連結 (the 設定 section and the 送出紀錄 section are gone); 交件 is no
   longer one of them.
 
 ## Activity log (project_events, built 2026-10-19)

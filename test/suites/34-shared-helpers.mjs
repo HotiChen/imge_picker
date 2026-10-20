@@ -267,8 +267,8 @@ await suite('util helpers — every page that loads a Util-using script loads js
       const info = await secInfo(page);
       // (the 交件 section and its one-liner went with the project page redesign of 2026-10-19; fmtDay now dates the 進度 steps)
       const step = await page.$eval('#pd-progress [data-step="delivered"] .pd-step-date', e => e.textContent).catch(() => null);
-      ok('the 進度 交件 step is dated 9/20 (fmtDay)', step === '9/20' && !!info.settings, JSON.stringify(step));
-      await page.waitForSelector('#pd-submissions .pd-submission', { state: 'attached', timeout: 5000 });
+      ok('the 進度 交件 step is dated 9/20 (fmtDay)', step === '9/20' && !!info.selections, JSON.stringify(step));   // (info.selections: the sections are drawn; 設定 is a modal now)
+      await page.waitForSelector('#pd-steps .pd-submission', { state: 'attached', timeout: 5000 });   // 送出紀錄 is part of 進度 since 2026-10-20
       const subs = await page.$$eval('.pd-submission', els => els.map(e => e.textContent));
       ok('floor: both submissions are listed', subs.length === 2, JSON.stringify(subs));
       ok('the submission time is 9/27 22:52 (fmtTime)', subs.some(t => t.includes('9/27 22:52') && !t.includes('2026-09-27T')), JSON.stringify(subs));

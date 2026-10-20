@@ -29,10 +29,11 @@ const DELIVERED = { phase: 'retouching', deliveredAt: '2026-09-20T00:00:00.000Z'
 const openRound = { id: 'r-open', message: '第二輪：再亮', picker_id: 'picker-0', created_at: '2026-09-22T04:00:00.000Z', resolved_at: null };
 const oldRound = { id: 'r-old', message: '第一輪：背景', picker_id: 'picker-0', created_at: '2026-09-21T03:00:00.000Z', resolved_at: '2026-09-21T09:00:00.000Z' };
 const TODAY = {
-  steps: '["picked","retouch","delivered","round-1","round-2","confirmed"]',
-  labels: JSON.stringify(['客人送出選片', '開始精修', '交件', '客人要求修改（第 1 輪）', '客人要求修改（第 2 輪）', '客人確認']),
-  marks: '✓✓✓✓●○',
-  dates: JSON.stringify(['9/12', '', '9/20', '9/21', '9/22', '']),
+  // (2026-10-20: each submission has its own row, so the two submissions below are two rows)
+  steps: '["picked","picked-2","retouch","delivered","round-1","round-2","confirmed"]',
+  labels: JSON.stringify(['客人送出選片', '客人再次送出選片', '開始精修', '交件', '客人要求修改（第 1 輪）', '客人要求修改（第 2 輪）', '客人確認']),
+  marks: '✓✓✓✓✓●○',
+  dates: JSON.stringify(['9/10', '9/12', '', '9/20', '9/21', '9/22', '']),
 };
 for (const [label, o] of [['the log is empty', {}], ['the log fetch fails (500: table missing / DB error)', { eventsStatus: 500 }]]) {
   const m = fx({ ...DELIVERED, revisions: [oldRound, openRound], ...o });

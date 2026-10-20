@@ -275,7 +275,7 @@
   .back-btn:focus-visible { outline: 2px solid var(--ink-90); outline-offset: 2px; }
   @media (max-width: 640px) { .back-btn { min-height: 44px; } }
   .proj-notice { margin: 0 0 14px; padding: 10px 14px; border-radius: 10px; background: var(--accent-dim); color: var(--ink-90); font-size: 13px; line-height: 1.6; }
-  /* Project page (Tim 2026-10-19): header (title, one meta line, ✎ 編輯 and ⋯), then the status card (one label, one
+  /* Project page (Tim 2026-10-19): header (title, one meta line and ⋯; 設定 is the menu's first item since 2026-10-20), then the status card (one label, one
      下一步 line, at most one accent button), 照片 (one row per version), 進度, then the collapsible sections. */
   .pd-head { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 12px; }
   .pd-head-main { flex: 1 1 auto; min-width: 0; }
@@ -341,8 +341,23 @@
   .pd-step-date { color: var(--ink-70); font-weight: 400; font-family: 'IBM Plex Mono', monospace; font-size: 12px; flex: none; white-space: nowrap; }
   /* a logged line can name long folders (改交精修二（原本是精修三）): it wraps, the time stays whole */
   .pd-step-label { min-width: 0; overflow-wrap: anywhere; }
+  /* a submission's row opens to its detail (送出紀錄 lives in 進度) */
+  .pd-steps li { flex-wrap: wrap; }
+  .pd-step-toggle { flex: none; margin-left: auto; min-height: 32px; padding: 0 10px; border: 1px solid var(--rule); border-radius: 8px; background: transparent; color: var(--ink-70); font: inherit; font-size: 12px; cursor: pointer; }
+  .pd-step-toggle:focus-visible { outline: 2px solid var(--ink-90); outline-offset: 1px; }
+  .pd-steps li > .pd-submission { flex: 1 1 100%; min-width: 0; margin: 2px 0 6px 28px; padding: 6px 0 0; overflow-wrap: anywhere; color: var(--ink-90); }
+  .pd-steps li > .pd-submission[hidden] { display: none; }
+  @media (max-width: 780px) { .pd-step-toggle { min-height: 44px; min-width: 44px; } }
+  /* 專案設定 modal: two blocks and a 關閉 row; taller than the screen → it scrolls inside (.pd-edit-box), never sideways */
+  .pd-set-sec { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+  .pd-set-sec + .pd-set-sec { border-top: 1px solid var(--rule); padding-top: 12px; }
+  .pd-set-sec > h5 { margin: 0; font-size: 13px; color: var(--ink-70); }
+  #pd-edit-modal .pd-block { margin: 0; min-width: 0; }
+  #pd-edit-modal .pd-edit-box { overflow-x: hidden; }
+  #pd-edit-modal .pd-block .btn { min-height: 44px; }
+  #pd-edit-modal .pd-switch { min-height: 44px; }   /* the checkbox is small; its whole label is the target */
   .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
-  /* ✎ 編輯 modal */
+  /* ⋯ → 設定 modal (專案設定) */
   .pd-edit-box { padding: 16px 18px; gap: 12px; max-height: 90vh; overflow-y: auto; }
   .pd-edit-box h4 { margin: 0; font-size: 15px; }
   .pd-edit-field label { display: block; font-size: 12px; color: var(--ink-70); margin-bottom: 4px; }
@@ -1567,7 +1582,7 @@
   // this page (secChoice), else what this browser remembers (localStorage — a
   // per-browser convenience, so every access is guarded and nothing depends on it),
   // else the section's default. Keyed by section name, not by project.
-  const SEC_TITLE = { settings: '設定', selections: '目前選取', orders: '訂單', submissions: '送出紀錄', people: '挑選人與連結' };
+  const SEC_TITLE = { selections: '目前選取', orders: '訂單', people: '挑選人與連結' };   // 設定 is the ⋯ menu's modal; 送出紀錄 is inside 進度
   const SEC_KEY = 'pd_sec_';
   let secProject = null;       // the project being drawn (the defaults depend on it)
   let secData = null;          // what the summaries count: selections, submissions, pickers, links, owner
@@ -1633,16 +1648,8 @@
   function secSummaries() {
     const p = currentProject || {}, d = secData || {};
     const out = {};
-    // 設定: the plan and the proofs download switch
-    const plan = [];
-    plan.push(p.pick_limit == null ? '不限張數' : `${p.pick_limit} 張` + (p.extra_max != null ? ` + 加選 ${p.extra_max}` : ''));
-    if (p.extra_price != null) plan.push(`加選 ${O.money(p.extra_price)}`);
-    plan.push(`毛片下載：${p.allow_proof_download ? '開' : '關'}`);
-    out.settings = plan.join(' · ');
     out.selections = `${d.selectedCount || 0} 張`;
     out.orders = ordersSummary();
-    const subs = d.submissions || [];
-    out.submissions = subs.length ? `${subs.length} 次，最近 ${fmtDay(subs[0].created_at)}` : '尚無送出';
     const live = (d.tokens || []).filter(t => t.status === 'live').length;
     const people = (d.pickers || []).length;
     out.people = `${d.ownerName || '尚無人認領'}${people > 1 ? `（共 ${people} 人）` : ''} · 連結有效 ${live} 條`;
@@ -1717,7 +1724,7 @@
     el.replaceChildren(...kids, ...[date, type].filter(s => s.hidden));
   }
 
-  // ✎ 編輯: one modal for 專案名稱 / 拍攝日期 / 攝影類別 (the folder is shown, never edited: renaming an R2
+  // ⋯ → 設定: one modal (一般設定 block) for 專案名稱 / 拍攝日期 / 攝影類別 (the folder is shown, never edited: renaming an R2
   // folder is decided against, CLAUDE.md). One 儲存 sends the same PATCH requests the old inline rows sent,
   // one per field that changed, in that order, with the old error messages under each field.
   function editModalHtml(project) {
@@ -1728,7 +1735,9 @@
     const typed = !!t && !SHOOT_TYPES.includes(t);
     return `<div id="pd-edit-modal" class="picker-overlay" hidden>
       <div class="picker-box pd-edit-box" role="dialog" aria-modal="true" aria-labelledby="pd-edit-h">
-        <h4 id="pd-edit-h">編輯專案</h4>
+        <h4 id="pd-edit-h">專案設定</h4>
+        <section class="pd-set-sec" aria-labelledby="pd-set-general-h">
+        <h5 id="pd-set-general-h">一般設定</h5>
         <form id="pd-edit-form" class="pd-edit-form" novalidate>
           <div class="pd-edit-field">
             <label for="pd-rename-input">專案名稱</label>
@@ -1750,10 +1759,16 @@
           </div>
           ${list.length ? `<div class="pd-edit-folder" id="pd-edit-folder">資料夾：${list.map(f => `<code>${escHtml(f)}</code>`).join('、')}（不能改）</div>` : ''}
           <div class="pd-edit-actions">
-            <button id="pd-edit-cancel" class="btn btn-outline" type="button">取消</button>
             <button id="pd-edit-save" class="btn btn-accent" type="submit">儲存</button>
           </div>
         </form>
+        </section>
+        <section class="pd-set-sec" aria-labelledby="pd-set-project-h">
+          <h5 id="pd-set-project-h">專案設定</h5>
+          <div id="pd-proofdl" class="pd-block"></div>
+          <div id="pd-plan" class="pd-block"></div>
+        </section>
+        <div class="pd-edit-actions"><button id="pd-edit-cancel" class="btn btn-outline" type="button">關閉</button></div>
       </div>
     </div>`;
   }
@@ -1774,21 +1789,26 @@
     const modal = $id('pd-edit-modal');
     if (!modal || modal.hidden) return;
     modal.hidden = true;
-    $id('pd-edit-btn')?.focus();
+    $id('pd-more-btn')?.focus();   // 編輯 is a ⋯ menu item now: focus goes back to ⋯
+  }
+  // 設定 (⋯ menu): the 專案設定 modal. The general form is filled from the project now; the 毛片下載 / 方案 blocks
+  // are drawn now too (their inputs show what the project holds at this moment).
+  function openEditModal() {
+    const modal = $id('pd-edit-modal');
+    if (!modal) return;
+    editFill();
+    renderProofDownloadBlock();
+    renderPlanBlock();
+    modal.hidden = false;
+    const input = $id('pd-rename-input');
+    input.focus();
+    input.select();
   }
   function wireEditModal() {
     const modal = $id('pd-edit-modal');
-    const btn = $id('pd-edit-btn');
-    if (!modal || !btn) return;
+    if (!modal || modal.dataset.wired) return;   // an open modal survives a page refresh (renderProjectDetail): wire once
+    modal.dataset.wired = '1';
     wireTypePair($id('pd-type-select'), $id('pd-type-other'));
-    btn.addEventListener('click', () => {
-      setMoreMenu(false);
-      editFill();
-      modal.hidden = false;
-      const input = $id('pd-rename-input');
-      input.focus();
-      input.select();
-    });
     $id('pd-edit-cancel').addEventListener('click', closeEditModal);
     modal.addEventListener('click', e => { if (e.target === modal) closeEditModal(); });
     modal.addEventListener('keydown', e => {
@@ -1872,7 +1892,7 @@
     const p = currentProject;
     if (!menu || !p) return;
     const delivered = !!p.delivered_at;
-    const items = [];
+    const items = [moreItem('pd-settings-btn', 'settings', '設定')];
     if (Array.isArray(p.folders) && p.folders.length)
       items.push(`<a id="pd-view-all-btn" class="pd-more-item" role="menuitem" tabindex="-1" href="index.html?project=${encodeURIComponent(p.id)}&amp;mode=all">看全部毛片</a>`);
     if (delivered) items.push(moreItem('pd-copy-notice-btn', 'copy-notice', '複製交件通知文案'));
@@ -1922,7 +1942,9 @@
     if (menu && !menu.hidden && !(e.target.closest && e.target.closest('.pd-more'))) setMoreMenu(false);
   });
   async function runMoreAction(action) {
-    if (action === 'copy-notice') {
+    if (action === 'settings') {
+      openEditModal();
+    } else if (action === 'copy-notice') {
       const st = $id('pd-copy-notice-status');
       const ok = await copyText(deliveryNoticeText(currentProject, liveLinkOf(currentTokens)));
       if (!st) return;
@@ -1982,6 +2004,12 @@
     const interests = Array.isArray(data.interests) ? data.interests : [];
 
     secProject = project;
+    // a refresh of the same project (an action's openProjectDetail) must not wipe an open 設定 modal and what is
+    // typed in it: the node is carried over to the redrawn page, its two blocks are redrawn below
+    const oldModal = $id('pd-edit-modal');
+    const keepModal = oldModal && !oldModal.hidden && currentProject && currentProject.id === project.id ? oldModal : null;
+    const keepFocusId = keepModal && keepModal.contains(document.activeElement) ? document.activeElement.id : '';
+    if (keepModal) keepModal.remove();
     body.innerHTML = `
       <div class="pd-head" id="pd-head">
         <div class="pd-head-main">
@@ -1992,7 +2020,6 @@
         </div>
         <div class="pd-head-actions">
           <span id="pd-copy-notice-status" class="dn-status" role="status"></span>
-          <button id="pd-edit-btn" class="btn btn-outline pd-head-btn" type="button">✎ 編輯</button>
           <div class="pd-more">
             <button id="pd-more-btn" class="btn btn-outline pd-head-btn" type="button" aria-label="更多" aria-haspopup="menu" aria-expanded="false" aria-controls="pd-more-menu">⋯</button>
             <div id="pd-more-menu" class="pd-more-menu" role="menu" aria-label="更多動作" hidden></div>
@@ -2025,8 +2052,6 @@
 
       ${interests.length ? '<div id="pd-interests" class="pd-block"></div>' : ''}
 
-      ${secHtml('settings', '<div id="pd-proofdl" class="pd-block"></div><div id="pd-plan" class="pd-block"></div>')}
-
       ${secHtml('selections', `<div id="pd-selections-details"><div class="table-wrap"><table><thead><tr><th>照片</th><th>♥</th><th>備註</th><th>選片人</th><th>更新時間</th></tr></thead>
           <tbody>${selected.length ? selected.map(s => `<tr>
             <td class="folder-raw"><a class="pd-link" href="index.html?project=${encodeURIComponent(project.id)}&amp;photo=${encodeURIComponent(s.photo_key)}">${escHtml(s.photo_key)}</a></td><td>♥</td><td>${escHtml(s.note || '')}</td>
@@ -2035,27 +2060,6 @@
         `<a class="pd-link" href="index.html?project=${encodeURIComponent(project.id)}">看照片 →</a>`)}
 
       ${secHtml('orders', '<div id="pd-orders"><div class="empty">載入中…</div></div>')}
-
-      ${secHtml('submissions', `<div id="pd-submissions">${submissions.length ? submissions.map((s, i) => {
-        const prev = submissions[i + 1];
-        const diff = prev ? projectDiff(s.photo_keys, prev.photo_keys) : null;
-        const pinKeys = prev ? marksChangedKeys(s.marks, prev.marks) : [];
-        const pinLine = pinKeys.length ? `標示變更 ${pinKeys.length} 張：${pinKeys.map(escHtml).join('、')}` : '';
-        const keyLines = diff ? [
-          diff.added.length ? `新增 ${diff.added.length} 張：${diff.added.map(escHtml).join('、')}` : '',
-          diff.removed.length ? `移除 ${diff.removed.length} 張：${diff.removed.map(escHtml).join('、')}` : '',
-          pinLine,
-        ].filter(Boolean) : [];
-        const diffHtml = !diff ? '<div class="pd-diff">（第一次送出）</div>'
-          : (!keyLines.length ? '<div class="pd-diff">與上次相同</div>'
-            : `<div class="pd-diff">${keyLines.join('<br>')}</div>`);
-        return `<div class="pd-submission">
-          <div><strong>${escHtml(fmtTime(s.created_at))}</strong> — ${escHtml(pickerNameOf(pickers, s.picker_id))}
-            （${escHtml(s.relationship)}${s.email ? ' · ' + escHtml(s.email) : ''}）— ${escHtml(s.count)} 張${s.pick_limit != null ? ` / 上限 ${escHtml(s.pick_limit)}` : ''}
-            ${!s.notified ? '<span class="badge badge-pending">未寄信</span>' : ''}</div>
-          ${diffHtml}
-        </div>`;
-      }).join('') : '<div class="empty">尚無送出紀錄</div>'}</div>`)}
 
       ${secHtml('people', `<h4>挑選人</h4>
       <div id="pd-pickers">${pickers.length ? pickers.map(p => `<div>${escHtml(p.name)}${p.relationship ? `（${escHtml(p.relationship)}）` : ''}${p.email ? ' · ' + escHtml(p.email) : ''}${data.owner && data.owner.id === p.id ? ' <span class="badge badge-approved">目前選片中</span>' : ''}</div>`).join('') : '<div class="empty">尚無挑選人</div>'}</div>
@@ -2077,6 +2081,10 @@
       <div id="pd-link-err" class="err"></div>`)}
       ${editModalHtml(project)}
     `;
+    if (keepModal) {
+      $id('pd-edit-modal').replaceWith(keepModal);
+      if (keepFocusId) $id(keepFocusId)?.focus();
+    }
     secData = { selectedCount: selected.length, submissions, pickers, tokens, ownerName };
 
     // 交件 / 毛片下載 have their own blocks (docs/delivery.md).
@@ -2204,7 +2212,9 @@
         folder: info ? `${info.root}/${PF.FINAL_NAME}/` : null };
       return;
     }
-    const mine = finalsTarget = { projectId: project.id, state: 'checking', folder: null, locked: false };
+    // a refresh of the same project re-reads the listing: until it is back the last answer still counts (no 載入中… flash)
+    const was = finalsTarget && finalsTarget.projectId === project.id ? finalsTarget : null;
+    const mine = finalsTarget = { projectId: project.id, state: 'checking', folder: null, locked: false, prevListed: was ? (was.listed || was.prevListed || null) : null };
     listPrefix(`${info.root}/`).then(listed => {
       if (finalsTarget !== mine) return;     // another project was opened meanwhile
       if (!listed) {
@@ -2321,12 +2331,25 @@
   // ONE stage per project, from fields the page already has. Order matters: an archived project is 已封存 whatever
   // else is true; a delivered one is 已完成 once confirmed (client_confirmed_at is only ever set while delivered),
   // else 客人要求修改 while a round is open, else 客人確認中; an undelivered one goes by its phase.
-  const STAGE_LABEL = { picking: '客人選片中', submitted: '選片完成・待精修', retouching: '精修中', awaiting: '客人確認中', done: '已完成', archived: '已封存' };
+  const STAGE_LABEL = { new: '準備中', picking: '客人選片中', submitted: '選片完成・待精修', retouching: '精修中', awaiting: '客人確認中', done: '已完成', archived: '已封存' };
   // the newest open request and its round number (the oldest request is 第 1 輪); null when none is open
   function openRoundOf(revisions) {
     const i = revisions.findIndex(r => !r.resolved_at);
     return i === -1 ? null : { round: revisions[i], n: revisions.length - i };
   }
+  // 準備中: a project nobody could pick from yet. Known only from the listing of its root (a folder exists in R2 once
+  // something is in it): proofs folder absent → no 毛片 yet. Unknown (older folder layout, listing not back yet or
+  // failed) is never 'new'; a project with a pick, a submission or a phase past picking is never 'new' either.
+  // 'none' | 'some' | 'unknown'
+  function proofsState(p) {
+    const t = finalsTarget && finalsTarget.projectId === p.id ? finalsTarget : null;
+    const info = PF.rootOfProject(p);
+    if (!info || !info.proofShaped || !t) return 'unknown';
+    const listed = t.state === 'ready' && t.locked ? t.listed : t.state === 'checking' ? t.prevListed : null;
+    if (!Array.isArray(listed)) return 'unknown';
+    return listed.includes(info.proofFolder) ? 'some' : 'none';
+  }
+  const hasPickActivity = () => !!(secData && secData.selectedCount) || currentSubmissions.length > 0;
   function projectStage(p, revisions) {
     if (p.archived_at) return 'archived';
     if (p.delivered_at) {
@@ -2336,6 +2359,7 @@
     }
     if (p.phase === 'retouching') return 'retouching';
     if (p.phase === 'submitted') return 'submitted';
+    if (!hasPickActivity() && proofsState(p) === 'none') return 'new';
     return 'picking';
   }
   const leafName = f => String(f || '').split('/').filter(Boolean).pop() || '';
@@ -2354,6 +2378,7 @@
   }
   function stageNext(stage, p, plan) {
     switch (stage) {
+      case 'new': return '下一步：上傳毛片，再把連結給客人';
       case 'picking': return '下一步：等客人送出選片';
       case 'submitted': return '下一步：開始精修（開始後客人不能再改選片）';
       case 'retouching': return '下一步：上傳精修後交件';
@@ -2401,8 +2426,10 @@
     const t = finalsTarget && finalsTarget.projectId === p.id ? finalsTarget : null;
     card.dataset.stage = stage;
     card.dataset.target = t ? t.state : 'ready';
-    $id('pd-status-label').textContent = stage === 'revising' ? `客人要求修改（第 ${openRoundOf(currentRevisions).n} 輪）` : STAGE_LABEL[stage];
-    $id('pd-status-next').textContent = stageNext(stage, p, plan);
+    // 準備中 is only claimed once the listing says there is no 毛片; until then a project with nothing on record says 載入中…
+    const waiting = stage === 'picking' && t && t.state === 'checking' && !t.prevListed && !hasPickActivity();
+    $id('pd-status-label').textContent = waiting ? '載入中…' : stage === 'revising' ? `客人要求修改（第 ${openRoundOf(currentRevisions).n} 輪）` : STAGE_LABEL[stage];
+    $id('pd-status-next').textContent = waiting ? '' : stageNext(stage, p, plan);
     const actions = $id('pd-status-actions');
     actions.innerHTML = stage === 'submitted'
       ? '<button id="pd-start-retouch-btn" class="btn btn-accent" type="button" data-primary>開始精修</button>'
@@ -2542,12 +2569,18 @@
   // ── 進度: ✓ done / ● the first step not done / ○ the rest. Dates only where the page has one. ──
   function progressSteps(p, submissions, revisions) {
     const delivered = !!p.delivered_at;
-    const picked = p.phase !== 'picking' || delivered;
-    const steps = [
-      { step: 'picked', label: '客人送出選片', done: picked, at: picked && submissions[0] ? submissions[0].created_at : null },
+    // one row per submission (oldest first; `sub` / `prev` feed its expandable detail), or the single 客人送出選片 row
+    // when none is on record; a project nobody could pick from yet starts with 上傳毛片
+    const subs = submissions.slice().reverse();
+    const picked = p.phase !== 'picking' || delivered || subs.length > 0;
+    const steps = [];
+    if (projectStage(p, revisions) === 'new') steps.push({ step: 'proofs', label: '上傳毛片', done: false, at: null });
+    if (subs.length) subs.forEach((s, i) => steps.push({ step: i ? `picked-${i + 1}` : 'picked', label: i ? '客人再次送出選片' : '客人送出選片',
+      done: true, at: s.created_at, sub: s, prev: i ? subs[i - 1] : null }));
+    else steps.push({ step: 'picked', label: '客人送出選片', done: picked, at: null });
+    steps.push(
       { step: 'retouch', label: '開始精修', done: p.phase === 'retouching' || delivered, at: null },
-      { step: 'delivered', label: '交件', done: delivered, at: p.delivered_at || null },
-    ];
+      { step: 'delivered', label: '交件', done: delivered, at: p.delivered_at || null });
     revisions.slice().reverse().forEach((r, i) => steps.push({ step: `round-${i + 1}`, label: `客人要求修改（第 ${i + 1} 輪）`, done: !!r.resolved_at, at: r.created_at, round: i + 1, photos: Number(r.photo_count) || 0 }));
     steps.push({ step: 'confirmed', label: p.client_confirmed_by === 'photographer' ? '已標記完成（代客人）' : '客人確認', done: !!p.client_confirmed_at, at: p.client_confirmed_at || null });
     const cur = steps.findIndex(s => !s.done);
@@ -2556,10 +2589,32 @@
   const STEP_MARK = { done: ['✓', '已完成'], current: ['●', '目前'], next: ['○', '還沒到'] };
   // the log of the open project only (a project opened before it arrived draws without it)
   let currentEvents = { projectId: null, list: [] };
+  // 送出紀錄 lives in 進度: a submission's row opens to its detail (who, how many, what changed since the one before).
+  // Closed by default; what is open is remembered per project while the page is open (a redraw keeps it).
+  let subOpen = { projectId: null, steps: new Set() };
+  function submissionHtml(s, prev) {
+    const diff = prev ? projectDiff(s.photo_keys, prev.photo_keys) : null;
+    const pinKeys = prev ? marksChangedKeys(s.marks, prev.marks) : [];
+    const pinLine = pinKeys.length ? `標示變更 ${pinKeys.length} 張：${pinKeys.map(escHtml).join('、')}` : '';
+    const keyLines = diff ? [
+      diff.added.length ? `新增 ${diff.added.length} 張：${diff.added.map(escHtml).join('、')}` : '',
+      diff.removed.length ? `移除 ${diff.removed.length} 張：${diff.removed.map(escHtml).join('、')}` : '',
+      pinLine,
+    ].filter(Boolean) : [];
+    const diffHtml = !diff ? '<div class="pd-diff">（第一次送出）</div>'
+      : (!keyLines.length ? '<div class="pd-diff">與上次相同</div>'
+        : `<div class="pd-diff">${keyLines.join('<br>')}</div>`);
+    const pickers = (secData && secData.pickers) || [];
+    return `<div><strong>${escHtml(fmtTime(s.created_at))}</strong> — ${escHtml(pickerNameOf(pickers, s.picker_id))}
+        （${escHtml(s.relationship)}${s.email ? ' · ' + escHtml(s.email) : ''}）— ${escHtml(s.count)} 張${s.pick_limit != null ? ` / 上限 ${escHtml(s.pick_limit)}` : ''}
+        ${!s.notified ? '<span class="badge badge-pending">未寄信</span>' : ''}</div>
+      ${diffHtml}`;
+  }
   function renderProgress() {
     const list = $id('pd-steps');
     const p = currentProject;
     if (!list || !p) return;
+    if (subOpen.projectId !== p.id) subOpen = { projectId: p.id, steps: new Set() };
     const events = currentEvents.projectId === p.id ? currentEvents.list : [];
     const { rows, timed } = progressTimeline(p, currentSubmissions, currentRevisions, events);
     // textContent, not an escHtml template: the log's lines carry folder names from the bucket, and this list is
@@ -2575,6 +2630,23 @@
       // with the log a day can hold several lines: the time too
       li.append(mark, span('sr-only', `${STEP_MARK[s.state][1]}：`), span('pd-step-label', s.label),
         span('pd-step-date', s.at ? (timed ? fmtTime(s.at) : fmtDay(s.at)) : ''));
+      if (s.sub) {
+        const open = subOpen.steps.has(s.step);
+        const btn = document.createElement('button');
+        btn.type = 'button'; btn.className = 'pd-step-toggle'; btn.id = `pd-sub-${s.step}-btn`;
+        btn.setAttribute('aria-controls', `pd-sub-${s.step}`);
+        const detail = document.createElement('div');
+        detail.id = `pd-sub-${s.step}`; detail.className = 'pd-submission';
+        detail.innerHTML = submissionHtml(s.sub, s.prev);
+        const apply = o => { btn.setAttribute('aria-expanded', String(o)); btn.textContent = o ? '收起 ▴' : '詳情 ▾'; detail.hidden = !o; };
+        apply(open);
+        btn.addEventListener('click', () => {
+          const o = btn.getAttribute('aria-expanded') !== 'true';
+          if (o) subOpen.steps.add(s.step); else subOpen.steps.delete(s.step);
+          apply(o);
+        });
+        li.append(btn, detail);
+      }
       return li;
     }));
   }

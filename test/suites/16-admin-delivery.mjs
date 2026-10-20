@@ -6,7 +6,7 @@ import { PIXEL } from '../lib/env.mjs';
 import { ADMIN, adminMock } from '../lib/auth-mocks.mjs';
 import { ADMIN_BUCKET, adminDropDefaultFinal, adminPickFinals, chipTexts } from '../lib/delivery-helpers.mjs';
 import { pickFakeWorker } from '../lib/pick-fake.mjs';
-import { PF_NAMES, PF_ROOT, moreClick, pfLists } from '../lib/project-helpers.mjs';
+import { PF_NAMES, PF_ROOT, moreClick, openSettings, pfLists } from '../lib/project-helpers.mjs';
 
 export default async function register() {
 const deliverBodies = m => m.requests.filter(r => r.method === 'POST' && r.path.endsWith('/deliver')).map(r => r.body);
@@ -203,7 +203,7 @@ const pfWaitFinalsLink = page => page.waitForSelector('#pd-upload-final-btn[data
   await suite('admin 交件 — 不在精修中、也沒交件：整個交件區塊（含＋上傳精修）是空的、display:none',
     `${base}/admin.html#project=proj-up-hidden`,
     async page => {
-      await page.waitForSelector('#pd-plan #pd-plan-save', { timeout: 5000 });
+      await page.waitForSelector('#pd-plan #pd-plan-save', { state: 'attached', timeout: 5000 });   // the plan is in the closed 設定 modal since 2026-10-20: a page-is-drawn wait
       const r = await page.evaluate(() => ({
         link: !!document.getElementById('pd-upload-final-btn'),
         display: getComputedStyle(document.getElementById('pd-delivery')).display,
@@ -373,8 +373,8 @@ const pfFiles = names => [`${PF_ROOT}/毛片/IMG_1.jpg`, ...names.map(n => `${PF
       const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
       await page.waitForSelector('#pd-delivery #pd-final-pick-btn', { timeout: 5000 });
       await pfWaitFinalsLink(page);
-      // (project page 2026-10-19: the folder line is in the ✎ 編輯 modal, read-only)
-      await page.click('#pd-edit-btn');
+      // (project page 2026-10-19: the folder line is in the ⋯ → 設定 modal, read-only)
+      await openSettings(page);
       const line = await page.$eval('#pd-edit-folder', e => ({ text: e.textContent.trim(), shown: e.getClientRects().length > 0 })).catch(() => null);
       ok('the edit modal says 資料夾：<root>/（不能改）', line && line.shown && line.text === `資料夾：${PF_ROOT}/（不能改）`, JSON.stringify(line));
       await page.keyboard.press('Escape');

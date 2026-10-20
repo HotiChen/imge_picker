@@ -408,20 +408,21 @@ for (const [tag, ctx] of [['390', { viewport: { width: 390, height: 844 }, hasTo
       await page.waitForSelector('[data-open-project]', { timeout: 5000 });
       await page.click('[data-open-project]');
       await page.waitForSelector('#project-detail-panel', { state: 'visible' });
-      await page.waitForSelector('#pd-submissions .pd-submission');
+      // 2026-10-20: 送出紀錄 lives in 進度 — one (closed) detail block per submission, in time order (oldest first), not a section
+      await page.waitForSelector('#pd-steps .pd-submission', { state: 'attached' });
 
       const r = await page.evaluate(() => ({
         owner: document.querySelector('.pd-owner').textContent,
         // project page 2026-10-19: the stage is the status card's one label (選片完成・待精修 for 已送出)
         phaseBadge: document.getElementById('pd-status-label').textContent,
-        submissionBlocks: [...document.querySelectorAll('.pd-submission')].map(b => b.textContent),
+        submissionBlocks: [...document.querySelectorAll('#pd-steps .pd-submission')].map(b => b.textContent).reverse(),   // newest first, as the old section listed them
         selectionRows: document.querySelectorAll('#project-detail-body table tbody tr').length,
       }));
       ok('shows the current owner', r.owner.includes('Grace'), r.owner);
       ok('shows the phase', r.phaseBadge === '選片完成・待精修', r.phaseBadge);
       // times render in Asia/Taipei (task: 時間格式), not the raw UTC ISO —
       // 2026-01-0{1,2}T00:00:00Z is 08:00 Taipei the same calendar day
-      ok('submissions are newest first', /1\/2 08:00/.test(r.submissionBlocks[0]) && /1\/1 08:00/.test(r.submissionBlocks[1]),
+      ok('submissions are on record (two blocks, newest read first here)', r.submissionBlocks.length === 2 && /1\/2 08:00/.test(r.submissionBlocks[0]) && /1\/1 08:00/.test(r.submissionBlocks[1]),
         JSON.stringify(r.submissionBlocks));
       ok('the newest submission’s diff names what changed since the previous one',
         r.submissionBlocks[0].includes('新增') && r.submissionBlocks[0].includes('p0.jpg') &&
@@ -541,10 +542,10 @@ await suite('admin — escHtml(0): a project with zero submissions shows 送出 
       ok('the list shows 1 次送出未寄信', listText.includes('1 次送出未寄信'), listText);
 
       await page.click('[data-open-project]');
-      await page.waitForSelector('#pd-submissions .pd-submission', { timeout: 5000 });
+      await page.waitForSelector('#pd-steps .pd-submission', { state: 'attached', timeout: 5000 });
       const r = await page.evaluate(() => ({
         headText: document.querySelector('.pd-head').textContent,
-        blocks: [...document.querySelectorAll('.pd-submission')].map(b => b.textContent),
+        blocks: [...document.querySelectorAll('#pd-steps .pd-submission')].map(b => b.textContent).reverse(),   // newest first
       }));
       ok('the detail head shows the same badge', r.headText.includes('1 次送出未寄信'), r.headText);
       ok('the newest (unmailed) submission carries its own 未寄信 marker', r.blocks[0].includes('未寄信'), r.blocks[0]);
@@ -733,7 +734,7 @@ await suite('selection-export — 純函式：CSV 內容逐字、BOM、跳脫、
         injected: document.querySelectorAll('img[src="x"]').length,
         ownerShown: document.querySelector('.pd-owner').textContent.includes(payload),
         pickersShown: document.getElementById('pd-pickers').textContent.includes(payload),
-        submissionsShown: document.getElementById('pd-submissions').textContent.includes(payload),
+        submissionsShown: document.getElementById('pd-steps').textContent.includes(payload),
         selectionsShown: document.querySelector('#project-detail-body table').textContent.includes(payload),
       }), XSS_NAME);
       ok('惡意字串沒有變成元素', r.injected === 0, `注入了 ${r.injected} 個 img`);

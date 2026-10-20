@@ -3,7 +3,7 @@
 // hidden, 「← 返回專案列表」 on top); #project=<id> is the address of the detail view.
 // Registered by test/run.mjs in file-name order; see test/README.md.
 import { base, suite } from '../lib/harness.mjs';
-import { moreClick, openCreateForm } from '../lib/project-helpers.mjs';
+import { moreClick, openCreateForm, openSettings } from '../lib/project-helpers.mjs';
 import { MOBILE } from '../lib/env.mjs';
 import { ADMIN_PLAIN } from '../lib/auth-mocks.mjs';
 import { pickFakeWorker } from '../lib/pick-fake.mjs';
@@ -40,7 +40,7 @@ const listAllHidden = async page => {
   return true;
 };
 const hashOf = page => page.evaluate(() => location.hash);
-const waitDetail = page => page.waitForSelector('#pd-sec-settings', { timeout: 5000 });
+const waitDetail = page => page.waitForSelector('#pd-sec-selections', { timeout: 5000 });   // the first collapsible section (設定 became a modal on 2026-10-20)
 // the create form is behind 「＋ 新增專案」: open it here so the list/detail show-hide checks below cover the form parts for real
 const waitList = async page => { await page.waitForSelector('[data-project-row]', { state: 'visible', timeout: 5000 }); await openCreateForm(page); };
 // An entry for Back to land on that is not about:blank (the suite's init script cannot touch
@@ -77,7 +77,7 @@ const lines = () => {
       ok('the hash is #project=proj-dv', (await hashOf(page)) === '#project=proj-dv', await hashOf(page));
       const pos = await page.evaluate(() => ({ y: scrollY, panelTop: Math.round(document.getElementById('project-detail-panel').getBoundingClientRect().top), vh: innerHeight }));
       ok('the detail starts at the top: no scroll, the panel begins in the first 150px of the page', pos.y === 0 && pos.panelTop < 150, JSON.stringify(pos));
-      ok('the first section title is inside the first screen without scrolling', (await see(page, '#pd-sec-settings-btn')).bottom < pos.vh, JSON.stringify(await see(page, '#pd-sec-settings-btn')));
+      ok('the first section title is inside the first screen without scrolling', (await see(page, '#pd-sec-selections-btn')).bottom < pos.vh, JSON.stringify(await see(page, '#pd-sec-selections-btn')));
       ok('the side menu is still there (this is still the 選片專案 screen)', await isShown(page, '.side-nav-item.active'));
       return out;
     },
@@ -375,23 +375,26 @@ const lines = () => {
     async page => {
       const { out, ok } = lines();
       await waitDetail(page);
-      await page.click('#pd-sec-settings-btn');
+      // (2026-10-20: the plan is in the ⋯ → 設定 modal; 目前選取's summary element is the "never missing" marker now)
       await page.evaluate(() => {
         window.__gone = 0; window.__loading = 0;
         new MutationObserver(() => {
-          if (!document.getElementById('pd-sec-settings-sum')) window.__gone++;
-          if (/載入中/.test(document.getElementById('project-detail-body').textContent) && !document.getElementById('pd-sec-settings-sum')) window.__loading++;
+          if (!document.getElementById('pd-sec-selections-sum')) window.__gone++;
+          if (/載入中/.test(document.getElementById('project-detail-body').textContent) && !document.getElementById('pd-sec-selections-sum')) window.__loading++;
         }).observe(document.body, { childList: true, subtree: true });
         document.getElementById('project-detail-body').style.paddingBottom = '2500px';
         scrollTo(0, 300);
       });
+      await page.evaluate(() => scrollTo(0, 0));
+      await openSettings(page);
+      await page.evaluate(() => scrollTo(0, 300));
       const y0 = await page.evaluate(() => scrollY);
       await page.fill('#pd-plan-limit', '35');
       await page.click('#pd-plan-save');
-      await page.waitForFunction(() => /35 張/.test(document.getElementById('pd-sec-settings-sum').textContent), null, { timeout: 4000 });
+      await page.waitForFunction(() => /45 張（35 \+ 加選 10）/.test(document.getElementById('pd-plan-result')?.textContent || ''), null, { timeout: 4000 });
       await page.waitForSelector('#pd-plan-ok:not(:empty)', { timeout: 3000 });
       const r = await page.evaluate(() => ({ gone: window.__gone, loading: window.__loading, y: scrollY, ok: document.getElementById('pd-plan-ok').textContent }));
-      ok('positive: the page really re-read the project (summary now 35 張, 已儲存 shown)', r.ok === '已儲存', JSON.stringify(r));
+      ok('positive: the page really re-read the project (plan line now 45 張（35 + 加選 10）, 已儲存 shown)', r.ok === '已儲存', JSON.stringify(r));
       ok('the summary element was never missing while the project was re-read', r.gone === 0, JSON.stringify(r));
       ok('the detail never fell back to 載入中… on a refresh of the same project', r.loading === 0, JSON.stringify(r));
       ok('the scroll position did not jump', y0 >= 250 && Math.abs(r.y - y0) <= 2, `before=${y0} after=${r.y}`);

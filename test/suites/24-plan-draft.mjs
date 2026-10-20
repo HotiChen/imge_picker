@@ -6,7 +6,7 @@ import { ADMIN } from '../lib/auth-mocks.mjs';
 import { SEED_TOKEN, dashSettingsMock } from '../lib/dashboard-mocks.mjs';
 import { PHOTOS } from '../lib/editor-mocks.mjs';
 import { pickFakeWorker } from '../lib/pick-fake.mjs';
-import { pickHeart, pickSubmits, openCreateForm } from '../lib/project-helpers.mjs';
+import { pickHeart, pickSubmits, openCreateForm, openSettings } from '../lib/project-helpers.mjs';
 
 export default async function register() {
 
@@ -170,7 +170,8 @@ const createPosts = m => m.requests.filter(r => r.method === 'POST' && r.path ==
       const out = [];
       const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
       const patches = () => m.requests.filter(r => r.method === 'PATCH').map(r => r.body);
-      await page.waitForSelector('#pd-plan-limit', { timeout: 5000 });
+      await page.waitForSelector('#pd-plan-limit', { state: 'attached', timeout: 5000 });
+      await openSettings(page);   // the plan is in the ⋯ → 設定 modal (2026-10-20)
       const v = await page.evaluate(() => ({
         l: document.getElementById('pd-plan-limit').value, p: document.getElementById('pd-plan-price').value,
         e: document.getElementById('pd-plan-extra').value,
@@ -228,7 +229,8 @@ const createPosts = m => m.requests.filter(r => r.method === 'POST' && r.path ==
     async page => {
       const out = [];
       const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
-      await page.waitForSelector('#pd-plan-extra', { timeout: 5000 });
+      await page.waitForSelector('#pd-plan-extra', { state: 'attached', timeout: 5000 });
+      await openSettings(page);   // the plan is in the ⋯ → 設定 modal (2026-10-20)
       ok('the field is empty', (await page.inputValue('#pd-plan-extra')) === '');
       ok('the result line says 不限制（舊專案）', /不限制（舊專案）/.test(await page.textContent('#pd-plan-result')), await page.textContent('#pd-plan-result'));
       await page.click('#pd-plan-save');
@@ -246,7 +248,8 @@ const createPosts = m => m.requests.filter(r => r.method === 'POST' && r.path ==
     async page => {
       const out = [];
       const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
-      await page.waitForSelector('#pd-plan-extra', { timeout: 5000 });
+      await page.waitForSelector('#pd-plan-extra', { state: 'attached', timeout: 5000 });
+      await openSettings(page);   // the plan is in the ⋯ → 設定 modal (2026-10-20)
       await page.fill('#pd-plan-extra', '3');
       await page.click('#pd-plan-save');
       await page.waitForFunction(() => document.getElementById('pd-plan-err').textContent !== '', null, { timeout: 3000 });
@@ -265,7 +268,8 @@ const createPosts = m => m.requests.filter(r => r.method === 'POST' && r.path ==
     async page => {
       const out = [];
       const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
-      await page.waitForSelector('#pd-plan-extra', { timeout: 5000 });
+      await page.waitForSelector('#pd-plan-extra', { state: 'attached', timeout: 5000 });
+      await openSettings(page);   // the plan is in the ⋯ → 設定 modal (2026-10-20)
       await page.fill('#pd-plan-extra', '3');
       await page.click('#pd-plan-save');
       await page.waitForFunction(() => document.getElementById('pd-plan-err').textContent !== '', null, { timeout: 3000 });

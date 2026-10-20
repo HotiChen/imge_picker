@@ -1168,15 +1168,15 @@ async function pvOpen(page, id) {
       const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
       await page.waitForSelector('[data-open-project]', { timeout: 5000 });
       await page.click('[data-open-project]');
-      await page.waitForSelector('#pd-submissions .pd-submission');
-      const blocks = await page.evaluate(() => [...document.querySelectorAll('#pd-submissions .pd-submission')].map(b => b.querySelector('.pd-diff').textContent));
+      await page.waitForSelector('#pd-steps .pd-submission', { state: 'attached' });   // 送出紀錄 is part of 進度 since 2026-10-20 (closed details)
+      const blocks = await page.evaluate(() => [...document.querySelectorAll('#pd-steps .pd-submission')].map(b => b.querySelector('.pd-diff').textContent).reverse());   // 進度 lists oldest first; read newest first
       // newest first: s4, s3, s2, s1
       ok('s4 (marks null after 3 pinned photos): all 3 pinned photos changed → 標示變更 3 張', /標示變更 3 張/.test(blocks[0]), blocks[0]);
       ok('s3 (identical to s2): 與上次相同 — and no pin line', blocks[1] === '與上次相同', blocks[1]);
       ok('s2 (b gained a pin, c got one; a same): 標示變更 2 張, no 新增/移除', /標示變更 2 張/.test(blocks[2]) && !/新增|移除/.test(blocks[2]), blocks[2]);
       ok('s1 is 第一次送出 with no pin line', blocks[3] === '（第一次送出）', blocks[3]);
       ok('the file names are listed', blocks[2].includes('b.jpg') && blocks[2].includes('c.jpg') && !blocks[2].includes('a.jpg'), blocks[2]);
-      ok('a pin note is never rendered in the diff', !(await page.evaluate(() => document.getElementById('pd-submissions').innerHTML.includes('<b>x</b>'))));
+      ok('a pin note is never rendered in the diff', !(await page.evaluate(() => document.getElementById('pd-steps').innerHTML.includes('<b>x</b>'))));
       return out;
     },
     { before: m.attach, initScript: ADMIN });

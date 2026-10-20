@@ -649,7 +649,7 @@ export const ADMIN_PICKS = m => {
 // 它預存「全部展開」，等於一個已經把區塊都打開過的攝影師。
 // ═══════════════════════════════════════════════════════════════════════════
 // 交件 is not a section since the project page redesign (2026-10-19): it is the status card (#pd-status)
-export const SEC_NAMES = ['settings', 'selections', 'orders', 'submissions', 'people'];
+export const SEC_NAMES = ['selections', 'orders', 'people'];   // 設定 became the ⋯ modal and 送出紀錄 went into 進度 (2026-10-20)
 export const secInfo = page => page.evaluate(names => Object.fromEntries(names.map(n => {
   const sec = document.getElementById('pd-sec-' + n), btn = document.getElementById(`pd-sec-${n}-btn`);
   const body = document.getElementById(`pd-sec-${n}-body`), sum = document.getElementById(`pd-sec-${n}-sum`);
@@ -659,7 +659,7 @@ export const secInfo = page => page.evaluate(names => Object.fromEntries(names.m
     caret: btn.querySelector('.pd-sec-caret').textContent.trim(), tag: btn.tagName, type: btn.type,
   } : null];
 })), SEC_NAMES);
-export const secWait = page => page.waitForSelector('#pd-sec-settings-btn', { timeout: 5000 });
+export const secWait = page => page.waitForSelector('#pd-sec-selections-btn', { timeout: 5000 });
 export const secOpen = i => i && i.expanded === 'true' && i.display !== 'none' && i.caret === '▾';
 
 // ── operator.html: the operator's own sign-in key and a seed for it ────────

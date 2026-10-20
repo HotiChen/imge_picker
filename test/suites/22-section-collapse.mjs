@@ -7,9 +7,11 @@ import { SEED_TOKEN, dashSettingsMock } from '../lib/dashboard-mocks.mjs';
 import { ADMIN_BUCKET, ADM_REVS } from '../lib/delivery-helpers.mjs';
 import { SEC_NAMES, ordersFake, secInfo, secOpen, secWait, waitText } from '../lib/orders-fake.mjs';
 import { pickFakeWorker } from '../lib/pick-fake.mjs';
+import { openSettings } from '../lib/project-helpers.mjs';
 
 export default async function register() {
-const SEC_TITLES = { settings: '設定', selections: '目前選取', orders: '訂單', submissions: '送出紀錄', people: '挑選人與連結' };
+// (2026-10-20: 設定 is the ⋯ menu's modal and 送出紀錄 is inside 進度, so three sections are left)
+const SEC_TITLES = { selections: '目前選取', orders: '訂單', people: '挑選人與連結' };
 const secShut = i => i && i.expanded === 'false' && i.display === 'none' && i.caret === '▸';
 const secFixture = (o = {}) => pickFakeWorker({ projectId: 'proj-sec', title: '收合專案', folders: ['shoot/毛片/'], bucketFolders: ADMIN_BUCKET, ...o });
 const SEC_AT = '2026-01-01T00:00:00Z';
@@ -20,10 +22,10 @@ const secSub = (id, at, keys) => ({ id, picker_id: 'picker-0', relationship: '�
 // status card's ONE label above the sections — `card` below — and 交件 is not a section at all.)
 for (const [label, build, want] of [
   ['選片中、什麼都還沒有', () => secFixture({ phase: 'picking' }), {
-    card: '客人選片中', settings: { sum: '不限張數 · 毛片下載：關', open: false }, selections: { sum: '0 張', open: false },
-    orders: { sum: '尚無訂單', open: false }, submissions: { sum: '尚無送出', open: false }, people: { sum: '尚無人認領 · 連結有效 1 條', open: false } }],
+    card: '客人選片中', selections: { sum: '0 張', open: false },
+    orders: { sum: '尚無訂單', open: false }, people: { sum: '尚無人認領 · 連結有效 1 條', open: false } }],
   ['精修中、尚未交件', () => secFixture({ phase: 'retouching', pickLimit: 30, extraMax: 10, extraPrice: 500, allowProofDownload: true }), {
-    card: '精修中', settings: { sum: '30 張 + 加選 10 · 加選 NT$500 · 毛片下載：開', open: false } }],
+    card: '精修中' }],
   ['已交件、客戶尚未確認', () => secFixture({ phase: 'retouching', deliveredAt: '2026-09-20T00:00:00.000Z', finalFolders: ['shoot/精修/'] }), {
     card: '客人確認中', folders: 1 }],
   ['已交件、兩個精修資料夾', () => secFixture({ phase: 'retouching', deliveredAt: '2026-09-20T00:00:00.000Z', finalFolders: ['shoot/精修/', 'shoot/精修二/'] }), {
@@ -43,7 +45,8 @@ for (const [label, build, want] of [
       const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
       await secWait(page);
       const info = await secInfo(page);
-      ok('all five sections exist, each with a title row', SEC_NAMES.every(n => info[n]), JSON.stringify(info));
+      ok('all three sections exist, each with a title row', SEC_NAMES.length === 3 && SEC_NAMES.every(n => info[n]), JSON.stringify(info));
+      ok('設定 and 送出紀錄 are not sections any more', (await page.$('#pd-sec-settings, #pd-sec-submissions')) === null);
       ok('交件 is not a section any more', (await page.$('#pd-sec-delivery')) === null);
       const card = await page.evaluate(() => ({ label: document.getElementById('pd-status-label')?.textContent.trim(), next: document.getElementById('pd-status-next')?.textContent.trim(),
         folders: document.querySelectorAll('#pd-status #pd-delivered-folders [data-final-chip]').length, first: document.querySelector('#project-detail-body .pd-sec') }))
@@ -67,14 +70,14 @@ for (const [label, build, want] of [
 }
 
 {
-  // submitted: 目前選取 starts open, the 送出紀錄 summary counts and dates the latest
+  // submitted: 目前選取 starts open
   const m = secFixture({ phase: 'submitted', ownerName: 'Grace' });
   m.state.selections.set('20260819/p0.jpg', { rating: 5, note: '', updated_by: 'picker-0', updated_at: SEC_AT });
   m.state.selections.set('20260819/p1.jpg', { rating: 1, note: '', updated_by: 'picker-0', updated_at: SEC_AT });
   m.state.selections.set('20260819/p2.jpg', { rating: 0, note: '', updated_by: 'picker-0', updated_at: SEC_AT });
   m.state.submissions.push(secSub('s1', '2026-01-01T00:00:00Z', ['20260819/p0.jpg']), secSub('s2', '2026-01-02T00:00:00Z', ['20260819/p0.jpg', '20260819/p1.jpg']));
   m.state.tokens.push({ token: 'OLD', created_at: SEC_AT, expires_at: '2027-01-01T00:00:00.000Z', revoked_at: SEC_AT });
-  await suite('區塊收合 — 已送出：目前選取預設展開（只算 ♥ 的張數）；送出紀錄摘要「2 次，最近 1/2」；已撤銷的連結不算有效',
+  await suite('區塊收合 — 已送出：目前選取預設展開（只算 ♥ 的張數）；已撤銷的連結不算有效',
     `${base}/admin.html#project=proj-sec`,
     async page => {
       const out = [];
@@ -82,7 +85,6 @@ for (const [label, build, want] of [
       await secWait(page);
       const i = await secInfo(page);
       ok('目前選取: 2 張 (the rating-0 row is not counted), open', i.selections.sum === '2 張' && secOpen(i.selections), JSON.stringify(i.selections));
-      ok('送出紀錄: 2 次，最近 1/2, closed', i.submissions.sum === '2 次，最近 1/2' && secShut(i.submissions), JSON.stringify(i.submissions));
       ok('挑選人與連結: Grace · 連結有效 1 條 (the revoked one is not counted), closed', i.people.sum === 'Grace · 連結有效 1 條' && secShut(i.people), JSON.stringify(i.people));
       ok('the 看照片 link is on the title row, so it works while the section is closed',
         await page.$eval('#pd-sec-selections .pd-sec-head a.pd-link', a => /index\.html\?project=proj-sec/.test(a.getAttribute('href')) && a.getBoundingClientRect().width > 20));
@@ -219,70 +221,48 @@ for (const [label, build, want] of [
 
 // ── 3. click, keyboard, computed display (not just the hidden attribute) ──
 {
-  const m = secFixture({ phase: 'picking', pickLimit: 30, extraMax: 10 });
+  const m = secFixture({ phase: 'picking' });
   await suite('區塊收合 — 點標題列展開／收合：aria-expanded、▾/▸、body 的 computed display；內容仍在 DOM（id 都保留）；鍵盤也能操作',
     `${base}/admin.html#project=proj-sec`,
     async page => {
       const out = [];
       const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
       await secWait(page);
-      ok('設定 starts closed: the plan input is in the DOM but not displayed (computed display on the container, no hidden attribute)',
-        await page.evaluate(() => { const b = document.getElementById('pd-sec-settings-body'), i = document.getElementById('pd-plan-limit');
+      // (2026-10-20: 挑選人與連結 stands in for the old 設定 section, which became a modal)
+      ok('挑選人與連結 starts closed: the link button is in the DOM but not displayed (computed display on the container, no hidden attribute)',
+        await page.evaluate(() => { const b = document.getElementById('pd-sec-people-body'), i = document.getElementById('pd-new-link-btn');
           return getComputedStyle(b).display === 'none' && !b.hasAttribute('hidden') && !!i && i.getClientRects().length === 0; }));
-      ok('all the ids inside survive: #pd-proofdl, #pd-plan, #pd-allow-proof-dl, #pd-plan-save', await page.evaluate(() => ['pd-proofdl', 'pd-plan', 'pd-allow-proof-dl', 'pd-plan-save'].every(id => !!document.getElementById(id))));
-      await page.click('#pd-sec-settings-btn');
-      let i = (await secInfo(page)).settings;
+      ok('all the ids inside survive: #pd-pickers, #pd-tokens, #pd-new-link-btn', await page.evaluate(() => ['pd-pickers', 'pd-tokens', 'pd-new-link-btn'].every(id => !!document.getElementById(id))));
+      await page.click('#pd-sec-people-btn');
+      let i = (await secInfo(page)).people;
       ok('a click opens it: expanded, ▾, body shown', secOpen(i), JSON.stringify(i));
-      ok('and the plan form is on screen with its values (positive: inputs have a size, the 30 is there)',
-        await page.evaluate(() => { const l = document.getElementById('pd-plan-limit'); return l.getClientRects().length > 0 && l.value === '30'; }));
-      await page.click('#pd-sec-settings-btn');
-      i = (await secInfo(page)).settings;
-      ok('a second click closes it again: not expanded, ▸, body display none, inputs have no box', secShut(i) &&
-        await page.evaluate(() => document.getElementById('pd-plan-limit').getClientRects().length === 0), JSON.stringify(i));
+      ok('and the link button is on screen (positive: it has a size)', await page.evaluate(() => document.getElementById('pd-new-link-btn').getClientRects().length > 0));
+      await page.click('#pd-sec-people-btn');
+      i = (await secInfo(page)).people;
+      ok('a second click closes it again: not expanded, ▸, body display none, the button has no box', secShut(i) &&
+        await page.evaluate(() => document.getElementById('pd-new-link-btn').getClientRects().length === 0), JSON.stringify(i));
       // keyboard: focus the button, Enter then Space
-      await page.focus('#pd-sec-settings-btn');
+      await page.focus('#pd-sec-people-btn');
       await page.keyboard.press('Enter');
-      ok('Enter on the focused title row opens it', secOpen((await secInfo(page)).settings));
+      ok('Enter on the focused title row opens it', secOpen((await secInfo(page)).people));
       await page.keyboard.press('Space');
-      ok('Space closes it', secShut((await secInfo(page)).settings));
-      ok('the title row shows a focus outline for keyboard users', await page.evaluate(() => { const b = document.getElementById('pd-sec-settings-btn'); b.focus(); return getComputedStyle(b).outlineStyle !== 'none' || getComputedStyle(b).boxShadow !== 'none'; }));
+      ok('Space closes it', secShut((await secInfo(page)).people));
+      ok('the title row shows a focus outline for keyboard users', await page.evaluate(() => { const b = document.getElementById('pd-sec-people-btn'); b.focus(); return getComputedStyle(b).outlineStyle !== 'none' || getComputedStyle(b).boxShadow !== 'none'; }));
       // the other sections are not touched by it
       const rest = await secInfo(page);
-      ok('the other sections kept their state', secShut(rest.selections) && secShut(rest.submissions) && secShut(rest.people), JSON.stringify(rest));
+      ok('the other sections kept their state', secShut(rest.selections) && secShut(rest.orders), JSON.stringify(rest));
       // the top is not collapsible: its buttons are visible and not inside a section
-      // (project page 2026-10-19: the top is the header with ✎ 編輯 / ⋯, the status card, 照片 and 進度)
+      // (project page 2026-10-19: the top is the header with ⋯, the status card, 照片 and 進度)
       ok('the top (header, status card, 照片, 進度) is not a section: visible, and not inside .pd-sec', await page.evaluate(() => {
-        const ids = ['pd-edit-btn', 'pd-more-btn', 'pd-status-label', 'pd-download-csv-btn', 'pd-steps'];
+        const ids = ['pd-more-btn', 'pd-status-label', 'pd-download-csv-btn', 'pd-steps'];
         return ids.every(id => { const e = document.getElementById(id); return e && e.getClientRects().length > 0 && !e.closest('.pd-sec'); }) && !!document.querySelector('.pd-head') && !document.querySelector('.pd-head').closest('.pd-sec'); }));
       return out;
     },
     { before: m.attach, initScript: ADMIN_PLAIN });
 }
 
-{
-  // the existing interactions still work once the section is opened: 允許下載 switch + the summary follows; 編輯方案 saves
-  const m = secFixture({ phase: 'picking', pickLimit: 30, extraMax: 10, extraPrice: 500 });
-  await suite('區塊收合 — 展開後既有互動照常：毛片下載開關（摘要跟著變）、編輯方案儲存',
-    `${base}/admin.html#project=proj-sec`,
-    async page => {
-      const out = [];
-      const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
-      await secWait(page);
-      ok('before: 毛片下載：關', (await secInfo(page)).settings.sum === '30 張 + 加選 10 · 加選 NT$500 · 毛片下載：關', (await secInfo(page)).settings.sum);
-      await page.click('#pd-sec-settings-btn');
-      await page.check('#pd-allow-proof-dl');
-      await page.waitForFunction(() => /毛片下載：開/.test(document.getElementById('pd-sec-settings-sum').textContent), null, { timeout: 3000 });
-      ok('the switch PATCHed and the summary now says 毛片下載：開', m.requests.some(r => r.method === 'PATCH' && r.body && r.body.allow_proof_download === true));
-      await page.fill('#pd-plan-limit', '35');
-      await page.click('#pd-plan-save');
-      await page.waitForFunction(() => /35 張/.test(document.getElementById('pd-sec-settings-sum').textContent), null, { timeout: 4000 });
-      const patches = m.requests.filter(r => r.method === 'PATCH').map(r => r.body);
-      ok('the plan PATCH carried only pick_limit, and the summary says 35 張', JSON.stringify(patches[patches.length - 1]) === '{"pick_limit":35}', JSON.stringify(patches));
-      ok('the section is still open after the page re-read the project', secOpen((await secInfo(page)).settings));
-      return out;
-    },
-    { before: m.attach, initScript: ADMIN_PLAIN });
-}
+// (the old "展開後既有互動照常：毛片下載開關、編輯方案儲存" suite lived in the 設定 section; the switch and the plan now live in the
+// ⋯ → 設定 modal and are covered by 99g-project-settings-modal.mjs and 17-/24-)
 
 // ── 4. localStorage: remembered, per section name (not per project), and every access guarded ──
 {
@@ -293,16 +273,16 @@ for (const [label, build, want] of [
       const out = [];
       const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
       await secWait(page);
-      await page.click('#pd-sec-settings-btn');
+      await page.click('#pd-sec-selections-btn');
       await page.click('#pd-sec-people-btn');
       await page.click('#pd-sec-people-btn');
       const keys = await page.evaluate(() => Object.fromEntries(Object.keys(localStorage).filter(k => k.startsWith('pd_sec_')).map(k => [k, localStorage.getItem(k)])));
-      ok('opened 設定 is stored as 1, a section opened then closed as 0, untouched ones are not written', keys.pd_sec_settings === '1' && keys.pd_sec_people === '0' && !('pd_sec_submissions' in keys), JSON.stringify(keys));
+      ok('opened 目前選取 is stored as 1, a section opened then closed as 0, untouched ones are not written', keys.pd_sec_selections === '1' && keys.pd_sec_people === '0' && !('pd_sec_orders' in keys), JSON.stringify(keys));
       ok('the keys carry the section name only — no project id', Object.keys(keys).every(k => !/proj/.test(k)), JSON.stringify(keys));
       await page.reload({ waitUntil: 'load' });
       await secWait(page);
       const i = await secInfo(page);
-      ok('after a reload: 設定 is still open, 挑選人與連結 still closed, the rest at their defaults', secOpen(i.settings) && secShut(i.people) && secShut(i.submissions) && secShut(i.selections), JSON.stringify(i));
+      ok('after a reload: 目前選取 is still open, 挑選人與連結 still closed, 訂單 at its default', secOpen(i.selections) && secShut(i.people) && secShut(i.orders), JSON.stringify(i));
       return out;
     },
     { before: m.attach, initScript: ADMIN_PLAIN });
@@ -311,8 +291,8 @@ for (const [label, build, want] of [
 for (const [label, seed, check] of [
   // (the default-open section here was 交件 until 2026-10-19; 目前選取 is the one that opens by default now, once submitted)
   ['stored 0 beats the default-open 目前選取', { selections: '0' }, i => secShut(i.selections)],
-  ['stored 1 opens a default-closed section', { submissions: '1', people: '1' }, i => secOpen(i.submissions) && secOpen(i.people) && secShut(i.settings)],
-  ['a garbage value falls back to the default', { settings: 'maybe', selections: '' }, i => secShut(i.settings) && secOpen(i.selections)],
+  ['stored 1 opens a default-closed section', { orders: '1', people: '1' }, i => secOpen(i.orders) && secOpen(i.people)],
+  ['a garbage value falls back to the default', { orders: 'maybe', selections: '' }, i => secShut(i.orders) && secOpen(i.selections)],
 ]) {
   const m = secFixture({ phase: 'submitted' });
   await suite(`區塊收合 — 已存的偏好 vs 預設：${label}`,
@@ -354,15 +334,15 @@ for (const [label, seed, check] of [
       await secWait(page);
       ok('localStorage really throws here (the fixture is not a no-op)', await page.evaluate(() => { try { localStorage.getItem('x'); return false; } catch (e) { return true; } }));
       let i = await secInfo(page);
-      ok('the defaults: no 交件 section, 目前選取 open, 設定 closed', !i.delivery && (await page.$('#pd-sec-delivery')) === null && secOpen(i.selections) && secShut(i.settings), JSON.stringify(i));
-      await page.click('#pd-sec-settings-btn');
+      ok('the defaults: no 交件 section, 目前選取 open, 挑選人與連結 closed', !i.delivery && (await page.$('#pd-sec-delivery')) === null && secOpen(i.selections) && secShut(i.people), JSON.stringify(i));
+      await page.click('#pd-sec-people-btn');
       await page.click('#pd-sec-selections-btn');
       i = await secInfo(page);
-      ok('clicking still toggles: 設定 open, 目前選取 closed', secOpen(i.settings) && secShut(i.selections), JSON.stringify(i));
+      ok('clicking still toggles: 挑選人與連結 open, 目前選取 closed', secOpen(i.people) && secShut(i.selections), JSON.stringify(i));
       await page.click('#pd-start-retouch-btn');   // the page re-reads and redraws the whole detail
       await page.waitForFunction(() => document.getElementById('pd-status-label')?.textContent === '精修中', null, { timeout: 5000 });
       i = await secInfo(page);
-      ok('after the redraw your choice is kept (kept in memory, since nothing can be stored)', secOpen(i.settings) && secShut(i.selections), JSON.stringify(i));
+      ok('after the redraw your choice is kept (kept in memory, since nothing can be stored)', secOpen(i.people) && secShut(i.selections), JSON.stringify(i));
       ok('and the page threw nothing (the suite reports page errors)', true);
       return out;
     },
@@ -416,7 +396,8 @@ for (const [tag, ctx] of [['390', { viewport: { width: 390, height: 844 }, hasTo
       const out = [];
       const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
       await secWait(page);
-      for (const n of ['settings', 'people']) await page.click(`#pd-sec-${n}-btn`);   // measure them open: a closed section has no height at all
+      await page.click('#pd-sec-people-btn');   // measure it open: a closed section has no height at all
+      await openSettings(page);                 // and the 設定 modal (where the plan / download lines live) open
       const r = await page.evaluate(() => ['pd-action-err', 'pd-link-err', 'pd-deliver-err', 'pd-plan-err', 'pd-plan-ok', 'pd-proofdl-err'].map(id => {
         const e = document.getElementById(id); return [id, !!e, e && e.textContent === '', e && e.getBoundingClientRect().height]; }));
       ok('those lines exist and are empty (positive)', r.every(([, there, empty]) => there && empty), JSON.stringify(r));

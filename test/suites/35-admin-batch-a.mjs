@@ -366,7 +366,7 @@ const STATES = [
     card: '已完成', list: { '已標記完成': 'st-done' } },
 ];
 for (const st of STATES) {
-  const m = pickFakeWorker({ projectId: 'proj-st', ownerName: 'Zoe', folders: ['shoot/毛片/'], ...st.opts });
+  const m = pickFakeWorker({ projectId: 'proj-st', ownerName: 'Zoe', folders: ['shoot/毛片/'], bucketFolders: ['shoot/', 'shoot/毛片/'], ...st.opts });   // (with 毛片 in the bucket: without any the card says 準備中, 2026-10-20)
   if (st.mutate) st.mutate(m);
   // (project page 2026-10-19: the detail header has no badges any more — its status card carries ONE label; the list keeps its badge)
   await suite(`35 狀態顏色 — ${st.name}：列表（每列只有一個徽章）的徽章有自己的顏色類別、文字對比 ≥ 4.5；詳情沒有徽章，狀態卡一個標籤`,

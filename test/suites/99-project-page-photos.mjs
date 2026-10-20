@@ -143,11 +143,11 @@ const steps = page => page.evaluate(STEPS);
     const out = [], ok = line(out);
     await page.waitForSelector('#pd-progress [data-step]', { timeout: 5000 });
     const s = await steps(page);
-    ok('steps: picked, retouch, delivered, round-1, round-2, confirmed', JSON.stringify(s.map(x => x.step)) === '["picked","retouch","delivered","round-1","round-2","confirmed"]', JSON.stringify(s));
-    ok('labels', JSON.stringify(s.map(x => x.label)) === JSON.stringify(['客人送出選片', '開始精修', '交件', '客人要求修改（第 1 輪）', '客人要求修改（第 2 輪）', '客人確認']), JSON.stringify(s.map(x => x.label)));
-    ok('marks ✓ ✓ ✓ ✓ ● ○', s.map(x => x.mark).join('') === '✓✓✓✓●○', s.map(x => x.mark).join(''));
-    ok('dates: the latest submission 9/12, none for 開始精修, 交件 9/20, rounds 9/21 and 9/22, none for 確認',
-      JSON.stringify(s.map(x => x.date)) === JSON.stringify(['9/12', '', '9/20', '9/21', '9/22', '']), JSON.stringify(s.map(x => x.date)));
+    ok('steps: picked, picked-2 (each submission has its own row since 2026-10-20), retouch, delivered, round-1, round-2, confirmed', JSON.stringify(s.map(x => x.step)) === '["picked","picked-2","retouch","delivered","round-1","round-2","confirmed"]', JSON.stringify(s));
+    ok('labels', JSON.stringify(s.map(x => x.label)) === JSON.stringify(['客人送出選片', '客人再次送出選片', '開始精修', '交件', '客人要求修改（第 1 輪）', '客人要求修改（第 2 輪）', '客人確認']), JSON.stringify(s.map(x => x.label)));
+    ok('marks ✓ ✓ ✓ ✓ ✓ ● ○', s.map(x => x.mark).join('') === '✓✓✓✓✓●○', s.map(x => x.mark).join(''));
+    ok('dates: the submissions 9/10 and 9/12, none for 開始精修, 交件 9/20, rounds 9/21 and 9/22, none for 確認',
+      JSON.stringify(s.map(x => x.date)) === JSON.stringify(['9/10', '9/12', '', '9/20', '9/21', '9/22', '']), JSON.stringify(s.map(x => x.date)));
     return out;
   }, { before: m.attach, initScript: ADMIN });
 }

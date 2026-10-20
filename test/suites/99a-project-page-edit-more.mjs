@@ -1,4 +1,4 @@
-// Browser suites: the project page header (title, one meta line, 「✎ 編輯」 and 「⋯」). 編輯 opens a focus-trapped
+// Browser suites: the project page header (title, one meta line and 「⋯」; 「設定」 is its first menu item and opens the 專案設定 modal, whose 一般設定 block is the old edit form). The form is a focus-trapped
 // modal with 專案名稱 / 拍攝日期 / 攝影類別 and the read-only folder line; one 儲存 sends the same PATCH requests the old
 // inline rows did (only for what changed, with the same error messages). 「⋯」 opens a menu of the remaining actions,
 // each running exactly the old action (confirm dialogs kept). (File name 99a sorts after 99-; a 100- would sort first.)
@@ -7,6 +7,7 @@ import { base, suite } from '../lib/harness.mjs';
 import { MOBILE } from '../lib/env.mjs';
 import { ADMIN } from '../lib/auth-mocks.mjs';
 import { pickFakeWorker } from '../lib/pick-fake.mjs';
+import { openSettings } from '../lib/project-helpers.mjs';
 
 export default async function register() {
 
@@ -27,12 +28,13 @@ const initAdmin = `(${ADMIN.toString()})();${CLIP}`;
 // ═════ header ═════
 {
   const m = fx({ shootDate: '2026-10-19', projectType: '婚紗' });
-  await suite('project page header — title, one meta line (日期 · 類別 · 挑選人), ✎ 編輯 and ⋯ (更多); the old inline rows are gone', URL_, async page => {
+  await suite('project page header — title, one meta line (日期 · 類別 · 挑選人) and ⋯ (更多); the old inline rows are gone', URL_, async page => {
     const out = [], ok = line(out);
     await waitHead(page);
     ok('title', (await page.textContent('#pd-title')).trim() === '編輯專案');
     ok('meta line 「2026-10-19 · 婚紗 · 挑選人：你好」', (await page.textContent('#pd-meta')).trim() === '2026-10-19 · 婚紗 · 挑選人：你好', await page.textContent('#pd-meta'));
-    ok('✎ 編輯 button', (await page.textContent('#pd-edit-btn')).trim() === '✎ 編輯' && await shown(page, '#pd-edit-btn'));
+    ok('no ✎ 編輯 button in the header: 設定 is the first menu item (2026-10-20)', await page.$$eval('#pd-head button:not(.pd-more-item)', bs => bs.length === 1 && bs[0].id === 'pd-more-btn') &&
+      (await page.textContent('#pd-settings-btn')).trim() === '設定');
     ok('⋯ button, aria-label 更多, says it opens a menu, closed', await page.$eval('#pd-more-btn', b => b.textContent.trim() === '⋯' && b.getAttribute('aria-label') === '更多' &&
       b.getAttribute('aria-haspopup') === 'menu' && b.getAttribute('aria-expanded') === 'false'));
     ok('the menu is closed (not displayed)', !(await shown(page, '#pd-more-menu')));
@@ -58,7 +60,7 @@ const initAdmin = `(${ADMIN.toString()})();${CLIP}`;
   await suite('project page edit — the modal: prefilled, folder line read-only, focus trapped, Esc / 取消 close without sending', URL_, async page => {
     const out = [], ok = line(out);
     await waitHead(page);
-    await page.click('#pd-edit-btn');
+    await openSettings(page);
     await page.waitForSelector('#pd-edit-modal', { state: 'visible', timeout: 3000 });
     ok('a modal dialog with a name', await page.$eval('#pd-edit-modal [role="dialog"]', d => d.getAttribute('aria-modal') === 'true' && !!d.getAttribute('aria-labelledby')).catch(() => false));
     ok('focus starts in 專案名稱', (await active(page)) === 'pd-rename-input');
@@ -73,8 +75,8 @@ const initAdmin = `(${ADMIN.toString()})();${CLIP}`;
     ok('Shift+Tab from the first field wraps to the last control inside', await inModal(page), await active(page));
     await page.fill('#pd-rename-input', '半途');
     await page.keyboard.press('Escape');
-    ok('Esc closes it, nothing sent, focus back on ✎ 編輯', !(await shown(page, '#pd-edit-modal')) && patches(m).length === 0 && (await active(page)) === 'pd-edit-btn');
-    await page.click('#pd-edit-btn');
+    ok('Esc closes it, nothing sent, focus back on ⋯', !(await shown(page, '#pd-edit-modal')) && patches(m).length === 0 && (await active(page)) === 'pd-more-btn');
+    await openSettings(page);
     ok('reopening shows the stored name again', (await page.inputValue('#pd-rename-input')) === '編輯專案');
     await page.click('#pd-edit-cancel');
     ok('取消 closes it too, nothing sent', !(await shown(page, '#pd-edit-modal')) && patches(m).length === 0);
@@ -87,7 +89,7 @@ const initAdmin = `(${ADMIN.toString()})();${CLIP}`;
   await suite('project page edit — 儲存 sends one PATCH per changed field (title, shoot_date, project_type), updates the header and the list, closes', URL_, async page => {
     const out = [], ok = line(out);
     await waitHead(page);
-    await page.click('#pd-edit-btn');
+    await openSettings(page);
     await page.fill('#pd-rename-input', '  新名字 <b>x</b>  ');
     await page.fill('#pd-shoot-input', '2026-10-21');
     await page.selectOption('#pd-type-select', '其他');
@@ -99,12 +101,12 @@ const initAdmin = `(${ADMIN.toString()})();${CLIP}`;
     ok('header title is the new one, as text', (await page.textContent('#pd-title')) === '新名字 <b>x</b>' && (await page.$('#pd-title b')) === null);
     ok('meta line updated', (await page.textContent('#pd-meta')).trim() === '2026-10-21 · 寵物 · 挑選人：你好', await page.textContent('#pd-meta'));
     ok('the list row has the new title too', await page.$eval('[data-project-row="proj-ed"]', r => r.textContent.includes('新名字 <b>x</b>')).catch(() => false));
-    await page.click('#pd-edit-btn');
+    await openSettings(page);
     await page.fill('#pd-rename-input', '只改名');
     await page.click('#pd-edit-save');
     await page.waitForSelector('#pd-edit-modal', { state: 'hidden', timeout: 4000 }).catch(() => {});
     ok('changing only the name sends only {title}', JSON.stringify(patches(m).slice(3)) === JSON.stringify([{ title: '只改名' }]), JSON.stringify(patches(m)));
-    await page.click('#pd-edit-btn');
+    await openSettings(page);
     await page.fill('#pd-shoot-input', '');
     await page.selectOption('#pd-type-select', '');
     await page.click('#pd-edit-save');
@@ -120,7 +122,7 @@ const initAdmin = `(${ADMIN.toString()})();${CLIP}`;
   await suite('project page edit — client-side checks: blank name / empty 其他 are refused with the old messages, nothing sent', URL_, async page => {
     const out = [], ok = line(out);
     await waitHead(page);
-    await page.click('#pd-edit-btn');
+    await openSettings(page);
     await page.fill('#pd-rename-input', '   ');
     await page.click('#pd-edit-save');
     ok('專案名稱不能空白, modal stays', (await page.textContent('#pd-rename-err')).trim() === '專案名稱不能空白' && await shown(page, '#pd-edit-modal') && patches(m).length === 0);
@@ -138,7 +140,7 @@ const initAdmin = `(${ADMIN.toString()})();${CLIP}`;
   await suite('project page edit — the Worker refuses the name: 「專案名稱格式不正確（1–200 字）」, modal stays, title unchanged', URL_, async page => {
     const out = [], ok = line(out);
     await waitHead(page);
-    await page.click('#pd-edit-btn');
+    await openSettings(page);
     await page.fill('#pd-rename-input', '新的');
     await page.click('#pd-edit-save');
     await page.waitForFunction(() => document.getElementById('pd-rename-err').textContent !== '', null, { timeout: 4000 }).catch(() => {});
@@ -153,7 +155,7 @@ const initAdmin = `(${ADMIN.toString()})();${CLIP}`;
   await suite('project page edit — 拍攝日期 before its migration: the old Chinese message under the date, modal stays', URL_, async page => {
     const out = [], ok = line(out);
     await waitHead(page);
-    await page.click('#pd-edit-btn');
+    await openSettings(page);
     await page.fill('#pd-shoot-input', '2026-10-05');
     await page.click('#pd-edit-save');
     await page.waitForFunction(() => document.getElementById('pd-shoot-err').textContent !== '', null, { timeout: 4000 }).catch(() => {});
@@ -171,10 +173,10 @@ const initAdmin = `(${ADMIN.toString()})();${CLIP}`;
     await waitHead(page);
     await page.click('#pd-more-btn');
     ok('opens: shown, aria-expanded=true', await shown(page, '#pd-more-menu') && (await page.getAttribute('#pd-more-btn', 'aria-expanded')) === 'true');
-    ok('items: 看全部毛片, 開放修改, —, 重設主人, 封存, 刪除', JSON.stringify(await menuItems(page)) === JSON.stringify(['看全部毛片', '開放修改', '—', '重設主人', '封存', '刪除']), JSON.stringify(await menuItems(page)));
-    ok('focus is on the first item', (await active(page)) === 'pd-view-all-btn');
+    ok('items: 設定, 看全部毛片, 開放修改, —, 重設主人, 封存, 刪除', JSON.stringify(await menuItems(page)) === JSON.stringify(['設定', '看全部毛片', '開放修改', '—', '重設主人', '封存', '刪除']), JSON.stringify(await menuItems(page)));
+    ok('focus is on the first item (設定)', (await active(page)) === 'pd-settings-btn');
     await page.keyboard.press('ArrowDown');
-    ok('ArrowDown → 開放修改', (await active(page)) === 'pd-reopen-btn');
+    ok('ArrowDown → 看全部毛片', (await active(page)) === 'pd-view-all-btn');
     await page.keyboard.press('ArrowUp');
     await page.keyboard.press('ArrowUp');
     ok('ArrowUp wraps to the last item (刪除)', (await active(page)) === 'pd-delete-btn');
@@ -198,7 +200,7 @@ const initAdmin = `(${ADMIN.toString()})();${CLIP}`;
     const out = [], ok = line(out);
     await waitHead(page);
     await page.click('#pd-more-btn');
-    ok('items', JSON.stringify(await menuItems(page)) === JSON.stringify(['看全部毛片', '複製交件通知文案', '開放修改', '取消交件', '—', '重設主人', '封存']), JSON.stringify(await menuItems(page)));
+    ok('items', JSON.stringify(await menuItems(page)) === JSON.stringify(['設定', '看全部毛片', '複製交件通知文案', '開放修改', '取消交件', '—', '重設主人', '封存']), JSON.stringify(await menuItems(page)));
     await page.click('#pd-copy-notice-btn');
     await page.waitForFunction(() => document.getElementById('pd-copy-notice-status')?.textContent === '已複製', null, { timeout: 3000 }).catch(() => {});
     ok('複製交件通知文案 copies the notice and says 已複製 where it can be seen', (await page.evaluate(() => window.__clip.length)) === 1 &&
@@ -253,15 +255,15 @@ const initAdmin = `(${ADMIN.toString()})();${CLIP}`;
 
 {
   const m = fx({ shootDate: '2026-10-19', projectType: '婚紗' });
-  await suite('project page header — phone 390px: header fits, ✎ 編輯 / ⋯ >= 44px, the modal fits, no sideways scroll', URL_, async page => {
+  await suite('project page header — phone 390px: header fits, ⋯ >= 44px, the modal fits, no sideways scroll', URL_, async page => {
     const out = [], ok = line(out);
     await waitHead(page);
-    const hs = await page.$$eval('#pd-edit-btn, #pd-more-btn', els => els.map(e => Math.round(e.getBoundingClientRect().height)));
-    ok('both >= 44px', hs.length === 2 && hs.every(h => h >= 44), JSON.stringify(hs));
-    await page.click('#pd-edit-btn');
+    const hs = await page.$$eval('#pd-more-btn', els => els.map(e => Math.round(e.getBoundingClientRect().height)));
+    ok('⋯ >= 44px', hs.length === 1 && hs.every(h => h >= 44), JSON.stringify(hs));
+    await openSettings(page);
     const g = await page.evaluate(() => { const b = document.querySelector('#pd-edit-modal [role="dialog"]').getBoundingClientRect();
       return { l: b.left, r: b.right, vw: innerWidth, sw: document.documentElement.scrollWidth,
-        hs: [...document.querySelectorAll('#pd-edit-modal button, #pd-edit-modal input, #pd-edit-modal select')].filter(e => e.getClientRects().length).map(e => Math.round(e.getBoundingClientRect().height)) }; });
+        hs: [...document.querySelectorAll('#pd-edit-modal button, #pd-edit-modal input:not([type="checkbox"]), #pd-edit-modal select, #pd-edit-modal .pd-switch')].filter(e => e.getClientRects().length).map(e => Math.round(e.getBoundingClientRect().height)) }; });
     ok('the dialog is inside the screen', g.l >= 0 && g.r <= g.vw, JSON.stringify(g));
     ok('no horizontal scroll', g.sw <= g.vw, JSON.stringify(g));
     ok('modal controls >= 44px', g.hs.length >= 5 && g.hs.every(h => h >= 44), JSON.stringify(g.hs));

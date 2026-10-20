@@ -3,7 +3,7 @@
 import { join } from 'node:path';
 import { readFileSync } from 'node:fs';
 import { base, suite } from '../lib/harness.mjs';
-import { openCreateForm } from '../lib/project-helpers.mjs';
+import { openCreateForm, openSettings } from '../lib/project-helpers.mjs';
 import { ROOT } from '../lib/env.mjs';
 import { ADMIN, ADMIN_PLAIN, SHOOT_CLIENTS, adminMock, shareMock } from '../lib/auth-mocks.mjs';
 import { ADMIN_BUCKET, ADM_REVS, admDelivered } from '../lib/delivery-helpers.mjs';
@@ -199,27 +199,37 @@ for (const [tag, ctx] of [['1280', DESKTOP], ['390', PHONE]]) {
       // 建立表單與專案列表 suite below, in the list view)
       // (every section is open: ADMIN stores that preference; 目前選取 used to be a <details> opened here)
       ok('the fixture reached the places under test: pins line, 加挑 warning, a cancelled order, selections table',
-        await page.evaluate(() => /標示變更 1 張/.test(document.getElementById('pd-submissions').textContent) &&
+        await page.evaluate(() => /標示變更 1 張/.test(document.getElementById('pd-steps').textContent) &&
           !!document.getElementById('pd-extra-warn') && !!document.querySelector('.ord-card.cancelled') &&
           document.querySelectorAll('#pd-selections-details tbody tr').length === 2));
       await tokenChecks(page, ok, 'admin');
       // project page 2026-10-19: no header badges; the status card, 照片 and 進度 instead, and the ⋯ menu (opened for the
       // scan, so its items are on screen and measured)
+      // 2026-10-20: a submission's detail lives in 進度, closed until its toggle is pressed: open them so they are scanned
+      for (const b of await page.$$('.pd-step-toggle')) await b.click();
       await page.click('#pd-more-btn');
       await page.waitForSelector('#pd-more-menu', { state: 'visible', timeout: 3000 });
       await brightChecks(page, ok, 'admin 詳情', { minItems: 80,
         named: ['header .subtitle', '.side-nav-item', '.side-nav-item.active', '#pd-back-btn', '#pd-status-label', '#pd-status-next', '.pd-meta',
-          '#pd-submissions .badge-pending', '.pd-owner', '.pd-diff', '#project-detail-panel a.pd-link', '#pd-upload-final-btn', '#pd-reset-seat-btn',
-          '#pd-download-btn', '#pd-archive-btn', '#pd-reopen-btn', '#pd-edit-btn', '#pd-more-btn', '.pd-ver-name', '.pd-step-label',
-          '.pd-steps li[data-state="next"]', '#pd-final-pick-btn', 'th', '.field', '.panel-note, .pd-note', '.ord-warn',
-          '.ord-card .ord-status', '.ord-owed', '.ord-actions .btn', '[data-copy-link]',
-          '.pd-switch'],
+          '#pd-steps .pd-submission .badge-pending', '.pd-step-toggle', '.pd-owner', '.pd-diff', '#project-detail-panel a.pd-link', '#pd-upload-final-btn', '#pd-reset-seat-btn',
+          '#pd-download-btn', '#pd-archive-btn', '#pd-reopen-btn', '#pd-settings-btn', '#pd-more-btn', '.pd-ver-name', '.pd-step-label',
+          '.pd-steps li[data-state="next"]', '#pd-final-pick-btn', 'th', '.panel-note, .pd-note', '.ord-warn',
+          '.ord-card .ord-status', '.ord-owed', '.ord-actions .btn', '[data-copy-link]'],
         }).then(r => {
           ok('the cancelled order stays legible (positive: it was scanned, and no failure names it)',
             r.fails.every(f => !/ord-card/.test(f)) && r.n > 0);
           ok('the STUDIO ADMIN wordmark was found (so the logotype exemption is not hiding an absent element)', r.logotypes.length === 1, String(r.logotypes.length));
         });
       await shot(page, `admin-detail-${tag}`);
+      // the 設定 modal (⋯ → 設定): 一般設定, the 毛片下載 switch and the plan
+      await page.keyboard.press('Escape');
+      await openSettings(page);
+      await brightChecks(page, ok, 'admin 設定 modal', { minItems: 40, allowDark: ['#pd-edit-modal'],
+        named: ['#pd-edit-h', '.pd-set-sec > h5', '#pd-edit-modal label', '#pd-edit-modal .field', '#pd-edit-save', '#pd-edit-cancel', '.pd-switch', '#pd-plan-save', '#pd-edit-folder'] });
+      const setBox = await page.$eval('#pd-edit-modal .picker-box', e => { const c = getComputedStyle(e); return { bg: c.backgroundColor, color: c.color }; });
+      ok('the settings modal box itself is a light card', setBox.bg === WHITE, JSON.stringify(setBox));
+      await shot(page, `admin-settings-modal-${tag}`);
+      await page.click('#pd-edit-cancel');
       // the 精修資料夾 chooser is a modal over the page
       await page.click('#pd-final-pick-btn');
       await page.waitForSelector('#folder-picker[style*="flex"]', { timeout: 3000 });

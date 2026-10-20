@@ -126,7 +126,7 @@ const clickTab = async (page, t) => { await page.click(`[data-pl-tab="${t}"]`); 
       await waitRows(page, 3);
       ok('after reload: still 已完成', same(await rowIds(page), DONE3) && (await tabSelected(page, 'done')) === 'true');
       await page.click('[data-project-row="proj-A"] [data-open-project]');
-      await page.waitForSelector('#pd-sec-settings', { timeout: 5000 }).catch(() => null);
+      await page.waitForSelector('#pd-sec-selections', { timeout: 5000 }).catch(() => null);   // (設定 became a modal 2026-10-20)
       const dh = new URLSearchParams((await hash(page)).slice(1));
       ok('the detail hash keeps tab=done next to project=', dh.get('project') === 'proj-A' && dh.get('tab') === 'done', await hash(page));
       await page.goBack();
