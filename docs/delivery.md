@@ -795,6 +795,33 @@ deliver replaces `final_folders`, undeliver / reopen clear the stamp), so e.g. �
   客人確認完成, 已標記完成（代客人）. `link_reissued` = 重新產生挑選連結（舊連結 N 條失效）, or 產生新挑選連結 when N is 0 (2026-10-20). Unknown kinds are skipped. textContent only.
 - Events start when the migration runs: an older project's earlier history stays as derived before.
 
+## Photo expiry (照片保存期限, Worker, 2026-10-20)
+
+Why: the R2 bucket `imagepicker` has a lifecycle rule that deletes every object 180 days after its upload (whole
+bucket, no prefix). Neither the photographer nor the client could see when. These two read-only routes give the
+date; the pages that show it (「照片保存到 X 月 X 日」) are a separate frontend step.
+
+- `R2_LIFETIME_DAYS = 180` in worker.js mirrors the lifecycle rule: change the rule and the constant together.
+- It is an estimate: R2 counts from each object's `uploaded`, so a photo uploaded again starts its 180 days over.
+  The answer is the EARLIEST upload among the photos (+180 days): the first ones go then, later uploads later.
+- One helper (`folderExpiry`) scans the folders through `bucketFor` (the project's photographer's prefix). R2 lists
+  by key, never by date, so it scans: at most 5 list calls (about 5000 objects) per folder; past that
+  `truncated: true` and the date is the earliest of what was scanned. Subfolders count; a key with a `_` segment
+  (`_thumbs/`, `_t/` …, hidden from the folder picker too) and anything that is not a photo upload takes (`.thumb`,
+  `.json`, `.txt` …) do not. No photos: both dates null.
+- `GET /api/admin/projects/:id/expiry` (requirePhotographer, scoped to the caller: another photographer's project is
+  404 as for none; another method on one's own project 405; `ADMIN_ONLY_HEADERS`):
+  `{proofs: {expires_at, earliest_uploaded, count, truncated}, finals: {…} | null}`. proofs = `projects.folders`;
+  finals = `final_folders`, whenever it is non-null (delivered or not: it is the last chosen finals).
+- `GET /api/pick/expiry` (any live pick link, like `/api/pick/shop`; a dead link is 401; another method 405):
+  `{expires_at, days_left}`, `days_left` = whole days left rounded up, never below 0. Only the folders `pickFinals`
+  opens (delivered_at set); not delivered (picking, 取消交件, 開放修改, a snapshot that does not parse) is
+  `{expires_at: null, days_left: null}` and asks R2 nothing. Never the proofs (even with 毛片下載 on), never a folder or
+  key from the request, never a key, name or count in the answer.
+- Cost: one list call per 1000 objects per folder per request (up to 5 × 20 finals folders on the guest route).
+  Not cached; fine at the current scale, worth caching if the page calls it on every load at volume.
+- Tests: `worker/test/photo-expiry.test.mjs`.
+
 ## Out of scope for this step
 
 (Status 2026-10-08: the zip of all finals shipped on the 完成頁, 下載全部精修.) Watermarks; a second link just for delivery;

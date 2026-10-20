@@ -9,13 +9,16 @@ import { readFileSync } from 'node:fs';
 export function fakeBucket(initial = {}, { pageSize = 1000 } = {}) {
   const store = new Map(Object.entries(initial).map(([k, v]) => [k, entry(k, v)]));
 
-  function entry(key, value, contentType = 'image/jpeg') {
+  // `uploaded` is a Date, as on a real R2 object: a seeded object's own (or
+  // 2026-01-01 when it names none), and the time of the put for a put — real
+  // R2 stamps an object when it is written (the 180-day lifecycle counts from it)
+  function entry(key, value, contentType = 'image/jpeg', uploaded = new Date('2026-01-01T00:00:00Z')) {
     const body = typeof value === 'string' ? value : value.body;
     return {
       key,
       body,
       contentType: typeof value === 'string' ? contentType : (value.contentType || contentType),
-      uploaded: new Date('2026-01-01T00:00:00Z'),
+      uploaded: typeof value === 'string' || !value.uploaded ? uploaded : new Date(value.uploaded),
     };
   }
 
@@ -93,7 +96,7 @@ export function fakeBucket(initial = {}, { pageSize = 1000 } = {}) {
       putLog.push(key);
       // the upload route hands us request.body (a stream), the book routes a string
       const text = typeof value === 'string' ? value : await new Response(value).text();
-      store.set(key, entry(key, { body: text, contentType: opts.httpMetadata?.contentType }));
+      store.set(key, entry(key, { body: text, contentType: opts.httpMetadata?.contentType }, undefined, new Date()));
       return { key };
     },
 

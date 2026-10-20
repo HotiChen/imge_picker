@@ -85,6 +85,7 @@ const ROUTES = [
   R('scoped', 'POST', f => `${P(f)}/undeliver`),
   R('scoped', 'POST', f => `${P(f)}/confirm`),
   R('scoped', 'GET', f => `${P(f)}/events`),
+  R('scoped', 'GET', f => `${P(f)}/expiry`),
   R('scoped', 'PATCH', P, { title: '改名' }),
   R('open', 'PUT', P, {}),
   R('open', 'POST', P, {}),

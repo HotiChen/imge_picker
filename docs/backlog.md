@@ -114,6 +114,9 @@ Design: `docs/products-orders.md`.
    deleted 180 days after upload. Show it: 「照片將於 X 月 X 日刪除」 on the
    project in admin and on the guest page. The platform is not the
    photographer's archive — they keep their originals.
+   *Status: Worker done (2026-10-20): `GET /api/admin/projects/:id/expiry` and
+   `GET /api/pick/expiry` (`docs/delivery.md`, "Photo expiry"); the frontend
+   (admin + guest page) is not built yet.*
 2. **B — guest shop.** Platform products (photo, price) on the pick page;
    the guest orders, the photographer confirms, payment by transfer. The main
    selling point. *Status: S1 (product info) and 我有興趣 live; S2 ordering built

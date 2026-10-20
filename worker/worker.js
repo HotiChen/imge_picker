@@ -2652,6 +2652,55 @@ function finalFolders(value) {
   return out;
 }
 
+// ─── Photo expiry (docs/delivery.md, "Photo expiry") ─────────────────────────
+// MIRRORS THE R2 LIFECYCLE RULE on the bucket `imagepicker` (Cloudflare → R2 →
+// imagepicker → Settings → Object lifecycle rules): every object, whole
+// bucket, no prefix, is deleted this many days after its upload. Change the
+// rule and this together. Only an estimate: R2 counts from the object's
+// `uploaded`, so a photo uploaded again starts over.
+const R2_LIFETIME_DAYS = 180;
+const DAY_MS = 86400000;
+// R2 lists by key, never by date, so finding the oldest means scanning: at
+// most this many list calls (1000 objects each) per folder; past that the
+// answer is the earliest of what was scanned, and says truncated.
+const EXPIRY_LIST_CALLS_MAX = 5;
+
+// When the photos in `folders` (logical folders, already validated by the
+// caller: pickFolders / pickFinals) start to be deleted, read through
+// `photos` (a bucketFor — the project's photographer's, never the request's).
+// Subfolders count; a key with a `_` segment (`_thumbs/`, `_t/` and the like,
+// which the folder picker hides too) and anything that is not a photo upload
+// takes (UPLOAD_TYPES: a .thumb, .json, .txt) do not.
+// {earliest_uploaded, expires_at, count, truncated}; both dates null when
+// nothing was found.
+async function folderExpiry(photos, folders) {
+  let earliest = null;
+  let count = 0;
+  let truncated = false;
+  for (const folder of folders) {
+    let cursor;
+    for (let calls = 1; ; calls++) {
+      const listed = await photos.list(cursor === undefined ? { prefix: folder } : { prefix: folder, cursor });
+      for (const o of listed.objects || []) {
+        if (typeof o.key !== 'string' || o.key.split('/').some(s => s.startsWith('_')) || !UPLOAD_TYPES[keyExtension(o.key)]) continue;
+        const at = o.uploaded instanceof Date ? o.uploaded.getTime() : Date.parse(o.uploaded);
+        if (!Number.isFinite(at)) continue;
+        count++;
+        if (earliest === null || at < earliest) earliest = at;
+      }
+      if (!listed.truncated) break;
+      if (calls >= EXPIRY_LIST_CALLS_MAX) { truncated = true; break; }
+      cursor = listed.cursor;
+    }
+  }
+  return {
+    expires_at: earliest === null ? null : new Date(earliest + R2_LIFETIME_DAYS * DAY_MS).toISOString(),
+    earliest_uploaded: earliest === null ? null : new Date(earliest).toISOString(),
+    count,
+    truncated,
+  };
+}
+
 // The finals a project is delivered with, or null when it is not delivered.
 // Delivered needs both the stamp and a readable snapshot: a stamp from before
 // this feature (no snapshot) or a snapshot that no longer parses is not a
@@ -4724,6 +4773,34 @@ async function routeRequest(request, env, ctx) {
       return jsonOk({ events }, 200, ADMIN_ONLY_HEADERS);
     }
 
+    // GET /api/admin/projects/:id/expiry — 照片保存期限 (docs/delivery.md,
+    // "Photo expiry"): when the R2 lifecycle starts deleting this project's
+    // photos. {proofs, finals}, each folderExpiry's answer; finals null while
+    // final_folders is (it is the last chosen finals, delivered or not). The
+    // project's photographer only (another's is 404, as for no project), read
+    // through that photographer's prefix. Another method on one's own
+    // project is 405.
+    if (pathParts[0] === 'api' && pathParts[1] === 'admin' && pathParts[2] === 'projects' && pathParts[3] &&
+        pathParts[4] === 'expiry' && !pathParts[5]) {
+      const auth = await requirePhotographer(request, env); // scoped to the caller (who.id)
+      if (auth.refused) return auth.refused;
+      const who = auth.who;
+      if (!env.DB) return jsonErr('DB not configured', 500);
+      const project = await env.DB.prepare('SELECT * FROM projects WHERE id = ? AND photographer_id = ?')
+        .bind(pathParts[3], who.id).first();
+      if (!project) return jsonErr('Not found', 404);
+      // after the lookup: another's project answers 404 on every method
+      if (request.method !== 'GET') return jsonOk({ error: 'Method not allowed' }, 405, { ...ADMIN_ONLY_HEADERS, Allow: 'GET' });
+      const parsed = text => { try { return JSON.parse(text); } catch { return null; } };
+      const photos = bucketFor(env, project.photographer_id);
+      const proofFolders = pickFolders(parsed(project.folders)) || [];
+      const finalsFolders = typeof project.final_folders === 'string' ? finalFolders(parsed(project.final_folders)) : null;
+      return jsonOk({
+        proofs: await folderExpiry(photos, proofFolders),
+        finals: finalsFolders ? await folderExpiry(photos, finalsFolders) : null,
+      }, 200, ADMIN_ONLY_HEADERS);
+    }
+
     // GET /api/admin/projects/:id — the seat holder, every submit record and
     // who set each pick. Guest strings go out raw in JSON; admin.html escapes
     // them when it renders.
@@ -6422,6 +6499,25 @@ async function routeRequest(request, env, ctx) {
         // also needs is_owner and confirmed_at from /state).
         const ordering = guestOrdersEnabled(env, project) && await guestOrdersReady(env) ? GUEST_ORDERING_INFO : null;
         return jsonOk({ products, ordering }, 200, SHARED_LINK_HEADERS);
+      }
+
+      // GET /api/pick/expiry — 照片保存期限 (docs/delivery.md, "Photo
+      // expiry"): until when the delivered finals stay before the R2
+      // lifecycle deletes them. Any live link (owner, collaborator, viewer:
+      // they all see the gallery). The link (401 above), the method (405).
+      // Only the folders pickFinals opens now (delivered_at set): never the
+      // proofs, never a folder or key from the request; not delivered —
+      // undelivered, reopened, a snapshot that does not parse — is
+      // {expires_at: null, days_left: null} and asks R2 nothing. Only the
+      // date and the whole days left go out: no key, name or count.
+      if (route === 'expiry') {
+        if (request.method !== 'GET') return jsonOk({ error: 'Method not allowed' }, 405, { ...SHARED_LINK_HEADERS, Allow: 'GET' });
+        const finals = pickFinals(project);
+        if (!finals) return jsonOk({ expires_at: null, days_left: null }, 200, SHARED_LINK_HEADERS);
+        // the project's photographer's files (batch 3), never the request's
+        const { expires_at } = await folderExpiry(bucketFor(env, project.photographer_id), finals);
+        const days_left = expires_at === null ? null : Math.max(0, Math.ceil((Date.parse(expires_at) - Date.now()) / DAY_MS));
+        return jsonOk({ expires_at, days_left }, 200, SHARED_LINK_HEADERS);
       }
 
       // POST /api/pick/interest {product_id} — 「我有興趣」 on the completion
