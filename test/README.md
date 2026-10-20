@@ -11,14 +11,32 @@ ONLY='guest picking' NODE_PATH=/opt/node-tools/node_modules node test/run.mjs
 
 (Outside the cloud session Playwright lives at `/tmp/pwinstall/node_modules`.)
 
+The whole suite, faster: `run-parallel.mjs` runs the same suite files in `JOBS` worker processes (default 3; `JOBS=4` was also green twice on a 4-core machine), each
+with its own static server (port 0) and Chromium, pulling files from one queue. Output comes one file at a time (never
+interleaved), then a summary: failing files with the failing suite names, the slowest files, and the exit code.
+A file whose `register()` throws counts as FAIL and the run goes on; a file running longer than `FILE_TIMEOUT_S`
+(default 600) has its worker killed and counts as FAIL. `ONLY=` works the same. `run.mjs` stays the one-process runner.
+
+```
+NODE_PATH=/opt/node-tools/node_modules node test/run-parallel.mjs
+JOBS=2 ONLY='guest tour' NODE_PATH=/opt/node-tools/node_modules node test/run-parallel.mjs
+```
+
+More parallel workers = more CPU load = the load-sensitive suites (CLAUDE.md "Known flaky") fail more often; re-run a
+red suite alone with `ONLY=` before calling it a regression.
+
+Suites 50/51 compare with layout baselines recorded on another machine, in fallback fonts (Google Fonts is out of
+reach): see `lib/layout-baseline.mjs`.
+
 ## Layout
 
 | Path | What |
 |---|---|
+| `run-parallel.mjs` | The same suite files in `JOBS` worker processes (see above); no suite logic of its own. |
 | `run.mjs` | The runner: imports the harness, imports every `suites/*.mjs` in file-name order and calls its default export, then closes the browser and prints the summary / exit code. Nothing else belongs here. |
 | `lib/harness.mjs` | Starts the static file server (`base`) and Chromium (`browser`), defines `suite()`, holds the counters (`stats.failed`, `stats.ran`) and `ONLY`. |
 | `lib/env.mjs` | Plain shared constants and helpers: `ROOT`, `PIXEL`, `MOBILE`, touch gestures (`swipeTouch`, `pinchTouch`, `realTouch` ...), `BIG_PHOTO`, `CANVAS_PX`. |
-| `lib/*.mjs` (others) | Fakes and helpers used by **more than one** suite file: `pick-fake.mjs` (`pickFakeWorker`, the fake Worker most suites build on), `project-helpers.mjs`, `delivery-helpers.mjs`, `auth-mocks.mjs`, `dashboard-mocks.mjs`, `editor-mocks.mjs`, `orders-fake.mjs`, `guest-orders-fake.mjs` (S2 guest ordering routes), `revision-pins-fake.mjs` (revision pins, rounds, round thumbnails), `upload-fake.mjs` (upload.html with scripted per-attempt outcomes), `album-world.mjs` (fake Worker + book fixtures for the album preview). `upload-desktop-baseline.json` is a recorded desktop layout the upload phone suite compares against. **Fakes mirror the real routes** (status codes, order of checks, answer shapes): a fake that drifts from `worker/worker.js` makes a green test lie. |
+| `lib/*.mjs` (others) | Fakes and helpers used by **more than one** suite file: `pick-fake.mjs` (`pickFakeWorker`, the fake Worker most suites build on), `project-helpers.mjs`, `delivery-helpers.mjs`, `auth-mocks.mjs`, `dashboard-mocks.mjs`, `editor-mocks.mjs`, `orders-fake.mjs`, `guest-orders-fake.mjs` (S2 guest ordering routes), `revision-pins-fake.mjs` (revision pins, rounds, round thumbnails), `upload-fake.mjs` (upload.html with scripted per-attempt outcomes), `album-world.mjs` (fake Worker + book fixtures for the album preview), `layout-baseline.mjs` (compare a layout with a recorded baseline, tolerant only of fallback-font text metrics), `tour-settle.mjs` (wait until the guest tour ring has stopped moving). `upload-desktop-baseline.json` is a recorded desktop layout the upload phone suite compares against. **Fakes mirror the real routes** (status codes, order of checks, answer shapes): a fake that drifts from `worker/worker.js` makes a green test lie. |
 | `suites/NN-<topic>.mjs` | The suites, grouped by topic. Helpers used by one file only stay at the top of that file. |
 
 Suites run in file-name order, and the order inside a file is the order they are written.
