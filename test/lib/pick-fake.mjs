@@ -151,6 +151,17 @@ export function revisionMessageFake(v) {
   if (!t || [...t].length > 1000) return null;
   return t;
 }
+// worker.js folderExpiry's answer for a folder whose earliest upload is `uploaded` (ISO, or null = no photos)
+export function expiryOfFake(uploaded, truncated) {
+  const at = uploaded ? Date.parse(uploaded) : null;
+  return {
+    expires_at: at === null ? null : new Date(at + 180 * 86400000).toISOString(),
+    earliest_uploaded: at === null ? null : new Date(at).toISOString(),
+    count: at === null ? 0 : 1,
+    truncated: at === null ? false : truncated,
+  };
+}
+
 export function pickFakeWorker(opts = {}) {
   const settings = { ...(opts.settings || {}) };
   const state = {
@@ -238,6 +249,7 @@ export function pickFakeWorker(opts = {}) {
   // action changed something). opts.eventsStatus answers GET .../events with that status instead.
   state.events = (opts.events || []).map((e, i) => ({ id: i + 1, actor: 'photographer', data: null, ...e }));
   const logEvent = (kind, actor, at, data = null) => state.events.push({ id: state.events.length + 1, at, kind, actor, data });
+  state.expiryCalls = { admin: 0, pick: 0 };   // how many times each expiry route was asked
   const requests = [];
 
   function findByKey(key) {
@@ -376,6 +388,24 @@ export function pickFakeWorker(opts = {}) {
         if (opts.shopUnavailable) return send({ error: '商品資訊暫時無法顯示', code: 'shop_unavailable' }, 500);
         // `ordering` (docs/guest-shop.md, S2): null = switch off / migration not run; opts.ordering is the object the Worker would send
         return send({ products: opts.shopProducts || [], ordering: opts.ordering ?? null }, 200);
+      }
+
+      // GET /api/pick/expiry (worker.js, docs/delivery.md "Photo expiry"): link (401) -> method (405, Allow: GET) ->
+      // not delivered = 200 {expires_at: null, days_left: null} -> {expires_at, days_left} of the finals' earliest upload
+      // + 180 days (days_left = whole days rounded up, never below 0). opts.expiryUploaded = {proofs, finals}: the earliest
+      // upload of each (ISO or null); opts.expiryFail = 'net' | a status. Counted in state.expiryCalls.pick.
+      if (u.pathname === '/api/pick/expiry') {
+        state.expiryCalls.pick++;
+        if (opts.expiryFail === 'net') return route.abort('failed');
+        if (typeof opts.expiryFail === 'number') return json({ error: 'boom' }, opts.expiryFail);
+        if (!shareTok || state.project.archived_at) return json({ error: 'Unauthorized' }, 401);
+        const send = (data, status, extra) => route.fulfill({ status, contentType: 'application/json', headers: { 'Cache-Control': 'private, no-store', 'Vary': 'X-Share-Token', ...(extra || {}) }, body: JSON.stringify(data) });
+        if (method !== 'GET') return send({ error: 'Method not allowed' }, 405, { Allow: 'GET' });
+        const scope = pickScopeFake(state.project);
+        if (scope.mode !== 'delivered') return send({ expires_at: null, days_left: null }, 200);
+        const exp = expiryOfFake((opts.expiryUploaded || {}).finals, false);
+        const days_left = exp.expires_at === null ? null : Math.max(0, Math.ceil((Date.parse(exp.expires_at) - nowMs()) / 86400000));
+        return send({ expires_at: exp.expires_at, days_left }, 200);
       }
 
       // ── Co-picking routes (worker.js "Co-picking", docs/co-picking.md). Order of checks as the Worker: link (401: no
@@ -874,6 +904,19 @@ export function pickFakeWorker(opts = {}) {
       if (/\/api\/admin\/projects\/[^/]+\/reset-seat$/.test(u.pathname) && method === 'POST') {
         state.project.owner_picker_id = null;
         return json({ ok: true });
+      }
+      // GET /api/admin/projects/:id/expiry (worker.js, docs/delivery.md "Photo expiry"): {proofs, finals} with
+      // {expires_at, earliest_uploaded, count, truncated} each; finals null while final_folders is. Fed by
+      // opts.expiryUploaded = {proofs, finals} (earliest upload, ISO or null), opts.expiryTruncated, opts.expiryFail.
+      if (/^\/api\/admin\/projects\/[^/]+\/expiry$/.test(u.pathname)) {
+        state.expiryCalls.admin++;
+        if (opts.expiryFail === 'net') return route.abort('failed');
+        if (typeof opts.expiryFail === 'number') return json({ error: 'boom' }, opts.expiryFail);
+        if (state.deleted || decodeURIComponent(u.pathname.split('/')[4]) !== state.project.id) return json({ error: 'Not found' }, 404);
+        if (method !== 'GET') return route.fulfill({ status: 405, contentType: 'application/json', headers: { Allow: 'GET' }, body: JSON.stringify({ error: 'Method not allowed' }) });
+        const up = opts.expiryUploaded || {};
+        const hasFinals = Array.isArray(state.project.final_folders) && state.project.final_folders.length > 0;
+        return json({ proofs: expiryOfFake(up.proofs, !!opts.expiryTruncated), finals: hasFinals ? expiryOfFake(up.finals, !!opts.expiryTruncated) : null });
       }
       // GET /api/admin/projects/:id/events (worker.js): the newest 200, oldest first; another id is 404
       if (/^\/api\/admin\/projects\/[^/]+\/events$/.test(u.pathname) && method === 'GET') {

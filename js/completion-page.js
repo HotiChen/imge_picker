@@ -128,7 +128,7 @@
         root: null, ctx: null, albumSec: null, coverKey: null,
         _interested: new Set(),   // product ids the owner has told the photographer about, kept until unmount
         _products: null, _ordering: null, _orderOff: false,
-        _shopTok: 0, _shopDone: false, _planBase: null, _hadPlanBase: false,
+        _shopTok: 0, _expiryTok: 0, _shopDone: false, _planBase: null, _hadPlanBase: false,
 
         isMounted() { return !!this.root && this.root.isConnected; },
         galleryHost() { return this.root ? this.root.querySelector('#cpGalleryHost') : null; },
@@ -168,7 +168,9 @@
             const dl = el('section', 'cp-sec cp-download', null, 'cpDownload');
             const dlBtn = btn('cpDownloadAll', 'cp-btn cp-btn--solid', '下載全部精修');
             dlBtn.addEventListener('click', () => this._downloadAll(dlBtn));
-            dl.append(el('h2', 'cp-h2', '帶回家'), el('p', 'cp-sub', '把全部精修照片打包成一個檔案，存進你的手機或電腦。'), dlBtn);
+            const expiryNote = el('p', 'cp-expiry', null, 'cpExpiry');
+            expiryNote.hidden = true;
+            dl.append(el('h2', 'cp-h2', '帶回家'), el('p', 'cp-sub', '把全部精修照片打包成一個檔案，存進你的手機或電腦。'), dlBtn, expiryNote);
 
             // 5. album (4., the shop, is inserted before this one if the Worker has products)
             const alb = el('section', 'cp-sec cp-album', null, 'cpAlbum');
@@ -197,10 +199,12 @@
                 AlbumPreview.onResult = hint => this._setHint(hint);
             }
             this._loadShop();
+            this._loadExpiry();
         },
 
         unmount() {
             this._shopTok++;
+            this._expiryTok++;
             this._shopDone = false;
             this._interested = new Set();
             this._products = null; this._ordering = null; this._orderOff = false;
@@ -326,6 +330,31 @@
                 button.removeAttribute('aria-busy');
                 button.textContent = label;
             }
+        },
+
+        // ── 照片保存期限 (docs/delivery.md, "Photo expiry") ────────────────────
+        // One answer per page load (pick.js keeps the promise): {expires_at, days_left} (the guest route has no
+        // `truncated`, so no 估計 here; the 30-day mark is the Worker's whole-day count, as the photographer's page counts it). No date or any failure = the
+        // note stays hidden; 30 days or fewer left gets a more visible (still calm) style. The date is read in Asia/Taipei.
+        _loadExpiry() {
+            const tok = ++this._expiryTok;
+            const cfg = this.ctx;
+            // like _loadShop: a callback that throws must not break mount()
+            let p;
+            try { p = Promise.resolve(cfg && cfg.fetchExpiry ? cfg.fetchExpiry() : null); } catch (e) { p = Promise.resolve(null); }
+            p.then(r => {
+                if (tok !== this._expiryTok || !this.isMounted()) return;
+                const note = this.root.querySelector('#cpExpiry');
+                const at = r && typeof r.expires_at === 'string' ? Date.parse(r.expires_at) : NaN;
+                if (!note || !Number.isFinite(at)) return;
+                const parts = new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Taipei', year: 'numeric', month: 'numeric', day: 'numeric' }).formatToParts(new Date(at));
+                const part = type => (parts.find(x => x.type === type) || {}).value;
+                note.textContent = at <= Date.now()
+                    ? '照片已超過預計保存期限，請盡快下載保存'
+                    : `照片預計保存到 ${part('year')} 年 ${part('month')} 月 ${part('day')} 日，請在這之前下載保存`;
+                note.classList.toggle('cp-expiry--soon', Number.isFinite(r.days_left) && r.days_left <= 30);
+                note.hidden = false;
+            }, () => {});
         },
 
         // ── 商品／加購 ─────────────────────────────────────────────────

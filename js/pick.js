@@ -154,6 +154,17 @@
             return this._json('/api/pick/shop', { headers: this.headers(), signal: ctl ? ctl.signal : undefined })
                 .finally(() => clearTimeout(timer));
         },
+        // GET /api/pick/expiry (docs/delivery.md, "Photo expiry"): until when the delivered finals stay. The Worker
+        // scans R2 for it, so it is asked at most once per page load (the promise is kept) and never polled. Resolves
+        // to {expires_at, days_left} or null on any failure.
+        fetchExpiry() {
+            if (!this._expiryP) {
+                this._expiryP = this._json('/api/pick/expiry', { headers: this.headers() })
+                    .then(r => (r && r.ok && r.data && typeof r.data.expires_at === 'string' ? { expires_at: r.data.expires_at, days_left: r.data.days_left } : null),
+                        () => null);
+            }
+            return this._expiryP;
+        },
         // POST /api/pick/interest (docs/guest-shop.md): the 完成頁 「我有興趣」. Token in the query, key only in
         // the X-Picker-Key header (this.headers()), never in a URL.
         postInterest(productId) {
@@ -472,6 +483,7 @@
                 onShare: () => this.shareLink(),
                 onDownloadAll: () => this.downloadAllFinals(),
                 fetchShop: () => this.fetchShop(),
+                fetchExpiry: () => this.fetchExpiry(),
                 isOwner: this.isOwner,
                 onInterest: id => this.postInterest(id),
                 confirmed: !!this.confirmedAt,

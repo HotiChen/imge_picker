@@ -355,6 +355,8 @@
   .pd-ver-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-left: auto; }
   .pd-ver-actions a.btn { text-decoration: none; display: inline-flex; align-items: center; justify-content: center; }
   .pd-ver-actions .btn { min-height: 44px; }   /* 看 / ＋ 上傳 / 改交這一版: touch targets at every width (a tablet is not 'mobile') */
+  .pd-expiry { margin: 8px 0 0; font-size: 13px; color: var(--ink-70); }
+  .pd-expiry.pd-expiry--warn { color: var(--danger); font-weight: 600; }
   .pd-photos-dl { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; padding-top: 10px; border-top: 1px solid var(--rule); }
   .pd-steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
   .pd-steps li { display: flex; align-items: baseline; gap: 8px; font-size: 13px; color: var(--ink-70); }
@@ -1990,7 +1992,7 @@
       openEditModal();
     } else if (action === 'copy-notice') {
       const st = $id('pd-copy-notice-status');
-      const ok = await copyText(deliveryNoticeText(currentProject, liveLinkOf(currentTokens)));
+      const ok = await copyText(deliveryNoticeText(currentProject, liveLinkOf(currentTokens), currentProject.delivered_at ? finalsExpiryDate : null));
       if (!st) return;
       st.textContent = ok ? '已複製' : '複製失敗，請手動複製';
       clearTimeout(st._t);
@@ -2108,6 +2110,7 @@
       <section class="pd-card" id="pd-photos" aria-labelledby="pd-photos-h">
         <h4 id="pd-photos-h">照片</h4>
         <div id="pd-photo-rows"></div>
+        <p id="pd-expiry" class="pd-expiry" role="status" hidden></p>
         <div class="pd-photos-dl">
           <button id="pd-download-btn" class="btn btn-outline" type="button">下載選片</button>
           <button id="pd-download-csv-btn" class="btn btn-outline" type="button" title="檔名、客人備註、標示（給修圖師）">下載需求表 (CSV)</button>
@@ -2165,6 +2168,7 @@
     renderDeliveryBlock();
     renderProofDownloadBlock();
     renderPlanBlock();
+    loadExpiry(project);
     body.querySelectorAll('[data-copy-live-link]').forEach(btn => {
       btn.addEventListener('click', () => copyLinkAndShare(btn, project.title, btn.dataset.copyLiveLink, linkStage(project)));
     });
@@ -2853,7 +2857,60 @@
     const live = (tokens || []).find(t => t.status === 'live');
     return live ? projectLink(live.token) : '';
   }
-  function deliveryNoticeText(project, link) {
+  // 照片保存期限 (docs/delivery.md, "Photo expiry"): R2 deletes every object 180 days after its upload; the Worker
+  // answers the date. Dates are always read in Asia/Taipei, whatever the browser's zone. Any failure = nothing shown.
+  const EXPIRY_DAY_MS = 86400000;
+  function taipeiDateText(iso) {
+    const t = Date.parse(iso);
+    if (!Number.isFinite(t)) return '';
+    const parts = new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Taipei', year: 'numeric', month: 'numeric', day: 'numeric' }).formatToParts(new Date(t));
+    const get = type => (parts.find(p => p.type === type) || {}).value;
+    return `${get('year')} 年 ${get('month')} 月 ${get('day')} 日`;
+  }
+  // an entry {expires_at,…} of the answer when it has a real date, else null
+  function validExpiry(e) {
+    return e && typeof e.expires_at === 'string' && Number.isFinite(Date.parse(e.expires_at)) ? e : null;
+  }
+  async function fetchExpiryData(id) {
+    try {
+      const r = await fetch(`${WORKER_URL}/api/admin/projects/${encodeURIComponent(id)}/expiry`, { headers: { 'Authorization': `Bearer ${getToken()}` } });
+      return r.ok ? await r.json() : null;
+    } catch (e) { return null; }
+  }
+  // The answer is kept per project state (id + delivered_at + final_folders) for 5 minutes: every action refreshes
+  // the detail page, and each ask makes the Worker scan R2. A deliver / 更換精修 changes the key, so it asks again.
+  // The finals' date is kept as text so 複製交件通知文案 can copy synchronously (an await before
+  // navigator.clipboard.writeText can lose the tap on iOS Safari); not there yet / unknown = the old notice.
+  const EXPIRY_KEEP_MS = 5 * 60000;
+  let expiryCache = null, finalsExpiryDate = null;
+  function expiryFor(project) {
+    const key = [project.id, project.delivered_at, JSON.stringify(project.final_folders)].join('|');
+    if (!expiryCache || expiryCache.key !== key || Date.now() - expiryCache.at > EXPIRY_KEEP_MS) {
+      expiryCache = { key, at: Date.now(), p: fetchExpiryData(project.id) };
+    }
+    return expiryCache.p;
+  }
+  function loadExpiry(project) {
+    const id = project.id;
+    finalsExpiryDate = null;
+    const asked = expiryFor(project);
+    asked.then(data => {
+      const el = $id('pd-expiry');
+      // a newer ask (the project's state changed meanwhile) wins over a late answer to this one
+      if (!el || !currentProject || currentProject.id !== id || !data || !expiryCache || expiryCache.p !== asked) return;
+      const fin = validExpiry(data.finals);
+      finalsExpiryDate = fin ? taipeiDateText(fin.expires_at) : null;
+      const e = validExpiry(currentProject.delivered_at ? data.finals : data.proofs);
+      if (!e) { el.hidden = true; el.textContent = ''; return; }
+      const left = Math.ceil((Date.parse(e.expires_at) - Date.now()) / EXPIRY_DAY_MS);
+      el.classList.toggle('pd-expiry--warn', left <= 30);
+      el.textContent = left <= 0
+        ? '已超過預計保存期限，檔案可能已被刪除'
+        : `照片預計保存到 ${taipeiDateText(e.expires_at)}（剩 ${left} 天）${e.truncated ? '（估計）' : ''}`;
+      el.hidden = false;
+    });
+  }
+  function deliveryNoticeText(project, link, expiryDate) {
     const title = String((project && project.title) || '').replace(/[\u0000-\u001F\u007F-\u009F\u2028\u2029]+/g, ' ').trim() || '您的專案';
     return [
       `${title} 的成品已經完成，可以看了！`,
@@ -2861,6 +2918,7 @@
       '',
       '看完覺得沒問題，請按頁面上的「確認完成」。',
       '如果有想調整的地方，請按「需要修改」，寫下想修改的內容，我會再幫您處理。',
+      ...(expiryDate ? ['', `精修預計保存到 ${expiryDate}，請在這之前下載保存。`] : []),
     ].join('\n');
   }
   // Clipboard API first; where it is missing (an insecure context, an old in-app browser) or
@@ -2987,7 +3045,7 @@
     if (!project || !project.delivered_at) return;
     document.getElementById('pd-deliver-notice')?.remove();
     const link = liveLinkOf(tokens);
-    const text = deliveryNoticeText(project, link);
+    const text = deliveryNoticeText(project, link, null);
     const overlay = document.createElement('div');
     overlay.id = 'pd-deliver-notice';
     overlay.className = 'picker-overlay';
@@ -3027,6 +3085,11 @@
     box.append(h, note, ta, actions);
     overlay.appendChild(box);
     document.body.appendChild(overlay);
+    // the deliver that opened this dialog changed delivered_at / final_folders, so expiryFor asks again; the date joins the text once the Worker has answered (nothing changes if it does not)
+    expiryFor(project).then(data => {
+      const fin = data && validExpiry(data.finals);
+      if (fin && overlay.isConnected && ta.value === text) ta.value = deliveryNoticeText(project, link, taipeiDateText(fin.expires_at));
+    });
     const onKey = e => { if (e.key === 'Escape') done(); };
     const done = () => { overlay.remove(); document.removeEventListener('keydown', onKey); };
     document.addEventListener('keydown', onKey);
