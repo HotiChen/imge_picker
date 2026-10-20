@@ -336,8 +336,11 @@ for (const [tag, ctx] of [['1280', DESKTOP], ['390', PHONE]]) {
       await tokenChecks(page, ok, 'admin 區塊');
       const named = ['.pd-sec-title', '.pd-sec-sum', '.pd-sec-caret', '#pd-sec-selections .pd-sec-head a.pd-link'];
       await brightChecks(page, ok, 'admin 區塊（收合）', { minItems: 30, named });
-      const bg = await page.$eval('.pd-sec', e => getComputedStyle(e).backgroundColor);
+      // 目前選取 sits inside the 照片 card now (it has no card of its own); the others are white cards on the cream page
+      const bg = await page.$eval('.pd-sec:not(#pd-photos .pd-sec)', e => getComputedStyle(e).backgroundColor);
       ok('a section is a white card on the cream page', bg === WHITE, bg);
+      const inner = await page.$eval('#pd-photos .pd-sec', e => ({ bg: getComputedStyle(e).backgroundColor, top: getComputedStyle(e).borderTopWidth, card: getComputedStyle(e.closest('#pd-photos')).backgroundColor })).catch(() => null);
+      ok('the section inside the 照片 card has no card of its own (no fill, a top rule) and the 照片 card is white', !!inner && inner.bg === 'rgba(0, 0, 0, 0)' && inner.top === '1px' && inner.card === WHITE, JSON.stringify(inner));
       for (const n of SEC_NAMES) { if (!secOpen((await secInfo(page))[n])) await page.click(`#pd-sec-${n}-btn`); }
       await brightChecks(page, ok, 'admin 區塊（全部展開）', { minItems: 60, named });
       await shot(page, `admin-sections-${tag}`);

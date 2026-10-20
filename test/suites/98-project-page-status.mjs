@@ -108,13 +108,13 @@ for (const [name, o, want] of [
       ok('標記完成 is in the card (secondary)', await page.$eval('#pd-status #pd-mark-done-btn', b => b.getClientRects().length > 0 && !b.hasAttribute('data-primary')).catch(() => false));
     }
     const order = await page.evaluate(() => {
-      const ids = ['pd-head', 'pd-status', 'pd-photos', 'pd-sec-selections', 'pd-progress'];
+      const ids = ['pd-head', 'pd-status', 'pd-photos', 'pd-progress'];
       const els = ids.map(i => document.getElementById(i));
       const firstSec = document.querySelector('#project-detail-body .pd-sec:not(#pd-sec-selections)');
       return { all: els.every(Boolean), inOrder: els.every((e, k) => k === 0 || (els[k - 1] && (els[k - 1].compareDocumentPosition(e) & Node.DOCUMENT_POSITION_FOLLOWING))),
-        secAfter: !!firstSec && !!els[4] && !!(els[4].compareDocumentPosition(firstSec) & Node.DOCUMENT_POSITION_FOLLOWING) };
+        secAfter: !!firstSec && !!els[3] && !!(els[3].compareDocumentPosition(firstSec) & Node.DOCUMENT_POSITION_FOLLOWING) };
     });
-    ok('top to bottom: header, status card, 照片, 目前選取, 進度, then the other collapsible sections', order.all && order.inOrder && order.secAfter, JSON.stringify(order));
+    ok('top to bottom: header, status card, 照片, 目前選取, 進度, then the other collapsible sections (目前選取 is inside 照片)', order.all && order.inOrder && order.secAfter, JSON.stringify(order));
     return out;
   }, { before: m.attach, initScript: ADMIN });
 }

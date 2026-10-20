@@ -7,10 +7,10 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@600;900&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/revision-rounds-view.css?v=20261020b">
-<link rel="stylesheet" href="css/side-nav.css?v=20261020b">
-<link rel="stylesheet" href="css/studio-who.css?v=20261020b">
-<link rel="stylesheet" href="css/guest-order-card.css?v=20261020b">
+<link rel="stylesheet" href="css/revision-rounds-view.css?v=20261020c">
+<link rel="stylesheet" href="css/side-nav.css?v=20261020c">
+<link rel="stylesheet" href="css/studio-who.css?v=20261020c">
+<link rel="stylesheet" href="css/guest-order-card.css?v=20261020c">
 <style>
   /* Bright theme, shared with home.html / dashboard.html / settings.html — cream
      ground, white cards, dark ink, warm accent, soft pastel pills. The photographer's
@@ -243,6 +243,7 @@
   /* Project detail sections: a title row (title + one-line summary + ▾/▸) that opens and
      closes its body. Closed = display:none on the body container. Everything inside keeps its id. */
   .pd-sec { border: 1px solid var(--rule); border-radius: 12px; background: var(--surface); margin: 10px 0 0; }
+  #pd-photos .pd-sec { border-width: 1px 0 0; border-radius: 0; background: transparent; margin: 14px 0 0; }
   .pd-sec.pd-sec-off { display: none; }
   #project-detail-panel .pd-sec-h { display: block; margin: 0; font-size: 14px; }
   .pd-sec-head { display: flex; flex-wrap: wrap; align-items: center; gap: 0 8px; }
@@ -463,7 +464,7 @@
   .ord-editor-foot { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end; margin-top: 8px; }
   .ord-editor-foot .field { padding: 6px 8px; font-size: 13px; }
 </style>
-<script src="js/photographer-session.js?v=20261020b"></script>
+<script src="js/photographer-session.js?v=20261020c"></script>
 </head>
 <body>
 
@@ -610,18 +611,18 @@
   </div>
 </div>
 
-<script src="js/shoot-types.js?v=20261020b"></script>
-<script src="js/project-folders.js?v=20261020b"></script>
-<script src="js/build-version.js?v=20261020b"></script>
-<script src="js/password-toggle.js?v=20261020b"></script>
-<script src="js/unified-login.js?v=20261020b"></script>
-<script src="js/util.js?v=20261020b"></script>
-<script src="js/side-nav.js?v=20261020b"></script>
-<script src="js/studio-who.js?v=20261020b"></script>
-<script src="js/orders-common.js?v=20261020b"></script>
-<script src="js/selection-export.js?v=20261020b"></script>
-<script src="js/pin-layer.js?v=20261020b"></script>
-<script src="js/revision-rounds-view.js?v=20261020b"></script>
+<script src="js/shoot-types.js?v=20261020c"></script>
+<script src="js/project-folders.js?v=20261020c"></script>
+<script src="js/build-version.js?v=20261020c"></script>
+<script src="js/password-toggle.js?v=20261020c"></script>
+<script src="js/unified-login.js?v=20261020c"></script>
+<script src="js/util.js?v=20261020c"></script>
+<script src="js/side-nav.js?v=20261020c"></script>
+<script src="js/studio-who.js?v=20261020c"></script>
+<script src="js/orders-common.js?v=20261020c"></script>
+<script src="js/selection-export.js?v=20261020c"></script>
+<script src="js/pin-layer.js?v=20261020c"></script>
+<script src="js/revision-rounds-view.js?v=20261020c"></script>
 <script>
 (function() {
   const WORKER_URL = 'https://imagepicker.hotichen.workers.dev';
@@ -2043,14 +2044,13 @@
           <button id="pd-download-btn" class="btn btn-outline" type="button">下載選片</button>
           <button id="pd-download-csv-btn" class="btn btn-outline" type="button" title="檔名、客人備註、標示（給修圖師）">下載需求表 (CSV)</button>
         </div>
-      </section>
-
       ${secHtml('selections', `<div id="pd-selections-details"><div class="table-wrap"><table><thead><tr><th>照片</th><th>♥</th><th>備註</th><th>選片人</th><th>更新時間</th></tr></thead>
           <tbody>${selected.length ? selected.map(s => `<tr>
             <td class="folder-raw"><a class="pd-link" href="index.html?project=${encodeURIComponent(project.id)}&amp;photo=${encodeURIComponent(s.photo_key)}">${escHtml(s.photo_key)}</a></td><td>♥</td><td>${escHtml(s.note || '')}</td>
             <td>${escHtml(pickerNameOf(pickers, s.updated_by))}</td><td>${escHtml(fmtTime(s.updated_at))}</td>
           </tr>`).join('') : '<tr><td colspan="5" class="empty">尚無選取</td></tr>'}</tbody></table></div></div>`,
         `<a class="pd-link" href="index.html?project=${encodeURIComponent(project.id)}">看照片 →</a>`)}
+      </section>
 
       <section class="pd-card" id="pd-progress" aria-labelledby="pd-progress-h">
         <h4 id="pd-progress-h">進度</h4>
