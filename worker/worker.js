@@ -5060,7 +5060,7 @@ async function routeRequest(request, env, ctx) {
         jsonOk({ error: '尚未開始修圖，無法標記為已交件', code: 'not_retouching', phase }, 409, ADMIN_ONLY_HEADERS);
       const invalid = (code, extra = {}, error = '交件資料夾不正確') => jsonOk({ error, code, ...extra }, 400, ADMIN_ONLY_HEADERS);
       // final_folders as it was: the activity log's 改交 names what it replaced
-      const project = await env.DB.prepare('SELECT phase, folders, final_folders FROM projects WHERE id = ? AND photographer_id = ?')
+      const project = await env.DB.prepare('SELECT phase, folders, final_folders, delivered_at FROM projects WHERE id = ? AND photographer_id = ?')
         .bind(id, who.id).first();
       if (!project) return jsonErr('Not found', 404);
       if (project.phase !== 'retouching') return notRetouching(project.phase);
@@ -5114,8 +5114,10 @@ async function routeRequest(request, env, ctx) {
       // choice): either way the project is not delivered now.
       if (!result.meta?.changes || !row.delivered_at) return notRetouching(row.phase);
       // A stamp older than this request's (COALESCE kept it): a repeat, 改交,
-      // replacing the set read before the write
-      const repeat = row.delivered_at !== at;
+      // replacing the set read before the write. The stamp read before the
+      // write counts too: two delivers inside one millisecond share `at`, so
+      // the later one would otherwise read as a first deliver.
+      const repeat = !!project.delivered_at || row.delivered_at !== at;
       await logProjectEvent(env, id, 'deliver', 'photographer', at,
         repeat ? { final_folders: finals, repeat: true, previous: parsedFinals(project) } : { final_folders: finals });
       return jsonOk({ ok: true, delivered_at: row.delivered_at, final_folders: finals }, 200, ADMIN_ONLY_HEADERS);

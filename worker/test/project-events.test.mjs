@@ -313,3 +313,19 @@ test('the admin detail route is unchanged (no events in it): the page fetches th
   const d = await detail(env, p.id);
   assert.equal(d.events, undefined);
 });
+
+test('two delivers inside one millisecond: the second still reads as 改交 (the stamp read before the write counts)', async () => {
+  const env = setup();
+  const p = await retouching(env);
+  const real = Date.prototype.toISOString;
+  const frozen = real.call(new Date());
+  // both delivers share one `at`, so the second one's `at` equals the first stamp
+  Date.prototype.toISOString = function () { return frozen; };
+  try {
+    assert.equal((await deliver(env, p.id, [FINAL])).status, 200);
+    assert.equal((await deliver(env, p.id, [FINAL2])).status, 200);
+  } finally { Date.prototype.toISOString = real; }
+  const ev = events(env);
+  assert.equal(one(env, 'SELECT delivered_at FROM projects').delivered_at, frozen, 'both delivers ran at the same instant (control)');
+  assert.deepEqual(ev[ev.length - 1].data, { final_folders: [FINAL2], repeat: true, previous: [FINAL] });
+});
