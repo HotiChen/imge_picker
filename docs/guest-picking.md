@@ -130,9 +130,26 @@ browser. This replaces the fake `submitJob()` in `js/app.js`.
     keys only, so it sends **no email** (the row is `notified = 0` and shows
     in `unnotified_submissions`). It counts toward `PICK_MAX_SUBMISSIONS`.
 - **Lost / leaked link**: `POST /api/admin/projects/:id/links` mints a new pick
-  link (snapshot = `projects.folders`, 90-day expiry like creation); the old
-  one is killed with the ordinary `POST /api/shares/:token/revoke`. Old and new
-  links reach the same project and seat.
+  link (snapshot = `projects.folders`, 90-day expiry like creation) and
+  **replaces** the old one (Tim, 2026-10-20: a project has exactly one live pick
+  link). In the **same `db.batch`**, after the insert, it revokes every other
+  live `kind = 'pick'` row of this project (`revoked_at` = the new link's
+  `created_at`; rows already revoked keep their own stamp), gated like the mint
+  (this photographer's, not archived) and on the new row having landed, so a
+  refused mint (404 unknown / another photographer, 409 `archived`, an archive
+  racing the mint) or a failed batch revokes nothing. Response adds `revoked`
+  (how many this call revoked). Only pick links of this project: other kinds
+  that name it, other projects, the seat holder and their key, collaborators,
+  invites and selections are untouched. The seat is on the project
+  (`owner_picker_id`), not the link, so the client carries on with the new
+  link and the same picker key (same seat, same selections); the old link is
+  401 on every route. Two mints at once: D1 runs batches one after another and
+  the revoke spares the new token by name (not by time), so the later batch
+  revokes the earlier one's token and exactly one stays live. Logged as a
+  `link_reissued` project event (`{revoked}`, no token). Not re-checked inside
+  the guest writes: a claim / save already past `resolveShareToken` when the
+  mint lands can still finish (milliseconds; same as a manual revoke).
+  `POST /api/shares/:token/revoke` still kills one link by hand.
 - **Archive and delete** (admin only, scoped to this photographer):
   - `POST /api/admin/projects/:id/archive` stamps `projects.archived_at` and
     revokes every live pick link of the project in the **same batch**
@@ -298,7 +315,7 @@ ALTER TABLE share_tokens ADD COLUMN project_id TEXT;
 | `PATCH /api/admin/projects/:id` | admin | any non-empty subset of `{title, allow_proof_download: bool, pick_limit, extra_price, extra_max, shoot_date, project_type}` (plan keys: `null` or whole numbers: `pick_limit` ≥ 0, `extra_price` ≤ 10,000,000, `extra_max` ≤ 500; `title` 1–200 characters, `shoot_date` `YYYY-MM-DD`, `project_type` ≤ 20 characters: `docs/delivery.md`) → `{ok: true, ...keys sent}`; 400 `invalid_body` (other key, bad value, empty); 404 other photographer; 409 `archived` for a plan key on an archived project (title / shoot_date / project_type / the proof switch still work there); never touches submissions |
 | `GET /api/admin/projects[?archived=1]` | admin | `{projects: [{id, title, phase, modified_after_submit, pick_limit, extra_price, extra_max, owner_name, created_at, archived_at, delivered_at, final_folders, allow_proof_download, shoot_date, project_type, client_confirmed_at, client_confirmed_by, open_revision_count, submission_count, last_submitted_at, unnotified_submissions, token}]}` newest first, this photographer only (`photographer_id = 'default'`), ≤ 200 rows, one SQL query; `owner_name` null when the seat is free; `token` is the newest live pick link (not revoked, not expired, inside the 180-day ceiling) or null. Archived projects are hidden; `?archived=1` returns only archived ones (any other value = default) |
 | `GET /api/admin/projects/:id` | admin | project incl. `phase`, `modified_after_submit`, `last_notified_at`, `pick_limit`, `extra_price`, `extra_max` (`null` = no plan cap); owner, pickers, selections with `updated_by`, `note` and `marks` (parsed `[{x, y, note}]`, `null` when none), `tokens` (every pick link, newest first: `{token, created_at, expires_at, revoked_at, last_seen_at, status: 'live'\|'revoked'\|'expired'}`), `submissions` newest first, at most `PICK_MAX_SUBMISSIONS` (50) (`photo_keys` parsed, `notified` 0/1, `marks` parsed `{photo_key: [{x, y, note}]}` or `null`), `unnotified_submissions` |
-| `POST /api/admin/projects/:id/links` | admin | mint a new pick link → 201 `{token, expires_at, created_at, status: 'live'}` |
+| `POST /api/admin/projects/:id/links` | admin | mint a new pick link and revoke the project's other live pick links (one batch) → 201 `{token, expires_at, created_at, status: 'live', revoked}` (`revoked` = links revoked by this call); 404 unknown / other photographer; 409 `archived`, nothing revoked |
 | `POST /api/shares/:token/revoke` | admin | revoke any link, pick links included → `{ok: true}`; 404 if unknown or already revoked |
 | `POST /api/admin/projects/:id/archive` | admin | stamp `archived_at` + revoke live pick links (one batch) → `{ok: true, archived_at, revoked}` (`revoked` = links revoked by this call; a repeat keeps the first stamp, `revoked: 0`); 404 unknown / other photographer |
 | `POST /api/admin/projects/:id/unarchive` | admin | clear `archived_at` → `{ok: true, archived_at: null}` (links stay revoked); 404 |

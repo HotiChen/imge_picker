@@ -163,10 +163,10 @@ test('rename rewrites the label of every pick link of THIS project (live and rev
   const p = await created(env);
   const q = await created(env, { title: '另一個專案' });
   const id = p.project.id;
-  // a second link for p, then revoke the first
+  // a second link for p, which revokes the first (one live pick link per project)
   const minted = await admin(env, id, 'links');
   assert.equal(minted.status, 201, await minted.clone().text());
-  assert.equal((await call(env, `/api/shares/${encodeURIComponent(p.token)}/revoke`, { method: 'POST', token: SECRET })).status, 200);
+  assert.ok(one(env, 'SELECT revoked_at FROM share_tokens WHERE token = ?', p.token).revoked_at, 'the first link is revoked');
   // a book link carrying the same text, and a pick row of another project
   await seedToken(env, { token: 'BOOK-LINK', book_id: 'b1', kind: 'client', label: '王先生 婚紗', folders: [PROOF] });
   // and a non-pick row that (wrongly) names this project: only pick links are the project's

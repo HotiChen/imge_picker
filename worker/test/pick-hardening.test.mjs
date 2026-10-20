@@ -560,12 +560,13 @@ test('minting a link is admin-only and fails closed', async () => {
   assert.equal(rows(env, 'SELECT * FROM share_tokens').length, 1);
 });
 
-test('the project detail lists every pick link with its status; revoke kills the old one only', async () => {
+test('the project detail lists every pick link with its status; a new link revokes the old one, and only that', async () => {
   const env = setup();
   const p = await claimed(env);
   const { token: fresh } = await (await links(env, p.project.id)).json();
-  assert.equal((await call(env, `/api/shares/${p.token}/revoke`, { method: 'POST', token: SECRET })).status, 200);
+  // the mint itself revoked the old one (link-reissue.test.mjs); the manual revoke now finds nothing live
   assert.equal((await pick(env, 'GET', 'state', p.token)).status, 401);
+  assert.equal((await call(env, `/api/shares/${p.token}/revoke`, { method: 'POST', token: SECRET })).status, 404);
   assert.equal((await pick(env, 'GET', 'state', fresh)).status, 200);
   // an expired one, and one past the 180-day ceiling
   env.DB._db.prepare(
