@@ -62,6 +62,9 @@ jobs end to end first; no new big feature outside that list.
 | Normal | new UI | sonnet, related tests only while developing, ~5 mutants, no security review |
 | Tiny | text, style, 1–2 line fixes | orchestrator edits directly, no agent |
 
+Code for High and Normal work is written by agents (in worktrees, TDD, see "Working with agents"); the
+orchestrator splits, verifies and merges. Tim says when to merge.
+
 ## TDD (always)
 1. Write the failing test first; confirm it fails for the right reason.
 2. Implement until green.
