@@ -505,8 +505,12 @@ await suite('admin — escHtml(0): a project with zero submissions shows 送出 
       ok('the real revoke endpoint was called',
         m.requests.some(r => r.method === 'POST' && /\/api\/shares\/.+\/revoke$/.test(r.path)));
 
+      // (2026-10-20: 產生新連結 now asks first; with no live link left the text carries no revoke sentence)
+      let mintMsg = '';
+      page.once('dialog', d => { mintMsg = d.message(); d.accept(); });
       await page.click('#pd-new-link-btn');
       await page.waitForFunction(() => document.querySelectorAll('[data-token-row]').length === 2, null, { timeout: 5000 });
+      ok('the confirm for a project with no live link has no 舊連結會立刻失效 sentence', mintMsg !== '' && !mintMsg.includes('立刻失效'), mintMsg);
       const afterMint = await page.evaluate(() => ({
         rows: document.querySelectorAll('[data-token-row]').length,
         liveCount: [...document.querySelectorAll('[data-token-row] .badge')].filter(b => b.textContent === '有效').length,

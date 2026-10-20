@@ -842,8 +842,12 @@ export function pickFakeWorker(opts = {}) {
         const token = 'PICK-TOKEN-' + (state.tokens.length + 1);
         const created_at = new Date().toISOString();
         const expires_at = new Date(Date.now() + 90 * 86400000).toISOString();
+        // worker.js: a new link revokes the project's other live pick links, says how many, and logs link_reissued
+        let revoked = 0;
+        for (const t of state.tokens) if (pickTokenStatusFake(t) === 'live') { t.revoked_at = created_at; revoked++; }
         state.tokens.push({ token, created_at, expires_at, revoked_at: null });
-        return json({ token, expires_at, created_at, status: 'live' }, 201);
+        logEvent('link_reissued', 'photographer', created_at, { revoked });
+        return json({ token, expires_at, created_at, status: 'live', revoked }, 201);
       }
       if (/\/api\/admin\/projects\/[^/]+\/archive$/.test(u.pathname) && method === 'POST') {
         let revoked = 0;

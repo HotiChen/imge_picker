@@ -337,6 +337,10 @@
   .pd-link-token { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .pd-link-actions { flex: none; display: flex; flex-wrap: nowrap; gap: 6px; margin-left: auto; justify-content: flex-end; }
   .pd-link-actions .btn { min-height: 44px; min-width: 44px; padding-left: 12px; padding-right: 12px; white-space: nowrap; }
+  .pd-link-dead { opacity: .6; }
+  .pd-dead-btn { display: block; width: 100%; min-height: 44px; margin-top: 4px; padding: 0 4px; background: none; border: 0; border-top: 1px solid var(--rule); color: var(--ink-70); font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
+  .pd-dead-btn::after { content: ' ▾'; }
+  .pd-dead-btn[aria-expanded="true"]::after { content: ' ▴'; }
   .pd-link-info { margin-top: 2px; font-size: 12px; color: var(--ink-70); overflow-wrap: anywhere; }
   /* 照片 and 進度 */
   .pd-card { border: 1px solid var(--rule); border-radius: 14px; background: var(--surface); padding: 12px 16px; margin: 0 0 12px; }
@@ -2047,6 +2051,22 @@
     const pickers = data.pickers || [];
     const submissions = data.submissions || [];
     const tokens = data.tokens || [];
+    const liveTokens = tokens.filter(t => t.status === 'live'), deadTokens = tokens.filter(t => t.status !== 'live');
+    // a dead link (撤銷 / 過期) has no buttons and is dimmed: it only says what it is
+    const linkRowHtml = t => `
+        <div class="pd-link-row${t.status === 'live' ? '' : ' pd-link-dead'}" data-token-row="${escHtml(t.token)}">
+          <div class="pd-link-top">
+            <code class="folder-raw pd-link-token">${escHtml(t.token)}</code>
+            <div class="actions pd-link-actions">
+              ${t.status === 'live' ? `
+              <button type="button" class="btn btn-outline" data-copy-link="${escHtml(t.token)}">複製連結</button>
+              <button type="button" class="btn btn-danger" data-revoke-token="${escHtml(t.token)}">撤銷</button>` : ''}
+            </div>
+          </div>
+          <div class="pd-link-info">
+            <span class="badge ${t.status === 'live' ? 'badge-approved' : 'badge-pending'}">${escHtml(TOKEN_STATUS_LABEL[t.status] || t.status)}</span>
+          </div>
+        </div>`;
     const selected = (data.selections || []).filter(s => s.rating > 0);
     const ownerName = data.owner ? data.owner.name : null;
     const interests = Array.isArray(data.interests) ? data.interests : [];
@@ -2112,20 +2132,9 @@
       <div id="pd-pickers">${pickers.length ? pickers.map(p => `<div>${escHtml(p.name)}${p.relationship ? `（${escHtml(p.relationship)}）` : ''}${p.email ? ' · ' + escHtml(p.email) : ''}${data.owner && data.owner.id === p.id ? ' <span class="badge badge-approved">目前選片中</span>' : ''}</div>`).join('') : '<div class="empty">尚無挑選人</div>'}</div>
 
       <h4>挑選連結</h4>
-      <div id="pd-tokens">${tokens.length ? tokens.map(t => `
-        <div class="pd-link-row" data-token-row="${escHtml(t.token)}">
-          <div class="pd-link-top">
-            <code class="folder-raw pd-link-token">${escHtml(t.token)}</code>
-            <div class="actions pd-link-actions">
-              ${t.status === 'live' ? `
-              <button type="button" class="btn btn-outline" data-copy-link="${escHtml(t.token)}">複製連結</button>
-              <button type="button" class="btn btn-danger" data-revoke-token="${escHtml(t.token)}">撤銷</button>` : ''}
-            </div>
-          </div>
-          <div class="pd-link-info">
-            <span class="badge ${t.status === 'live' ? 'badge-approved' : 'badge-pending'}">${escHtml(TOKEN_STATUS_LABEL[t.status] || t.status)}</span>
-          </div>
-        </div>`).join('') : '<div class="empty">尚無連結</div>'}</div>
+      <div id="pd-tokens">${tokens.length ? (liveTokens.length ? liveTokens.map(linkRowHtml).join('') : '<div class="empty">沒有有效連結</div>') : '<div class="empty">尚無連結</div>'}${deadTokens.length ? `
+        <button type="button" id="pd-dead-links-btn" class="pd-dead-btn" aria-expanded="false" aria-controls="pd-dead-links">另有 ${deadTokens.length} 條已失效</button>
+        <div id="pd-dead-links" hidden>${deadTokens.map(linkRowHtml).join('')}</div>` : ''}</div>
       ${project.archived_at ? '' : '<button id="pd-new-link-btn" class="btn btn-outline" type="button" style="margin-top:8px;">產生新連結</button>'}
       <div id="pd-link-err" class="err"></div>`, peopleCopyHtml(tokens))}
       ${editModalHtml(project)}
@@ -2177,9 +2186,20 @@
         }
       });
     });
+    document.getElementById('pd-dead-links-btn')?.addEventListener('click', function () {
+      const box = document.getElementById('pd-dead-links');
+      const open = this.getAttribute('aria-expanded') !== 'true';
+      this.setAttribute('aria-expanded', String(open));
+      box.hidden = !open;
+    });
     document.getElementById('pd-new-link-btn')?.addEventListener('click', async function () {
       const errEl = document.getElementById('pd-link-err');
       if (errEl) errEl.textContent = '';
+      // making a new link kills the project's other live ones (Worker): say so first; no live link = nothing to kill
+      const liveNow = (currentTokens || []).filter(t => t.status === 'live').length;
+      if (!confirm(liveNow
+        ? '產生新連結後，舊連結會立刻失效，已經拿到舊連結的人要改用新的。選片紀錄不會掉。確定嗎？'
+        : '要產生一條新的挑選連結嗎？')) return;
       this.disabled = true;
       try {
         const r = await fetch(`${WORKER_URL}/api/admin/projects/${encodeURIComponent(currentProjectId)}/links`, {
@@ -2577,6 +2597,7 @@
     if (e.kind === 'undeliver') return '取消交件';
     if (e.kind === 'reopen') return '開放修改';
     if (e.kind === 'retouch') return '開始精修';
+    if (e.kind === 'link_reissued') { const n = Number(d.revoked); return n > 0 ? `重新產生挑選連結（舊連結 ${n} 條失效）` : '產生新挑選連結'; }
     if (e.kind === 'confirm') return e.actor === 'client' ? '客人確認完成' : '已標記完成（代客人）';
     return null;
   }

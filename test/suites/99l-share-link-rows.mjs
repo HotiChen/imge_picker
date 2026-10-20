@@ -51,7 +51,7 @@ for (const width of [390, 360, 320, 800]) {
     const o = await page.evaluate(`(${(() => {
       const R = e => { const b = e.getBoundingClientRect(); return { l: b.left, r: b.right, t: b.top, b: b.bottom, h: b.height, w: b.width, cy: (b.top + b.bottom) / 2 }; };
       const sec = R(document.getElementById('pd-sec-people'));
-      const rows = [...document.querySelectorAll('[data-token-row]')].map(row => {
+      const rows = [...document.querySelectorAll('[data-token-row]')].filter(r => r.getClientRects().length).map(row => {
         const top = row.querySelector('.pd-link-top'), tok = row.querySelector('code'), info = row.querySelector('.pd-link-info');
         const btns = [...row.querySelectorAll('button')].map(R);
         return { top: R(top), tok: R(tok), info: R(info), btns, nb: btns.length, row: R(row), badge: row.querySelector('.badge')?.textContent,
@@ -60,14 +60,27 @@ for (const width of [390, 360, 320, 800]) {
       const all = [...document.querySelectorAll('#pd-sec-people-body *')].filter(e => e.getClientRects().length);
       return { iw: innerWidth, sw: document.scrollingElement.scrollWidth, sec, rows, n: all.length, out: all.filter(e => e.getBoundingClientRect().right > sec.r + 0.5).map(e => e.tagName + '.' + e.className).slice(0, 6) };
     }).toString()})()`);
-    ok('floor: scanned the open section (>= 15 elements) and both rows', o.n >= 15 && o.rows.length === 2, String(o.n));
-    const live = o.rows[0], dead = o.rows[1];
+    // (2026-10-20: dead links are folded away by default; only the live row is on screen until 「另有 N 條已失效」 opens)
+    ok('floor: scanned the open section (>= 12 elements) and the one live row (the dead one is folded)', o.n >= 12 && o.rows.length === 1, String(o.n));
+    const live = o.rows[0];
     ok('live row: 2 buttons (複製連結, 撤銷), both >= 44px tall and wide, both inside the card’s right edge', live.nb === 2 && live.btns.every(b => b.h >= 44 && b.w >= 44 && b.r <= o.sec.r && b.l >= o.sec.l), JSON.stringify(live.btns));
     ok('live row: line 1 contains the buttons (right-aligned, after the token), line 2 (the badge) is below line 1', live.buttonsInTop && live.btns[0].l >= live.tok.r - 1 && live.info.t >= live.top.b - 1 && live.infoHasBadge && live.badge === '有效', JSON.stringify(live));
     ok('live row: the token is one line with an ellipsis, not wrapped (43 characters)', live.ell && live.tok.h <= 24 && live.tok.r <= o.sec.r, JSON.stringify(live.tok));
     ok('the buttons are right-aligned: the last button ends at the card padding', live.btns[1].r >= o.sec.r - 30, JSON.stringify([live.btns[1].r, o.sec.r]));
-    ok('revoked row: no buttons, badge on line 2', dead.nb === 0 && dead.infoHasBadge && dead.info.t >= dead.top.b - 1 && dead.badge === '已撤銷', JSON.stringify(dead));
     ok('nothing in the section sticks out past the card; no sideways scroll', o.out.length === 0 && o.sw <= o.iw, JSON.stringify(o.out));
+    // open the fold: the revoked row (still two lines, no buttons) and the fold line stay inside the card
+    await page.click('#pd-dead-links-btn');
+    const f = await page.evaluate(`(${(() => {
+      const R = e => { const b = e.getBoundingClientRect(); return { l: b.left, r: b.right, t: b.top, b: b.bottom, h: b.height }; };
+      const sec = R(document.getElementById('pd-sec-people'));
+      const row = [...document.querySelectorAll('[data-token-row]')].find(r => r.querySelector('.badge')?.textContent === '已撤銷');
+      const top = row.querySelector('.pd-link-top'), info = row.querySelector('.pd-link-info'), fold = R(document.getElementById('pd-dead-links-btn'));
+      const all = [...document.querySelectorAll('#pd-sec-people-body *')].filter(e => e.getClientRects().length);
+      return { sec, nb: row.querySelectorAll('button').length, shown: row.getClientRects().length > 0, top: R(top), info: R(info), fold, iw: innerWidth, sw: document.scrollingElement.scrollWidth,
+        out: all.filter(e => e.getBoundingClientRect().right > sec.r + 0.5).map(e => e.tagName + '.' + e.className).slice(0, 6) };
+    }).toString()})()`);
+    ok('opened: the revoked row is on screen, no buttons, badge on line 2', f.shown && f.nb === 0 && f.info.t >= f.top.b - 1, JSON.stringify(f));
+    ok('opened: the fold line is >= 44px, inside the card; nothing sticks out; no sideways scroll', f.fold.h >= 44 && f.fold.r <= f.sec.r && f.out.length === 0 && f.sw <= f.iw, JSON.stringify(f));
     return out;
   }, { before: m.attach, initScript: ADMIN, contextOptions: { ...MOBILE, viewport: { width, height: 844 } } });
 }

@@ -749,6 +749,9 @@ Frontend only; no Worker field was added. Top to bottom (`renderProjectDetail`):
 - 目前選取 (2026-10-20): its 「看照片 →」 link stays on the title row's line (no wrap), tap target >= 44px.
 - The collapsible sections are now 目前選取, 訂單 and 挑選人與連結 (the 設定 section and the 送出紀錄 section are gone); 交件 is no
   longer one of them.
+- 挑選連結 (2026-10-20): 產生新連結 asks first (「舊連結會立刻失效…選片紀錄不會掉」; with no live link a plain confirm), because the Worker
+  revokes the project's other live pick links. The list shows the live links only; revoked / expired ones fold into a
+  「另有 N 條已失效」 button (aria-expanded, opens them dimmed, no buttons). The header's 連結有效 N 條 is unchanged.
 
 ## Activity log (project_events, built 2026-10-19)
 
@@ -789,7 +792,7 @@ deliver replaces `final_folders`, undeliver / reopen clear the stamp), so e.g. �
   the folder), a confirm event at `client_confirmed_at` is the 客人確認 step (not a second line), the latest
   開始精修 event dates the 開始精修 step; a pins round says how many photos (第 N 輪，M 張); dates show the time
   (`m/d HH:mm`). Lines: 交件（精修）, 改交精修（原本是精修三）, 重新交件（X） (same set again), 取消交件, 開放修改, 開始精修,
-  客人確認完成, 已標記完成（代客人）. Unknown kinds are skipped (`link_reissued` has no line yet, so 進度 skips it). textContent only.
+  客人確認完成, 已標記完成（代客人）. `link_reissued` = 重新產生挑選連結（舊連結 N 條失效）, or 產生新挑選連結 when N is 0 (2026-10-20). Unknown kinds are skipped. textContent only.
 - Events start when the migration runs: an older project's earlier history stays as derived before.
 
 ## Out of scope for this step
