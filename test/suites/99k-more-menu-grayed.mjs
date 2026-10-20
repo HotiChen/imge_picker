@@ -74,6 +74,12 @@ for (const [name, o0, want] of CASES) {
       ons.filter(i => ['pd-reset-seat-btn', 'pd-archive-btn', 'pd-delete-btn'].includes(i.id)).every(i => i.color === red),
       JSON.stringify(items.map(i => [i.label, i.color, i.bg])));
     ok('grayed is not an opacity trick (fully opaque)', await page.$$eval('#pd-more-menu .is-off', els => els.every(e => getComputedStyle(e).opacity === '1')));
+    // the lock is CSS-generated (textContent stays the plain reason): read it from the pseudo-element
+    const locks = await page.$$eval('#pd-more-menu .pd-more-item', els => els.map(e => ({ off: e.getAttribute('aria-disabled') === 'true',
+      lock: (() => { const r = e.querySelector('.pd-more-reason'); return r ? getComputedStyle(r, '::before').content : 'none'; })() })));
+    ok('every grayed item shows a lock before its reason, no active item does (as many locks as grayed items)',
+      locks.filter(l => l.off).length === offs.length && locks.filter(l => l.off).every(l => l.lock.includes('\u{1F512}')) && locks.filter(l => !l.off).every(l => !l.lock.includes('\u{1F512}')),
+      JSON.stringify(locks));
     return out;
   }, { before: m.attach, initScript: ADMIN, contextOptions: CTX });
 }
