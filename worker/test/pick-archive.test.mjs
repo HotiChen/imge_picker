@@ -31,13 +31,16 @@ async function submit(env, p, relationship = '本人') {
   return res;
 }
 
-// a claimed project with a pick, a submission and a second link
+// a claimed project with a pick, a submission and a second live link. The
+// second one is seeded, not minted: since 2026-10-20 a mint revokes the
+// project's other pick links (link-reissue.test.mjs), but a database from
+// before that can still hold two live links, and the archive must kill both.
 async function busy(env) {
   const p = await claimed(env);
   await save(env, p.token, p.key, { upsert: [{ photo_key: A, rating: 1, note: 'n' }] });
   assert.equal((await submit(env, p)).status, 200);
-  const second = await (await admin(env, p.project.id, 'links')).json();
-  return { ...p, second: second.token };
+  const second = await seedToken(env, { token: `SECOND-${p.project.id}`, project_id: p.project.id, created_at: days(0) });
+  return { ...p, second };
 }
 
 // makes `sql` run once, the first time the Worker prepares a statement

@@ -2778,7 +2778,8 @@ function resolveRevisionsIfConfirmed(env, projectId, at, ownerId) {
 // ─── Project activity log (docs/delivery.md, "Activity log") ────────────────
 // project_events: one row per action that overwrites project columns
 // (deliver, a repeat deliver 改交, undeliver, reopen, start-retouch, confirm),
-// so the 進度 history survives the overwrite. Append-only: this INSERT is the
+// so the 進度 history survives the overwrite; also link_reissued (a new pick
+// link that revoked the old ones, data {revoked}). Append-only: this INSERT is the
 // one statement that touches the table (a worker test scans for it). Called
 // AFTER the action's own write and only when that write changed something.
 // Best-effort: any failure — the table not there before its migration, a
@@ -4983,8 +4984,12 @@ async function routeRequest(request, env, ctx) {
 
     // POST /api/admin/projects/:id/links — a fresh pick link for a project
     // whose link leaked or was revoked. Same snapshot as the project (not the
-    // old link's, not the body's), same expiry as at creation. The old links
-    // stay as they are; POST /api/shares/:token/revoke kills one.
+    // old link's, not the body's), same expiry as at creation. It REPLACES the
+    // project's other pick links (Tim, 2026-10-20: one live pick link per
+    // project): the same batch revokes every other live kind = 'pick' row of
+    // this project, so a leaked link dies the moment its successor exists.
+    // The seat, keys, collaborators and selections are the project's, not the
+    // link's, so the client carries on with the new link.
     if (request.method === 'POST' && pathParts[0] === 'api' && pathParts[1] === 'admin' && pathParts[2] === 'projects' && pathParts[3] && pathParts[4] === 'links' && !pathParts[5]) {
       const auth = await requirePhotographer(request, env); // scoped to the caller (who.id)
       if (auth.refused) return auth.refused;
@@ -5002,11 +5007,26 @@ async function routeRequest(request, env, ctx) {
       // Gated on the project still being open and still the caller's, so an
       // archive (or a delete) landing between the read above and this write
       // leaves no live link behind it.
-      const minted = await env.DB.prepare(
-        "INSERT INTO share_tokens (token, book_id, label, kind, project_id, folders, created_at, expires_at) SELECT ?, '', ?, 'pick', ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM projects WHERE id = ? AND photographer_id = ? AND archived_at IS NULL)"
-      ).bind(token, project.title, project.id, project.folders, createdAt, expiresAt, project.id, who.id).run();
+      // The revoke is in the same batch (one transaction: both land or
+      // neither), after the insert, and gated twice: on the same project gate
+      // and on the new row being there, so a refused insert revokes nothing.
+      // It spares the new token by name, not by time: two mints at once are
+      // serialised by D1, and the later one revokes the earlier one's token,
+      // so exactly one link stays live. Already revoked rows keep their stamp.
+      const mintGate = 'EXISTS (SELECT 1 FROM projects WHERE id = ? AND photographer_id = ? AND archived_at IS NULL)';
+      const [minted, revoked] = await env.DB.batch([
+        env.DB.prepare(
+          `INSERT INTO share_tokens (token, book_id, label, kind, project_id, folders, created_at, expires_at) SELECT ?, '', ?, 'pick', ?, ?, ?, ? WHERE ${mintGate}`
+        ).bind(token, project.title, project.id, project.folders, createdAt, expiresAt, project.id, who.id),
+        env.DB.prepare(
+          "UPDATE share_tokens SET revoked_at = ? WHERE kind = 'pick' AND project_id = ? AND revoked_at IS NULL AND token != ? " +
+          `AND EXISTS (SELECT 1 FROM share_tokens WHERE token = ? AND kind = 'pick' AND project_id = ?) AND ${mintGate}`
+        ).bind(createdAt, project.id, token, token, project.id, project.id, who.id),
+      ]);
       if (!minted.meta || !minted.meta.changes) return archivedErr();
-      return jsonOk({ token, expires_at: expiresAt, created_at: createdAt, status: 'live' }, 201, ADMIN_ONLY_HEADERS);
+      const n = revoked.meta?.changes ?? 0;
+      await logProjectEvent(env, project.id, 'link_reissued', 'photographer', createdAt, { revoked: n });
+      return jsonOk({ token, expires_at: expiresAt, created_at: createdAt, status: 'live', revoked: n }, 201, ADMIN_ONLY_HEADERS);
     }
 
     // POST /api/admin/projects/:id/deliver {final_folders: [...]} — the

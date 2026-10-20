@@ -764,6 +764,7 @@ deliver replaces `final_folders`, undeliver / reopen clear the stamp), so e.g. �
   | `reopen` | POST .../reopen, unless already picking and undelivered | photographer | `{from_phase, was_delivered}` |
   | `retouch` | POST .../start-retouch from `submitted` (a repeat press: none) | photographer | NULL |
   | `confirm` | POST .../confirm (標記完成) / POST /api/pick/confirm, only the press that made the stamp | photographer / client | NULL |
+  | `link_reissued` | POST .../links, only when the new link was written (2026-10-20; the mint revokes the project's other pick links) | photographer | `{revoked}` = how many old links it revoked (no token) |
 
   Not logged: revision requests (`revision_requests` already holds them; the page merges them by time). `data`
   holds folders and phases only, never a name, token or key.
@@ -785,7 +786,7 @@ deliver replaces `final_folders`, undeliver / reopen clear the stamp), so e.g. �
   the folder), a confirm event at `client_confirmed_at` is the 客人確認 step (not a second line), the latest
   開始精修 event dates the 開始精修 step; a pins round says how many photos (第 N 輪，M 張); dates show the time
   (`m/d HH:mm`). Lines: 交件（精修）, 改交精修（原本是精修三）, 重新交件（X） (same set again), 取消交件, 開放修改, 開始精修,
-  客人確認完成, 已標記完成（代客人）. Unknown kinds are skipped. textContent only.
+  客人確認完成, 已標記完成（代客人）. Unknown kinds are skipped (`link_reissued` has no line yet, so 進度 skips it). textContent only.
 - Events start when the migration runs: an older project's earlier history stays as derived before.
 
 ## Out of scope for this step
