@@ -34,7 +34,7 @@ const pfWaitFinalsLink = page => page.waitForSelector('#pd-upload-final-btn[data
       await adminDropDefaultFinal(page, ok, 'shoot/精修二/');
       ok('交件 is disabled until a folder is chosen', await page.$eval('#pd-deliver-btn', b => b.disabled));
       ok('nothing is shown as delivered yet',
-        (await page.$('[data-delivered-status]')) === null && (await page.$('#pd-undeliver-btn')) === null);
+        (await page.$('[data-delivered-status]')) === null && (await page.$('#pd-undeliver-btn:not([aria-disabled="true"])')) === null);
 
       await page.click('#pd-final-pick-btn');
       await adminPickFinals(page, ['shoot/'], ['shoot/精修/']);
@@ -228,7 +228,7 @@ const pfWaitFinalsLink = page => page.waitForSelector('#pd-upload-final-btn[data
         m.state.project.delivered_at === null && JSON.stringify(m.state.project.final_folders) === '["shoot/精修/"]');
       ok('NOT shown as delivered (no status, no replace/undeliver buttons, no header badge)',
         (await page.$('[data-delivered-status]')) === null && (await page.$('#pd-replace-final-btn')) === null &&
-        (await page.$('#pd-undeliver-btn')) === null && (await page.textContent('#pd-status-label')) === '精修中');
+        (await page.$('#pd-undeliver-btn:not([aria-disabled="true"])')) === null && (await page.textContent('#pd-status-label')) === '精修中');
       await page.waitForSelector('#proj-recent-list [data-project-row]', { state: 'attached', timeout: 5000 });   // the list is hidden behind the open detail
       ok('the project list row is rendered and has no 已交件 badge',
         (await page.$('#proj-recent-list [data-project-row]')) !== null && (await page.$('#proj-recent-list [data-delivered-badge]')) === null);

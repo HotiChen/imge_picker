@@ -292,7 +292,7 @@ for (const who of [
       const ok = (n, c, d = '') => out.push(`${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`);
       await page.waitForSelector('#pd-more-btn', { timeout: 5000 });   // the detail is drawn (重設主人 is in the ⋯ menu since 2026-10-19)
       ok('no 標記已交件 button while still picking',
-        (await page.$('#pd-deliver-btn')) === null && (await page.$('#pd-undeliver-btn')) === null);
+        (await page.$('#pd-deliver-btn')) === null && (await page.$('#pd-undeliver-btn:not([aria-disabled="true"])')) === null);
 
       // The friendly 409 message is exercised directly against the endpoint —
       // the button itself is gated off in this phase, by design.

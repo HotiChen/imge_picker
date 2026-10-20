@@ -17,7 +17,7 @@ const patches = m => m.requests.filter(r => r.method === 'PATCH').map(r => r.bod
 const shown = (page, sel) => page.$eval(sel, e => e.getClientRects().length > 0 && getComputedStyle(e).visibility !== 'hidden').catch(() => false);
 const waitHead = page => page.waitForSelector('#pd-more-btn', { timeout: 5000 });
 const active = page => page.evaluate(() => document.activeElement && (document.activeElement.id || document.activeElement.tagName));
-const labels = page => page.$$eval('#pd-more-menu [role="menuitem"], #pd-more-menu [role="separator"]', els => els.map(e => e.getAttribute('role') === 'separator' ? '—' : e.textContent.trim()));
+const labels = page => page.$$eval('#pd-more-menu [role="menuitem"], #pd-more-menu [role="separator"]', els => els.map(e => e.getAttribute('role') === 'separator' ? '—' : (e.querySelector('.pd-more-label') || e).textContent.trim()));
 const inModal = page => page.evaluate(() => !!document.activeElement && !!document.activeElement.closest('#pd-edit-modal'));
 
 {
@@ -31,10 +31,10 @@ const inModal = page => page.evaluate(() => !!document.activeElement && !!docume
     await page.click('#pd-more-btn');
     await page.waitForSelector('#pd-more-menu', { state: 'visible' });
     const l = await labels(page);
-    ok('order: 設定, 看全部毛片, 開放修改, separator, danger items', JSON.stringify(l.slice(0, 4)) === JSON.stringify(['設定', '看全部毛片', '開放修改', '—']) && l.length === 7, JSON.stringify(l));
+    ok('order: 設定, 看全部毛片, 複製交件通知文案, 開放修改, 取消交件, separator, danger items (grayed ones stay in place)', JSON.stringify(l.slice(0, 6)) === JSON.stringify(['設定', '看全部毛片', '複製交件通知文案', '開放修改', '取消交件', '—']) && l.length === 9, JSON.stringify(l));
     ok('the first item holds focus', (await active(page)) === 'pd-settings-btn', await active(page));
     const hs = await page.$$eval('#pd-more-menu [role="menuitem"]', els => els.map(e => Math.round(e.getBoundingClientRect().height)));
-    ok('items >= 44px (and there are some)', hs.length === 6 && hs.every(h => h >= 44), JSON.stringify(hs));
+    ok('items >= 44px (and there are some)', hs.length === 8 && hs.every(h => h >= 44), JSON.stringify(hs));
     await page.keyboard.press('ArrowDown');
     ok('ArrowDown -> 看全部毛片', (await active(page)) === 'pd-view-all-btn', await active(page));
     await page.keyboard.press('Home');

@@ -416,7 +416,7 @@ await suite('desktop preview — arrow keys and mouse click still navigate/open 
       await page.waitForSelector('[data-open-project]', { timeout: 5000 });
       await page.click('[data-open-project]');
       await page.waitForSelector('#pd-steps .pd-submission', { state: 'attached', timeout: 5000 });   // 送出紀錄 is part of 進度 since 2026-10-20 (closed details)
-      ok('刪除 is not offered once the project has a submission', !(await page.$('#pd-delete-btn')));
+      ok('刪除 is not offered once the project has a submission', !(await page.$('#pd-delete-btn:not([aria-disabled="true"])')) && !!(await page.$('#pd-delete-btn[aria-disabled="true"]')));
       return out;
     },
     { before: m.attach, initScript: ADMIN });

@@ -311,7 +311,7 @@ const deliverAndWait = async page => {
     async page => {
       const out = [], ok = okFn(out);
       await page.waitForSelector('#pd-deliver-btn', { timeout: 5000 });
-      ok('not delivered yet: no copy button', (await page.$('#pd-copy-notice-btn')) === null);
+      ok('not delivered yet: copy button grayed (aria-disabled)', (await page.$('#pd-copy-notice-btn:not([aria-disabled="true"])')) === null && !!(await page.$('#pd-copy-notice-btn[aria-disabled="true"]')));
       await deliverAndWait(page);
       const first = await page.$eval('#dn-text', e => e.value);
       await page.click('#dn-close-btn');
@@ -325,7 +325,7 @@ const deliverAndWait = async page => {
       page.once('dialog', d => d.accept());
       await moreClick(page, '#pd-undeliver-btn');
       await page.waitForSelector('#pd-deliver-btn', { timeout: 3000 });
-      ok('after 取消交件 the button is gone again', (await page.$('#pd-copy-notice-btn')) === null);
+      ok('after 取消交件 the button is gone again', (await page.$('#pd-copy-notice-btn:not([aria-disabled="true"])')) === null);
       return out;
     },
     { before: m.attach, initScript: CLIP_OK });

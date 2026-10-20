@@ -246,8 +246,9 @@
   #pd-photos .pd-sec { border-width: 1px 0 0; border-radius: 0; background: transparent; margin: 14px 0 0; }
   .pd-sec.pd-sec-off { display: none; }
   #project-detail-panel .pd-sec-h { display: block; margin: 0; font-size: 14px; }
-  .pd-sec-head { display: flex; flex-wrap: wrap; align-items: center; gap: 0 8px; }
-  .pd-sec-head .pd-sec-h { flex: 1 1 220px; min-width: 0; }
+  /* one line: the title button takes what is left, a link at the end (看照片 →) stays on the same line */
+  .pd-sec-head { position: relative; display: flex; flex-wrap: nowrap; align-items: center; gap: 0 4px; }
+  .pd-sec-head .pd-sec-h { flex: 1 1 0; min-width: 0; }
   .pd-sec-btn { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; width: 100%; min-height: 40px;
     padding: 9px 14px; background: transparent; border: 0; border-radius: 12px; text-align: left; cursor: pointer;
     font: inherit; color: var(--ink-90); }
@@ -256,8 +257,16 @@
   .pd-sec-caret { width: 14px; flex: none; color: var(--ink-55); font-size: 12px; }
   .pd-sec-title { font-weight: 600; font-size: 14px; }
   .pd-sec-sum { flex: 1 1 140px; min-width: 0; color: var(--ink-70); font-size: 12px; font-weight: 400; overflow-wrap: anywhere; }
-  .pd-sec-head a.pd-link { flex: none; margin: 0 14px 6px 38px; font-size: 12px; color: var(--accent-ink); text-decoration: none; }
+  .pd-sec-head a.pd-link { flex: none; display: inline-flex; align-items: center; min-height: 44px; margin: 0 6px 0 0; padding: 0 8px; font-size: 12px; white-space: nowrap; color: var(--accent-ink); text-decoration: none; }
   .pd-sec-head a.pd-link:hover { text-decoration: underline; }
+  /* 挑選人與連結: line 1 = title + 複製連結 (a sibling of the toggle, pinned right), line 2 = the summary */
+  #pd-sec-people .pd-sec-title { flex: 1 1 auto; display: inline-flex; align-items: center; min-height: 44px; }
+  /* padding-right = room for the pinned 複製連結 button (~100px at 13px text, wider if its label grows) */
+  #pd-sec-people .pd-sec-btn { padding-top: 0; padding-bottom: 6px; padding-right: 118px; }
+  #pd-sec-people .pd-sec-sum { flex: 1 1 100%; padding-left: 24px; }
+  .pd-sec-copy { position: absolute; top: 0; right: 8px; min-height: 44px; min-width: 44px; padding: 0 12px; white-space: nowrap; line-height: 1.2; display: inline-flex; flex-direction: column; align-items: center; justify-content: center; }
+  .pd-sec-copy[aria-disabled="true"], .pd-sec-copy[aria-disabled="true"]:hover { background: var(--rule); border-color: var(--rule); color: var(--ink-70); cursor: default; }
+  .pd-sec-copy small { display: block; font-size: 11px; font-weight: 400; }
   .pd-sec.is-collapsed > .pd-sec-body { display: none; }
   .pd-sec-body { padding: 2px 14px 12px; }
   /* the blocks used to be boxes of their own; inside a section they are just its content */
@@ -291,11 +300,13 @@
   .pd-more { position: relative; }
   .pd-more-menu { position: absolute; right: 0; top: calc(100% + 6px); z-index: 50; min-width: 200px; max-width: calc(100vw - 32px);
     background: var(--surface); border: 1px solid var(--rule); border-radius: 12px; box-shadow: 0 12px 30px rgba(90,60,20,.18); padding: 6px; }
-  .pd-more-item { display: flex; align-items: center; width: 100%; min-height: 44px; padding: 0 12px; border: 0; border-radius: 8px;
+  .pd-more-item { display: flex; flex-direction: column; align-items: flex-start; justify-content: center; gap: 1px; width: 100%; min-height: 44px; padding: 6px 12px; border: 0; border-radius: 8px;
     background: transparent; color: var(--ink-90); font: inherit; font-size: 14px; text-align: left; text-decoration: none; cursor: pointer; white-space: nowrap; }
   .pd-more-item:hover, .pd-more-item:focus-visible { background: var(--card); outline: none; }
   .pd-more-item:focus-visible { box-shadow: inset 0 0 0 2px var(--ink-90); }
   .pd-more-item.danger { color: var(--danger); }
+  .pd-more-reason { font-size: 12px; line-height: 1.3; }
+  .pd-more-item.is-off, .pd-more-item.is-off:hover, .pd-more-item.is-off:focus-visible { background: var(--rule); color: var(--ink-70); cursor: default; }
   .pd-more-sep { height: 1px; background: var(--rule); margin: 6px 4px; }
   .pd-owner { color: var(--ink-55); font-size: 13px; }
   .pd-meta .pd-owner { color: inherit; }
@@ -319,6 +330,14 @@
   .pd-delivered-line { font-size: 13px; color: var(--ink-70); display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin-top: 10px; }
   .pd-delivered-line [data-delivered-status] { font-weight: 600; color: var(--success); }
   .pd-delivered-line #pd-delivered-folders { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+  /* 挑選連結: two lines. Line 1 = the token (one line, ellipsis) + 複製連結 / 撤銷 at its end; line 2 = the info. */
+  .pd-link-row { padding: 8px 0; border-top: 1px solid var(--rule); min-width: 0; }
+  .pd-link-row:first-child { border-top: 0; }
+  .pd-link-top { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .pd-link-token { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pd-link-actions { flex: none; display: flex; flex-wrap: nowrap; gap: 6px; margin-left: auto; justify-content: flex-end; }
+  .pd-link-actions .btn { min-height: 44px; min-width: 44px; padding-left: 12px; padding-right: 12px; white-space: nowrap; }
+  .pd-link-info { margin-top: 2px; font-size: 12px; color: var(--ink-70); overflow-wrap: anywhere; }
   /* 照片 and 進度 */
   .pd-card { border: 1px solid var(--rule); border-radius: 14px; background: var(--surface); padding: 12px 16px; margin: 0 0 12px; }
   #project-detail-panel .pd-card > h4 { margin: 0 0 6px; font-size: 14px; }
@@ -1885,28 +1904,46 @@
   // 「⋯」: the actions that are not the stage's main step, as a menu of real buttons. Each runs exactly what its
   // old button ran (same requests, same confirm dialogs). Rebuilt with the status card (renderDeliveryBlock), so
   // 複製交件通知文案 / 取消交件 follow the delivery and 刪除 only shows while there is no submission.
-  function moreItem(id, action, text, danger) {
-    return `<button type="button" id="${id}" class="pd-more-item${danger ? ' danger' : ''}" role="menuitem" tabindex="-1" data-action="${action}">${text}</button>`;
+  // An item that does not apply now stays in its place, grayed (aria-disabled, never hidden or removed) with the reason
+  // in small text on the item itself (a phone has no hover). A click on it does nothing; the arrow keys pass over it.
+  const moreLabel = (text, off) => `<span class="pd-more-label">${text}</span>` + (off ? `<span class="pd-more-reason">${off}</span>` : '');
+  function moreItem(id, action, text, off = '', danger = false) {
+    return `<button type="button" id="${id}" class="pd-more-item${danger ? ' danger' : ''}${off ? ' is-off' : ''}" role="menuitem" tabindex="-1" data-action="${action}"${off ? ' aria-disabled="true"' : ''}>${moreLabel(text, off)}</button>`;
+  }
+  // 看全部毛片 is a link; grayed it has no href at all
+  function moreViewAll(p, off) {
+    const href = off ? ' aria-disabled="true"' : ` href="index.html?project=${encodeURIComponent(p.id)}&amp;mode=all"`;
+    return `<a id="pd-view-all-btn" class="pd-more-item${off ? ' is-off' : ''}" role="menuitem" tabindex="-1"${href}>${moreLabel('看全部毛片', off)}</a>`;
+  }
+  // No 毛片 to look at: the root listing says there is no proofs folder (the 準備中 knowledge), or the project
+  // records no folder at all and no listing is on its way. While the listing is still coming nothing is grayed.
+  function noProofs(p) {
+    const st = proofsState(p);
+    if (st === 'none') return true;
+    if (st === 'some') return false;
+    const t = finalsTarget && finalsTarget.projectId === p.id ? finalsTarget : null;
+    return !!t && t.state === 'ready' && !(Array.isArray(p.folders) && p.folders.length);   // listing done (not under way, not failed), nothing recorded
   }
   function renderMoreMenu() {
     const menu = $id('pd-more-menu');
     const p = currentProject;
     if (!menu || !p) return;
     const delivered = !!p.delivered_at;
+    // 開放修改 (Worker: back to picking only from a later phase or while delivered) means something only then
+    const nothingToReopen = !delivered && (!p.phase || p.phase === 'picking');
     const items = [moreItem('pd-settings-btn', 'settings', '設定')];
-    if (Array.isArray(p.folders) && p.folders.length)
-      items.push(`<a id="pd-view-all-btn" class="pd-more-item" role="menuitem" tabindex="-1" href="index.html?project=${encodeURIComponent(p.id)}&amp;mode=all">看全部毛片</a>`);
-    if (delivered) items.push(moreItem('pd-copy-notice-btn', 'copy-notice', '複製交件通知文案'));
-    items.push(moreItem('pd-reopen-btn', 'reopen', '開放修改'));
-    if (delivered) items.push(moreItem('pd-undeliver-btn', 'undeliver', '取消交件'));
+    items.push(moreViewAll(p, noProofs(p) ? '還沒有毛片' : ''));
+    items.push(moreItem('pd-copy-notice-btn', 'copy-notice', '複製交件通知文案', delivered ? '' : '尚未交件'));
+    items.push(moreItem('pd-reopen-btn', 'reopen', '開放修改', nothingToReopen ? '還沒送出選片' : ''));
+    items.push(moreItem('pd-undeliver-btn', 'undeliver', '取消交件', delivered ? '' : '尚未交件'));
     items.push('<div class="pd-more-sep" role="separator"></div>');
-    items.push(moreItem('pd-reset-seat-btn', 'reset-seat', '重設主人', true));
+    items.push(moreItem('pd-reset-seat-btn', 'reset-seat', '重設主人', currentOwnerName ? '' : '還沒有人認領', true));
     // an archived project's 取消封存 is the status card's button
-    if (!p.archived_at) items.push(moreItem('pd-archive-btn', 'archive', '封存', true));
-    if (!currentSubmissions.length) items.push(moreItem('pd-delete-btn', 'delete', '刪除', true));
+    if (!p.archived_at) items.push(moreItem('pd-archive-btn', 'archive', '封存', '', true));
+    items.push(moreItem('pd-delete-btn', 'delete', '刪除', currentSubmissions.length ? '已有送出紀錄，不能刪' : '', true));
     menu.innerHTML = items.join('');
   }
-  const moreItems = () => [...($id('pd-more-menu')?.querySelectorAll('[role="menuitem"]') || [])];
+  const moreItems = () => [...($id('pd-more-menu')?.querySelectorAll('[role="menuitem"]:not([aria-disabled="true"])') || [])];
   function setMoreMenu(open, focusButton) {
     const btn = $id('pd-more-btn'), menu = $id('pd-more-menu');
     if (!btn || !menu) return;
@@ -1933,6 +1970,7 @@
     menu.addEventListener('click', e => {
       const item = e.target.closest('[role="menuitem"]');
       if (!item) return;
+      if (item.getAttribute('aria-disabled') === 'true') { e.preventDefault(); return; }   // grayed: nothing happens, the menu stays
       setMoreMenu(false, true);
       if (item.dataset.action) runMoreAction(item.dataset.action);
     });
@@ -1992,6 +2030,15 @@
     } finally {
       deleting = false;
     }
+  }
+
+  // 挑選人與連結 title row, line 1: a real 複製連結 button beside (not inside) the toggle. It copies the project's first live
+  // pick link, the same one the 交件通知 text uses (liveLinkOf); with none it is grayed with its reason. A click only copies.
+  function peopleCopyHtml(tokens) {
+    const live = (tokens || []).find(t => t.status === 'live');
+    return live
+      ? `<button type="button" class="btn btn-outline pd-sec-copy" id="pd-sec-people-copy" data-copy-live-link="${escHtml(live.token)}">複製連結</button>`
+      : '<button type="button" class="btn btn-outline pd-sec-copy" id="pd-sec-people-copy" aria-disabled="true">複製連結<small>沒有有效連結</small></button>';
   }
 
   function renderProjectDetail(data) {
@@ -2066,19 +2113,21 @@
 
       <h4>挑選連結</h4>
       <div id="pd-tokens">${tokens.length ? tokens.map(t => `
-        <div class="proj-recent-row" data-token-row="${escHtml(t.token)}">
-          <div>
-            <code class="folder-raw">${escHtml(t.token)}</code>
-            <span class="badge ${t.status === 'live' ? 'badge-approved' : 'badge-pending'}">${escHtml(TOKEN_STATUS_LABEL[t.status] || t.status)}</span>
-          </div>
-          <div class="actions">
-            ${t.status === 'live' ? `
+        <div class="pd-link-row" data-token-row="${escHtml(t.token)}">
+          <div class="pd-link-top">
+            <code class="folder-raw pd-link-token">${escHtml(t.token)}</code>
+            <div class="actions pd-link-actions">
+              ${t.status === 'live' ? `
               <button type="button" class="btn btn-outline" data-copy-link="${escHtml(t.token)}">複製連結</button>
               <button type="button" class="btn btn-danger" data-revoke-token="${escHtml(t.token)}">撤銷</button>` : ''}
+            </div>
+          </div>
+          <div class="pd-link-info">
+            <span class="badge ${t.status === 'live' ? 'badge-approved' : 'badge-pending'}">${escHtml(TOKEN_STATUS_LABEL[t.status] || t.status)}</span>
           </div>
         </div>`).join('') : '<div class="empty">尚無連結</div>'}</div>
       ${project.archived_at ? '' : '<button id="pd-new-link-btn" class="btn btn-outline" type="button" style="margin-top:8px;">產生新連結</button>'}
-      <div id="pd-link-err" class="err"></div>`)}
+      <div id="pd-link-err" class="err"></div>`, peopleCopyHtml(tokens))}
       ${editModalHtml(project)}
     `;
     if (keepModal) {
@@ -2106,6 +2155,9 @@
     renderDeliveryBlock();
     renderProofDownloadBlock();
     renderPlanBlock();
+    body.querySelectorAll('[data-copy-live-link]').forEach(btn => {
+      btn.addEventListener('click', () => copyLinkAndShare(btn, project.title, btn.dataset.copyLiveLink, linkStage(project)));
+    });
     body.querySelectorAll('[data-copy-link]').forEach(btn => {
       btn.addEventListener('click', () => copyLinkAndShare(btn, project.title, btn.dataset.copyLink, linkStage(project)));
     });
@@ -2462,10 +2514,9 @@
     const t = finalsTarget && finalsTarget.projectId === p.id ? finalsTarget : null;
     $id('pd-photos').dataset.target = t ? t.state : 'ready';
     const id = encodeURIComponent(p.id);
-    const hasProofs = Array.isArray(p.folders) && p.folders.length > 0;
     const delivered = p.delivered_at && Array.isArray(p.final_folders) ? p.final_folders : [];
     const rows = [`<div class="pd-ver" data-version="proofs"><span class="pd-ver-name">毛片</span>
-      <span class="pd-ver-actions">${hasProofs ? `<a class="btn btn-outline" data-view href="index.html?project=${id}&amp;mode=all">看</a>` : ''}${proofsUploadHtml(p)}</span></div>`];
+      ${noProofs(p) ? '<span class="pd-ver-meta">還沒有毛片</span>' : ''}<span class="pd-ver-actions">${noProofs(p) ? '<button type="button" class="btn btn-outline btn-locked" data-view disabled aria-disabled="true" title="還沒有毛片">看</button>' : `<a class="btn btn-outline" data-view href="index.html?project=${id}&amp;mode=all">看</a>`}${proofsUploadHtml(p)}</span></div>`];
     for (const f of finalRowsOf(p)) {
       // 改交這一版: while delivered, on every version the client does not see now (a repeat deliver of just it)
       const revert = delivered.length && !delivered.includes(f)

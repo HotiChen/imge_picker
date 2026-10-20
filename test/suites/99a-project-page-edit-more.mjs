@@ -21,7 +21,7 @@ const shown = (page, sel) => page.$eval(sel, e => e.getClientRects().length > 0 
 const waitHead = page => page.waitForSelector('#pd-more-btn', { timeout: 5000 });
 const active = page => page.evaluate(() => document.activeElement && (document.activeElement.id || document.activeElement.tagName));
 const inModal = page => page.evaluate(() => !!document.activeElement && !!document.activeElement.closest('#pd-edit-modal'));
-const menuItems = page => page.$$eval('#pd-more-menu [role="menuitem"], #pd-more-menu [role="separator"]', els => els.map(e => e.getAttribute('role') === 'separator' ? '—' : e.textContent.trim()));
+const menuItems = page => page.$$eval('#pd-more-menu [role="menuitem"], #pd-more-menu [role="separator"]', els => els.map(e => e.getAttribute('role') === 'separator' ? '—' : (e.querySelector('.pd-more-label') || e).textContent.trim()));
 const CLIP = `(() => { window.__clip = []; try { Object.defineProperty(navigator, 'clipboard', { value: { writeText: t => { window.__clip.push(t); return Promise.resolve(); } }, configurable: true }); } catch (e) {} })();`;
 const initAdmin = `(${ADMIN.toString()})();${CLIP}`;
 
@@ -173,7 +173,7 @@ const initAdmin = `(${ADMIN.toString()})();${CLIP}`;
     await waitHead(page);
     await page.click('#pd-more-btn');
     ok('opens: shown, aria-expanded=true', await shown(page, '#pd-more-menu') && (await page.getAttribute('#pd-more-btn', 'aria-expanded')) === 'true');
-    ok('items: 設定, 看全部毛片, 開放修改, —, 重設主人, 封存, 刪除', JSON.stringify(await menuItems(page)) === JSON.stringify(['設定', '看全部毛片', '開放修改', '—', '重設主人', '封存', '刪除']), JSON.stringify(await menuItems(page)));
+    ok('items, always the same nine: 設定, 看全部毛片, 複製交件通知文案, 開放修改, 取消交件, —, 重設主人, 封存, 刪除 (the ones that do not apply are grayed, see 99k)', JSON.stringify(await menuItems(page)) === JSON.stringify(['設定', '看全部毛片', '複製交件通知文案', '開放修改', '取消交件', '—', '重設主人', '封存', '刪除']), JSON.stringify(await menuItems(page)));
     ok('focus is on the first item (設定)', (await active(page)) === 'pd-settings-btn');
     await page.keyboard.press('ArrowDown');
     ok('ArrowDown → 看全部毛片', (await active(page)) === 'pd-view-all-btn');
@@ -196,11 +196,11 @@ const initAdmin = `(${ADMIN.toString()})();${CLIP}`;
 {
   const m = fx({ phase: 'retouching', deliveredAt: '2026-09-20T00:00:00.000Z', finalFolders: ['20261019 編輯專案/精修/'] });
   m.state.submissions.push({ id: 's1', picker_id: 'picker-0', relationship: '本人', email: null, photo_keys: [], count: 0, pick_limit: null, extra_price: null, created_at: '2026-09-10T00:00:00Z', notified: 1 });
-  await suite('project page more — delivered: 複製交件通知文案 and 取消交件 are there; with a submission there is no 刪除', URL_, async page => {
+  await suite('project page more — delivered: 複製交件通知文案 and 取消交件 are there; with a submission 刪除 is grayed', URL_, async page => {
     const out = [], ok = line(out);
     await waitHead(page);
     await page.click('#pd-more-btn');
-    ok('items', JSON.stringify(await menuItems(page)) === JSON.stringify(['設定', '看全部毛片', '複製交件通知文案', '開放修改', '取消交件', '—', '重設主人', '封存']), JSON.stringify(await menuItems(page)));
+    ok('items', JSON.stringify(await menuItems(page)) === JSON.stringify(['設定', '看全部毛片', '複製交件通知文案', '開放修改', '取消交件', '—', '重設主人', '封存', '刪除']), JSON.stringify(await menuItems(page)));
     await page.click('#pd-copy-notice-btn');
     await page.waitForFunction(() => document.getElementById('pd-copy-notice-status')?.textContent === '已複製', null, { timeout: 3000 }).catch(() => {});
     ok('複製交件通知文案 copies the notice and says 已複製 where it can be seen', (await page.evaluate(() => window.__clip.length)) === 1 &&
