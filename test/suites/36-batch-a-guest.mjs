@@ -46,8 +46,13 @@ await heroCase('a candidate that fails to load is skipped (2nd errors -> 3rd)', 
   { tune: page => only400(page, 2, r => r.fulfill({ status: 404, body: 'x', headers: CORS })) });
 await heroCase('deterministic: a slow 2nd landscape still wins over a fast 3rd', [P, L, L], 2,
   { tune: page => only400(page, 2, async r => { await new Promise(res => setTimeout(res, 700)); return r.fallback(); }) });
-await heroCase('a probe that never answers is skipped after the timeout (1st landscape hangs -> 2nd)', [L, L], 2,
-  { wait: 9000, tune: page => only400(page, 1, () => new Promise(() => {})) });
+// The 1st probe answers (with its real landscape) only after HANG_MS, well past COVER_PROBE_MS (3 s, js/completion-page.js):
+// a page without the timeout would wait for it and pick the 1st, so the 2nd proves the skip. It must answer at some
+// point: Chromium keeps the window `load` event pending while any image is loading, a `new Image()` probe included,
+// and suite() waits for `load` (a probe that never answered timed page.goto out at 30 s and aborted the whole file).
+const HANG_MS = 6000;
+await heroCase('a probe that answers only after the timeout is skipped (1st landscape hangs -> 2nd)', [L, L], 2,
+  { wait: 9000, tune: page => only400(page, 1, async r => { await new Promise(res => setTimeout(res, HANG_MS)); return r.fallback().catch(() => {}); }) });
 
 // every probe fails: the first final stays the hero as today (its own load is the preview bucket, not 400)
 {
@@ -103,8 +108,10 @@ for (const [vp, co] of [['1280x800', { viewport: { width: 1280, height: 800 } }]
         const b = await look();
         ok('gone afterwards: not active and computed display none', b.disp === 'none', JSON.stringify(b));
         if (mode === 'ok') {
-          await page.waitForSelector('.fg-tile', { timeout: 5000 });
-          ok('positive: the photos are there after loading', (await page.$$('.fg-tile')).length === 6);
+          // delivered, not confirmed = the 驗收頁: the standard card grid since 2962f87, not the web album's .fg-tile
+          // (suite 28 "undelivered/legacy ... the old grid is there"); this line was never reached while the file aborted
+          ok('positive: the 6 photos are there after loading (standard cards)', await page.waitForFunction(() => document.querySelectorAll('#photoGrid .photo-card').length === 6, null, { timeout: 5000 }).then(() => true, () => false),
+            String(await page.evaluate(() => document.querySelectorAll('#photoGrid .photo-card').length)));
         }
         return out;
       },

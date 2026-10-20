@@ -6,6 +6,7 @@ import { base, suite } from '../lib/harness.mjs';
 import { MOBILE } from '../lib/env.mjs';
 import { PHOTOS } from '../lib/editor-mocks.mjs';
 import { pickFakeWorker } from '../lib/pick-fake.mjs';
+import { tourSettled } from '../lib/tour-settle.mjs';
 
 export default async function register() {
 
@@ -24,7 +25,8 @@ const pickWorld = (o = {}) => pickFakeWorker({ ownerName: 'Pia', ownerKey: 'PIA-
 const waitCard = page => until(() => page.evaluate(() => { const c = document.querySelector('.gt-card'); return !!c && c.getBoundingClientRect().width > 0; }));
 const gone = page => until(async () => !(await page.$('.gt-card')));
 const gridReady = page => page.waitForFunction(() => document.querySelectorAll('.photo-card').length > 0, null, { timeout: 8000 });
-const info = async page => { await sleep(320); return page.evaluate(() => {
+// measure only once the ring has stopped gliding (lib/tour-settle.mjs: the lightbox slideUp + the ring's transition)
+const info = async page => { await tourSettled(page); return page.evaluate(() => {
   const c = document.querySelector('.gt-card'), ring = document.querySelector('.gt-ring');
   if (!c) return null;
   const r = x => { const b = x.getBoundingClientRect(); return { l: b.left, t: b.top, r: b.right, b: b.bottom, w: b.width, h: b.height }; };
