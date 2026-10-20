@@ -371,8 +371,10 @@ for (const [tag, ctx] of [['390', { viewport: { width: 390, height: 844 }, hasTo
       ok('no horizontal scroll', g.sw <= g.iw, JSON.stringify([g.sw, g.iw]));
       ok('every title row and its summary is inside the screen and tall enough to tap (≥ 36px)', g.rows.every(r => r.left >= 0 && r.right <= g.iw && r.sumRight <= g.iw + 1 && r.h >= 36), JSON.stringify(g.rows));
       // (after 目前選取 the 看照片 link may wrap onto a second row on a phone: allow that row)
-      ok('collapsed rows sit close together (≤ 16px between two title rows; ≤ 40px after 目前選取, which carries a link row)',
-        g.rows.slice(1).every((r, k) => (r.top - g.rows[k].bottom <= (g.rows[k].n === 'selections' ? 40 : 16))), JSON.stringify(g.rows.map(r => [r.n, Math.round(r.top), Math.round(r.bottom)])));
+      // 目前選取 sits under the 照片 card now, away from the other collapsed rows: only 訂單 and 挑選人 are neighbours
+      const tail = g.rows.filter(r => r.n !== 'selections');
+      ok('collapsed rows sit close together (≤ 16px between 訂單 and 挑選人; there are two of them)',
+        tail.length === 2 && tail.slice(1).every((r, k) => r.top - tail[k].bottom <= 16), JSON.stringify(g.rows.map(r => [r.n, Math.round(r.top), Math.round(r.bottom)])));
       ok('no big blank under the last section (≤ 40px to the card’s bottom edge)', g.panelBottom - g.lastBottom <= 40, JSON.stringify([g.panelBottom, g.lastBottom]));
       const shut = g.panelH;
       if (process.env.SHOTS_A) await page.screenshot({ path: `${process.env.SHOTS_A}/detail-collapsed-${tag}.png`, fullPage: true });
