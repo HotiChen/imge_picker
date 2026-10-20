@@ -347,11 +347,10 @@
                 const note = this.root.querySelector('#cpExpiry');
                 const at = r && typeof r.expires_at === 'string' ? Date.parse(r.expires_at) : NaN;
                 if (!note || !Number.isFinite(at)) return;
-                const parts = new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Taipei', year: 'numeric', month: 'numeric', day: 'numeric' }).formatToParts(new Date(at));
-                const part = type => (parts.find(x => x.type === type) || {}).value;
+                const [y, m, d] = Util.fmtDate(at, 'ymd').split('/');
                 note.textContent = at <= Date.now()
                     ? '照片已超過預計保存期限，請盡快下載保存'
-                    : `照片預計保存到 ${part('year')} 年 ${part('month')} 月 ${part('day')} 日，請在這之前下載保存`;
+                    : `照片預計保存到 ${y} 年 ${m} 月 ${d} 日，請在這之前下載保存`;
                 note.classList.toggle('cp-expiry--soon', Number.isFinite(r.days_left) && r.days_left <= 30);
                 note.hidden = false;
             }, () => {});
