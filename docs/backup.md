@@ -239,11 +239,18 @@ GitHub → **Actions** → **D1 time travel** → **Run workflow**：
    跑完再執行一次檢查，直到 0 列。
    - `from_file` 是 `schema.sql` 的項目：是最早的基本表，或只寫在 `worker/schema.sql` 的索引。
      索引可以直接從 `schema.sql` 複製那一行 `CREATE INDEX IF NOT EXISTS …` 來跑；表缺少的話請先問 Claude，不要自己建。
-6. 如果 Console 不接受這麼長的查詢、或回報 `pragma_table_info` 之類的錯誤（**在真的 D1 Console 上還沒驗證過**）：
+6. 如果 Console 不接受這麼長的查詢、或回報 `pragma_table_info` 之類的錯誤（Tim 2026-10-21 回報正式庫的 Console 跑得了，見下面「正式庫目前狀態」）：
    每週備份的「還原演練」那一步也會跑同一段檢查（在備份的複本上），缺少的項目會以黃色 warning 顯示在
    GitHub Actions 的 log 裡，可以直接看那裡。
 7. 給開發者：新增 migration 後要重新產生這個檔案：`node worker/tools/gen-migration-check.mjs`
    （worker 測試 `migration-check.test.mjs` 會在檔案過期時失敗，CI 會擋）。
+
+### 正式庫目前狀態（2026-10-21，Tim 在 D1 Console 跑這段檢查後口頭回報，無留存輸出）
+
+- 缺少的只有 `2026-10-09-guest-orders.sql` 的 11 項（客人自助訂購 S2）：**刻意未跑**，`GUEST_ORDERS = "off"`。
+  打開 `GUEST_ORDERS` 之前要先跑它（11 句，一句一句），並審過個資告知（`docs/guest-shop.md`）。
+- 其餘 `worker/migrations/` 的檔案（到 `2026-10-20-project-events.sql`，含 `2026-10-12-indexes.sql` 的索引）都已套用。
+- 之後每加一個 migration，Tim 跑完後再執行一次這段檢查，並更新這一段。
 
 ---
 
@@ -265,5 +272,4 @@ GitHub → **Actions** → **D1 time travel** → **Run workflow**：
   - 真實 D1 匯出檔的格式能通過完整性檢查與還原演練（目前用 SQLite 自己產生的同格式檔案測過）；
   - rclone 上傳到真的 Google Drive、`drive.file` 權限、token 能自動續期；
   - `wrangler d1 time-travel info / restore` 實際輸出（目前依 wrangler 4.148.0 原始碼寫成，沒有對真的資料庫執行過）；
-  - Mac 內建 openssl 能不能解密；
-  - D1 Console 能不能執行 `check-migrations.sql`。
+  - Mac 內建 openssl 能不能解密。
