@@ -2,7 +2,9 @@
 // its upload. The photographer's project page shows one line in the 照片 card and the 複製交件通知文案 text carries the
 // finals' date; the client's 完成頁 shows the date next to 下載全部精修. Dates are read in Asia/Taipei whatever the
 // browser's zone (the suites run the page in America/Los_Angeles, where the UTC day and the Taipei day differ).
-// The fake Worker (test/lib/pick-fake.mjs expiryOfFake) answers both routes exactly like the real one, incl. null.
+// The fake Worker answers both routes like the real one NOW: every date null (the lifecycle rule is retired). The dated
+// answers (opts.legacyExpiryUploaded) exist only to keep exercising the date code the pages still carry (the copied notice's
+// 精修預計保存到 line, the 完成頁 #cpExpiry); the admin photo card's dated line was replaced (99s).
 import { base, suite } from '../lib/harness.mjs';
 import { MOBILE } from '../lib/env.mjs';
 import { ADMIN } from '../lib/auth-mocks.mjs';
@@ -43,69 +45,10 @@ const CONTRAST = `((el) => {
 })`;
 
 // ═════ admin: the line in the 照片 card ═════
-{
-  // delivered: the FINALS date is used, not the proofs' (the two differ)
-  const m = fx({ ...DELIVERED, expiryUploaded: { proofs: uploadedFor(400 - 180 + 5), finals: EDGE_UPLOADED } });
-  await suite('99p expiry admin — delivered: the line uses the finals date (Taipei day, browser in Los Angeles) and the days left', URL_, async page => {
-    const out = [], ok = line(out);
-    await settle(page, m);
-    const t = await expiryText(page);
-    const left = Math.ceil((Date.parse('2027-03-18T20:00:00.000Z') - Date.now()) / DAY);
-    ok('the line says 照片預計保存到 2027 年 3 月 19 日（剩 N 天）', t === `照片預計保存到 ${EDGE_TEXT}（剩 ${left} 天）`, t);
-    ok('it sits in the 照片 card', await page.$eval('#pd-expiry', e => !!e.closest('#pd-photos')));
-    ok('asked once for this page load', m.state.expiryCalls.admin === 1, String(m.state.expiryCalls.admin));
-    return out;
-  }, { before: m.attach, initScript: initAdmin, contextOptions: LA });
-}
-{
-  // not delivered (finals kept or not): the proofs' date
-  const m = fx({ expiryUploaded: { proofs: EDGE_UPLOADED, finals: uploadedFor(3) }, finalFolders: ['shoot/精修/'] });
-  await suite('99p expiry admin — not delivered: the line uses the proofs date even when final_folders is set', URL_, async page => {
-    const out = [], ok = line(out);
-    await settle(page, m);
-    ok('fixture: final_folders is set and delivered_at is not', m.state.project.final_folders && !m.state.project.delivered_at);
-    const t = await expiryText(page);
-    ok('the proofs date (not the 3-day finals one)', !!t && t.includes(`照片預計保存到 ${EDGE_TEXT}（剩 `), t);
-    return out;
-  }, { before: m.attach, initScript: initAdmin, contextOptions: LA });
-}
-for (const [days, warn] of [[31, false], [30, true], [1, true]]) {
-  const m = fx({ expiryUploaded: { proofs: uploadedFor(days) } });
-  await suite(`99p expiry admin — ${days} days left: ${warn ? 'warning style' : 'normal style'}, text readable (>= 4.5:1)`, URL_, async page => {
-    const out = [], ok = line(out);
-    await settle(page, m);
-    const t = await expiryText(page);
-    ok(`the line shows 剩 ${days} 天`, !!t && t.endsWith(`（剩 ${days} 天）`), t);
-    const look = await page.$eval('#pd-expiry', e => ({ warn: e.classList.contains('pd-expiry--warn'), weight: getComputedStyle(e).fontWeight, color: getComputedStyle(e).color }));
-    ok(warn ? 'warning style is on' : 'warning style is off', look.warn === warn, JSON.stringify(look));
-    const ratio = await page.$eval('#pd-expiry', new Function('return ' + CONTRAST)());
-    ok('contrast >= 4.5', ratio >= 4.5, String(ratio));
-    return out;
-  }, { before: m.attach, initScript: initAdmin, contextOptions: MOBILE });
-}
-{
-  const m = fx({ expiryUploaded: { proofs: new Date(Date.now() - 181 * DAY).toISOString() } });
-  await suite('99p expiry admin — past the date: 已超過預計保存期限，檔案可能已被刪除 (no date, no days)', URL_, async page => {
-    const out = [], ok = line(out);
-    await settle(page, m);
-    const t = await expiryText(page);
-    ok('the past wording', t === '已超過預計保存期限，檔案可能已被刪除', t);
-    ok('warning style', await page.$eval('#pd-expiry', e => e.classList.contains('pd-expiry--warn')));
-    return out;
-  }, { before: m.attach, initScript: initAdmin, contextOptions: MOBILE });
-}
-{
-  const m = fx({ expiryUploaded: { proofs: uploadedFor(100) }, expiryTruncated: true });
-  await suite('99p expiry admin — truncated scan: （估計） is added', URL_, async page => {
-    const out = [], ok = line(out);
-    await settle(page, m);
-    const t = await expiryText(page);
-    ok('the line ends with （估計）', !!t && t.startsWith('照片預計保存到 ') && t.endsWith('（剩 100 天）（估計）'), t);
-    return out;
-  }, { before: m.attach, initScript: initAdmin, contextOptions: MOBILE });
-}
-for (const [why, o] of [['no photos (date null)', {}], ['the request fails with 500', { expiryFail: 500, expiryUploaded: { proofs: uploadedFor(10) } }],
-  ['the connection drops', { expiryFail: 'net', expiryUploaded: { proofs: uploadedFor(10) } }]]) {
+// The dated line (照片預計保存到 …) is gone with the R2 lifecycle rule: the card's line is now the proofs' deletion status
+// (99s-proof-retention-ui.mjs). Here: the retired /expiry answer (every date null, what the Worker sends now) shows nothing.
+for (const [why, o] of [['the Worker\'s retired answer (every date null)', {}], ['the request fails with 500', { expiryFail: 500, legacyExpiryUploaded: { proofs: uploadedFor(10) } }],
+  ['the connection drops', { expiryFail: 'net', legacyExpiryUploaded: { proofs: uploadedFor(10) } }]]) {
   const m = fx(o);
   await suite(`99p expiry admin — ${why}: no line, the page still works`, URL_, async page => {
     const out = [], ok = line(out);
@@ -120,7 +63,7 @@ for (const [why, o] of [['no photos (date null)', {}], ['the request fails with 
 
 // ═════ admin: 複製交件通知文案 ═════
 {
-  const m = fx({ ...DELIVERED, expiryUploaded: { finals: EDGE_UPLOADED, proofs: uploadedFor(5) } });
+  const m = fx({ ...DELIVERED, legacyExpiryUploaded: { finals: EDGE_UPLOADED, proofs: uploadedFor(5) } });
   await suite('99p expiry notice — the copied text carries the finals date, on its own line, after the usual text', URL_, async page => {
     const out = [], ok = line(out);
     await settle(page, m);
@@ -134,7 +77,7 @@ for (const [why, o] of [['no photos (date null)', {}], ['the request fails with 
     return out;
   }, { before: m.attach, initScript: initAdmin, contextOptions: LA });
 }
-for (const [why, o] of [['the expiry request fails', { expiryFail: 500 }], ['the finals folders hold no photos', { expiryUploaded: {} }]]) {
+for (const [why, o] of [['the expiry request fails', { expiryFail: 500 }], ['the finals folders hold no photos', { legacyExpiryUploaded: {} }]]) {
   const m = fx({ ...DELIVERED, ...o });
   await suite(`99p expiry notice — ${why}: the copy still works, exactly the old text`, URL_, async page => {
     const out = [], ok = line(out);
@@ -160,7 +103,7 @@ const cpUp = async page => {
 };
 const cpNote = page => page.evaluate(() => { const e = document.getElementById('cpExpiry'); return e && !e.hidden && e.getClientRects().length ? e.textContent.trim() : null; });
 for (const [days, soon] of [[31, false], [30, true]]) {
-  const w = albumWorld({ n: 6, fake: { expiryUploaded: { finals: uploadedFor(days) } } });
+  const w = albumWorld({ n: 6, fake: { legacyExpiryUploaded: { finals: uploadedFor(days) } } });
   await suite(`99p expiry 完成頁 — ${days} days left: the date next to 下載全部精修, ${soon ? 'more visible style' : 'calm style'}`, GURL, async page => {
     const out = [], ok = line(out);
     await cpUp(page);
@@ -178,7 +121,7 @@ for (const [days, soon] of [[31, false], [30, true]]) {
   }, { before: w.before, initScript: OWNER, contextOptions: LA });
 }
 {
-  const w = albumWorld({ n: 6, fake: { expiryUploaded: { finals: EDGE_UPLOADED } } });
+  const w = albumWorld({ n: 6, fake: { legacyExpiryUploaded: { finals: EDGE_UPLOADED } } });
   await suite('99p expiry 完成頁 — the date is the Taipei day (browser in Los Angeles)', GURL, async page => {
     const out = [], ok = line(out);
     await cpUp(page);
@@ -186,8 +129,8 @@ for (const [days, soon] of [[31, false], [30, true]]) {
     return out;
   }, { before: w.before, initScript: OWNER, contextOptions: LA });
 }
-for (const [why, fake] of [['no date (null from the Worker)', {}], ['the request fails with 500', { expiryFail: 500, expiryUploaded: { finals: uploadedFor(5) } }],
-  ['the connection drops', { expiryFail: 'net', expiryUploaded: { finals: uploadedFor(5) } }]]) {
+for (const [why, fake] of [['no date (null from the Worker)', {}], ['the request fails with 500', { expiryFail: 500, legacyExpiryUploaded: { finals: uploadedFor(5) } }],
+  ['the connection drops', { expiryFail: 'net', legacyExpiryUploaded: { finals: uploadedFor(5) } }]]) {
   const w = albumWorld({ n: 6, fake });
   await suite(`99p expiry 完成頁 — ${why}: nothing shown, the page still works`, GURL, async page => {
     const out = [], ok = line(out);
@@ -199,7 +142,7 @@ for (const [why, fake] of [['no date (null from the Worker)', {}], ['the request
   }, { before: w.before, initScript: OWNER, contextOptions: MOBILE });
 }
 {
-  const w = albumWorld({ n: 6, fake: { confirmedAt: null, expiryUploaded: { finals: uploadedFor(5) } } });
+  const w = albumWorld({ n: 6, fake: { confirmedAt: null, legacyExpiryUploaded: { finals: uploadedFor(5) } } });
   await suite('99p expiry 驗收頁 (delivered, not confirmed) — no expiry request and no note (positive: the page is up)', GURL, async page => {
     const out = [], ok = line(out);
     await page.waitForSelector('#photoGrid .photo-card', { timeout: 5000 });

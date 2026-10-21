@@ -89,6 +89,14 @@ export function dashSettingsMock(opts = {}) {
           if (opts.linkMessagesMigrated === false) return json({ error: 'link messages unavailable', code: 'link_messages_unavailable' }, 500);
           body = { ...body, [k]: v === null || !v.trim() ? null : v.trim() };
         }
+        // proof_retention_days (worker.js, docs/delivery.md "Proof retention"): 0 / 90 / 180 / 365 (null = 0), else 400
+        // invalid_proof_retention_days; before the migration 500 proof_retention_unavailable (nothing stored)
+        if ('proof_retention_days' in (body || {})) {
+          const v = body.proof_retention_days;
+          if (![0, 90, 180, 365, null].includes(v)) return json({ error: 'proof_retention_days must be 0, 90, 180 or 365', code: 'invalid_proof_retention_days' }, 400);
+          if (opts.retentionMigrated === false) return json({ error: '毛片自動刪除功能尚未啟用', code: 'proof_retention_unavailable' }, 500);
+          body = { ...body, proof_retention_days: v === null ? 0 : v };
+        }
         // default_extra_max: null or a whole number 0-500, else 400 (nothing written)
         if ('default_extra_max' in (body || {}) && body.default_extra_max !== null && !isExtraMaxFake(body.default_extra_max))
           return json({ error: 'default_extra_max must be a whole number from 0 to 500', code: 'invalid_default_extra_max' }, 400);
@@ -108,6 +116,12 @@ export function dashSettingsMock(opts = {}) {
         return json({ ok: true, has_logo: false });
       }
       if (u.pathname === '/api/admin/stats' && method === 'GET') return json(state.stats);
+      // GET /api/admin/proofs-retention (worker.js): the reminder list; opts.upcoming = [{id, title, proofs_delete_at, days_left, days, source}]
+      if (u.pathname === '/api/admin/proofs-retention' && method === 'GET') {
+        if (typeof opts.retentionStatus === 'number') return json({ error: 'boom' }, opts.retentionStatus);
+        return opts.retentionMigrated === false ? json({ available: false, studio_days: 0, upcoming: [] })
+          : json({ available: true, studio_days: state.settings.proof_retention_days ?? 0, upcoming: opts.upcoming || [] });
+      }
       if (u.pathname === '/api/admin/projects' && method === 'GET') return json({ projects: state.projects });
       if (/^\/api\/admin\/projects\/[^/]+\/deliver$/.test(u.pathname) && method === 'POST')
         return json(state.deliverBody || { ok: true, delivered_at: '2026-09-27T00:00:00.000Z' }, state.deliverStatus);

@@ -170,7 +170,13 @@
             dlBtn.addEventListener('click', () => this._downloadAll(dlBtn));
             const expiryNote = el('p', 'cp-expiry', null, 'cpExpiry');
             expiryNote.hidden = true;
-            dl.append(el('h2', 'cp-h2', '帶回家'), el('p', 'cp-sub', '把全部精修照片打包成一個檔案，存進你的手機或電腦。'), dlBtn, expiryNote);
+            // 毛片: the entry back to the proofs list + when they are deleted (shown only from GET /api/pick/expiry `proofs`)
+            const proofsBtn = btn('cpProofsBtn', 'cp-btn cp-btn--line cp-btn--proofs', '下載毛片');
+            proofsBtn.hidden = true;
+            proofsBtn.addEventListener('click', () => { if (this.ctx && this.ctx.onOpenProofs) this.ctx.onOpenProofs(); });
+            const proofsNote = el('p', 'cp-expiry', null, 'cpProofsNote');
+            proofsNote.hidden = true;
+            dl.append(el('h2', 'cp-h2', '帶回家'), el('p', 'cp-sub', '把全部精修照片打包成一個檔案，存進你的手機或電腦。'), dlBtn, expiryNote, proofsBtn, proofsNote);
 
             // 5. album (4., the shop, is inserted before this one if the Worker has products)
             const alb = el('section', 'cp-sec cp-album', null, 'cpAlbum');
@@ -344,6 +350,7 @@
             try { p = Promise.resolve(cfg && cfg.fetchExpiry ? cfg.fetchExpiry() : null); } catch (e) { p = Promise.resolve(null); }
             p.then(r => {
                 if (tok !== this._expiryTok || !this.isMounted()) return;
+                this._showProofs(r && r.proofs);
                 const note = this.root.querySelector('#cpExpiry');
                 const at = r && typeof r.expires_at === 'string' ? Date.parse(r.expires_at) : NaN;
                 if (!note || !Number.isFinite(at)) return;
@@ -354,6 +361,29 @@
                 note.classList.toggle('cp-expiry--soon', Number.isFinite(r.days_left) && r.days_left <= 30);
                 note.hidden = false;
             }, () => {});
+        },
+
+        // 毛片 (docs/delivery.md "Proof retention"): `proofs` = {proofs_delete_at, days_left, notice, proofs_deleted_at,
+        // can_download}. can_download (switch on, the seat owner, not deleted) -> the 下載毛片 entry, plus the deletion date
+        // when there is one (more visible inside the 14-day window). Deleted -> a plain sentence for the seat owner, no entry.
+        // Anything else (a viewer, switch off, no `proofs`) shows nothing.
+        _showProofs(p) {
+            const btnEl = this.root.querySelector('#cpProofsBtn'), note = this.root.querySelector('#cpProofsNote');
+            if (!btnEl || !note || !p || typeof p !== 'object') return;
+            const day = v => { const t = typeof v === 'string' ? Util.fmtDate(v, 'ymd').split('/') : []; return t.length === 3 ? `${t[0]} 年 ${t[1]} 月 ${t[2]} 日` : ''; };
+            const deleted = day(p.proofs_deleted_at);
+            if (deleted) {
+                if (this.ctx && this.ctx.isOwner) { note.textContent = '毛片已依設定刪除'; note.classList.remove('cp-expiry--soon'); note.hidden = false; }
+                return;
+            }
+            if (p.can_download !== true) return;
+            btnEl.hidden = false;
+            const when = day(p.proofs_delete_at);
+            if (when) {
+                note.textContent = `毛片將於 ${when} 刪除，要保存請先下載`;
+                note.classList.toggle('cp-expiry--soon', p.notice === true);
+                note.hidden = false;
+            }
         },
 
         // ── 商品／加購 ─────────────────────────────────────────────────
