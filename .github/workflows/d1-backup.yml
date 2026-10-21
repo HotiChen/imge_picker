@@ -1,0 +1,202 @@
+# 每週把 D1 imagepicker-db 匯出、加密，存到 Google Drive（docs/backup.md）。
+# 備份內含客人姓名／email、share token：明文只存在這台 runner 上，加密後才上傳，
+# 不使用 upload-artifact，log 不印任何資料內容或下載網址。
+name: D1 weekly backup
+
+on:
+  schedule:
+    # 每週日 18:17 UTC = 台灣週一 02:17（匯出期間 D1 會短暫無法回應查詢，挑半夜）
+    - cron: '17 18 * * 0'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# 和 d1-time-travel.yml 同一組：備份與還原不會同時跑
+concurrency:
+  group: d1-imagepicker-db
+  cancel-in-progress: false
+
+jobs:
+  backup:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      WRANGLER_VERSION: '4.148.0'
+      # Ubuntu 24.04 正式版（release pocket，檔案不會被移除）的 rclone，固定版本＋sha256
+      RCLONE_DEB_URL: 'https://archive.ubuntu.com/ubuntu/pool/universe/r/rclone/rclone_1.60.1+dfsg-3_amd64.deb'
+      RCLONE_DEB_SHA256: '5b4d38b862c48cbcb95b548c128dffda62931eb8310b48ac039e13058848cf60'
+      REMOTE_DIR: 'gdrive:imagepicker-backups/'
+      WRANGLER_SEND_METRICS: 'false'
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+
+      - name: 檢查 secrets 都已設定
+        env:
+          CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+          BACKUP_PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
+          RCLONE_CONF_B64: ${{ secrets.RCLONE_CONF_B64 }}
+        run: |
+          set -euo pipefail
+          missing=0
+          for v in CF_API_TOKEN CF_ACCOUNT_ID BACKUP_PASSPHRASE RCLONE_CONF_B64; do
+            if [ -z "${!v:-}" ]; then
+              echo "::error::GitHub secret $v 沒有設定（設定方法見 docs/backup.md）"
+              missing=1
+            fi
+          done
+          if [ -n "${BACKUP_PASSPHRASE:-}" ] && [ "${#BACKUP_PASSPHRASE}" -lt 16 ]; then
+            echo "::error::BACKUP_PASSPHRASE 太短（至少 16 個字元）"
+            missing=1
+          fi
+          exit "$missing"
+
+      - name: 安裝 rclone（固定版本，驗 sha256）
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP"
+          curl -fsSL --retry 3 -o rclone.deb "$RCLONE_DEB_URL"
+          echo "$RCLONE_DEB_SHA256  rclone.deb" | sha256sum -c -
+          dpkg-deb -x rclone.deb rclone-pkg
+          rm -f rclone.deb
+          echo "$RUNNER_TEMP/rclone-pkg/usr/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/rclone-pkg/usr/bin/rclone" version | head -n 1
+
+      - name: 準備 rclone 設定（Google Drive）
+        env:
+          RCLONE_CONF_B64: ${{ secrets.RCLONE_CONF_B64 }}
+        run: |
+          set -euo pipefail
+          umask 077
+          conf="$RUNNER_TEMP/rclone.conf"
+          if ! printf '%s' "$RCLONE_CONF_B64" | tr -d ' \r\n\t' | base64 -d > "$conf" 2>/dev/null; then
+            echo "::error::RCLONE_CONF_B64 不是有效的 base64（見 docs/backup.md）"
+            exit 1
+          fi
+          # 解開後的 token 不是 secret 原文，GitHub 不會自動遮蔽：手動遮蔽
+          grep -oE '"(access_token|refresh_token)":"[^"]+"' "$conf" | sed -E 's/^"[a-z_]+":"(.*)"$/\1/' | while IFS= read -r v; do
+            echo "::add-mask::$v"
+          done || true
+          grep -E '^[[:space:]]*(client_secret|token)[[:space:]]*=' "$conf" | sed -E 's/^[^=]*=[[:space:]]*//' | while IFS= read -r v; do
+            [ -n "$v" ] && echo "::add-mask::$v"
+          done || true
+          if ! grep -qx '\[gdrive\]' "$conf"; then
+            echo "::error::rclone 設定裡沒有名為 gdrive 的 remote（第一行應是 [gdrive]）"
+            exit 1
+          fi
+          if ! grep -qE '^[[:space:]]*type[[:space:]]*=[[:space:]]*drive[[:space:]]*$' "$conf"; then
+            echo "::error::rclone 設定的 gdrive 不是 Google Drive（type = drive）"
+            exit 1
+          fi
+          echo "RCLONE_CONFIG=$conf" >> "$GITHUB_ENV"
+
+      - name: 先確認 Google Drive 連得上（匯出前，避免白白鎖住 D1）
+        run: |
+          set -euo pipefail
+          rclone mkdir "$REMOTE_DIR"
+          rclone lsf --max-depth 1 "$REMOTE_DIR" > /dev/null
+          echo "Google Drive 連線正常"
+
+      - name: 匯出 D1（wrangler d1 export）
+        working-directory: worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          umask 077
+          w="$RUNNER_TEMP/d1-backup"
+          mkdir -p "$w"
+          log="$w/export.log"
+          status=0
+          npx --yes "wrangler@${WRANGLER_VERSION}" d1 export imagepicker-db --remote \
+            --output="$w/backup.sql" --skip-confirmation > "$log" 2>&1 || status=$?
+          # wrangler 會印出一小時有效、可直接下載明文備份的網址；公開 repo 的 log 任何人都看得到：一律遮掉
+          sed -E 's#https?://[^[:space:]]+#[網址已遮蔽]#g' "$log"
+          rm -f "$log"
+          if [ "$status" -ne 0 ]; then
+            echo "::error::wrangler d1 export 失敗（exit $status）。常見原因：CF_API_TOKEN 沒有 D1 權限（見 docs/backup.md）"
+            exit 1
+          fi
+
+      - name: 完整性檢查（不通過就不上傳）
+        run: node worker/tools/verify-backup.mjs gate "$RUNNER_TEMP/d1-backup/backup.sql"
+
+      - name: 還原演練（載入 SQLite＋檢查 migration）
+        id: drill
+        continue-on-error: true
+        run: node worker/tools/verify-backup.mjs drill "$RUNNER_TEMP/d1-backup/backup.sql"
+
+      - name: 加密（AES-256-CBC, PBKDF2 600000 次）並驗證可解開，刪除明文
+        env:
+          BACKUP_PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          umask 077
+          w="$RUNNER_TEMP/d1-backup"
+          name="imagepicker-db-$(date -u +%Y%m%dT%H%M%SZ).sql.enc"
+          mkdir -p "$w/out"
+          openssl enc -aes-256-cbc -pbkdf2 -iter 600000 -salt -pass env:BACKUP_PASSPHRASE \
+            -in "$w/backup.sql" -out "$w/out/$name"
+          if [ "$(head -c 8 "$w/out/$name")" != "Salted__" ]; then
+            echo "::error::加密檔格式不對"
+            exit 1
+          fi
+          plain="$(sha256sum < "$w/backup.sql" | cut -d ' ' -f 1)"
+          back="$(openssl enc -d -aes-256-cbc -pbkdf2 -iter 600000 -pass env:BACKUP_PASSPHRASE \
+            -in "$w/out/$name" | sha256sum | cut -d ' ' -f 1)"
+          if [ "$plain" != "$back" ]; then
+            echo "::error::加密檔解不回原檔，不上傳"
+            exit 1
+          fi
+          shred -u "$w/backup.sql"
+          echo "BACKUP_NAME=$name" >> "$GITHUB_ENV"
+          echo "加密完成：$name（$(stat -c %s "$w/out/$name") bytes），明文已刪除"
+
+      - name: 上傳到 Google Drive 並核對
+        run: |
+          set -euo pipefail
+          w="$RUNNER_TEMP/d1-backup/out"
+          f="$w/$BACKUP_NAME"
+          rclone copyto "$f" "${REMOTE_DIR}${BACKUP_NAME}" --retries 3 --low-level-retries 10
+          size="$(stat -c %s "$f")"
+          remote_size="$(rclone lsjson --files-only "${REMOTE_DIR}${BACKUP_NAME}" \
+            | node -e 'const a = JSON.parse(require("fs").readFileSync(0, "utf8")); if (a.length !== 1) process.exit(1); console.log(a[0].Size)')"
+          if [ "$remote_size" != "$size" ]; then
+            echo "::error::雲端檔案大小（$remote_size）和本機（$size）不符"
+            exit 1
+          fi
+          # 大小＋MD5 再核對一次
+          rclone check --one-way --include "/${BACKUP_NAME}" "$w" "$REMOTE_DIR"
+          echo "已上傳並核對：${REMOTE_DIR}${BACKUP_NAME}（$size bytes）"
+          {
+            echo "### D1 備份完成"
+            echo "- 檔案：\`${BACKUP_NAME}\`（$size bytes，已加密）"
+            echo "- 位置：Google Drive 的 \`imagepicker-backups\` 資料夾"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 刪除舊備份（保留最新 12 份；不到 90 天的不刪）
+        run: node worker/tools/prune-backups.mjs "$REMOTE_DIR" "$BACKUP_NAME"
+
+      - name: 還原演練結果
+        if: steps.drill.outcome == 'failure'
+        run: |
+          echo "::error::備份已上傳，但還原演練失敗：這份備份可能無法還原。請看上面「還原演練」那一步的訊息。"
+          exit 1
+
+      - name: 清除 runner 上的暫存檔
+        if: always()
+        run: |
+          set -uo pipefail
+          w="$RUNNER_TEMP/d1-backup"
+          [ -f "$w/backup.sql" ] && shred -u "$w/backup.sql"
+          [ -f "$RUNNER_TEMP/rclone.conf" ] && shred -u "$RUNNER_TEMP/rclone.conf"
+          rm -rf "$w"
+          exit 0

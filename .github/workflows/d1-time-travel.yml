@@ -1,0 +1,155 @@
+# D1 Time Travel：查看或把 imagepicker-db 還原到過去某個時間點（docs/backup.md）。
+# 只能手動觸發。info 只讀；restore / restore-bookmark 會覆蓋正式庫現在的資料，
+# 必須在 confirm 欄一字不差輸入 RESTORE imagepicker-db。
+# 所有輸入只經由 env 傳進 shell 並先驗證格式（不把 ${{ inputs.* }} 直接寫進 run）。
+name: D1 time travel
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'info = 只查看（安全）；restore = 還原到某個時間；restore-bookmark = 用 bookmark 還原（反悔用）'
+        type: choice
+        options: [info, restore, restore-bookmark]
+        default: info
+      timestamp:
+        description: 'restore 用（info 可選填，查那個時間的 bookmark）。要寫時區，例：2026-10-21T09:30:00+08:00'
+        required: false
+        type: string
+        default: ''
+      bookmark:
+        description: 'restore-bookmark 用：之前記下的 bookmark'
+        required: false
+        type: string
+        default: ''
+      confirm:
+        description: '還原時必填，一字不差：RESTORE imagepicker-db'
+        required: false
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: d1-imagepicker-db
+  cancel-in-progress: false
+
+jobs:
+  time-travel:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      WRANGLER_VERSION: '4.148.0'
+      WRANGLER_SEND_METRICS: 'false'
+      MODE: ${{ inputs.mode }}
+      TS: ${{ inputs.timestamp }}
+      BM: ${{ inputs.bookmark }}
+      CONFIRM: ${{ inputs.confirm }}
+    steps:
+      - name: 驗證輸入
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::$1"; exit 1; }
+          case "$MODE" in info|restore|restore-bookmark) ;; *) fail "mode 只能是 info、restore 或 restore-bookmark" ;; esac
+          if [ -n "$TS" ]; then
+            [[ "$TS" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}(:[0-9]{2}(\.[0-9]{1,3})?)?(Z|[+-][0-9]{2}:[0-9]{2})$ ]] \
+              || fail "timestamp 格式不對，要像 2026-10-21T09:30:00+08:00（一定要有 +08:00 或 Z）"
+            epoch="$(date -u -d "$TS" +%s 2>/dev/null)" || fail "timestamp 不是有效的日期時間"
+            now="$(date -u +%s)"
+            [ "$epoch" -le "$now" ] || fail "timestamp 在未來"
+            [ "$epoch" -ge $((now - 30 * 86400)) ] || fail "timestamp 超過 30 天前（Time Travel 最多 30 天，免費方案更短）"
+            echo "時間點：$(date -u -d "@$epoch" '+%Y-%m-%d %H:%M:%S UTC')＝台灣 $(TZ=Asia/Taipei date -d "@$epoch" '+%Y-%m-%d %H:%M:%S')"
+          fi
+          if [ -n "$BM" ]; then
+            [[ "$BM" =~ ^[A-Za-z0-9-]{8,128}$ ]] || fail "bookmark 格式不對（只會有英數字和 -）"
+          fi
+          case "$MODE" in
+            info)
+              echo "模式：info（只讀，不會改任何資料）" ;;
+            restore)
+              [ -n "$TS" ] || fail "restore 需要填 timestamp"
+              [ -z "$BM" ] || fail "restore 用 timestamp；要用 bookmark 請選 restore-bookmark"
+              [ "$CONFIRM" = "RESTORE imagepicker-db" ] || fail "confirm 必須一字不差輸入：RESTORE imagepicker-db" ;;
+            restore-bookmark)
+              [ -n "$BM" ] || fail "restore-bookmark 需要填 bookmark"
+              [ -z "$TS" ] || fail "restore-bookmark 不要填 timestamp"
+              [ "$CONFIRM" = "RESTORE imagepicker-db" ] || fail "confirm 必須一字不差輸入：RESTORE imagepicker-db" ;;
+          esac
+
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+
+      - name: 查看目前的 bookmark（info）
+        working-directory: worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          bm() { node -e 'const s = require("fs").readFileSync(0, "utf8"); const j = JSON.parse(s.slice(s.indexOf("{"), s.lastIndexOf("}") + 1)); if (!j.bookmark) process.exit(1); console.log(j.bookmark)'; }
+          err="$RUNNER_TEMP/tt-info.err"
+          out="$(npx --yes "wrangler@${WRANGLER_VERSION}" d1 time-travel info imagepicker-db --json 2> "$err")" || {
+            sed -E 's#https?://[^[:space:]]+#[網址已遮蔽]#g' "$err"
+            echo "::error::查詢 Time Travel 失敗。常見原因：CF_API_TOKEN 沒有 D1 權限（見 docs/backup.md）"
+            exit 1
+          }
+          current="$(printf '%s' "$out" | bm)"
+          echo "================================================================"
+          echo "目前（還原前）的 bookmark：$current"
+          echo "================================================================"
+          {
+            echo "### D1 Time Travel（$MODE）"
+            echo "- 目前（還原前）的 bookmark：\`$current\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ -n "$TS" ]; then
+            out="$(npx --yes "wrangler@${WRANGLER_VERSION}" d1 time-travel info imagepicker-db --timestamp="$TS" --json 2> "$err")" || {
+              sed -E 's#https?://[^[:space:]]+#[網址已遮蔽]#g' "$err"
+              echo "::error::查詢 $TS 的 bookmark 失敗"
+              exit 1
+            }
+            at="$(printf '%s' "$out" | bm)"
+            echo "時間 $TS 對應的 bookmark：$at"
+            echo "- 時間 \`$TS\` 對應的 bookmark：\`$at\`" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: 還原（會覆蓋正式庫現在的資料）
+        if: inputs.mode == 'restore' || inputs.mode == 'restore-bookmark'
+        working-directory: worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          # 上一步已驗證 MODE / TS / BM / CONFIRM；這裡再檢查一次 confirm，避免步驟被改動後失去保護
+          [ "$CONFIRM" = "RESTORE imagepicker-db" ] || { echo "::error::confirm 不符"; exit 1; }
+          if [ "$MODE" = "restore" ]; then args=(--timestamp="$TS"); else args=(--bookmark="$BM"); fi
+          err="$RUNNER_TEMP/tt-restore.err"
+          status=0
+          out="$(npx --yes "wrangler@${WRANGLER_VERSION}" d1 time-travel restore imagepicker-db "${args[@]}" --json 2> "$err")" || status=$?
+          sed -E 's#https?://[^[:space:]]+#[網址已遮蔽]#g' "$err"
+          echo "wrangler 回傳："
+          printf '%s\n' "$out"
+          if [ "$status" -ne 0 ]; then
+            echo "::error::還原失敗（exit $status）。不確定資料庫有沒有被改動：先用 info 看目前 bookmark；要回到還原前，用 restore-bookmark 填上一步印的「還原前 bookmark」。"
+            exit 1
+          fi
+          prev="$(printf '%s' "$out" | node -e 'const s = require("fs").readFileSync(0, "utf8"); const j = JSON.parse(s.slice(s.indexOf("{"), s.lastIndexOf("}") + 1)); console.log(j.previous_bookmark || "")')"
+          now_bm="$(printf '%s' "$out" | node -e 'const s = require("fs").readFileSync(0, "utf8"); const j = JSON.parse(s.slice(s.indexOf("{"), s.lastIndexOf("}") + 1)); console.log(j.bookmark || "")')"
+          echo "================================================================"
+          echo "還原完成。現在的 bookmark：$now_bm"
+          echo "要反悔：再跑一次這個 workflow，mode 選 restore-bookmark，"
+          echo "bookmark 填下面這個 previous bookmark，confirm 填 RESTORE imagepicker-db："
+          echo ""
+          echo "    previous bookmark：$prev"
+          echo "================================================================"
+          {
+            echo "- **還原完成**，現在的 bookmark：\`$now_bm\`"
+            echo "- **要反悔**：mode 選 \`restore-bookmark\`，bookmark 填 \`$prev\`，confirm 填 \`RESTORE imagepicker-db\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+          [ -n "$prev" ] || echo "::warning::wrangler 沒有回傳 previous bookmark；請改用上一步印的「還原前 bookmark」反悔"
