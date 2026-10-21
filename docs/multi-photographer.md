@@ -1,7 +1,23 @@
 # 多攝影師（multi-photographer）設計
 
-狀態：**設計稿，尚未實作**（第 0 批）。2026-10-08 Tim 決定：不等「找 5 位驗證」，直接做多攝影師，
+2026-10-08 Tim 決定：不等「找 5 位驗證」，直接做多攝影師，
 分批放行；範圍只到「我有興趣」，**金流與 S2 下單維持關閉**。順序變更已寫入 `docs/backlog.md`。
+
+**狀態（2026-10-21，對照 main d713634 核對）**：第 1、2a、2b-0..3、3 批、第 3 批安全審查補強、刪除照片、邀請碼（Worker + 前端）
+都已合併上線；`worker/wrangler.toml` 的 `PHOTOGRAPHER_ROUTES = "on"`（e44a679），`PHOTOGRAPHER_SIGNUP = "off"`。
+正式 D1 已跑 `2026-10-11-photographers`、`2026-10-15-photographer-must-change-password`、`2026-10-17-share-token-owner`、
+`2026-10-18-photographer-invites`（Tim 2026-10-21 用 `check-migrations.sql` 核對，見 `docs/backup.md` §四）。
+下面各批的筆記保留當時的寫法（例如「Tim 還沒跑過」「`PHOTOGRAPHER_ROUTES` 仍是 off」「前端尚未改」），以這段為準。
+- **已做**：帳號表、登入／登出／`/me`、operator 審核清單（核准／拒絕／停用／恢復／重設密碼）、強制改密碼；
+  operator 發邀請碼（綁 email）→ `register.html` 用邀請碼註冊、直接 active（頁面寫「照片 180 天後自動刪除，請自行保留原檔」）；
+  所有頁面同一個登入表單（帳號 = `admin` 用工作室密碼，其他當 email 帳號）；專案、連結、商品、設定、logo、儀表板、R2（`_t/<id>/`）
+  按攝影師隔離；`GET /api/pick/logo`、`GET /api/admin/settings/logo` 已由 `js/pick.js`、`settings.html` 使用；
+  專案頁的照片保存期限一行（`docs/delivery.md`「Photo expiry」）。
+- **還沒做**：第 4 批（每人 `notify_email`：非 default 的專案目前**不寄任何通知信**，`mailsDefaultInbox`）；
+  自助註冊頁（`/register` + Turnstile，開關仍 off）；儲存空間／檔案大小配額；服務條款／隱私告知頁；攝影師帳號刪除
+  （只有 operator 對 pending 申請的 reject 會刪列）與刪除後 R2 檔案的處理；相本（`/api/books/*`、`_books/`）的擁有權，
+  非 default 一律 404；訂單路由對非 default 全部暫停 404（`ORDER_ROUTES_PAUSED`）；設定頁的 180 天提示。
+  是否已有第一位真實的非 default 攝影師在用：repo 看不出來，只有 Tim 知道。
 
 ## 目標與不做的事
 
@@ -155,7 +171,7 @@ Tim 的決定：除了「自助註冊 → 待審核」，operator 可以發**邀
      `approved_at = created_at`、PBKDF2、`must_change_password` 不寫 → 預設 0）、session INSERT、釋放限速列都以「這個碼的 `used_by` 是我這個新 id」為條件。
      所以兩個人同時用同一個碼只會建立一個帳號；email 衝突時碼不會被用掉、既有帳號（含 suspended、id 為 `default` 的列）完全不變；
      若衝突的是 pending 申請、被 reject 後，同一組碼還能用。查碼時排除用過／撤銷／過期的列並取最早的活碼，所以同 email 同碼的舊列不會擋住新的。
-- **must_change_password migration 還沒跑時（prod 現況）**：註冊照常 201，回應的 `must_change_password` 是 `null`（和登入一致）。但守門會把
+- **must_change_password migration 還沒跑時**（寫作時的 prod 現況；2026-10-21 已確認正式庫跑過）：註冊照常 201，回應的 `must_change_password` 是 `null`（和登入一致）。但守門會把
   `null` 當「未知」：這個 session 除了 `/me`、`/logout` 以外都 500 `password_change_unavailable`。所以**開放邀請之前要先跑 2026-10-15 的 migration**。
 - **接受的取捨**（審查後確認，不再修）：
   - **鎖住單一受邀者**：知道某位受邀者 email 的人，每送 5 次錯碼就能讓**那個 email** 15 分鐘無法用邀請碼註冊（其他人不受影響）。
@@ -171,7 +187,7 @@ Tim 的決定：除了「自助註冊 → 待審核」，operator 可以發**邀
   再用 `SELECT id, email FROM photographer_invites LIMIT 1` 確認表在、而且有 `email` 欄。**如果曾經跑過審查前的 3 句版本**（沒有 `email` 欄；
   `CREATE TABLE IF NOT EXISTS` 不會補欄位，Worker 會一律回 500 `invites_unavailable`），先 `DROP TABLE photographer_invites`（那時不可能有任何有效的碼），
   再跑現在的 4 句檔案；(2) `wrangler secret put PHOTOGRAPHER_INVITE_SECRET`（32 字元以上的隨機字串，例如
-  `openssl rand -hex 32`）；(3) 註冊頁與 operator 頁的邀請碼 UI（前端，尚未做）；(4) 要真的開放時才把 `PHOTOGRAPHER_ROUTES` 改成 `"on"`（這個開關同時開放所有攝影師路由，先安全審查）。
+  `openssl rand -hex 32`）；(3) 註冊頁與 operator 頁的邀請碼 UI（前端；已做，d993a67：`register.html`、operator 邀請面板）；(4) 要真的開放時才把 `PHOTOGRAPHER_ROUTES` 改成 `"on"`（這個開關同時開放所有攝影師路由，先安全審查；已改 on，e44a679）。
 - 沒驗證到的：真 D1 batch 的交易語意（測試用 node:sqlite 模擬「batch 之間不會交錯」）、真 Workers 上 PBKDF2 的耗時、`CF-Connecting-IP` 在正式環境的值。
 
 ### 2. 資料隔離（第 2 批）
@@ -259,11 +275,11 @@ Tim 的決定：除了「自助註冊 → 待審核」，operator 可以發**邀
 - **logo 存在 D1（`studio_settings.logo` BLOB），不在 R2**：沒有任何 R2 鍵，所以沒有 default 前綴碰撞的問題（第 3 批不用管 logo）。
   所有 logo 讀取走 `readLogo(env, photographerId)`，呼叫端各自給擁有者。
 - 新增 `GET /api/admin/settings/logo`：呼叫者自己的 logo（設定頁預覽用），`private, no-store`、`Vary: Authorization`；沒有 = 404，和誰都沒有時完全相同。
-  要帶 Authorization，所以 `<img src>` 不能直接用：settings.html 要改成 fetch → blob（前端，尚未改）。
+  要帶 Authorization，所以 `<img src>` 不能直接用：settings.html 要改成 fetch → blob（前端；已改，2f55d1d）。
 - 新增 `GET /api/pick/logo?t=<選片連結>`（或 `X-Share-Token`）：連結所屬專案的 `project.photographer_id` 的 logo，絕不讀 request 裡的 id。
   任何有效連結都可（挑選人、協作者、檢視者，和 `/state` 的 studio 區塊一致）；連結無效／撤銷／專案封存 → 401（同 pick 區塊）；非 GET → 405；
   該攝影師沒有 logo → 404，和 default 專案沒設 logo 時完全相同（不會退回 default 的 logo）。`Cache-Control: private, max-age=300`（URL 帶連結，不給共用快取）。
-  客人頁（`js/pick.js` 三處）要改打這條（前端，尚未改）。
+  客人頁（`js/pick.js` 三處）要改打這條（前端；已改，186ffa2）。
 - 舊的公開 `GET /api/studio/logo` 保留，**只給 default**（`DEFAULT_PHOTOGRAPHER_ID` 在 `routeRequest` 剩 9 處：batch 3 的建立專案／交件／取消交件，和這條；第 3 批後只剩這條）。
   B 的 logo 永遠不會從這裡出去。前端全部改走上面兩條後可以移除。
 - 測試：`worker/test/settings-scope.test.mjs`（兩個方向的讀寫、body 帶 id、壞 body 不寫、logo 上傳／刪除互不影響、兩條 logo 讀取路由、
@@ -397,6 +413,7 @@ Tim 的決定：除了「自助註冊 → 待審核」，operator 可以發**邀
 - Tim 手動核准第一位真實攝影師，跑一個真實案子，再決定是否放寬自由開通。
 - 180 天自動刪除：註冊頁與設定頁都要明講「照片 180 天後自動刪除，請自行保留原檔」，
   專案頁顯示倒數（backlog 的 180-day countdown 這時一併做）。
+  （2026-10-21：`register.html` 已有這句；專案頁的保存期限一行已做（`docs/delivery.md`「Photo expiry」）；設定頁還沒有。）
 
 ## 批次與風險
 
