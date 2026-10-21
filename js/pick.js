@@ -2243,7 +2243,7 @@
             modal.classList.add('active');
         },
         // The submit form's 關係 / Email, kept per link on this device after a submit that went through (never after a
-        // refused one), so a second submit does not ask 與新人的關係 again.
+        // refused one), so a second submit does not ask 與被攝者的關係 again.
         _submitMemoKey() { return `pick_submit:${this.token}`; },
         _recallSubmit() {
             try {

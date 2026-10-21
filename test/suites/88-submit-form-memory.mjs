@@ -1,4 +1,4 @@
-// Browser suites: the submit form remembers 與新人的關係 and Email after a submit that went through, so a second submit
+// Browser suites: the submit form remembers 與被攝者的關係 and Email after a submit that went through, so a second submit
 // (before the photographer starts retouching) does not ask again (Tim 2026-10-18). Never after a refused submit.
 // Registered by test/run.mjs in file-name order; see test/README.md.
 import { base, suite } from '../lib/harness.mjs';
