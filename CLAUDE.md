@@ -8,11 +8,13 @@ JS frontend. Feature designs live in `docs/` (e.g. `docs/guest-picking.md`).
 jobs end to end first; no new big feature outside that list.
 
 ## Where things are (grep the names; line numbers drift)
-- `worker/worker.js` (one file, ~3.8k lines): `resolveShareToken` (every link/token
+- `worker/worker.js` (one file, ~8.4k lines): `resolveShareToken` (every link/token
   lookup), `pickReadScope` / `pickFinals` (what a guest link may read — the gate),
-  `/api/admin/projects…` (photographer routes, `isAdminToken`), `/api/pick/state`
+  `/api/admin/projects…` (photographer routes, `requirePhotographer` → `who.id`; `isAdminToken`
+  is only called inside it), `/api/pick/state`
   and `?list=` / object reads (guest side), `withoutMissingColumn` (works before a
-  migration has run). `DEFAULT_PHOTOGRAPHER_ID` is the single-tenant placeholder.
+  migration has run). `DEFAULT_PHOTOGRAPHER_ID` (`'default'`) is Tim's own account (`PHOTOGRAPHER_TOKEN`);
+  other photographers are accounts with a session (`docs/multi-photographer.md`).
 - `worker/test/*.test.mjs` (`fakes.mjs` = fake D1/R2, `pick-helpers.mjs`):
   `delivery.test.mjs` = deliver / undeliver / reopen / finals gate,
   `pick-marks.test.mjs` = pins, `pick-gate.test.mjs` = what a link may read.
@@ -28,6 +30,9 @@ jobs end to end first; no new big feature outside that list.
   `upload.html` upload; `book_editor/` album editor (own CSS `book_editor.css`,
   not `css/styles.css`); `test/run.mjs` the browser-suite runner (suites live in
   `test/suites/NN-<topic>.mjs`, shared helpers/fakes in `test/lib/`; `test/README.md`).
+- D1 backup / restore / migration check: `docs/backup.md` (`.github/workflows/d1-backup.yml`,
+  `d1-time-travel.yml`; `worker/tools/`: `gen-migration-check.mjs` → `check-migrations.sql`,
+  `verify-backup.mjs`, `prune-backups.mjs`).
 
 ## Talking with Tim
 - Reply in Traditional Chinese, short: what's wrong, how to fix it.
@@ -115,7 +120,10 @@ Also seen under load, green alone (3/3 on HEAD): admin "plan 編輯方案…" an
 "the list row picks up 精修中 too, not just the detail panel".
 Also flaky under load, reproduced on the pre-pins base feb9bd4 (5 of 8 runs red alone): suite 10
 "mobile preview — preloads i±1/i±2 … at the responsive width bucket (1200 on a 390px/DPR3 phone)".
-Also seen under load, green 3/3 alone: suite 10 "mobile preview — a fast burst of navigation only preloads around where it settles".
+Also seen under load, green 3/3 alone: suite 10 "mobile preview — a fast burst of navigation only preloads around where it settles"
+(seen once more under load by 2026-10-21, green when re-run alone).
+Seen once under load (by 2026-10-21), green when re-run alone: suite 83 "unified login — r2_designer overlay: an account
+that must change its password lands on settings.html with must:true stored".
 Seen once in a full run, green 3/3 alone and in all 126 admin suites together: admin "訂單品項是平台商品：單價不能低於平台價（below_platform_price）…" (a 4000ms waitForFunction timeout).
 Also flaky, seen on the base too (c574078 failed 2 of 3 alone; 1 of 3 on HEAD): "guest tour lightbox (390px) … step 3/7 (navigation)" (the ring position on the real prev/next controls).
 Also seen once under load, green alone: dashboard "全部待處理歸零…" (3000ms waitForURL timeout). When the full suite shows
@@ -194,6 +202,9 @@ empty scan passes.
 - D1 migrations are hand-run by Tim in the D1 Console **before** the merge
   that needs them. Schema changes are append-only (`ALTER TABLE ... ADD COLUMN`);
   put the SQL in `worker/migrations/` and note it in `worker/schema.sql`.
+  Every new migration: re-run `node worker/tools/gen-migration-check.mjs` to regenerate
+  `worker/tools/check-migrations.sql`, or the worker test `migration-check.test.mjs` (CI) fails.
+  Which migrations prod has run: `docs/backup.md` §四.
 - Bump the asset `?v=` stamp on every frontend change.
 - After deploy: Cloudflare → imhoti.tw → Caching → Purge Everything.
 - Never put PHOTOGRAPHER_TOKEN or any secret in `js/config.js` (it is public).
@@ -202,4 +213,6 @@ empty scan passes.
 - R2 lifecycle deletes every object 180 days after upload (whole bucket, no
   prefix). Anything meant to last (logos, long-term copies) must live elsewhere.
 - The r2.dev public URL is disabled; all reads go through the Worker's token gates.
-- `photographer_id` exists on projects ('default' today); multi-photographer is the goal.
+- `photographer_id` exists on projects; 'default' is Tim. Other photographers can sign up with an
+  operator invite code (`PHOTOGRAPHER_ROUTES = "on"`); open self sign-up is still off
+  (`PHOTOGRAPHER_SIGNUP = "off"`). `docs/multi-photographer.md` says what is built and what is not.
