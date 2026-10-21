@@ -827,8 +827,10 @@ confirmation. **Default off**: until the photographer picks a number nothing is 
 
 ### Rules
 - What goes: the originals under the project's `projects.folders` (subfolders included) that a photo upload could be
-  (`deletablePhotoKey`: an extension upload.html takes, no `.`/`..` segment, not a `_` key, ≤ 1024 bytes), and their
-  thumbnails `_thumbs/<w>/<key>.thumb` (every width folder found under `_thumbs/`, orphans too). Never a key inside
+  (`deletablePhotoKey`: an extension upload.html takes, no `.`/`..` segment, ≤ 1024 bytes) **with no `_` path segment
+  at any depth** (`shoot/毛片/_備份/` stays), and their thumbnails `_thumbs/<w>/<key>.thumb` (every width folder found
+  under `_thumbs/`, orphans too). **Only objects R2 says were uploaded no later than `client_confirmed_at`**: anything
+  put into the folder after the confirmation (a further shoot), or whose upload time cannot be read, stays. Never a key inside
   any finals folder. Nothing else: no `.txt`/`.json`, no neighbour folder (`shoot/毛片-other/` is not `shoot/毛片/`).
   D1 is untouched: selections, submissions, rounds, orders, events stay.
 - **Finals (`final_folders`) are never deleted.**
@@ -836,7 +838,10 @@ confirmation. **Default off**: until the photographer picks a number nothing is 
   開放修改 clear the confirmation → the schedule is gone (a new confirmation starts a new count).
 - N: `projects.proof_retention_days` (NULL = follow the studio, 0 = never, 14..3650) else
   `studio_settings.proof_retention_days` (0 / 90 / 180 / 365; NULL = 0). A value the routes never store (edited by
-  hand) reads as 0.
+  hand: 1..13, 30 on the studio, a negative, a fraction, text) reads as 0, in JS (`effectiveProofDays`) and in the
+  cron's candidate query (`PROOF_DAYS_SQL`) alike.
+- The candidate query takes up to a day early; a candidate that is not due yet gets `proofs_delete_next_at` pushed to
+  its due time (at most a day), so more than ten such rows never keep a due project off the list.
 - Never sooner than 14 days after a number was set (studio: every project that follows the studio; project: that
   project) and never sooner than 30 days after 延後: `projects.proofs_delete_next_at` is that floor (it is also a run's
   lease and a skip's 7-day wait). So a newly chosen number always shows the 14-day reminder first, even for a project
@@ -848,6 +853,7 @@ Run by the cron per project, after claiming it (`proofs_delete_next_at` lease, 1
 | reason code | when |
 |---|---|
 | `bad_folders` | `projects.folders` does not validate (`pickFolders`) |
+| `top_level_folder` | a proof folder is a single top-level segment (`2026/`): too wide to delete by schedule |
 | `bad_finals` | delivered but `final_folders` does not validate (`pickFinals`) |
 | `finals_overlap` | a finals folder (the current one, or any round's frozen `revision_requests.finals` of this project) is inside, equal to or around a proof folder |
 | `shared_with_project` | another project **of the same photographer** has a proof or finals folder overlapping (either direction), or another project's round `finals` overlaps, or another project's submission / round pins name a key under the folder |
@@ -913,8 +919,12 @@ nothing in a request names a key or folder.
 - Two confirmed projects sharing a proof folder are never deleted (skipped every 7 days, logged).
 - A default-photographer project re-reads every album each run (≤ 25 gets): with many albums a big folder takes
   several days.
-- A photo uploaded into the folder during a run's last pass may remain after `proofs_deleted_at`.
+- A photo uploaded into the folder after the confirmation is never deleted (it stays after `proofs_deleted_at`).
 - 開放修改 after the delete reopens picking on an empty folder (nothing blocks it).
+- Half-deleted state (a run cut by the budget or an R2 error): there is no column for it, only the
+  `proofs_delete_partial` / `proofs_delete_planned` events and the lease. Meanwhile `proofs_deleted_at` is still
+  null, so `can_download` stays true and the pages show the old date; pressing 不要刪 / 延後 then stops the deleting
+  where it is (part of the proofs already gone, the rest kept). Not built: a 「刪除中」 state.
 - The 45-call budget and the Free plan's 10 ms CPU per cron run are not verified on Cloudflare.
 - The browser fake (`test/lib/pick-fake.mjs`) does not model these routes yet.
 

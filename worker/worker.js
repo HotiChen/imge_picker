@@ -2720,16 +2720,26 @@ const DAY_MS = 86400000;
 const PROOF_RETENTION_UNAVAILABLE = { error: '毛片自動刪除功能尚未啟用', code: 'proof_retention_unavailable' };
 const PROOF_RETENTION_COLUMNS = ['proof_retention_days', 'proofs_deleted_at', 'proofs_delete_next_at'];
 
-// The days in effect for a project: its own number (a whole 0..MAX) when it
-// has one, else the studio's when that is one of the choices. Anything else
-// stored (edited by hand) reads as 0, never: fail closed.
+// The days in effect for a project: its own number (0, or a whole
+// MIN..MAX: what the route stores) when it has one, else the studio's when
+// that is one of the choices. Anything else stored (edited by hand) reads as
+// 0, never: fail closed. PROOF_DAYS_SQL says the same in SQL.
 function effectiveProofDays(projectDays, studioDays) {
   if (projectDays !== null && projectDays !== undefined) {
-    return Number.isSafeInteger(projectDays) && projectDays >= 0 && projectDays <= PROOF_RETENTION_MAX_DAYS ? projectDays : 0;
+    return Number.isSafeInteger(projectDays) && projectDays >= PROOF_RETENTION_MIN_DAYS && projectDays <= PROOF_RETENTION_MAX_DAYS ? projectDays : 0;
   }
   return PROOF_RETENTION_STUDIO_CHOICES.includes(studioDays) ? studioDays : 0;
 }
 const studioProofDaysValue = v => (PROOF_RETENTION_STUDIO_CHOICES.includes(v) ? v : 0);
+// effectiveProofDays as an SQL expression over p (projects) and s
+// (studio_settings): 0 for anything it would read as 0
+const PROOF_DAYS_SQL = '(CASE WHEN p.proof_retention_days IS NOT NULL THEN ' +
+  `(CASE WHEN typeof(p.proof_retention_days) = 'integer' AND p.proof_retention_days BETWEEN ${PROOF_RETENTION_MIN_DAYS} AND ${PROOF_RETENTION_MAX_DAYS} THEN p.proof_retention_days ELSE 0 END) ` +
+  `WHEN typeof(s.proof_retention_days) = 'integer' AND s.proof_retention_days IN (${PROOF_RETENTION_STUDIO_CHOICES.join(', ')}) THEN s.proof_retention_days ELSE 0 END)`;
+// A key the cron may delete as a proof original: a photo upload key
+// (deletablePhotoKey) with no `_` path segment at any depth (a hidden or
+// Worker folder inside the proofs, e.g. `_備份/`, is never touched).
+const proofOriginalKey = key => deletablePhotoKey(key) && !key.split('/').some(seg => seg.startsWith('_'));
 
 // When the cron may delete `project`'s proofs (ms), or null: never while not
 // delivered (delivered_at), not confirmed, already deleted, or N = 0.
@@ -2937,9 +2947,16 @@ async function proofsHeld(run, p, folders, finals, nowMs, cache) {
 async function retireProofs(run, p, nowMs, budget, cache) {
   const days = effectiveProofDays(p.proof_retention_days, p.studio_days);
   const dueAt = proofsDeleteAt(p, days);
-  if (dueAt === null || dueAt > nowMs) return 'not_due';
   const owner = p.photographer_id;
   const now = new Date(nowMs).toISOString();
+  if (dueAt === null || dueAt > nowMs) {
+    // a candidate of the query's one-day slack, not due yet: off the list
+    // for a day, so a run's candidates are never all such rows
+    await run.DB.prepare(
+      'UPDATE projects SET proofs_delete_next_at = ? WHERE id = ? AND proofs_deleted_at IS NULL AND (proofs_delete_next_at IS NULL OR proofs_delete_next_at <= ?)'
+    ).bind(new Date(Math.min(dueAt ?? Infinity, nowMs + DAY_MS)).toISOString(), p.id, now).run();
+    return 'not_due';
+  }
   const lease = new Date(nowMs + PROOF_LEASE_MS).toISOString();
   // the claim: the row as read, still due, nobody else's run on it
   const claimed = await run.DB.prepare(
@@ -2952,7 +2969,10 @@ async function retireProofs(run, p, nowMs, budget, cache) {
   try { parsed = JSON.parse(p.folders); } catch {}
   const folders = pickFolders(parsed);
   const finals = pickFinals(p);
-  const reason = !folders ? 'bad_folders' : !finals ? 'bad_finals' : await proofsHeld(run, p, folders, finals, nowMs, cache);
+  // a top-level folder (`2026/`) is too wide to delete by schedule: skipped
+  const topLevel = folders && folders.some(f => f.split('/').filter(Boolean).length < 2);
+  const reason = !folders ? 'bad_folders' : topLevel ? 'top_level_folder' : !finals ? 'bad_finals'
+    : await proofsHeld(run, p, folders, finals, nowMs, cache);
   if (reason) {
     await run.DB.prepare('UPDATE projects SET proofs_delete_next_at = ? WHERE id = ? AND proofs_delete_next_at = ?')
       .bind(new Date(nowMs + PROOF_SKIP_RETRY_DAYS * DAY_MS).toISOString(), p.id, lease).run();
@@ -2961,7 +2981,14 @@ async function retireProofs(run, p, nowMs, budget, cache) {
   }
 
   const photos = bucketFor(run.env, owner, run.spend);
-  const proofKey = key => deletablePhotoKey(key) && folders.some(f => folderCovers(f, key)) && !finals.some(f => folderCovers(f, key));
+  const proofKey = key => proofOriginalKey(key) && folders.some(f => folderCovers(f, key)) && !finals.some(f => folderCovers(f, key));
+  // only what was there at the confirmation: an object uploaded later (a
+  // further shoot put into the folder), or one whose time cannot be read, stays
+  const confirmedMs = Date.parse(p.client_confirmed_at);
+  const uploadedBy = o => {
+    const at = o.uploaded instanceof Date ? o.uploaded.getTime() : Date.parse(o.uploaded);
+    return Number.isFinite(at) && Number.isFinite(confirmedMs) && at <= confirmedMs;
+  };
   const widths = new Set(THUMB_BUCKETS);
   for (let cursor, more = true; more;) {
     const page = await photos.list(cursor === undefined ? { prefix: THUMB_PREFIX, delimiter: '/' } : { prefix: THUMB_PREFIX, delimiter: '/', cursor });
@@ -2989,7 +3016,7 @@ async function retireProofs(run, p, nowMs, budget, cache) {
       const page = await photos.list(cursor === undefined ? { prefix: src.prefix } : { prefix: src.prefix, cursor });
       for (const o of page.objects || []) {
         const key = o.key;
-        if (typeof key !== 'string') continue;
+        if (typeof key !== 'string' || !uploadedBy(o)) continue;
         if (!src.thumb) {
           if (proofKey(key)) originals.add(key);
           continue;
@@ -3069,8 +3096,8 @@ async function runProofRetention(env, nowMs) {
       'p.proof_retention_days, p.proofs_deleted_at, p.proofs_delete_next_at, s.proof_retention_days AS studio_days ' +
       'FROM projects p LEFT JOIN studio_settings s ON s.photographer_id = p.photographer_id ' +
       'WHERE p.delivered_at IS NOT NULL AND p.client_confirmed_at IS NOT NULL AND p.proofs_deleted_at IS NULL ' +
-      'AND COALESCE(p.proof_retention_days, s.proof_retention_days, 0) > 0 ' +
-      'AND julianday(p.client_confirmed_at) + COALESCE(p.proof_retention_days, s.proof_retention_days, 0) <= julianday(?1) + 1 ' +
+      `AND ${PROOF_DAYS_SQL} > 0 ` +
+      `AND julianday(p.client_confirmed_at) + ${PROOF_DAYS_SQL} <= julianday(?1) + 1 ` +
       'AND (p.proofs_delete_next_at IS NULL OR p.proofs_delete_next_at <= ?1) ' +
       'ORDER BY p.proofs_delete_next_at IS NOT NULL, p.proofs_delete_next_at, p.client_confirmed_at, p.id LIMIT ?2'
     ).bind(now, PROOF_RUN_CANDIDATES).all());

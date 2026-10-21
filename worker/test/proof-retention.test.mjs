@@ -349,12 +349,12 @@ test('finals inside, equal to or around the proofs (edited by hand) — skipped 
   }
 });
 
-test('proofs around the finals (folders ["shoot/"] and finals shoot/精修/) — skipped, the finals untouched', async () => {
+test('proofs around the finals (folders ["shoot/"] and finals shoot/精修/) — skipped (a top-level folder), the finals untouched', async () => {
   const env = setup();
   await studio(env, 90);
   await confirmed(env);
   env.DB._db.prepare('UPDATE projects SET folders = ?').run(JSON.stringify(['shoot/']));
-  await skipped(env, 'finals_overlap');
+  await skipped(env, 'top_level_folder');
   for (const k of [F1, F2, F3, `_thumbs/400/${F1}.thumb`]) assert.ok(has(env, k));
 });
 
@@ -479,7 +479,7 @@ test('another photographer: B\'s due project deletes only under _t/B/; the defau
   // B's project on the same logical folders, with B's own copies
   const b = await confirmed(env);
   env.DB._db.prepare('UPDATE projects SET photographer_id = ? WHERE id = ?').run(B.id, b.id);
-  for (const k of [PA, PB, `_thumbs/400/${PA}.thumb`, F1]) env.imagepicker._store.set(`_t/${B.id}/${k}`, { key: k, body: 'B', contentType: 'image/jpeg', uploaded: new Date() });
+  for (const k of [PA, PB, `_thumbs/400/${PA}.thumb`, F1]) env.imagepicker._store.set(`_t/${B.id}/${k}`, { key: k, body: 'B', contentType: 'image/jpeg', uploaded: new Date(Date.now() - DAY) });
   // A's project also covers the same logical folder: other photographers' rows never count against B
   const bConfirmed = Date.parse(one(env, 'SELECT client_confirmed_at FROM projects WHERE id = ?', b.id).client_confirmed_at);
   await cron(env, bConfirmed + 90 * DAY);
@@ -619,7 +619,7 @@ test('after the delete every setting change is 409 proofs_deleted', async () => 
 test('a new studio number never deletes sooner than 14 days after it was set (old confirmed projects get a notice window)', async () => {
   const env = setup();
   const p = await confirmed(env);
-  env.DB._db.prepare('UPDATE projects SET client_confirmed_at = ?').run(iso(Date.now() - 400 * DAY));
+  env.DB._db.prepare('UPDATE projects SET client_confirmed_at = ?').run(iso(Date.now() - 200 * DAY));
   const set = Date.now();
   await studio(env, 90);
   const i = await info(env, p.id);
@@ -634,7 +634,7 @@ test('a new studio number never deletes sooner than 14 days after it was set (ol
 test('a new project number also waits 14 days from the press', async () => {
   const env = setup();
   const p = await confirmed(env);
-  env.DB._db.prepare('UPDATE projects SET client_confirmed_at = ?').run(iso(Date.now() - 400 * DAY));
+  env.DB._db.prepare('UPDATE projects SET client_confirmed_at = ?').run(iso(Date.now() - 200 * DAY));
   const set = Date.now();
   assert.equal((await retention(env, p.id, { days: 30 })).status, 200);
   await cron(env, set + 13 * DAY);
@@ -867,4 +867,75 @@ test('bucketFor.deleteMany: 1..1000 logical keys, each prefixed; a reserved or n
     for (const who of ['default', T]) assert.throws(() => bucketFor({ imagepicker: r2 }, who).deleteMany(bad), /R2/, JSON.stringify(bad)?.slice(0, 40));
   }
   assert.equal(r2._deletes.length, before);
+});
+
+// ─── security review fixes (2026-10-21) ───────────────────────────────────
+
+test('only what was uploaded by the confirmation goes: a file (and thumbnail) uploaded after it stays', async () => {
+  const LATE = 'shoot/毛片/2027續拍/n.jpg';
+  const env = setup();
+  await studio(env, 90);
+  await confirmed(env);
+  const c = confirmedAt(env);
+  for (const k of [LATE, `_thumbs/400/${LATE}.thumb`]) env.imagepicker._store.set(k, { key: k, body: 'L', contentType: 'image/jpeg', uploaded: new Date(c + 1000) });
+  // an original whose upload time cannot be read stays too
+  env.imagepicker._store.set('shoot/毛片/odd.jpg', { key: 'x', body: 'O', contentType: 'image/jpeg', uploaded: new Date(NaN) });
+  await cron(env, c + 90 * DAY);
+  assert.ok(has(env, LATE), 'uploaded after the confirmation');
+  assert.ok(has(env, `_thumbs/400/${LATE}.thumb`));
+  assert.ok(has(env, 'shoot/毛片/odd.jpg'));
+  assert.ok(!has(env, PA), 'positive control');
+  assert.deepEqual(events(env, 'proofs_deleted')[0].data, { folders: [PROOF], originals: 3, thumbs: 6 });
+});
+
+test('a top-level proof folder (one segment, e.g. 2026/) is skipped as top_level_folder', async () => {
+  const env = setup({ objects: { ...WORLD, '2026/a.jpg': 'A26', '_thumbs/400/2026/a.jpg.thumb': 'T26' } });
+  await studio(env, 90);
+  await confirmed(env);
+  env.DB._db.prepare('UPDATE projects SET folders = ?').run(JSON.stringify(['2026/']));
+  await skipped(env, 'top_level_folder');
+  assert.ok(has(env, '2026/a.jpg'));
+});
+
+test('a key with any `_` path segment is never deleted (shoot/毛片/_備份/z.jpg and its thumbnail stay)', async () => {
+  const HID = 'shoot/毛片/_備份/z.jpg';
+  const env = setup({ objects: { ...WORLD, [HID]: 'H', [`_thumbs/400/${HID}.thumb`]: 'HT' } });
+  await studio(env, 90);
+  await confirmed(env);
+  await cron(env, confirmedAt(env) + 90 * DAY);
+  assert.ok(has(env, HID));
+  assert.ok(has(env, `_thumbs/400/${HID}.thumb`));
+  assert.ok(!has(env, PA), 'positive control');
+});
+
+test('a project number the route never stores (1..13, a fraction, a string) reads as 0: never deleted', async () => {
+  for (const value of [1, 7, 13, 30.5, 'abc', -14]) {
+    const env = setup();
+    const p = await confirmed(env);
+    env.DB._db.prepare('UPDATE projects SET proof_retention_days = ?').run(value);
+    await cron(env, Date.now() + 9000 * DAY);
+    assert.deepEqual(env.imagepicker._deletes, [], String(value));
+    assert.equal((await info(env, p.id)).days, 0, String(value));
+    // the candidate query reads it as 0 as well: never even picked up
+    assert.equal(one(env, 'SELECT proofs_delete_next_at FROM projects').proofs_delete_next_at, null, String(value));
+  }
+});
+
+test('more than ten not-yet-due candidates do not keep a due project out (each is put off a day)', async () => {
+  const env = setup();
+  await studio(env, 90);
+  const p = await confirmed(env);
+  const now = Date.now();
+  env.DB._db.prepare('UPDATE projects SET client_confirmed_at = ? WHERE id = ?').run(iso(now - 91 * DAY), p.id);
+  // eleven projects due in 12 hours (inside the query's one-day slack), confirmed earlier, so sorted first
+  for (let i = 0; i < 11; i++) {
+    env.DB._db.prepare(
+      "INSERT INTO projects (id, title, folders, created_at, photographer_id, phase, delivered_at, final_folders, client_confirmed_at, proof_retention_days) " +
+      "VALUES (?, 'f', ?, ?, 'default', 'retouching', ?, ?, ?, 365)"
+    ).run(`filler-${i}`, JSON.stringify([`filler${i}/`]), iso(now), iso(now - 400 * DAY), JSON.stringify([`fillerfinal${i}/`]), iso(now - 365 * DAY + DAY / 2));
+  }
+  await cron(env, now);
+  await cron(env, now + 1000);
+  assert.ok(!has(env, PA), 'the due project was reached');
+  assert.ok(Date.parse(one(env, "SELECT proofs_delete_next_at FROM projects WHERE id = 'filler-0'").proofs_delete_next_at) > now);
 });
