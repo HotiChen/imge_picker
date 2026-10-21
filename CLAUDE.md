@@ -99,7 +99,8 @@ Commands:
 - Browser, related suites (fast): `NODE_PATH=/tmp/pwinstall/node_modules ONLY=<text in suite name> node test/run.mjs`
   (a filter matching nothing fails; `test/README.md`)
 - Browser, full suite (~10 min, 3 parallel workers): `NODE_PATH=/tmp/pwinstall/node_modules node test/run-parallel.mjs`
-  (`JOBS=4` is faster but less proven; a file that throws or hangs is reported as FAIL and the run goes on)
+  (`JOBS=4` is faster but less proven; a file that throws or hangs is reported as FAIL and the run goes on).
+  Size on 2026-10-21 (d713634): browser 114 files / 1353 suites (684 s, all green); worker 1831 tests.
   - Playwright lives outside the repo; Chromium at /opt/pw-browsers. In the cloud
     session `/tmp/pwinstall` does not exist: use `NODE_PATH=/opt/node-tools/node_modules`.
 - CI runs the worker suite only, not the browser suite.

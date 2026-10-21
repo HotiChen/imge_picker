@@ -5,7 +5,7 @@ and the pages' behaviour against fake Workers. The Worker's own tests are separa
 (`node --test "worker/test/*.test.mjs"`).
 
 ```
-NODE_PATH=/opt/node-tools/node_modules node test/run.mjs            # everything (minutes)
+NODE_PATH=/opt/node-tools/node_modules node test/run.mjs            # everything in one process (slow; for the full run use run-parallel.mjs below)
 ONLY='guest picking' NODE_PATH=/opt/node-tools/node_modules node test/run.mjs
 ```
 
@@ -36,13 +36,14 @@ reach): see `lib/layout-baseline.mjs`.
 | `run.mjs` | The runner: imports the harness, imports every `suites/*.mjs` in file-name order and calls its default export, then closes the browser and prints the summary / exit code. Nothing else belongs here. |
 | `lib/harness.mjs` | Starts the static file server (`base`) and Chromium (`browser`), defines `suite()`, holds the counters (`stats.failed`, `stats.ran`) and `ONLY`. |
 | `lib/env.mjs` | Plain shared constants and helpers: `ROOT`, `PIXEL`, `MOBILE`, touch gestures (`swipeTouch`, `pinchTouch`, `realTouch` ...), `BIG_PHOTO`, `CANVAS_PX`. |
-| `lib/*.mjs` (others) | Fakes and helpers used by **more than one** suite file: `pick-fake.mjs` (`pickFakeWorker`, the fake Worker most suites build on), `project-helpers.mjs`, `delivery-helpers.mjs`, `auth-mocks.mjs`, `dashboard-mocks.mjs`, `editor-mocks.mjs`, `orders-fake.mjs`, `guest-orders-fake.mjs` (S2 guest ordering routes), `revision-pins-fake.mjs` (revision pins, rounds, round thumbnails), `upload-fake.mjs` (upload.html with scripted per-attempt outcomes), `album-world.mjs` (fake Worker + book fixtures for the album preview), `layout-baseline.mjs` (compare a layout with a recorded baseline, tolerant only of fallback-font text metrics), `tour-settle.mjs` (wait until the guest tour ring has stopped moving). `upload-desktop-baseline.json` is a recorded desktop layout the upload phone suite compares against. **Fakes mirror the real routes** (status codes, order of checks, answer shapes): a fake that drifts from `worker/worker.js` makes a green test lie. |
+| `lib/*.mjs` (others) | Fakes and helpers used by **more than one** suite file: `pick-fake.mjs` (`pickFakeWorker`, the fake Worker most suites build on), `project-helpers.mjs`, `delivery-helpers.mjs`, `auth-mocks.mjs`, `dashboard-mocks.mjs`, `editor-mocks.mjs`, `orders-fake.mjs`, `guest-orders-fake.mjs` (S2 guest ordering routes), `revision-pins-fake.mjs` (revision pins, rounds, round thumbnails), `upload-fake.mjs` (upload.html with scripted per-attempt outcomes), `album-world.mjs` (fake Worker + book fixtures for the album preview), `layout-baseline.mjs` (compare a layout with a recorded baseline, tolerant only of fallback-font text metrics), `tour-settle.mjs` (wait until the guest tour ring has stopped moving), `co-picking-fake.mjs`, `photographer-fake.mjs`, `photo-delete-fake.mjs`, `review-stage.mjs`. `upload-desktop-baseline.json` is a recorded desktop layout the upload phone suite compares against. **Fakes mirror the real routes** (status codes, order of checks, answer shapes): a fake that drifts from `worker/worker.js` makes a green test lie. |
 | `suites/NN-<topic>.mjs` | The suites, grouped by topic. Helpers used by one file only stay at the top of that file. |
 
 Suites run in file-name order, and the order inside a file is the order they are written.
 The numbers only fix the order; a new file may take any unused number (or a letter suffix
-such as `16a-` to run right after `16-`). Today the files are `01-` to `56-` (55 files;
-**there is no `44-`**, a gap, not a missing file). Topics by number, roughly: 01–07 editor,
+such as `16a-` to run right after `16-`). On 2026-10-21 the files are `01-` to `99q-` (114 files, a full
+`run-parallel` run = 1353 suites; **there is no `44-` and no `94-`**, gaps, not missing files; after `99-` the
+new files take letters, `99a-` … `99q-`). Topics by number, roughly: 01–07 editor,
 XSS, share links, tokens, admin views, registration; 08–15 guest picking, project create,
 mobile preview, review view, dashboard/settings, guest UI and 確認完成; 16–21 admin delivery,
 revisions, guest downloads, products, operator, orders; 22–28 section collapse, retouch pins,
@@ -51,7 +52,10 @@ helpers, finals pins (37 client, 38 admin), bleed and shoot date, album bleed; 4
 filters, back buttons / rename, extra page price; 45–47 product interest, photographer phone
 pages, guest tour; 48–49 guest ordering (client, admin); 50–56 phone picker header, upload phone
 + retry, guest tour in the lightbox, album cover title / re-layout, desktop pick bar, share-link
-dialog. `ls test/suites` is the truth; this list is only a map.
+dialog; from 57 on, among others: operator photographers and invites (58, 75, 80), co-picking (65–67, 70, 71, 96),
+register / login (76, 77, 79, 83), photo delete (82), the 驗收頁 (91–93, 97), the project page (98–99o except 99b), photo
+expiry (99p), Space picks (99q).
+`ls test/suites` is the truth; this list is only a map.
 
 ## Adding a suite
 
