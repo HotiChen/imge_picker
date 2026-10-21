@@ -267,7 +267,7 @@ if (!ONLY || ONLY.split('|').some(t => t && U10.includes(t))) {
 const U6 = 'page titles and brand — the photographer pages say "<page> — Studio" and STUDIO, not five different names';
 if (!ONLY || ONLY.split('|').some(t => t && U6.includes(t))) {
   console.log(`\n# ${U6}`);
-  const PAGES = { 'admin.html': '選片專案', 'dashboard.html': '儀表板', 'orders.html': '訂單', 'settings.html': '設定', 'upload.html': '上傳照片', 'tutorial.html': '操作說明書', 'index.html': '選片' };
+  const PAGES = { 'admin.html': '選片專案', 'dashboard.html': '儀表板', 'orders.html': '訂單', 'settings.html': '設定', 'upload.html': '上傳照片', 'index.html': '選片' };
   const out = [];
   const ok = (n, c, d = '') => { if (!c) stats.failed++; out.push(`  ${c ? 'ok  ' : 'FAIL'}  ${n}${c ? '' : `   [${d}]`}`); };
   for (const [file, name] of Object.entries(PAGES)) {

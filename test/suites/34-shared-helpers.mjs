@@ -25,7 +25,7 @@ const scriptBlocks = html => [...html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/sc
 
 // ── 1. the helpers themselves, in a real page ───────────────────────────────
 await suite('util helpers — Util.fmtDate / todayTaipei / formatPrice: shapes, invalid input, Taipei midnight, money edge cases',
-  `${base}/tutorial.html`,
+  `${base}/register.html`,
   async page => {
     const out = [];
     const ok = okFn(out);
@@ -88,7 +88,7 @@ const COPY = /Intl\.DateTimeFormat|toLocaleString\(\s*['"]en-US['"]\s*\)|toLocal
 const COPY_SPACE = /NT\$ \$\{/;
 const stripComments = s => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '').replace(/<!--[\s\S]*?-->/g, '');
 await suite('util helpers — no Intl.DateTimeFormat / toLocaleString(en-US) copy is left outside js/util.js; callers delegate to Util',
-  `${base}/tutorial.html`,
+  `${base}/register.html`,
   async () => {
     const out = [];
     const ok = okFn(out);
@@ -130,7 +130,7 @@ await suite('util helpers — no Intl.DateTimeFormat / toLocaleString(en-US) cop
   });
 
 await suite('util helpers — every page that loads a Util-using script loads js/util.js first, once, with the same ?v= stamp',
-  `${base}/tutorial.html`,
+  `${base}/register.html`,
   async () => {
     const out = [];
     const ok = okFn(out);

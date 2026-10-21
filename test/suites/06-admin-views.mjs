@@ -251,7 +251,7 @@ let failed = 0;   // the asset-versions block below counts into this; folded int
 // pinned here — what is checked is that nothing was left behind when it moved.
 {
   console.log('\n# asset versions — every local asset on a page moves together');
-  const PAGES = ['index.html', 'upload.html', 'tutorial.html', 'admin.html', 'client-login.html',
+  const PAGES = ['index.html', 'upload.html', 'admin.html', 'client-login.html',
                  'home.html', 'dashboard.html', 'settings.html', 'orders.html', 'operator.html',
                  'book_editor/index.html', 'book_editor/view.html', 'r2_designer/index.html', 'register.html'];
   const lines = [];

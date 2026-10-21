@@ -31,7 +31,7 @@ const USERS = /(?:^|\/)(?:side-nav|orders-common|client-auth-check)\.js(?:\?|$)/
 
 // ── 1. the helper itself ────────────────────────────────────────────────────
 await suite('escHtml — the shared helper escapes & < > " \' ` and treats null / numbers sanely',
-  `${base}/tutorial.html`,
+  `${base}/register.html`,
   async page => {
     const out = [];
     const ok = okFn(out);
@@ -72,7 +72,7 @@ await suite('escHtml — the shared helper escapes & < > " \' ` and treats null 
 
 // ── 2. every page that uses the helper loads it first ───────────────────────
 await suite('escHtml — every page that loads side-nav / orders-common / client-auth-check (or calls escHtml inline) loads js/util.js first, with the same ?v= stamp',
-  `${base}/tutorial.html`,
+  `${base}/register.html`,
   async () => {
     const out = [];
     const ok = okFn(out);
@@ -104,7 +104,7 @@ await suite('escHtml — every page that loads side-nav / orders-common / client
 
 // ── 3. no local copy is left ────────────────────────────────────────────────
 await suite('escHtml — no local escHtml / esc definition is left in the pages or scripts (one function, in js/util.js)',
-  `${base}/tutorial.html`,
+  `${base}/register.html`,
   async () => {
     const out = [];
     const ok = okFn(out);

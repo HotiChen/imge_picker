@@ -33,7 +33,6 @@
 | `upload.html` | 上傳照片到 R2（手機版面、失敗的檔案可重試）；從專案進來（`?project=<id>`）時返回鍵回專案 |
 | `index.html` | 選圖介面：客人用選片連結開啟（首次使用導覽、選片、標示修改 pins、交件後的精修 gallery 與驗收頁、確認後的完成頁）；攝影師從專案的「看照片」進入是唯讀的 Review 模式（`js/project-view.js`，沒有標注工具，pins 列在右欄 / 照片下方） |
 | `client-login.html` | 客戶登入 |
-| `tutorial.html` | 操作說明 |
 | `ping.html` | 連線診斷 |
 | `book_editor/` | 相本排版：`index.html` 編輯器（自動排版、匯出 JPG ZIP）、`view.html` 客戶預覽 / 核准 |
 | `r2_designer/` | 自由排版畫布（Fabric.js） |
