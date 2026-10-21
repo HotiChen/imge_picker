@@ -109,7 +109,10 @@ test('guest expiry: delivered — {expires_at: null, days_left: null} for owner 
     assert.equal(res.headers.get('Cache-Control'), 'private, no-store');
     assert.equal(res.headers.get('Access-Control-Allow-Origin'), '*');
     const text = await res.text();
-    assert.deepEqual(JSON.parse(text), { expires_at: null, days_left: null });
+    const out = JSON.parse(text);
+    // the finals' date is gone; `proofs` is proof retention's (proof-retention.test.mjs), from D1 only
+    assert.deepEqual({ ...out, proofs: undefined }, { expires_at: null, days_left: null, proofs: undefined });
+    assert.deepEqual(Object.keys(out).sort(), ['days_left', 'expires_at', 'proofs']);
     for (const leak of ['shoot', '精修', '毛片', '.jpg', 'count', 'truncated', 'earliest']) assert.ok(!text.includes(leak), `leaked ${leak}`);
   }
   assert.deepEqual(calls, []);
@@ -123,7 +126,9 @@ test('guest expiry: picking, 取消交件 and 開放修改 — still null, and R
     const calls = countR2(env);
     const res = await guestExpiry(env, p.token);
     assert.equal(res.status, 200, String(action));
-    assert.deepEqual(await res.json(), { expires_at: null, days_left: null }, String(action));
+    const out = await res.json();
+    assert.equal(out.expires_at, null, String(action));
+    assert.equal(out.days_left, null, String(action));
     assert.deepEqual(calls, [], String(action));
   }
 });
@@ -133,7 +138,10 @@ test('guest expiry: folder / prefix / key in the query change nothing and ask R2
   const p = await delivered(env);
   const calls = countR2(env);
   const res = await guestExpiry(env, p.token, `?folder=other/&prefix=other/&key=${encodeURIComponent('other/x.jpg')}&folders=${encodeURIComponent(FINAL2)}`);
-  assert.deepEqual(await res.json(), { expires_at: null, days_left: null });
+  const out = await res.json();
+  assert.equal(out.expires_at, null);
+  assert.equal(out.days_left, null);
+  assert.ok(!JSON.stringify(out).includes('other'), 'nothing from the query');
   assert.deepEqual(calls, []);
 });
 

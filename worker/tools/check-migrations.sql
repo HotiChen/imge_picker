@@ -6,7 +6,7 @@
 -- （schema.sql = 基本表，或只寫在 worker/schema.sql 的索引：索引可直接複製 schema.sql 裡那一行
 --   CREATE INDEX IF NOT EXISTS … 執行；缺「表」請先問開發者，不要自己建）。
 -- 表不存在時只列「表」，不再列它的欄位。
--- 檢查項目：28 張表、37 個 ALTER 欄位、24 個索引。
+-- 檢查項目：28 張表、41 個 ALTER 欄位、24 個索引。
 WITH expected(n, from_file, kind, tbl, name) AS (VALUES
   (1, 'schema.sql', 'table', 'users', NULL),
   (2, 'schema.sql', 'table', 'permissions', NULL),
@@ -96,7 +96,11 @@ WITH expected(n, from_file, kind, tbl, name) AS (VALUES
   (86, '2026-10-18-photographer-invites.sql', 'index', 'photographer_invites', 'idx_photographer_invites_email'),
   (87, '2026-10-18-photographer-invites.sql', 'index', 'photographer_invites', 'idx_photographer_invites_used_by'),
   (88, '2026-10-20-project-events.sql', 'table', 'project_events', NULL),
-  (89, '2026-10-20-project-events.sql', 'index', 'project_events', 'idx_project_events_project')
+  (89, '2026-10-20-project-events.sql', 'index', 'project_events', 'idx_project_events_project'),
+  (90, '2026-10-21-proof-retention.sql', 'column', 'studio_settings', 'proof_retention_days'),
+  (91, '2026-10-21-proof-retention.sql', 'column', 'projects', 'proof_retention_days'),
+  (92, '2026-10-21-proof-retention.sql', 'column', 'projects', 'proofs_deleted_at'),
+  (93, '2026-10-21-proof-retention.sql', 'column', 'projects', 'proofs_delete_next_at')
 )
 SELECT e.from_file AS from_file,
        CASE e.kind

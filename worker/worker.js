@@ -934,6 +934,8 @@ function isInternalKey(key) {
 // BE B's object. Checked on the logical key, before the prefix, inside the
 // helper, so no route can forget it.
 const TENANT_PREFIX = '_t/';
+// R2's own limit on one batch delete (delete(keys[]))
+const R2_DELETE_BATCH_MAX = 1000;
 function isTenantKey(key) {
   return key === '_t' || key.startsWith(TENANT_PREFIX);
 }
@@ -954,9 +956,17 @@ function tenantPrefix(photographerId) {
 // read or write. A reserved key reads as missing (get / head: null; list:
 // nothing) and is refused for a write or a delete (throws; the upload route
 // answers 400 first). A list returns logical keys and only this
-// photographer's objects.
-function bucketFor(env, photographerId) {
-  const bucket = env.imagepicker;
+// photographer's objects. `meter` (the proof-retention cron's budget) is
+// called before every R2 call and may throw to stop it; no route passes one.
+function bucketFor(env, photographerId, meter = () => {}) {
+  const raw = env.imagepicker;
+  const bucket = {
+    get: (key, options) => { meter(); return raw.get(key, options); },
+    head: key => { meter(); return raw.head(key); },
+    put: (key, value, options) => { meter(); return raw.put(key, value, options); },
+    delete: keys => { meter(); return raw.delete(keys); },
+    list: options => { meter(); return raw.list(options); },
+  };
   const prefix = photographerId === DEFAULT_PHOTOGRAPHER_ID ? '' : tenantPrefix(photographerId);
   const reserved = key => typeof key !== 'string' || isTenantKey(key);
   // R2 key → logical key, or null when it is not this photographer's
@@ -979,6 +989,15 @@ function bucketFor(env, photographerId) {
       if (reserved(key)) throw new Error('R2: reserved key');
       return bucket.delete(prefix + key);
     },
+    // R2's batch delete, for the proof-retention cron only: an array of
+    // 1..R2_DELETE_BATCH_MAX logical keys, EVERY one checked as delete()
+    // checks one, before R2 is asked; any key that fails refuses the whole
+    // call (throws), so nothing can sweep a list past the check.
+    deleteMany(keys) {
+      if (!Array.isArray(keys) || !keys.length || keys.length > R2_DELETE_BATCH_MAX) throw new Error('R2: bad key list');
+      if (keys.some(reserved)) throw new Error('R2: reserved key');
+      return bucket.delete(keys.map(key => prefix + key));
+    },
     async list(options = {}) {
       const wanted = options.prefix ?? '';
       if (reserved(wanted)) return { objects: [], delimitedPrefixes: [], truncated: false, cursor: undefined };
@@ -1000,8 +1019,8 @@ function bucketFor(env, photographerId) {
 // Books have no owner yet (`_books/<id>.json` in R2, share links by book_id):
 // they are the default photographer's objects until a later batch gives them
 // one, and every book route is default-only until then.
-function bookBucket(env) {
-  return bucketFor(env, DEFAULT_PHOTOGRAPHER_ID);
+function bookBucket(env, meter) {
+  return bucketFor(env, DEFAULT_PHOTOGRAPHER_ID, meter);
 }
 
 // ─── Deleting one photo (docs/delivery.md "刪除照片") ──────────────────────
@@ -1682,7 +1701,7 @@ async function readStudioSettings(env, photographerId) {
   // default_extra_max, transfer_info, pick_link_message and the three
   // link_message_* arrive in hand-run migrations, in any order; until a
   // column exists it reads unset
-  const late = ['default_extra_max', 'transfer_info', 'pick_link_message', ...LINK_MESSAGE_FIELDS];
+  const late = ['default_extra_max', 'transfer_info', 'pick_link_message', ...LINK_MESSAGE_FIELDS, 'proof_retention_days'];
   const read = cols => env.DB.prepare(
     `SELECT studio_name, booking_url, default_pick_limit, default_extra_price${cols}, logo IS NOT NULL AS has_logo, logo_type, logo_updated_at, updated_at FROM studio_settings WHERE photographer_id = ?`
   ).bind(photographerId).first();
@@ -1715,6 +1734,10 @@ async function readStudioSettings(env, photographerId) {
     ...Object.fromEntries(LINK_MESSAGE_FIELDS.map(f => [f, row?.[f] ?? null])),
     // what a new project gets when the create body leaves extra_max out
     effective_default_extra_max: isExtraMax(extraMax) ? extraMax : EXTRA_MAX_DEFAULT,
+    // proof retention's studio default (docs/delivery.md): 0 / 90 / 180 /
+    // 365 days after the client's confirmation; 0 = never (also unset, and
+    // before the migration). Admin-only
+    proof_retention_days: studioProofDaysValue(row?.proof_retention_days ?? 0),
     has_logo: hasLogo,
     logo_type: hasLogo ? row.logo_type : null,
     logo_updated_at: hasLogo ? row.logo_updated_at : null,
@@ -2660,6 +2683,420 @@ function finalFolders(value) {
 // the pages hide the line on null — and never ask R2 anything.
 const NO_EXPIRY = Object.freeze({ expires_at: null, earliest_uploaded: null, count: null, truncated: false });
 
+// ─── Proof retention (docs/delivery.md, "Proof retention") ───────────────────
+// The bucket no longer deletes anything by itself (the 180-day lifecycle rule
+// is to be removed): the Worker's daily cron deletes a project's PROOFS —
+// the originals under projects.folders and their `_thumbs/<w>/…` thumbnails —
+// N days after the client confirmed the delivery (client_confirmed_at).
+// Finals are never deleted; no D1 row is deleted or changed but the
+// project's two bookkeeping columns. N: the project's own
+// proof_retention_days (NULL = the studio's, 0 = never) else the studio's
+// (0 / 90 / 180 / 365, NULL = 0). Default 0 everywhere: nothing is ever
+// deleted until the photographer picks a number.
+const PROOF_RETENTION_STUDIO_CHOICES = [0, 90, 180, 365];
+// a project's own number, when not 0: at least the notice window, so the
+// photographer always has PROOF_NOTICE_DAYS to postpone after a confirmation
+const PROOF_RETENTION_MIN_DAYS = 14;
+const PROOF_RETENTION_MAX_DAYS = 3650;
+// 「即將刪除」: the pages show the reminder this many days before
+const PROOF_NOTICE_DAYS = 14;
+// 延後: the effective number + this, and never sooner than this from the press
+const PROOF_POSTPONE_DAYS = 30;
+// a project the checks refused waits this long before it is checked again
+const PROOF_SKIP_RETRY_DAYS = 7;
+// one run's hold on a project: another run (a parallel or a retried one)
+// leaves it alone until this has passed
+const PROOF_LEASE_MS = 60 * 60000;
+// Every D1 statement and R2 call of one cron run counts against this (the
+// Workers Free plan allows a request 50 subrequests; the strict reading, as
+// ALBUM_SCAN_MAX). A run that would pass it stops; the next day's run goes on.
+const PROOF_RUN_CALLS_MAX = 45;
+// at most this many projects per run, and only while this many calls are left
+const PROOF_RUN_PROJECTS_MAX = 5;
+const PROOF_RUN_PROJECT_MIN_CALLS = 12;
+// rows the cron reads as candidates per run (the JS check decides)
+const PROOF_RUN_CANDIDATES = 10;
+const DAY_MS = 86400000;
+const PROOF_RETENTION_UNAVAILABLE = { error: '毛片自動刪除功能尚未啟用', code: 'proof_retention_unavailable' };
+const PROOF_RETENTION_COLUMNS = ['proof_retention_days', 'proofs_deleted_at', 'proofs_delete_next_at'];
+
+// The days in effect for a project: its own number (a whole 0..MAX) when it
+// has one, else the studio's when that is one of the choices. Anything else
+// stored (edited by hand) reads as 0, never: fail closed.
+function effectiveProofDays(projectDays, studioDays) {
+  if (projectDays !== null && projectDays !== undefined) {
+    return Number.isSafeInteger(projectDays) && projectDays >= 0 && projectDays <= PROOF_RETENTION_MAX_DAYS ? projectDays : 0;
+  }
+  return PROOF_RETENTION_STUDIO_CHOICES.includes(studioDays) ? studioDays : 0;
+}
+const studioProofDaysValue = v => (PROOF_RETENTION_STUDIO_CHOICES.includes(v) ? v : 0);
+
+// When the cron may delete `project`'s proofs (ms), or null: never while not
+// delivered (delivered_at), not confirmed, already deleted, or N = 0.
+// confirmed + N days, but never before proofs_delete_next_at (a lease, a
+// skip's wait, a new setting's notice floor). A date that does not parse is
+// null (fail closed).
+function proofsDeleteAt(project, days) {
+  if (!project.delivered_at || !project.client_confirmed_at || project.proofs_deleted_at || !(days > 0)) return null;
+  const confirmed = Date.parse(project.client_confirmed_at);
+  if (!Number.isFinite(confirmed)) return null;
+  let at = confirmed + days * DAY_MS;
+  if (project.proofs_delete_next_at) {
+    const floor = Date.parse(project.proofs_delete_next_at);
+    if (!Number.isFinite(floor)) return null;
+    if (floor > at) at = floor;
+  }
+  return at;
+}
+
+// The photographer's view (admin detail): everything from D1, R2 is not asked.
+function proofRetentionInfo(project, studioDays, available, nowMs) {
+  const projectDays = available ? project.proof_retention_days ?? null : null;
+  const studio = available ? studioProofDaysValue(studioDays) : 0;
+  const days = available ? effectiveProofDays(projectDays, studio) : 0;
+  const at = available ? proofsDeleteAt(project, days) : null;
+  return {
+    available,
+    days,
+    source: projectDays === null ? 'studio' : 'project',
+    project_days: projectDays,
+    studio_days: studio,
+    proofs_delete_at: at === null ? null : new Date(at).toISOString(),
+    days_left: at === null ? null : Math.max(0, Math.ceil((at - nowMs) / DAY_MS)),
+    notice: at !== null && at - nowMs <= PROOF_NOTICE_DAYS * DAY_MS,
+    proofs_deleted_at: available ? project.proofs_deleted_at ?? null : null,
+  };
+}
+
+// The guest's view (GET /api/pick/expiry): dates and whole days only, never
+// a folder, a key or where the number came from. can_download: whether this
+// caller may download proof originals now (the switch, the seat, not deleted).
+function guestProofsInfo(project, studio, isOwner, nowMs) {
+  const i = proofRetentionInfo(project, studio.days, studio.ok && projectHasRetention(project), nowMs);
+  return {
+    proofs_delete_at: i.proofs_delete_at,
+    days_left: i.days_left,
+    notice: i.notice,
+    proofs_deleted_at: i.proofs_deleted_at,
+    can_download: project.allow_proof_download === 1 && !!isOwner && !i.proofs_deleted_at,
+  };
+}
+
+// a project row (SELECT *) from a database that has had the migration
+const projectHasRetention = row => !!row && PROOF_RETENTION_COLUMNS.every(c => c in row);
+
+// {ok, days}: the studio's stored number (0 when none); ok false before the migration
+async function studioProofDays(env, photographerId) {
+  try {
+    const row = await env.DB.prepare('SELECT proof_retention_days FROM studio_settings WHERE photographer_id = ?')
+      .bind(photographerId).first();
+    return { ok: true, days: studioProofDaysValue(row?.proof_retention_days ?? 0) };
+  } catch (e) {
+    if (isMissingSchema(e)) return { ok: false, days: 0 };
+    throw e;
+  }
+}
+
+// ── the cron ──
+class ProofBudgetSpent extends Error {}
+
+// env.DB as one run sees it: every call spends one from the run's budget
+// first, and past it throws instead of calling. (R2: bucketFor's meter.)
+function budgetedDB(db, spend) {
+  const wrap = st => ({
+    first: (...a) => { spend(); return st.first(...a); },
+    all: (...a) => { spend(); return st.all(...a); },
+    run: (...a) => { spend(); return st.run(...a); },
+  });
+  return { prepare(sql) { const st = db.prepare(sql); return { ...wrap(st), bind: (...a) => wrap(st.bind(...a)) }; } };
+}
+
+// The albums' JSON texts (the default photographer's `_books/`), read once
+// per run, as photoInAlbum lists them; null when there are more than
+// ALBUM_SCAN_MAX (cannot tell, so every default project is skipped).
+async function albumTexts(run) {
+  const books = bookBucket(run.env, run.spend);
+  const listed = new Set();
+  let cursor;
+  let truncated = true;
+  while (truncated) {
+    const page = await books.list(cursor === undefined ? { prefix: '_books/' } : { prefix: '_books/', cursor });
+    for (const o of page.objects || []) if (o.key.endsWith('.json')) listed.add(o.key);
+    cursor = page.cursor;
+    truncated = page.truncated && cursor !== undefined;
+  }
+  const names = [...listed].filter(k => !(k.endsWith('_status.json') && listed.has(k.slice(0, -'_status.json'.length) + '.json')));
+  if (names.length > ALBUM_SCAN_MAX) return null;
+  const texts = [];
+  for (const name of names) {
+    const obj = await books.get(name);
+    if (obj) texts.push(await obj.text());
+  }
+  return texts;
+}
+
+// Why `p`'s proof folders may not be deleted, or null. `folders`: the
+// project's proofs; `finals`: its delivered finals. Only `p`'s own
+// photographer's rows count (another photographer's same folder names are
+// other objects, under another prefix); the client links, client accounts and
+// albums are the default photographer's. A value that cannot be read counts
+// as holding the folder. Missing table / column: check_unavailable.
+async function proofsHeld(run, p, folders, finals, nowMs, cache) {
+  const owner = p.photographer_id;
+  const overlap = (a, b) => folderCovers(a, b) || folderCovers(b, a);
+  const touches = f => folders.some(mine => overlap(mine, f));
+  // a folders column: JSON array of folders (NULL = none)
+  const columnTouches = value => {
+    if (value === null || value === undefined) return false;
+    let v;
+    try { v = JSON.parse(value); } catch { return true; }
+    if (!Array.isArray(v)) return true;
+    return v.some(f => typeof f !== 'string' || touches(f));
+  };
+  // a value holding photo keys: any string in it that names a folder, as is or URL-encoded
+  const names = value => folders.some(f => albumNames(value, f));
+  if (finals.some(touches)) return 'finals_overlap';
+  try {
+    const { results: projects } = await run.DB.prepare('SELECT id, folders, final_folders FROM projects WHERE photographer_id = ?')
+      .bind(owner).all();
+    for (const o of projects) {
+      if (o.id === p.id) {
+        if (columnTouches(o.final_folders)) return 'finals_overlap';
+        continue;
+      }
+      if (columnTouches(o.folders) || columnTouches(o.final_folders)) return 'shared_with_project';
+    }
+    // every round's frozen finals (this project's too), and the keys another
+    // project's rounds and submissions hold
+    const { results: records } = await run.DB.prepare(
+      "SELECT r.project_id AS pid, 'finals' AS what, r.finals AS v FROM revision_requests r JOIN projects q ON q.id = r.project_id " +
+      'WHERE q.photographer_id = ?1 AND r.finals IS NOT NULL ' +
+      "UNION ALL SELECT r.project_id, 'keys', r.marks FROM revision_requests r JOIN projects q ON q.id = r.project_id " +
+      'WHERE q.photographer_id = ?1 AND r.marks IS NOT NULL AND r.project_id <> ?2 ' +
+      "UNION ALL SELECT s.project_id, 'keys', s.photo_keys FROM submissions s JOIN projects q ON q.id = s.project_id " +
+      'WHERE q.photographer_id = ?1 AND s.project_id <> ?2'
+    ).bind(owner, p.id).all();
+    for (const r of records) {
+      if (r.what === 'finals' ? columnTouches(r.v) : names(parsedOrText(r.v))) {
+        return r.what === 'finals' && r.pid === p.id ? 'finals_overlap' : 'shared_with_project';
+      }
+    }
+    // every live link but this project's own pick links, whose owner is
+    // shareOwner's (a pick link its project's photographer; any other row its
+    // photographer_id, NULL = the default). Before the owner column every
+    // row counts as ours (fail closed).
+    const now = new Date(nowMs).toISOString();
+    const tokenRows = withOwner => run.DB.prepare(
+      `SELECT t.kind, t.folders, ${withOwner ? 't.photographer_id' : 'NULL'} AS owner, ${withOwner ? 1 : 0} AS owner_known, ` +
+      'q.photographer_id AS project_owner FROM share_tokens t LEFT JOIN projects q ON q.id = t.project_id ' +
+      "WHERE t.revoked_at IS NULL AND t.expires_at > ? AND NOT (t.kind = 'pick' AND t.project_id IS NOT NULL AND t.project_id = ?)"
+    ).bind(now, p.id).all();
+    const { results: tokens } = await withoutMissingColumn(() => tokenRows(true), () => tokenRows(false));
+    const ours = t => !t.owner_known || shareOwner({
+      kind: t.kind, photographer_id: t.owner, project: t.project_owner === null ? null : { photographer_id: t.project_owner },
+    }) === owner;
+    if (tokens.some(t => ours(t) && columnTouches(t.folders))) return 'shared_with_link';
+    if (isDefaultOwner(owner)) {
+      const { results: users } = await run.DB.prepare("SELECT folder_path FROM users WHERE folder_path IS NOT NULL AND folder_path <> ''").all();
+      for (const u of users) {
+        const f = parseClientFolders(u.folder_path);
+        if (f === null || f.some(touches)) return 'shared_with_client_account';
+      }
+    }
+    // every order line of this photographer's, any status (photoLock's rule)
+    const orderLines = withLayout => run.DB.prepare(
+      `SELECT i.photo_keys, ${withLayout ? "i.kind = 'album' AND i.layout IS NOT NULL" : '0'} AS all_finals, q.final_folders ` +
+      'FROM order_items i JOIN orders o ON o.id = i.order_id ' +
+      'LEFT JOIN projects q ON q.id = o.project_id AND q.photographer_id = o.photographer_id WHERE o.photographer_id = ?'
+    ).bind(owner).all();
+    const { results: lines } = await withoutMissingColumn(() => orderLines(true), () => orderLines(false));
+    if (lines.some(l => names(parsedOrText(l.photo_keys)) || (l.all_finals === 1 && columnTouches(l.final_folders)))) return 'in_order';
+  } catch (e) {
+    if (isMissingSchema(e)) return 'check_unavailable';
+    throw e;
+  }
+  if (isDefaultOwner(owner)) {
+    if (cache.albums === undefined) cache.albums = await albumTexts(run);
+    if (cache.albums === null) return 'albums_unchecked';
+    for (const text of cache.albums) {
+      const data = parsedOrText(text);
+      const cf = data && typeof data === 'object' ? data.clientFolders : undefined;
+      if (folders.some(f => text.includes(f)) || names(data) ||
+          (cf !== undefined && (!Array.isArray(cf) || cf.some(f => typeof f !== 'string' || touches(f))))) return 'in_album';
+    }
+  }
+  return null;
+}
+
+// One project's turn. Returns what happened ('deleted', 'partial', 'skipped',
+// 'busy', 'changed', 'not_due', 'not_logged'). Throws ProofBudgetSpent when the
+// run's budget is spent (the lease stays, the next run goes on). The keys
+// deleted are only ever what bucketFor(run, p.photographer_id) lists under
+// the project's own validated proof folders, each re-checked: a photo upload
+// key inside a proof folder and in no finals folder, or a thumbnail of one.
+async function retireProofs(run, p, nowMs, budget, cache) {
+  const days = effectiveProofDays(p.proof_retention_days, p.studio_days);
+  const dueAt = proofsDeleteAt(p, days);
+  if (dueAt === null || dueAt > nowMs) return 'not_due';
+  const owner = p.photographer_id;
+  const now = new Date(nowMs).toISOString();
+  const lease = new Date(nowMs + PROOF_LEASE_MS).toISOString();
+  // the claim: the row as read, still due, nobody else's run on it
+  const claimed = await run.DB.prepare(
+    'UPDATE projects SET proofs_delete_next_at = ? WHERE id = ? AND photographer_id = ? AND proofs_deleted_at IS NULL ' +
+    'AND delivered_at = ? AND client_confirmed_at = ? AND (proofs_delete_next_at IS NULL OR proofs_delete_next_at <= ?)'
+  ).bind(lease, p.id, owner, p.delivered_at, p.client_confirmed_at, now).run();
+  if (!claimed.meta?.changes) return 'busy';
+
+  let parsed = null;
+  try { parsed = JSON.parse(p.folders); } catch {}
+  const folders = pickFolders(parsed);
+  const finals = pickFinals(p);
+  const reason = !folders ? 'bad_folders' : !finals ? 'bad_finals' : await proofsHeld(run, p, folders, finals, nowMs, cache);
+  if (reason) {
+    await run.DB.prepare('UPDATE projects SET proofs_delete_next_at = ? WHERE id = ? AND proofs_delete_next_at = ?')
+      .bind(new Date(nowMs + PROOF_SKIP_RETRY_DAYS * DAY_MS).toISOString(), p.id, lease).run();
+    await logProjectEvent(run, p.id, 'proofs_delete_skipped', 'system', now, { reason, folders });
+    return 'skipped';
+  }
+
+  const photos = bucketFor(run.env, owner, run.spend);
+  const proofKey = key => deletablePhotoKey(key) && folders.some(f => folderCovers(f, key)) && !finals.some(f => folderCovers(f, key));
+  const widths = new Set(THUMB_BUCKETS);
+  for (let cursor, more = true; more;) {
+    const page = await photos.list(cursor === undefined ? { prefix: THUMB_PREFIX, delimiter: '/' } : { prefix: THUMB_PREFIX, delimiter: '/', cursor });
+    for (const d of page.delimitedPrefixes || []) {
+      const m = /^_thumbs\/(\d+)\/$/.exec(d);
+      if (m) widths.add(Number(m[1]));
+    }
+    cursor = page.cursor;
+    more = !!page.truncated && cursor !== undefined;
+  }
+  const sources = [
+    ...folders.map(f => ({ prefix: f, thumb: false })),
+    ...[...widths].sort((a, b) => a - b).flatMap(w => folders.map(f => ({ prefix: `${THUMB_PREFIX}${w}/${f}`, thumb: true }))),
+  ];
+  const originals = new Set();
+  const thumbs = new Set();
+  // after the listing: the summary, the last check, the deletes, then at most three for the end
+  const callsAfter = n => 2 + Math.ceil(n / R2_DELETE_BATCH_MAX) + 3;
+  let complete = true;
+  listing: for (const src of sources) {
+    let cursor;
+    do {
+      // one more page may bring up to a batch more keys
+      if (budget.left < 1 + callsAfter(originals.size + thumbs.size + R2_DELETE_BATCH_MAX)) { complete = false; break listing; }
+      const page = await photos.list(cursor === undefined ? { prefix: src.prefix } : { prefix: src.prefix, cursor });
+      for (const o of page.objects || []) {
+        const key = o.key;
+        if (typeof key !== 'string') continue;
+        if (!src.thumb) {
+          if (proofKey(key)) originals.add(key);
+          continue;
+        }
+        const m = /^_thumbs\/\d+\/(.+)\.thumb$/.exec(key);
+        if (m && proofKey(m[1])) thumbs.add(key);
+      }
+      cursor = page.truncated ? page.cursor : undefined;
+      if (page.truncated && cursor === undefined) { complete = false; break listing; }
+    } while (cursor !== undefined);
+  }
+
+  // the summary, before anything is deleted; no summary, no delete
+  const counts = { originals: originals.size, thumbs: thumbs.size };
+  if (!(await logProjectEvent(run, p.id, 'proofs_delete_planned', 'system', now, { folders, ...counts, complete }))) return 'not_logged';
+  // the last check, right before the delete: the same delivery, the same
+  // confirmation, the same folders, the same number of days, still our
+  // lease. A 不要刪 / 延後, an undeliver, a reopen, a new number or another
+  // run since the claim changes one of them, and nothing is deleted.
+  const lease2 = new Date(nowMs + PROOF_LEASE_MS + 1).toISOString();
+  const still = await run.DB.prepare(
+    'UPDATE projects SET proofs_delete_next_at = ? WHERE id = ? AND photographer_id = ? AND proofs_deleted_at IS NULL AND proofs_delete_next_at = ? ' +
+    'AND delivered_at = ? AND client_confirmed_at = ? AND folders = ? AND final_folders = ? ' +
+    'AND COALESCE(proof_retention_days, (SELECT s.proof_retention_days FROM studio_settings s WHERE s.photographer_id = ?), 0) = ?'
+  ).bind(lease2, p.id, owner, lease, p.delivered_at, p.client_confirmed_at, p.folders, p.final_folders, owner, days).run();
+  if (!still.meta?.changes) return 'changed';
+  // originals first: a run cut short leaves thumbnails, never a photo without them
+  const keys = [...originals, ...thumbs];
+  for (let i = 0; i < keys.length; i += R2_DELETE_BATCH_MAX) await photos.deleteMany(keys.slice(i, i + R2_DELETE_BATCH_MAX));
+
+  if (!complete) {
+    await logProjectEvent(run, p.id, 'proofs_delete_partial', 'system', now, { folders, ...counts });
+    return 'partial';
+  }
+  const stamped = await run.DB.prepare(
+    'UPDATE projects SET proofs_deleted_at = ?, proofs_delete_next_at = NULL WHERE id = ? AND proofs_deleted_at IS NULL AND proofs_delete_next_at = ?'
+  ).bind(now, p.id, lease2).run();
+  if (!stamped.meta?.changes) return 'changed';
+  // the totals: this run's and every earlier partial run's
+  const total = { ...counts };
+  try {
+    const { results } = await run.DB.prepare("SELECT data FROM project_events WHERE project_id = ? AND kind = 'proofs_delete_partial'").bind(p.id).all();
+    for (const r of results) {
+      let d = null;
+      try { d = JSON.parse(r.data); } catch {}
+      total.originals += Number.isSafeInteger(d?.originals) ? d.originals : 0;
+      total.thumbs += Number.isSafeInteger(d?.thumbs) ? d.thumbs : 0;
+    }
+  } catch (e) {
+    if (e instanceof ProofBudgetSpent) throw e;
+  }
+  await logProjectEvent(run, p.id, 'proofs_deleted', 'system', now, { folders, ...total });
+  return 'deleted';
+}
+
+// The scheduled handler's work: one pass over the due projects, within the
+// budget. Idempotent and resumable: whatever a run did not finish, the next
+// one lists again (a deleted key is no longer listed) and goes on. Nothing in
+// it comes from a request.
+async function runProofRetention(env, nowMs) {
+  if (!env || !env.DB) return { ran: false, reason: 'unconfigured' };
+  const budget = { left: PROOF_RUN_CALLS_MAX };
+  const spend = () => {
+    if (budget.left <= 0) throw new ProofBudgetSpent('proof retention: budget spent');
+    budget.left--;
+  };
+  // what one run reads and writes through: D1 and R2, both on the budget
+  const run = { env, spend, DB: budgetedDB(env.DB, spend) };
+  const now = new Date(nowMs).toISOString();
+  let candidates;
+  try {
+    // coarse (a day early is fine): retireProofs decides to the millisecond.
+    // Names every column of the migration: before it, this throws and the
+    // run ends here, before R2.
+    ({ results: candidates } = await run.DB.prepare(
+      'SELECT p.id, p.photographer_id, p.folders, p.final_folders, p.delivered_at, p.client_confirmed_at, ' +
+      'p.proof_retention_days, p.proofs_deleted_at, p.proofs_delete_next_at, s.proof_retention_days AS studio_days ' +
+      'FROM projects p LEFT JOIN studio_settings s ON s.photographer_id = p.photographer_id ' +
+      'WHERE p.delivered_at IS NOT NULL AND p.client_confirmed_at IS NOT NULL AND p.proofs_deleted_at IS NULL ' +
+      'AND COALESCE(p.proof_retention_days, s.proof_retention_days, 0) > 0 ' +
+      'AND julianday(p.client_confirmed_at) + COALESCE(p.proof_retention_days, s.proof_retention_days, 0) <= julianday(?1) + 1 ' +
+      'AND (p.proofs_delete_next_at IS NULL OR p.proofs_delete_next_at <= ?1) ' +
+      'ORDER BY p.proofs_delete_next_at IS NOT NULL, p.proofs_delete_next_at, p.client_confirmed_at, p.id LIMIT ?2'
+    ).bind(now, PROOF_RUN_CANDIDATES).all());
+  } catch (e) {
+    if (isMissingSchema(e)) return { ran: false, reason: 'unavailable' };
+    throw e;
+  }
+  const done = [];
+  const cache = {};
+  let turns = 0;
+  for (const p of candidates || []) {
+    if (turns >= PROOF_RUN_PROJECTS_MAX || budget.left < PROOF_RUN_PROJECT_MIN_CALLS) break;
+    let result;
+    try {
+      result = await retireProofs(run, p, nowMs, budget, cache);
+    } catch (e) {
+      if (e instanceof ProofBudgetSpent) { done.push({ id: p.id, result: 'budget' }); break; }
+      console.error('proof retention:', p.id, e?.message || e);
+      result = 'error';
+    }
+    if (result !== 'not_due') turns++;
+    done.push({ id: p.id, result });
+  }
+  return { ran: true, projects: done, calls: PROOF_RUN_CALLS_MAX - budget.left };
+}
+
 // The finals a project is delivered with, or null when it is not delivered.
 // Delivered needs both the stamp and a readable snapshot: a stamp from before
 // this feature (no snapshot) or a snapshot that no longer parses is not a
@@ -2794,13 +3231,17 @@ function resolveRevisionsIfConfirmed(env, projectId, at, ownerId) {
 // locked database — is swallowed, so the log never fails or changes an
 // action. The cost: a crash between the write and this insert loses that one
 // event. `data`: folders and phases only, never a name, token or key.
+// true when the row landed: the proof-retention cron deletes nothing unless
+// its summary did (actor 'system' for its rows).
 const PROJECT_EVENTS_MAX = 200;
 async function logProjectEvent(env, projectId, kind, actor, at, data = null) {
   try {
     await env.DB.prepare('INSERT INTO project_events (project_id, at, kind, actor, data) VALUES (?, ?, ?, ?, ?)')
       .bind(projectId, at, kind, actor, data == null ? null : JSON.stringify(data)).run();
+    return true;
   } catch (e) {
     if (!isMissingSchema(e)) console.error('project event not logged:', kind, e?.message || e);
+    return false;
   }
 }
 
@@ -3902,6 +4343,18 @@ export default {
     if (unauthorized && !GUARDED.has(request)) return unauthorized();
     return response;
   },
+  // The daily Cron Trigger (worker/wrangler.toml [triggers]): proof
+  // retention (docs/delivery.md, "Proof retention"). Its time is the
+  // controller's scheduledTime; it takes nothing else from outside.
+  async scheduled(controller, env, ctx) {
+    const at = Number(controller?.scheduledTime);
+    try {
+      return await runProofRetention(env, Number.isFinite(at) ? at : Date.now());
+    } catch (e) {
+      console.error('proof retention run failed:', e?.message || e);
+      return { ran: false, reason: 'error' };
+    }
+  },
 };
 
 async function routeRequest(request, env, ctx) {
@@ -4732,6 +5185,113 @@ async function routeRequest(request, env, ctx) {
       return jsonOk({ events }, 200, ADMIN_ONLY_HEADERS);
     }
 
+    // POST /api/admin/projects/:id/proofs-retention — proof retention for one
+    // project (docs/delivery.md, "Proof retention"). Exactly one of
+    //   {days: null}            follow the studio's number
+    //   {days: 0}               never delete (same as {action: 'never'})
+    //   {days: 14..3650}        this many days after the client's confirmation
+    //   {action: 'postpone'}    the days in effect + 30 (409 proofs_not_scheduled
+    //                           when that is 0; 409 retention_too_long past 3650)
+    //   {action: 'never'}       0
+    // Anything else, an extra key above all, is 400 invalid_body and writes
+    // nothing. The project's photographer only (another's is 404, as for
+    // none); another method 405 after that. Already deleted: 409
+    // proofs_deleted. A number > 0 never deletes sooner than 14 days (30 for
+    // postpone) from now (proofs_delete_next_at). One conditional UPDATE on
+    // the value read, so two presses at once cannot both apply; logged
+    // (proof_retention_set). Before the migration: 500
+    // proof_retention_unavailable.
+    if (pathParts[0] === 'api' && pathParts[1] === 'admin' && pathParts[2] === 'projects' && pathParts[3] &&
+        pathParts[4] === 'proofs-retention' && !pathParts[5]) {
+      const auth = await requirePhotographer(request, env); // scoped to the caller (who.id)
+      if (auth.refused) return auth.refused;
+      const who = auth.who;
+      if (!env.DB) return jsonErr('DB not configured', 500);
+      const project = await env.DB.prepare('SELECT * FROM projects WHERE id = ? AND photographer_id = ?')
+        .bind(pathParts[3], who.id).first();
+      if (!project) return jsonErr('Not found', 404);
+      if (request.method !== 'POST') return jsonOk({ error: 'Method not allowed' }, 405, { ...ADMIN_ONLY_HEADERS, Allow: 'POST' });
+      let body = null;
+      try { body = await request.json(); } catch {}
+      const keys = isPlainObject(body) ? Object.keys(body) : [];
+      const daysOk = v => v === null || v === 0 ||
+        (Number.isSafeInteger(v) && v >= PROOF_RETENTION_MIN_DAYS && v <= PROOF_RETENTION_MAX_DAYS);
+      const action = keys.length === 1 && keys[0] === 'days' && daysOk(body.days) ? 'set'
+        : keys.length === 1 && keys[0] === 'action' && (body.action === 'postpone' || body.action === 'never') ? body.action : null;
+      if (!action) {
+        return jsonOk({
+          error: `Send one of {days: null | 0 | ${PROOF_RETENTION_MIN_DAYS}..${PROOF_RETENTION_MAX_DAYS}}, {action: 'postpone' | 'never'}`,
+          code: 'invalid_body',
+        }, 400, ADMIN_ONLY_HEADERS);
+      }
+      const studio = await studioProofDays(env, who.id);
+      if (!studio.ok || !projectHasRetention(project)) return jsonOk(PROOF_RETENTION_UNAVAILABLE, 500, ADMIN_ONLY_HEADERS);
+      if (project.proofs_deleted_at) {
+        return jsonOk({ error: '毛片已依設定刪除', code: 'proofs_deleted' }, 409, ADMIN_ONLY_HEADERS);
+      }
+      const previous = project.proof_retention_days ?? null;
+      let next;
+      if (action === 'set') next = body.days;
+      else if (action === 'never') next = 0;
+      else {
+        const current = effectiveProofDays(previous, studio.days);
+        if (current <= 0) return jsonOk({ error: '這個專案沒有設定自動刪除，不需要延後', code: 'proofs_not_scheduled' }, 409, ADMIN_ONLY_HEADERS);
+        next = current + PROOF_POSTPONE_DAYS;
+        if (next > PROOF_RETENTION_MAX_DAYS) {
+          return jsonOk({ error: `保存天數最多 ${PROOF_RETENTION_MAX_DAYS} 天`, code: 'retention_too_long', max: PROOF_RETENTION_MAX_DAYS }, 409, ADMIN_ONLY_HEADERS);
+        }
+      }
+      const nowMs = Date.now();
+      const effective = effectiveProofDays(next, studio.days);
+      // the floor: a number in effect never deletes sooner than this
+      const floor = effective > 0
+        ? new Date(nowMs + (action === 'postpone' ? PROOF_POSTPONE_DAYS : PROOF_NOTICE_DAYS) * DAY_MS).toISOString() : null;
+      const result = await env.DB.prepare(
+        'UPDATE projects SET proof_retention_days = ?1, proofs_delete_next_at = CASE WHEN ?2 IS NOT NULL AND ' +
+        '(proofs_delete_next_at IS NULL OR proofs_delete_next_at < ?2) THEN ?2 ELSE proofs_delete_next_at END ' +
+        'WHERE id = ?3 AND photographer_id = ?4 AND proofs_deleted_at IS NULL AND proof_retention_days IS ?5'
+      ).bind(next, floor, project.id, who.id, previous).run();
+      if (!result.meta?.changes) {
+        return jsonOk({ error: '設定剛剛被改過，請重新整理再試一次', code: 'retention_changed' }, 409, ADMIN_ONLY_HEADERS);
+      }
+      await logProjectEvent(env, project.id, 'proof_retention_set', 'photographer', new Date(nowMs).toISOString(), { action, days: next, previous });
+      const row = await env.DB.prepare('SELECT * FROM projects WHERE id = ? AND photographer_id = ?').bind(project.id, who.id).first();
+      return jsonOk({ ok: true, proof_retention: proofRetentionInfo(row || project, studio.days, true, Date.now()) }, 200, ADMIN_ONLY_HEADERS);
+    }
+
+    // GET /api/admin/proofs-retention — the reminder list (docs/delivery.md,
+    // "Proof retention"): the caller's projects whose proofs go within 14
+    // days (or are overdue and not yet deleted), soonest first, with the
+    // studio's number. From D1 only. Before the migration {available: false,
+    // studio_days: 0, upcoming: []}. GET only (405).
+    if (pathParts[0] === 'api' && pathParts[1] === 'admin' && pathParts[2] === 'proofs-retention' && !pathParts[3]) {
+      const auth = await requirePhotographer(request, env); // scoped to the caller (who.id)
+      if (auth.refused) return auth.refused;
+      const who = auth.who;
+      if (request.method !== 'GET') return jsonOk({ error: 'Method not allowed' }, 405, { ...ADMIN_ONLY_HEADERS, Allow: 'GET' });
+      if (!env.DB) return jsonErr('DB not configured', 500);
+      const studio = await studioProofDays(env, who.id);
+      let found = null;
+      if (studio.ok) {
+        try {
+          ({ results: found } = await env.DB.prepare(
+            'SELECT id, title, delivered_at, client_confirmed_at, proof_retention_days, proofs_deleted_at, proofs_delete_next_at FROM projects ' +
+            'WHERE photographer_id = ? AND delivered_at IS NOT NULL AND client_confirmed_at IS NOT NULL AND proofs_deleted_at IS NULL'
+          ).bind(who.id).all());
+        } catch (e) {
+          if (!isMissingSchema(e)) throw e;
+        }
+      }
+      if (!found) return jsonOk({ available: false, studio_days: 0, upcoming: [] }, 200, ADMIN_ONLY_HEADERS);
+      const nowMs = Date.now();
+      const upcoming = found
+        .map(r => ({ r, i: proofRetentionInfo(r, studio.days, true, nowMs) }))
+        .filter(x => x.i.notice)
+        .sort((a, b) => Date.parse(a.i.proofs_delete_at) - Date.parse(b.i.proofs_delete_at) || (a.r.id < b.r.id ? -1 : 1))
+        .map(({ r, i }) => ({ id: r.id, title: r.title, proofs_delete_at: i.proofs_delete_at, days_left: i.days_left, days: i.days, source: i.source }));
+      return jsonOk({ available: true, studio_days: studio.days, upcoming }, 200, ADMIN_ONLY_HEADERS);
+    }
+
     // GET /api/admin/projects/:id/expiry — 照片保存期限 (docs/delivery.md,
     // "Photo expiry"): retired with the R2 lifecycle rule. {proofs, finals}
     // keep their shape (finals null while final_folders is), every date null,
@@ -4808,12 +5368,15 @@ async function routeRequest(request, env, ctx) {
       // 「我有興趣」 taps, newest first (docs/guest-shop.md); [] before the
       // product-interests migration. Admin only: no guest route reads them
       const interests = await interestsFor(env, project.id);
+      const retentionStudio = await studioProofDays(env, who.id);
       return jsonOk({
         project: {
           ...project, folders, extra_max: project.extra_max ?? null, shoot_date: project.shoot_date ?? null, project_type: project.project_type ?? null, ...deliveryFields(project),
           client_confirmed_at: project.client_confirmed_at ?? null,
           client_confirmed_by: project.client_confirmed_by ?? null,
           open_revision_count: revisions.open,
+          // 毛片自動刪除 (docs/delivery.md, "Proof retention"), from D1 only
+          proof_retention: proofRetentionInfo(project, retentionStudio.days, retentionStudio.ok && projectHasRetention(project), Date.now()),
         },
         owner: pickers.find(p => p.id === project.owner_picker_id) || null,
         pickers, selections, collaborators, tokens, submissions, unnotified_submissions: unnotified,
@@ -6247,19 +6810,44 @@ async function routeRequest(request, env, ctx) {
           if (v === undefined) return bad(field);
           set[field] = v;
         }
+        // proof retention's studio default: one of the fixed choices; null
+        // stores NULL, which reads as 0 (never)
+        if (has('proof_retention_days')) {
+          const v = body.proof_retention_days;
+          if (v !== null && !PROOF_RETENTION_STUDIO_CHOICES.includes(v)) return bad('proof_retention_days');
+          set.proof_retention_days = v;
+        }
         // column names come from the fixed list above, never from the body
         const cols = [...Object.keys(set), 'updated_at'];
         const all = ['photographer_id', ...cols];
+        const nowIso = new Date().toISOString();
         try {
-          await env.DB.prepare(
+          const upsert = env.DB.prepare(
             `INSERT INTO studio_settings (${all.join(', ')}) VALUES (${all.map(() => '?').join(', ')}) ` +
             `ON CONFLICT(photographer_id) DO UPDATE SET ${cols.map(k => `${k} = excluded.${k}`).join(', ')}`
-          ).bind(who.id, ...Object.values(set), new Date().toISOString()).run();
+          ).bind(who.id, ...Object.values(set), nowIso);
+          if ('proof_retention_days' in set) {
+            // a new number never deletes sooner than PROOF_NOTICE_DAYS from
+            // now: every project of this photographer's that follows the
+            // studio waits at least that long (the pages show the notice
+            // meanwhile). Same batch: both land or neither does — before the
+            // migration neither (the projects columns are named here too).
+            const floor = new Date(Date.parse(nowIso) + PROOF_NOTICE_DAYS * DAY_MS).toISOString();
+            await env.DB.batch([upsert, env.DB.prepare(
+              'UPDATE projects SET proofs_delete_next_at = ?1 WHERE photographer_id = ?2 AND proofs_deleted_at IS NULL ' +
+              'AND proof_retention_days IS NULL AND (proofs_delete_next_at IS NULL OR proofs_delete_next_at < ?1)'
+            ).bind(floor, who.id)]);
+          } else {
+            await upsert.run();
+          }
         } catch (e) {
           // default_extra_max / transfer_info / pick_link_message /
-          // link_message_* before its migration: one statement, so nothing
-          // landed; the error names the column
+          // link_message_* / proof retention before its migration: one
+          // statement (one batch), so nothing landed; the error names the column
           const msg = String(e?.message || '');
+          if (isMissingColumn(e) && 'proof_retention_days' in set && /proof/.test(msg)) {
+            return jsonOk(PROOF_RETENTION_UNAVAILABLE, 500, ADMIN_ONLY_HEADERS);
+          }
           if (isMissingColumn(e) && LINK_MESSAGE_FIELDS.some(f => f in set && msg.includes(f))) {
             return jsonOk(LINK_MESSAGES_UNAVAILABLE, 500, ADMIN_ONLY_HEADERS);
           }
@@ -6455,12 +7043,21 @@ async function routeRequest(request, env, ctx) {
       }
 
       // GET /api/pick/expiry — 照片保存期限 (docs/delivery.md, "Photo
-      // expiry"): retired with the R2 lifecycle rule. Any live link (401
-      // above), GET only (405); always {expires_at: null, days_left: null},
-      // and R2 is not asked.
+      // expiry"): the finals' date is retired with the R2 lifecycle rule
+      // (always {expires_at: null, days_left: null}). `proofs`: when this
+      // project's proofs are deleted (docs/delivery.md, "Proof retention"):
+      // {proofs_delete_at, days_left, notice, proofs_deleted_at,
+      // can_download}, all from D1 (the project, its photographer's studio
+      // number), R2 is not asked; dates and whole days only, never a folder,
+      // a key or where the number came from. Any live link (401 above), GET
+      // only (405).
       if (route === 'expiry') {
         if (request.method !== 'GET') return jsonOk({ error: 'Method not allowed' }, 405, { ...SHARED_LINK_HEADERS, Allow: 'GET' });
-        return jsonOk({ expires_at: null, days_left: null }, 200, SHARED_LINK_HEADERS);
+        const studio = await studioProofDays(env, project.photographer_id);
+        return jsonOk({
+          expires_at: null, days_left: null,
+          proofs: guestProofsInfo(project, studio, isOwner, Date.now()),
+        }, 200, SHARED_LINK_HEADERS);
       }
 
       // POST /api/pick/interest {product_id} — 「我有興趣」 on the completion

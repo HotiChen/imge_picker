@@ -179,6 +179,13 @@ test('crawl: every non-public /api path refuses a caller without a photographer 
           const own = who === 'B' && flags.PHOTOGRAPHER_ROUTES && /^\/api\/admin\/(settings|settings\/logo|stats)$/.test(path);
           if (own) allowed.push(200, 405, 415);
           const text = await res.clone().text();
+          // proof retention's reminder list: B's own (none here), GET only (405: no id, no data)
+          if (who === 'B' && flags.PHOTOGRAPHER_ROUTES && path === '/api/admin/proofs-retention') {
+            if (method === 'GET') {
+              assert.deepEqual(JSON.parse(text), { available: true, studio_days: 0, upcoming: [] }, 'B\'s own reminder list');
+              allowed.push(200);
+            } else allowed.push(405);
+          }
           if (who === 'B' && flags.PHOTOGRAPHER_ROUTES && block && res.status === 405) {
             const nobody = await hit(mod, env, method, path.replaceAll(project.project.id, NOBODY_ID), token, method === 'GET' ? undefined : {});
             assert.equal(nobody.status, 405, `${method} ${path}`);

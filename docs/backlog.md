@@ -126,6 +126,11 @@ Design: `docs/products-orders.md`.
    `GET /api/pick/expiry` (`docs/delivery.md`, "Photo expiry"). Frontend done (2026-10-20): a line on
    the admin project page, the date in 複製交件通知文案, a note beside 下載全部精修 on the 完成頁.
    Not built: the 驗收頁 (delivered, not yet confirmed) and the pick page show no date.*
+   *Replaced 2026-10-21 (Tim): the lifecycle rule is to be removed; both routes answer no date. Instead the
+   Worker deletes **proofs only**, N days after the client's confirmation (studio default 0 / 90 / 180 / 365,
+   default 0 = never; per-project override, 延後 30 天, 不要刪; 14-day reminder) — Worker built
+   (`docs/delivery.md`, "Proof retention", `2026-10-21-proof-retention.sql`, daily cron). Frontend not built:
+   the studio setting, the project's 毛片保存 line + 延後 / 不要刪, the dashboard reminder, the 完成頁 note.*
 2. **B — guest shop.** Platform products (photo, price) on the pick page;
    the guest orders, the photographer confirms, payment by transfer. The main
    selling point. *Status: S1 (product info) and 我有興趣 live; S2 ordering built

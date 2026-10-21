@@ -11,6 +11,7 @@ import { fakeBucket, fakeDB } from './fakes.mjs';
 import {
   SECRET, call, pick, claim, save, one, rows, days, withT, collectingCtx,
 } from './pick-helpers.mjs';
+import { withoutProofRetention, PROOF_RETENTION_PROJECT_COLUMNS } from './schema-helpers.mjs';
 
 const PROOF = 'shoot/毛片/';
 const FINAL = 'shoot/精修/';
@@ -24,7 +25,8 @@ const OBJECTS = {
   'shoot/精修二/f1.jpg': 'FINAL2-A-ORIGINAL',
 };
 
-const FRESH = readFileSync(new URL('../schema.sql', import.meta.url), 'utf8');
+// (without what later migrations append after these columns: schema-helpers.mjs)
+const FRESH = withoutProofRetention(readFileSync(new URL('../schema.sql', import.meta.url), 'utf8'));
 // a database before this migration: neither column, no table
 const strippedColumns = FRESH.replace(
   /(extra_max\s+INTEGER),\n(?:\s*--[^\n]*\n)*\s*client_confirmed_at\s+TEXT,\n(?:\s*--[^\n]*\n)*\s*client_confirmed_by\s+TEXT,\n(?:\s*--[^\n]*\n)*\s*shoot_date\s+TEXT,\n(?:\s*--[^\n]*\n)*\s*project_type\s+TEXT\n\);/, '$1\n);');
@@ -139,7 +141,7 @@ test('migration: two ALTERs, one CREATE TABLE IF NOT EXISTS and its index, one s
   const fresh = fakeDB();
   const freshCols = t => fresh._db.prepare(`PRAGMA table_info(${t})`).all().map(c => c.name);
   // (shoot_date and project_type come later, from 2026-10-07-project-shoot-date.sql and 2026-10-07-project-type.sql)
-  assert.deepEqual(cols('projects'), freshCols('projects').filter(c => !['shoot_date', 'project_type'].includes(c)));
+  assert.deepEqual(cols('projects'), freshCols('projects').filter(c => !['shoot_date', 'project_type', ...PROOF_RETENTION_PROJECT_COLUMNS].includes(c)));
   // (the three revision-pins columns come later, from 2026-10-07-revision-pins.sql)
   assert.deepEqual(cols('revision_requests'), freshCols('revision_requests').filter(c => !['marks', 'finals', 'message_auto'].includes(c)));
   assert.deepEqual(cols('revision_requests'), ['id', 'project_id', 'picker_id', 'message', 'created_at', 'resolved_at']);

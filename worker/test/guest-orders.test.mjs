@@ -13,6 +13,7 @@ import {
   F1, F2, F3, PA, FINAL, FINAL2, FRESH, fakeMailer, admin, deliver, confirm, retouching, delivered, SECRET, call, pick,
   rows, one, landOnce, S2_ORDER_COLUMNS, S2_ITEM_COLUMNS, S2_SETTINGS_COLUMNS,
 } from './guest-order-helpers.mjs';
+import { PROOF_RETENTION_STUDIO_SQL } from './schema-helpers.mjs';
 
 const mail = env => env.NOTIFY_EMAIL.sent;
 const GUEST_VIEW_KEYS = ['cancelled_at', 'confirmed_at', 'contact', 'created_at', 'delivery_method', 'discount', 'guest_note', 'id', 'items',
@@ -46,12 +47,14 @@ test('migration: eleven statements, each runnable on its own, noted in schema.sq
   assert.match(FRESH, /2026-10-09-guest-orders\.sql/);
   for (const s of statementsOf(MIGRATION)) assert.ok(FRESH.includes(s.replace(/ TEXT$| INTEGER$/, '')) || FRESH.includes(s), `schema.sql notes: ${s}`);
   // (studio_settings.pick_link_message and the three link_message_*, appended after transfer_info, come from their own later migrations on top)
-  const env = { DB: fakeDB({ schema: s2Schema({ settings: [...S2_SETTINGS_COLUMNS, 'pick_link_message', 'link_message_submitted', 'link_message_delivered', 'link_message_done'] }) }) };
+  // (and studio_settings.proof_retention_days after those, from 2026-10-21-proof-retention.sql)
+  const env = { DB: fakeDB({ schema: s2Schema({ settings: [...S2_SETTINGS_COLUMNS, 'pick_link_message', 'link_message_submitted', 'link_message_delivered', 'link_message_done'], studioRetention: false }) }) };
   assert.throws(() => env.DB._db.prepare('SELECT request_id FROM orders').all(), /no such column/, 'the fixture lacks it');
   assert.throws(() => env.DB._db.prepare('SELECT transfer_info FROM studio_settings').all(), /no such column/);
   for (const s of statementsOf(MIGRATION)) env.DB._db.exec(s);
   env.DB._db.exec(readFileSync(new URL('../migrations/2026-10-10-pick-link-message.sql', import.meta.url), 'utf8'));
   env.DB._db.exec(readFileSync(new URL('../migrations/2026-10-16-link-messages.sql', import.meta.url), 'utf8'));
+  env.DB._db.exec(PROOF_RETENTION_STUDIO_SQL);
   const fresh = fakeDB();
   for (const t of ['orders', 'order_items', 'studio_settings']) {
     const cols = d => d.prepare(`PRAGMA table_info(${t})`).all().map(c => ({ ...c }));

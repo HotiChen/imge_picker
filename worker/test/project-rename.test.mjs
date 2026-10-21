@@ -11,6 +11,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fakeBucket, fakeDB } from './fakes.mjs';
 import { SECRET, call, pick, claim, save, one, rows, collectingCtx, seedToken } from './pick-helpers.mjs';
+import { withoutProofRetention } from './schema-helpers.mjs';
 
 const PROOF = 'shoot/毛片/';
 const FINAL = 'shoot/精修/';
@@ -265,7 +266,7 @@ test('rename does not touch R2: no object is written, copied or deleted', async 
 });
 
 test('before the shoot_date migration: a rename alone works; a rename with shoot_date is 500 shoot_date_unavailable and writes nothing (links included)', async () => {
-  const FRESH = readFileSync(new URL('../schema.sql', import.meta.url), 'utf8');
+  const FRESH = withoutProofRetention(readFileSync(new URL('../schema.sql', import.meta.url), 'utf8'));
   const BEFORE = FRESH.replace(/(client_confirmed_by\s+TEXT),\n(?:\s*--[^\n]*\n)*\s*shoot_date\s+TEXT,\n(?:\s*--[^\n]*\n)*\s*project_type\s+TEXT\n\);/, '$1\n);');
   assert.notEqual(BEFORE, FRESH, 'fixture regex matched');
   const env = { imagepicker: fakeBucket(OBJECTS), DB: fakeDB({ schema: BEFORE }), PHOTOGRAPHER_TOKEN: SECRET };

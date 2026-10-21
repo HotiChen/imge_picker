@@ -7,6 +7,7 @@ import {
   SECRET, MINE, THEIRS, setup, call, pick, createProject, claim, claimed, save, rows, one,
   collectingCtx,
 } from './pick-helpers.mjs';
+import { PROOF_RETENTION_MIGRATION } from './schema-helpers.mjs';
 
 const post = (env, body, token = SECRET) =>
   call(env, '/api/admin/projects', { method: 'POST', token, body });
@@ -210,7 +211,8 @@ test('the migration file turns a deployed database into exactly what schema.sql 
     '\n' + readFileSync(new URL('../migrations/2026-10-09-guest-orders.sql', import.meta.url), 'utf8').match(/ALTER TABLE studio_settings[^;]*;/)[0] +
     '\n' + readFileSync(new URL('../migrations/2026-10-10-pick-link-message.sql', import.meta.url), 'utf8') +
     '\n' + readFileSync(new URL('../migrations/2026-10-16-link-messages.sql', import.meta.url), 'utf8') +
-    '\n' + readFileSync(new URL('../migrations/2026-10-17-share-token-owner.sql', import.meta.url), 'utf8');
+    '\n' + readFileSync(new URL('../migrations/2026-10-17-share-token-owner.sql', import.meta.url), 'utf8') +
+    '\n' + PROOF_RETENTION_MIGRATION;
   // the live database: share_tokens without project_id (nor the owner column
   // appended after it), none of the new tables
   const deployed = fresh

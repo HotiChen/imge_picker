@@ -86,6 +86,8 @@ const ROUTES = [
   R('scoped', 'POST', f => `${P(f)}/confirm`),
   R('scoped', 'GET', f => `${P(f)}/events`),
   R('scoped', 'GET', f => `${P(f)}/expiry`),
+  R('scoped', 'POST', f => `${P(f)}/proofs-retention`, { days: 0 }),
+  R('scoped', 'GET', () => '/api/admin/proofs-retention'),
   R('scoped', 'PATCH', P, { title: '改名' }),
   R('open', 'PUT', P, {}),
   R('open', 'POST', P, {}),
@@ -305,6 +307,8 @@ test('PHOTOGRAPHER_ROUTES=on: a non-default session is 404 on every default-only
       'GET /api/shares/minted': [200, []], 'POST /api/shares/minted/revoke-all': [200, { ok: true, revoked: 0 }],
       'PUT /2026/new.jpg': [200, { ok: true, key: '2026/new.jpg' }],
       [`GET /?list=${encodeURIComponent(MINE)}`]: [200, { status: 'success', data: [], folders: [] }],
+      // proof retention's reminder list: B's own (none; B's studio number unset = 0)
+      'GET /api/admin/proofs-retention': [200, { available: true, studio_days: 0, upcoming: [] }],
     };
     if (hasOwn(notRefused, label(r))) {
       const [status, body] = notRefused[label(r)];
@@ -325,7 +329,7 @@ test('PHOTOGRAPHER_ROUTES=on: a non-default session is 404 on every default-only
     assert.equal(res.status, 404, `${label(r)}: ${res.status} ${text.slice(0, 200)}`);
     refused++;
   }
-  assert.equal(refused, ROUTES.length - 19);
+  assert.equal(refused, ROUTES.length - 20); // the notRefused answers above (20 with the proof-retention reminder list)
 });
 
 test('marks: scoped (2b-1 onwards) is requirePhotographer; a leftover 2b-1..3 or batch 3 default-only mark is unknown now', () => {

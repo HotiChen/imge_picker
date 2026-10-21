@@ -12,13 +12,14 @@ import assert from 'node:assert/strict';
 import { readFileSync, existsSync } from 'node:fs';
 import { fakeBucket, fakeDB } from './fakes.mjs';
 import { SECRET, call, pick, claim, save, one, rows, collectingCtx } from './pick-helpers.mjs';
+import { withoutProofRetention, PROOF_RETENTION_MIGRATION } from './schema-helpers.mjs';
 
 const PROOF = 'shoot/毛片/';
 const FINAL = 'shoot/精修/';
 const PA = 'shoot/毛片/a.jpg';
 const OBJECTS = { [PA]: 'PROOF-A', 'shoot/精修/f1.jpg': 'FINAL-A' };
 
-const FRESH = readFileSync(new URL('../schema.sql', import.meta.url), 'utf8');
+const FRESH = withoutProofRetention(readFileSync(new URL('../schema.sql', import.meta.url), 'utf8')); // (and without the later proof-retention columns)
 const MIGRATION_FILE = new URL('../migrations/2026-10-07-project-type.sql', import.meta.url);
 // today's deployed database: everything up to shoot_date, no project_type
 const BEFORE = FRESH.replace(/(shoot_date\s+TEXT),\n(?:\s*--[^\n]*\n)*\s*project_type\s+TEXT\n\);/, '$1\n);');
@@ -74,7 +75,7 @@ test('migration: one ALTER adding projects.project_type TEXT; schema.sql notes i
   const shape = db => db._db.prepare('PRAGMA table_info(projects)').all();
   assert.ok(!shape(fakeDB({ schema: BEFORE })).some(c => c.name === 'project_type'));
   assert.ok(shape(fakeDB({ schema: BEFORE })).some(c => c.name === 'shoot_date'));
-  assert.deepEqual(shape(fakeDB({ schema: BEFORE + '\n' + sql })), shape(fakeDB()));
+  assert.deepEqual(shape(fakeDB({ schema: BEFORE + '\n' + sql + '\n' + PROOF_RETENTION_MIGRATION })), shape(fakeDB()));
   const twice = fakeDB({ schema: BEFORE + '\n' + sql });
   assert.throws(() => twice._db.exec(sql), /duplicate column/);
 });

@@ -195,7 +195,23 @@ CREATE TABLE IF NOT EXISTS projects (
   -- Appended, from a hand-run
   --   ALTER TABLE projects ADD COLUMN project_type TEXT;
   -- (worker/migrations/2026-10-07-project-type.sql).
-  project_type    TEXT
+  project_type    TEXT,
+  -- Proof retention (docs/delivery.md, "Proof retention"): the daily cron
+  -- deletes this project's proofs (`folders` and their thumbnails, never the
+  -- finals) N days after client_confirmed_at. N = this project's own number
+  -- (NULL = the studio's studio_settings.proof_retention_days, 0 = never,
+  -- 14..3650 days; set by POST /api/admin/projects/:id/proofs-retention).
+  -- proofs_deleted_at: when the cron deleted them (NULL = not; never cleared).
+  -- proofs_delete_next_at: not before this time — a run's lease, a skip's
+  -- 7-day wait, or the 14-day notice floor a new setting gives (NULL = none).
+  -- Appended, from a hand-run
+  --   ALTER TABLE projects ADD COLUMN proof_retention_days INTEGER;
+  --   ALTER TABLE projects ADD COLUMN proofs_deleted_at TEXT;
+  --   ALTER TABLE projects ADD COLUMN proofs_delete_next_at TEXT;
+  -- (worker/migrations/2026-10-21-proof-retention.sql).
+  proof_retention_days INTEGER,
+  proofs_deleted_at    TEXT,
+  proofs_delete_next_at TEXT
 );
 
 -- Everyone who ever held the seat. key_hash is the SHA-256 of the bearer key
@@ -318,7 +334,14 @@ CREATE TABLE IF NOT EXISTS studio_settings (
   -- (worker/migrations/2026-10-16-link-messages.sql).
   link_message_submitted TEXT,
   link_message_delivered TEXT,
-  link_message_done   TEXT
+  link_message_done   TEXT,
+  -- the studio's default for proof retention (docs/delivery.md, "Proof
+  -- retention"): 0 / 90 / 180 / 365 days after the client's confirmation;
+  -- NULL = 0 = never (the default: nothing is deleted until it is set).
+  -- Appended, from a hand-run
+  --   ALTER TABLE studio_settings ADD COLUMN proof_retention_days INTEGER;
+  -- (worker/migrations/2026-10-21-proof-retention.sql).
+  proof_retention_days INTEGER
 );
 
 -- ─── Products and orders (docs/products-orders.md) ─────────────────────────

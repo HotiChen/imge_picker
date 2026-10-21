@@ -9,6 +9,7 @@ import {
   SECRET, MINE, setup, call, pick, createProject, claimed, save, one, rows, seedToken, days,
   collectingCtx,
 } from './pick-helpers.mjs';
+import { withoutProofRetention, PROOF_RETENTION_MIGRATION } from './schema-helpers.mjs';
 
 const A = '20260819/a.jpg';
 
@@ -151,6 +152,7 @@ test('settings start empty and never return the blob', async () => {
     transfer_info: null, // docs/guest-shop.md S2
     pick_link_message: null, // the 「複製連結」 default (pick-link-message.test.mjs)
     link_message_submitted: null, link_message_delivered: null, link_message_done: null, // per stage (link-messages.test.mjs)
+    proof_retention_days: 0, // 毛片自動刪除, 0 = never (proof-retention.test.mjs)
     has_logo: false, logo_type: null, logo_updated_at: null, updated_at: null,
   });
   await putLogo(env, PNG);
@@ -561,7 +563,7 @@ test('the dashboard migration: fresh == archive-era database + it', () => {
   assert.equal(statements.length, 2);
   // (the delivery columns appended after delivered_at go too, and come back
   // from their own migration on top, so the column order is pinned)
-  const deployed = fresh
+  const deployed = withoutProofRetention(fresh)
     .replace(/,\n(?:\s*--[^\n]*\n)*\s*delivered_at\s+TEXT,\n(?:\s*--[^\n]*\n)*\s*final_folders\s+TEXT,\n\s*allow_proof_download[^\n]*\n(?:\s*--[^\n]*\n)*\s*extra_max\s+INTEGER,\n(?:\s*--[^\n]*\n)*\s*client_confirmed_at\s+TEXT,\n(?:\s*--[^\n]*\n)*\s*client_confirmed_by\s+TEXT,\n(?:\s*--[^\n]*\n)*\s*shoot_date\s+TEXT,\n(?:\s*--[^\n]*\n)*\s*project_type\s+TEXT\n\);/, '\n);')
     .replace(/\n-- ─── Studio settings[\s\S]*$/, '\n');
   assert.doesNotMatch(deployed, /delivered_at|studio_settings|final_folders|extra_max/, 'fixture still has the new schema');
@@ -575,7 +577,9 @@ test('the dashboard migration: fresh == archive-era database + it', () => {
     // (studio_settings.pick_link_message, appended after transfer_info)
     '\n' + readFileSync(new URL('../migrations/2026-10-10-pick-link-message.sql', import.meta.url), 'utf8') +
     // (the three studio_settings.link_message_*, appended after it)
-    '\n' + readFileSync(new URL('../migrations/2026-10-16-link-messages.sql', import.meta.url), 'utf8');
+    '\n' + readFileSync(new URL('../migrations/2026-10-16-link-messages.sql', import.meta.url), 'utf8') +
+    // (proof retention's columns on both tables, appended after all of these)
+    '\n' + PROOF_RETENTION_MIGRATION;
   const shape = db => ['projects', 'studio_settings'].map(t => db._db.prepare(`PRAGMA table_info(${t})`).all());
   assert.deepEqual(shape(fakeDB({ schema: deployed + '\n' + migration + '\n' + later })), shape(fakeDB({ schema: fresh })));
   assert.match(fresh, /ALTER TABLE projects ADD COLUMN delivered_at TEXT;/, 'schema.sql names the hand-run ALTER');

@@ -12,6 +12,7 @@ import {
   WORKER, statementsOf, s2Schema, envOf, ready, placed, myOrders, cancelOrder, code, rows,
   FINAL, FRESH, SECRET, call, pick, deliver, retouching, confirm,
 } from './guest-order-helpers.mjs';
+import { PROOF_RETENTION_STUDIO_SQL } from './schema-helpers.mjs';
 
 const FIELD = 'pick_link_message';
 const MAX = 1000;
@@ -40,10 +41,11 @@ test('migration: one append-only ALTER, noted in schema.sql; the fixture really 
   assert.deepEqual(statementsOf(MIGRATION), [`ALTER TABLE studio_settings ADD COLUMN ${FIELD} TEXT`]);
   assert.match(FRESH, /2026-10-10-pick-link-message\.sql/);
   assert.match(FRESH, /ALTER TABLE studio_settings ADD COLUMN pick_link_message TEXT;/);
-  const old = fakeDB({ schema: s2Schema({ orders: [], items: [], settings: [FIELD, ...LATER], index: false }) });
+  const old = fakeDB({ schema: s2Schema({ orders: [], items: [], settings: [FIELD, ...LATER], index: false, studioRetention: false }) });
   assert.throws(() => old._db.prepare(`SELECT ${FIELD} FROM studio_settings`).all(), /no such column/);
   old._db.exec(MIGRATION);
   old._db.exec(readFileSync(LATER_MIGRATION, 'utf8'));
+  old._db.exec(PROOF_RETENTION_STUDIO_SQL); // appended after those (2026-10-21-proof-retention.sql)
   const shape = d => d._db.prepare('PRAGMA table_info(studio_settings)').all().map(c => ({ ...c }));
   assert.deepEqual(shape(old), shape(fakeDB()));
   assert.throws(() => old._db.exec(MIGRATION), /duplicate column/);

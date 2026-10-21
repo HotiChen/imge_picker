@@ -801,7 +801,7 @@ deliver replaces `final_folders`, undeliver / reopen clear the stamp), so e.g. �
 History: from 2026-10-20 two read-only routes estimated when the bucket's lifecycle rule (every object deleted 180
 days after upload, whole bucket) would start deleting a project's photos, by scanning R2 for the earliest upload.
 Tim decided (2026-10-21) to remove that lifecycle rule in Cloudflare and let the Worker delete **proofs only**, on the
-photographer's own setting, counted from the client's confirmation (section "Proof retention", once built); finals are never deleted.
+photographer's own setting, counted from the client's confirmation (see "Proof retention" below); finals are never deleted.
 The 180-day date is therefore no longer true, and the routes stopped giving it:
 
 - `GET /api/admin/projects/:id/expiry` (requirePhotographer, scoped to the caller: another photographer's project is
@@ -818,6 +818,114 @@ The 180-day date is therefore no longer true, and the routes stopped giving it:
   (null dates, no R2 call, the same auth / tenant / method rules).
 - **Until Tim removes the lifecycle rule in Cloudflare it still deletes everything at 180 days**, now without a date
   shown anywhere.
+
+## Proof retention (毛片自動刪除, Worker, 2026-10-21)
+
+Why: Tim is removing the bucket's whole-bucket 180-day lifecycle rule. Finals must stay; proofs should not pile up
+forever. So the Worker deletes a project's **proofs** on the photographer's own schedule, counted from the client's
+confirmation. **Default off**: until the photographer picks a number nothing is ever deleted.
+
+### Rules
+- What goes: the originals under the project's `projects.folders` (subfolders included) that a photo upload could be
+  (`deletablePhotoKey`: an extension upload.html takes, no `.`/`..` segment, not a `_` key, ≤ 1024 bytes), and their
+  thumbnails `_thumbs/<w>/<key>.thumb` (every width folder found under `_thumbs/`, orphans too). Never a key inside
+  any finals folder. Nothing else: no `.txt`/`.json`, no neighbour folder (`shoot/毛片-other/` is not `shoot/毛片/`).
+  D1 is untouched: selections, submissions, rounds, orders, events stay.
+- **Finals (`final_folders`) are never deleted.**
+- When: N days after `client_confirmed_at`, and only while `delivered_at` is set. Not confirmed → never. 取消交件 /
+  開放修改 clear the confirmation → the schedule is gone (a new confirmation starts a new count).
+- N: `projects.proof_retention_days` (NULL = follow the studio, 0 = never, 14..3650) else
+  `studio_settings.proof_retention_days` (0 / 90 / 180 / 365; NULL = 0). A value the routes never store (edited by
+  hand) reads as 0.
+- Never sooner than 14 days after a number was set (studio: every project that follows the studio; project: that
+  project) and never sooner than 30 days after 延後: `projects.proofs_delete_next_at` is that floor (it is also a run's
+  lease and a skip's 7-day wait). So a newly chosen number always shows the 14-day reminder first, even for a project
+  confirmed long ago.
+- The reminder window: 14 days before the date (`notice: true`, also when overdue but not yet deleted).
+
+### Safety checks (every one must pass; otherwise skipped, logged, nothing deleted, checked again in 7 days)
+Run by the cron per project, after claiming it (`proofs_delete_next_at` lease, 1 hour):
+| reason code | when |
+|---|---|
+| `bad_folders` | `projects.folders` does not validate (`pickFolders`) |
+| `bad_finals` | delivered but `final_folders` does not validate (`pickFinals`) |
+| `finals_overlap` | a finals folder (the current one, or any round's frozen `revision_requests.finals` of this project) is inside, equal to or around a proof folder |
+| `shared_with_project` | another project **of the same photographer** has a proof or finals folder overlapping (either direction), or another project's round `finals` overlaps, or another project's submission / round pins name a key under the folder |
+| `shared_with_link` | a live (not revoked, not expired) share token of any kind — album link (`client`), client session (`session`), studio token, another project's pick link — owned by the same photographer (`shareOwner`) whose folders overlap. This project's own pick links do not count. Before the owner column every live token counts |
+| `shared_with_client_account` | (default photographer) a `users.folder_path` overlapping (unreadable counts) |
+| `in_order` | any order line of this photographer's (any status, cancelled too) naming a key under the folder, or an album line with a layout whose project's finals overlap |
+| `in_album` | (default photographer) an album `_books/*.json` naming the folder or a key in it, or `clientFolders` overlapping |
+| `albums_unchecked` | (default) more than `ALBUM_SCAN_MAX` (25) albums: cannot read them all in one run |
+| `check_unavailable` | a table/column a check needs is missing |
+
+Other photographers' rows never count against a project (their same folder names are other objects under their own
+prefix). Keys come only from `bucketFor(env, project.photographer_id)` listing the project's validated folders;
+nothing in a request names a key or folder.
+
+### The run (`scheduled` handler, `runProofRetention`)
+- Cron: `worker/wrangler.toml` `[triggers] crons = ["17 19 * * *"]` (UTC 19:17 = Taipei 03:17).
+- Budget: every D1 statement and R2 call counts; at most 45 per run (the Free plan's 50 subrequests, strict
+  reading), at most 5 projects, a project starts only with 12 calls left. Deletes are `delete(keys[])`, ≤ 1000 keys.
+- Per project: claim (conditional UPDATE: same `delivered_at` / `client_confirmed_at`, no other run's lease) → checks
+  → list → **`proofs_delete_planned` event {folders, originals, thumbs, complete} must land, or nothing is deleted** →
+  the last check (conditional UPDATE right before the delete: same delivery, confirmation, `folders`, `final_folders`,
+  same effective N, still our lease — a 不要刪 / 延後 / undeliver / reopen / new number since the claim stops it) →
+  delete originals, then thumbnails → complete: `proofs_deleted_at` set, `proofs_deleted` event {folders, originals,
+  thumbs} (totals across runs); not complete (budget): `proofs_delete_partial` event, the next run lists what is left.
+- Idempotent and resumable: a failed or cut run leaves its lease (1 hour); the next daily run lists again (deleted
+  keys are not listed) and goes on. Two runs at once: the claim lets one through.
+- Before the migration (any of the four columns missing) the candidate query throws and the run stops before R2.
+
+### Routes (contract for the pages)
+- `GET /api/admin/settings` → `proof_retention_days: 0|90|180|365` (0 = never; also before the migration).
+  `PUT /api/admin/settings {proof_retention_days: 0|90|180|365|null}`; anything else 400
+  `invalid_proof_retention_days`; before the migration 500 `proof_retention_unavailable` (nothing stored).
+- `GET /api/admin/projects/:id` → `project.proof_retention`:
+  `{available, days, source: 'project'|'studio', project_days, studio_days, proofs_delete_at, days_left, notice,
+  proofs_deleted_at}` (`days` = in effect, 0 = never; `proofs_delete_at` ISO or null; `days_left` whole days rounded
+  up, ≥ 0, or null; `available` false before the migration). Raw columns `proof_retention_days`, `proofs_deleted_at`,
+  `proofs_delete_next_at` also come with `...project`.
+- `POST /api/admin/projects/:id/proofs-retention` with exactly one of `{days: null}` (follow the studio),
+  `{days: 0}` / `{action: 'never'}` (不要刪), `{days: 14..3650}`, `{action: 'postpone'}` (延後: days in effect + 30
+  into the project's own number). 200 `{ok, proof_retention}`; 400 `invalid_body` (any other shape or extra key);
+  404 another photographer's project / none; 405 another method; 409 `proofs_deleted` (already deleted),
+  `proofs_not_scheduled` (postpone with 0 in effect), `retention_too_long` (postpone past 3650), `retention_changed`
+  (a concurrent change; reload); 500 `proof_retention_unavailable`. Logged `proof_retention_set` {action, days,
+  previous}.
+- `GET /api/admin/proofs-retention` → `{available, studio_days, upcoming: [{id, title, proofs_delete_at, days_left,
+  days, source}]}`: the caller's projects inside the 14-day window (or overdue), soonest first. For the dashboard
+  reminder.
+- `GET /api/pick/expiry` (any live link) → `{expires_at: null, days_left: null, proofs: {proofs_delete_at, days_left,
+  notice, proofs_deleted_at, can_download}}`. Dates and days only, never a folder, key or where the number came from.
+  `can_download` = 毛片下載 on, this caller is the seat owner, not deleted.
+- Events (`project_events`, actor `system` for the cron): `proofs_delete_planned`, `proofs_delete_partial`,
+  `proofs_deleted`, `proofs_delete_skipped` {reason, folders}; `proof_retention_set` (photographer). No file names.
+- After the delete: proof reads are a plain 404, `?list=` is empty; finals serve as before.
+
+### What the guest can read of the proofs today (checked 2026-10-21)
+- Worker: once delivered (confirmed or not), `pickReadScope` gives the proofs only when `allow_proof_download` is on
+  (previews and originals); originals and downloads of a proof only to the seat owner (`proof-owner-gate.test.mjs`).
+  Confirming changes nothing in the gate.
+- Page: the 驗收頁 shows 回到毛片 (when the switch is on); the **完成頁 has no entry to the proofs** (the delivery bar
+  is hidden there), so a client on the 完成頁 cannot reach the proof download today without the old view.
+
+### Known limits
+- Two confirmed projects sharing a proof folder are never deleted (skipped every 7 days, logged).
+- A default-photographer project re-reads every album each run (≤ 25 gets): with many albums a big folder takes
+  several days.
+- A photo uploaded into the folder during a run's last pass may remain after `proofs_deleted_at`.
+- 開放修改 after the delete reopens picking on an empty folder (nothing blocks it).
+- The 45-call budget and the Free plan's 10 ms CPU per cron run are not verified on Cloudflare.
+- The browser fake (`test/lib/pick-fake.mjs`) does not model these routes yet.
+
+### Tim, in order
+1. D1 Console: `worker/migrations/2026-10-21-proof-retention.sql`, four lines one by one; then the migration check
+   (`docs/backup.md` §四) shows 0 rows.
+2. Merge / deploy; Cloudflare → Workers → imagepicker → Settings → Triggers: the cron `17 19 * * *` is listed.
+3. Only then, Cloudflare → R2 → imagepicker → Settings → Object lifecycle rules: delete the 180-day rule (until then
+   R2 still deletes everything at 180 days).
+4. Pick a studio number in 設定 when the page has it (until then nothing is deleted). Tests:
+   `worker/test/proof-retention.test.mjs`.
 
 ## Out of scope for this step
 

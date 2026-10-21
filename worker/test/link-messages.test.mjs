@@ -16,6 +16,7 @@ import {
 } from './guest-order-helpers.mjs';
 import { createProject } from './pick-helpers.mjs';
 import { twoTenants, snapshot, ROUTES_ON } from './tenant-helpers.mjs';
+import { PROOF_RETENTION_STUDIO_SQL } from './schema-helpers.mjs';
 
 const NEW = ['link_message_submitted', 'link_message_delivered', 'link_message_done'];
 const ALL = ['pick_link_message', ...NEW];
@@ -40,14 +41,17 @@ test('migration: three separate append-only ALTERs, noted in schema.sql; the fix
   assert.deepEqual(statementsOf(MIGRATION), NEW.map(c => `ALTER TABLE studio_settings ADD COLUMN ${c} TEXT`));
   assert.match(FRESH, /2026-10-16-link-messages\.sql/);
   for (const c of NEW) assert.match(FRESH, new RegExp(`ALTER TABLE studio_settings ADD COLUMN ${c} TEXT;`));
-  const old = fakeDB({ schema: PRE() });
+  // (studio_settings.proof_retention_days, appended after them, comes from 2026-10-21-proof-retention.sql on top)
+  const old = fakeDB({ schema: s2Schema({ orders: [], items: [], settings: NEW, index: false, studioRetention: false }) });
   for (const c of NEW) assert.throws(() => old._db.prepare(`SELECT ${c} FROM studio_settings`).all(), /no such column/);
   old._db.prepare('SELECT pick_link_message FROM studio_settings').all(); // positive: only the three are cut
   const stmts = statementsOf(MIGRATION);
   for (const s of stmts) old._db.exec(s); // one by one, as Tim pastes them
+  old._db.exec(PROOF_RETENTION_STUDIO_SQL);
   const shape = d => d._db.prepare('PRAGMA table_info(studio_settings)').all().map(c => ({ ...c }));
   assert.deepEqual(shape(old), shape(fakeDB()));
   for (const s of stmts) assert.throws(() => old._db.exec(s), /duplicate column name/);
+  assert.throws(() => old._db.exec(PROOF_RETENTION_STUDIO_SQL), /duplicate column name/);
 });
 
 // ─── settings GET / PUT ─────────────────────────────────────────────────────

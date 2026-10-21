@@ -11,13 +11,14 @@ import assert from 'node:assert/strict';
 import { readFileSync, existsSync } from 'node:fs';
 import { fakeBucket, fakeDB } from './fakes.mjs';
 import { SECRET, call, pick, claim, save, one, rows, collectingCtx } from './pick-helpers.mjs';
+import { withoutProofRetention, PROOF_RETENTION_MIGRATION } from './schema-helpers.mjs';
 
 const PROOF = 'shoot/毛片/';
 const FINAL = 'shoot/精修/';
 const PA = 'shoot/毛片/a.jpg';
 const OBJECTS = { [PA]: 'PROOF-A', 'shoot/精修/f1.jpg': 'FINAL-A' };
 
-const FRESH = readFileSync(new URL('../schema.sql', import.meta.url), 'utf8');
+const FRESH = withoutProofRetention(readFileSync(new URL('../schema.sql', import.meta.url), 'utf8')); // (and without the later proof-retention columns)
 const MIGRATION_FILE = new URL('../migrations/2026-10-07-project-shoot-date.sql', import.meta.url);
 // today's deployed database: everything up to the revision pins, no shoot_date
 // (nor project_type, appended after it by its own migration)
@@ -79,7 +80,7 @@ test('migration: one ALTER adding projects.shoot_date TEXT; schema.sql notes it;
   assert.ok(shape(fakeDB({ schema: BEFORE })).some(c => c.name === 'client_confirmed_by'));
   // project_type comes back from its own migration on top, so the column order is pinned
   const typeSql = readFileSync(new URL('../migrations/2026-10-07-project-type.sql', import.meta.url), 'utf8');
-  assert.deepEqual(shape(fakeDB({ schema: BEFORE + '\n' + sql + '\n' + typeSql })), shape(fakeDB()));
+  assert.deepEqual(shape(fakeDB({ schema: BEFORE + '\n' + sql + '\n' + typeSql + '\n' + PROOF_RETENTION_MIGRATION })), shape(fakeDB()));
   const twice = fakeDB({ schema: BEFORE + '\n' + sql });
   assert.throws(() => twice._db.exec(sql), /duplicate column/);
 });

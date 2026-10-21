@@ -9,6 +9,7 @@ import {
   FINAL, FINAL2, F1, F2, F3, G1, PA, PB, OBJECTS, FRESH, setup, fakeMailer, admin, deliver, confirm, guest,
   delivered, retouching, SECRET, call, pick, rows, one, landOnce, claim,
 } from './revision-helpers.mjs';
+import { withoutStudioProofRetention } from './schema-helpers.mjs';
 
 export const OP = 'operator-secret';
 export const WORKER = readFileSync(new URL('../worker.js', import.meta.url), 'utf8');
@@ -26,8 +27,10 @@ export const F_MISSING = 'shoot/精修/missing.jpg';
 export const S2_ORDER_COLUMNS = ['request_id', 'contact_name', 'contact_phone', 'contact_line', 'delivery_method', 'consent_version', 'contact_erased_at'];
 export const S2_ITEM_COLUMNS = ['list_price', 'layout'];
 export const S2_SETTINGS_COLUMNS = ['transfer_info'];
-export function s2Schema({ orders = S2_ORDER_COLUMNS, items = S2_ITEM_COLUMNS, settings = S2_SETTINGS_COLUMNS, index = true } = {}) {
-  let s = FRESH;
+// studioRetention false: also without studio_settings.proof_retention_days,
+// appended after every settings column here (schema-helpers.mjs)
+export function s2Schema({ orders = S2_ORDER_COLUMNS, items = S2_ITEM_COLUMNS, settings = S2_SETTINGS_COLUMNS, index = true, studioRetention = true } = {}) {
+  let s = studioRetention ? FRESH : withoutStudioProofRetention(FRESH);
   for (const col of [...orders, ...items, ...settings]) {
     const re = new RegExp(`^[ \\t]*${col}[ \\t]+(TEXT|INTEGER)[^\\n]*\\n`, 'm');
     if (!re.test(s)) throw new Error(`s2Schema: no column line for ${col} in schema.sql`);

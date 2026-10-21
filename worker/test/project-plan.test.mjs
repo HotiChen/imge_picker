@@ -18,6 +18,7 @@ import {
   SECRET, MINE, setup, call, pick, claimed, createProject, save, one, rows, collectingCtx,
 } from './pick-helpers.mjs';
 import { fakeDB } from './fakes.mjs';
+import { withoutProofRetention, PROOF_RETENTION_MIGRATION } from './schema-helpers.mjs';
 
 const MONEY_MAX = 10_000_000;
 const A = '20260819/a.jpg';
@@ -82,7 +83,7 @@ function landOnce(env, re, fn) {
 }
 
 // schema.sql as a database that has not had the extra-max migration
-const FRESH = readFileSync(new URL('../schema.sql', import.meta.url), 'utf8');
+const FRESH = withoutProofRetention(readFileSync(new URL('../schema.sql', import.meta.url), 'utf8')); // (and without the later proof-retention columns)
 const PRE_MIGRATION = FRESH
   .replace(/(allow_proof_download INTEGER NOT NULL DEFAULT 0),\n(?:\s*--[^\n]*\n)*\s*extra_max\s+INTEGER,\n(?:\s*--[^\n]*\n)*\s*client_confirmed_at\s+TEXT,\n(?:\s*--[^\n]*\n)*\s*client_confirmed_by\s+TEXT,\n(?:\s*--[^\n]*\n)*\s*shoot_date\s+TEXT,\n(?:\s*--[^\n]*\n)*\s*project_type\s+TEXT\n\);/, '$1\n);')
   .replace(/(updated_at\s+TEXT),\n(?:\s*--[^\n]*\n)*\s*default_extra_max\s+INTEGER,\n(?:\s*--[^\n]*\n)*\s*transfer_info\s+TEXT,\n(?:\s*--[^\n]*\n)*\s*pick_link_message\s+TEXT,\n(?:\s*--[^\n]*\n)*\s*link_message_submitted\s+TEXT,\n\s*link_message_delivered\s+TEXT,\n\s*link_message_done\s+TEXT\n\);/, '$1\n);');
@@ -117,7 +118,7 @@ test('migration: two append-only ALTERs, noted in schema.sql; the fixture really
     '\n' + readFileSync(new URL('../migrations/2026-10-10-pick-link-message.sql', import.meta.url), 'utf8') +
     // (and the three studio_settings.link_message_* after that, from theirs)
     '\n' + readFileSync(new URL('../migrations/2026-10-16-link-messages.sql', import.meta.url), 'utf8');
-  assert.deepEqual(shape(fakeDB({ schema: PRE_MIGRATION + '\n' + sql + '\n' + confirmSql + '\n' + shootSql + '\n' + transferSql })), shape(fakeDB()));
+  assert.deepEqual(shape(fakeDB({ schema: PRE_MIGRATION + '\n' + sql + '\n' + confirmSql + '\n' + shootSql + '\n' + transferSql + '\n' + PROOF_RETENTION_MIGRATION })), shape(fakeDB()));
   // and a second paste fails loudly rather than doing anything
   const twice = fakeDB({ schema: PRE_MIGRATION + '\n' + sql });
   assert.throws(() => twice._db.exec(sql), /duplicate column/);

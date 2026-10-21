@@ -56,3 +56,9 @@ PHOTOGRAPHER_ROUTES = "on"
 # wrangler secret put PHOTOGRAPHER_INVITE_SECRET
 # 沒設或太短：所有邀請碼路由 500 invites_unavailable。用邀請碼註冊另外要 PHOTOGRAPHER_ROUTES = "on"。
 # 換這把 key 會讓所有尚未使用的邀請碼失效（存的是 HMAC）。
+
+# 毛片自動刪除（docs/delivery.md "Proof retention"）：每天一次，UTC 19:17 = 台灣 03:17（不在整點）。
+# Worker 的 scheduled handler 每次最多處理 5 個到期專案、最多 45 次 subrequest，中斷了下一輪會接著做。
+# 工作室預設 0（不自動刪）：沒在設定頁選天數之前，這個排程什麼都不刪。
+[triggers]
+crons = ["17 19 * * *"]
