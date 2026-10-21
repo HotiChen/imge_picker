@@ -195,6 +195,16 @@
           <input id="set-default-extra-max" class="field" type="number" min="0" max="500" step="1">
           <div class="hint" id="set-extra-max-hint">客人可在精修張數之外多挑幾張。0 = 不可加選。未設定時為 10。</div>
         </div>
+        <div class="field-group">
+          <label for="set-proof-retention">毛片預設保存時間</label>
+          <select id="set-proof-retention" class="field">
+            <option value="0">不自動刪（預設）</option>
+            <option value="90">客人確認後 90 天</option>
+            <option value="180">客人確認後 180 天</option>
+            <option value="365">客人確認後 365 天</option>
+          </select>
+          <div class="hint" id="set-proof-retention-hint">從客人按下確認完成起算；到期前 14 天會提醒你。精修成品不會被刪，每個專案也可以自己改。</div>
+        </div>
         <div class="hint" style="margin-bottom:12px;">建立新選片專案時會預先帶入這些值，仍可依專案調整。</div>
         <div class="field-group">
           <label for="set-transfer-info">匯款資訊</label>
@@ -453,6 +463,9 @@
     const limitInput = document.getElementById('set-default-pick-limit');
     const priceInput = document.getElementById('set-default-extra-price');
     const extraMaxInput = document.getElementById('set-default-extra-max');
+    const retentionInput = document.getElementById('set-proof-retention');
+    // 毛片自動刪除 (docs/delivery.md "Proof retention"): the studio's number as loaded (0 = never; a missing field reads 0)
+    let loadedRetention = 0;
     // the stored default as loaded (null = unset): a PUT names default_extra_max
     // only when it changed, so saving other settings never depends on the
     // extra-max migration having been run
@@ -562,6 +575,8 @@
         priceInput.value = s.default_extra_price != null ? s.default_extra_price : '';
         loadedExtraMax = s.default_extra_max != null ? s.default_extra_max : null;
         extraMaxInput.value = loadedExtraMax != null ? loadedExtraMax : '';
+        loadedRetention = [90, 180, 365].includes(s.proof_retention_days) ? s.proof_retention_days : 0;
+        retentionInput.value = String(loadedRetention);
         const eff = s.effective_default_extra_max != null ? s.effective_default_extra_max : 10;
         extraMaxInput.placeholder = `未設定時為 ${eff}`;
         loadedTransfer = typeof s.transfer_info === 'string' ? s.transfer_info : '';
@@ -586,6 +601,8 @@
       invalid_default_pick_limit: '預設精修張數上限需為 0 以上整數',
       invalid_default_extra_price: '預設加選單價需為 0 以上整數',
       invalid_default_extra_max: '最多可加選需為 0–500 的整數',
+      invalid_proof_retention_days: '毛片預設保存時間只能選不自動刪、90、180 或 365 天',
+      proof_retention_unavailable: '毛片自動刪除尚未啟用，請先執行 migration',
       extra_max_unavailable: '請先在 D1 執行 extra-max migration',
       invalid_transfer_info: '匯款資訊格式不正確（500 字以內，不可含特殊控制字元）',
       invalid_pick_link_message: '選片中的訊息格式不正確（1000 字以內，不可含特殊控制字元）',
@@ -635,6 +652,8 @@
         default_extra_price: extra_price,
       };
       if (extra_max !== loadedExtraMax) putBody.default_extra_max = extra_max;
+      const retention = Number(retentionInput.value);
+      if (retention !== loadedRetention) putBody.proof_retention_days = retention;
       if (transferInput.value !== loadedTransfer) putBody.transfer_info = transferInput.value;
       const linkNext = {};
       for (const m of LM) {
@@ -661,6 +680,7 @@
           return;
         }
         if ('default_extra_max' in putBody) loadedExtraMax = extra_max;
+        if ('proof_retention_days' in putBody) loadedRetention = retention;
         if ('transfer_info' in putBody) loadedTransfer = transferInput.value;
         for (const m of LM) if (m.field in putBody) m.loaded = linkNext[m.field];
         if (window.StudioWho) StudioWho.setStudioName(putBody.studio_name);   // Tim's label follows the saved name (no-op for an account session)

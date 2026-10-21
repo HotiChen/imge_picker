@@ -151,6 +151,15 @@
       </div>
     </div>
 
+    <div id="retention-sec" hidden>
+      <h2>即將刪毛片</h2>
+      <div class="panel">
+        <div class="panel-body">
+          <ul class="todo-list" id="retention-list"></ul>
+        </div>
+      </div>
+    </div>
+
     <h2>最近專案</h2>
     <div class="panel">
       <div class="panel-body">
@@ -295,8 +304,35 @@
       }
     }
 
+    // 即將刪毛片 (docs/delivery.md "Proof retention"): projects whose proofs go within 14 days, soonest first, from the
+    // Worker. Nothing to list or any failure = the section stays hidden (it is a reminder, not a page of its own).
+    async function loadRetention() {
+      try {
+        const data = await authedGet('/api/admin/proofs-retention');
+        const rows = data && data.available === true && Array.isArray(data.upcoming) ? data.upcoming : [];
+        const list = document.getElementById('retention-list');
+        list.replaceChildren();
+        for (const p of rows) {
+          if (!p || typeof p.id !== 'string') continue;
+          const at = Util.fmtDate(p.proofs_delete_at, 'ymd').split('/');
+          if (at.length !== 3) continue;
+          const li = document.createElement('li');
+          li.dataset.retention = p.id;
+          const span = document.createElement('span');
+          span.textContent = `${p.title || '（未命名）'}　毛片將於 ${at[0]} 年 ${at[1]} 月 ${at[2]} 日 刪除${Number.isFinite(p.days_left) ? `（剩 ${p.days_left} 天）` : ''}`;
+          const a = document.createElement('a');
+          a.href = `admin.html#project=${encodeURIComponent(p.id)}`;
+          a.textContent = '查看 →';
+          li.append(span, a);
+          list.append(li);
+        }
+        document.getElementById('retention-sec').hidden = list.children.length === 0;
+      } catch (e) { /* stays hidden */ }
+    }
+
     loadStats();
     loadRecent();
+    loadRetention();
   }
 })();
 </script>

@@ -156,14 +156,25 @@
         },
         // GET /api/pick/expiry (docs/delivery.md, "Photo expiry"): until when the delivered finals stay. The Worker
         // scans R2 for it, so it is asked at most once per page load (the promise is kept) and never polled. Resolves
-        // to {expires_at, days_left} or null on any failure.
+        // to {expires_at, days_left, proofs} or null on any failure. expires_at / days_left are null now (the finals' date is
+        // retired); `proofs` = {proofs_delete_at, days_left, notice, proofs_deleted_at, can_download} (docs/delivery.md,
+        // "Proof retention"), null when the Worker did not send an object.
         fetchExpiry() {
             if (!this._expiryP) {
                 this._expiryP = this._json('/api/pick/expiry', { headers: this.headers() })
-                    .then(r => (r && r.ok && r.data && typeof r.data.expires_at === 'string' ? { expires_at: r.data.expires_at, days_left: r.data.days_left } : null),
-                        () => null);
+                    .then(r => {
+                        const d = r && r.ok && r.data && typeof r.data === 'object' ? r.data : null;
+                        if (!d) return null;
+                        return { expires_at: typeof d.expires_at === 'string' ? d.expires_at : null, days_left: d.days_left,
+                            proofs: d.proofs && typeof d.proofs === 'object' ? d.proofs : null };
+                    }, () => null);
             }
             return this._expiryP;
+        },
+        // 完成頁 「下載毛片」: the existing 回到毛片 path (the proofs list, originals for the seat owner with the key header).
+        // Only when the photographer's switch is on; the Worker's gates are untouched.
+        openProofs() {
+            if (this.mode === 'delivered' && this.allowProofDownload) return this.switchView('proofs');
         },
         // POST /api/pick/interest (docs/guest-shop.md): the 完成頁 「我有興趣」. Token in the query, key only in
         // the X-Picker-Key header (this.headers()), never in a URL.
@@ -484,6 +495,7 @@
                 onDownloadAll: () => this.downloadAllFinals(),
                 fetchShop: () => this.fetchShop(),
                 fetchExpiry: () => this.fetchExpiry(),
+                onOpenProofs: () => this.openProofs(),
                 isOwner: this.isOwner,
                 onInterest: id => this.postInterest(id),
                 confirmed: !!this.confirmedAt,

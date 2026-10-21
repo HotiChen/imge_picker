@@ -77,6 +77,8 @@ html.cp-on footer.app-footer { display: none !important; }
 .cp-count { font-size: 14px; color: var(--cp-ink-70); font-variant-numeric: tabular-nums; }
 .cp-expiry { margin: 14px 0 0; font-size: 14px; line-height: 1.7; color: var(--cp-ink-70); }
 .cp-expiry[hidden] { display: none; }
+.cp-btn[hidden] { display: none; }   /* inline-flex would beat [hidden] */
+.cp-btn--proofs { margin-top: 14px; }
 .cp-expiry.cp-expiry--soon { padding: 10px 14px; border: 1px solid var(--cp-accent-shadow); border-radius: 10px; background: var(--cp-amber-soft); color: var(--cp-ink); font-weight: 600; }
 .cp-sub { margin: 0 0 18px; font-size: 15px; line-height: 1.7; color: var(--cp-ink-70); }
 

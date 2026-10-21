@@ -357,6 +357,10 @@
   .pd-ver-actions .btn { min-height: 44px; }   /* 看 / ＋ 上傳 / 改交這一版: touch targets at every width (a tablet is not 'mobile') */
   .pd-expiry { margin: 8px 0 0; font-size: 13px; color: var(--ink-70); }
   .pd-expiry.pd-expiry--warn { color: var(--danger); font-weight: 600; }
+  .pd-expiry-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+  .pd-expiry-actions .btn { min-height: 44px; font-weight: 400; }
+  .pd-expiry .err { margin-top: 6px; }
+  #pd-ret-custom { margin-top: 8px; }
   .pd-photos-dl { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; padding-top: 10px; border-top: 1px solid var(--rule); }
   .pd-steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
   .pd-steps li { display: flex; align-items: baseline; gap: 8px; font-size: 13px; color: var(--ink-70); }
@@ -1794,6 +1798,7 @@
           <h5 id="pd-set-project-h">專案設定</h5>
           <div id="pd-proofdl" class="pd-block"></div>
           <div id="pd-plan" class="pd-block"></div>
+          <div id="pd-retention" class="pd-block"></div>
         </section>
         <div class="pd-edit-actions"><button id="pd-edit-cancel" class="btn btn-outline" type="button">關閉</button></div>
       </div>
@@ -1826,6 +1831,7 @@
     editFill();
     renderProofDownloadBlock();
     renderPlanBlock();
+    renderRetentionBlock();
     modal.hidden = false;
     const input = $id('pd-rename-input');
     input.focus();
@@ -2115,6 +2121,7 @@
       <section class="pd-card" id="pd-photos" aria-labelledby="pd-photos-h">
         <h4 id="pd-photos-h">照片</h4>
         <div id="pd-photo-rows"></div>
+        <!-- 毛片刪除狀態 (renderRetentionLine) -->
         <p id="pd-expiry" class="pd-expiry" role="status" hidden></p>
         <div class="pd-photos-dl">
           <button id="pd-download-btn" class="btn btn-outline" type="button">下載選片</button>
@@ -2173,6 +2180,8 @@
     renderDeliveryBlock();
     renderProofDownloadBlock();
     renderPlanBlock();
+    renderRetentionBlock();
+    renderRetentionLine();
     loadExpiry(project);
     body.querySelectorAll('[data-copy-live-link]').forEach(btn => {
       btn.addEventListener('click', () => copyLinkAndShare(btn, project.title, btn.dataset.copyLiveLink, linkStage(project)));
@@ -2893,24 +2902,172 @@
     }
     return expiryCache.p;
   }
+  // Only the finals' date for 複製交件通知文案 is read here now; the photo card's line is the proofs' deletion status
+  // (renderRetentionLine below). The Worker answers null dates (the lifecycle rule is retired), so the notice stays the usual text.
   function loadExpiry(project) {
     const id = project.id;
     finalsExpiryDate = null;
     const asked = expiryFor(project);
     asked.then(data => {
-      const el = $id('pd-expiry');
       // a newer ask (the project's state changed meanwhile) wins over a late answer to this one
-      if (!el || !currentProject || currentProject.id !== id || !data || !expiryCache || expiryCache.p !== asked) return;
+      if (!currentProject || currentProject.id !== id || !data || !expiryCache || expiryCache.p !== asked) return;
       const fin = validExpiry(data.finals);
       finalsExpiryDate = fin ? taipeiDateText(fin.expires_at) : null;
-      const e = validExpiry(currentProject.delivered_at ? data.finals : data.proofs);
-      if (!e) { el.hidden = true; el.textContent = ''; return; }
-      const left = Math.ceil((Date.parse(e.expires_at) - Date.now()) / EXPIRY_DAY_MS);
-      el.classList.toggle('pd-expiry--warn', left <= 30);
-      el.textContent = left <= 0
-        ? '已超過預計保存期限，檔案可能已被刪除'
-        : `照片預計保存到 ${taipeiDateText(e.expires_at)}（剩 ${left} 天）${e.truncated ? '（估計）' : ''}`;
-      el.hidden = false;
+    });
+  }
+
+  // ── 毛片自動刪除 (docs/delivery.md, "Proof retention") ───────────────────
+  // currentProject.proof_retention comes with the project detail: {available, days, source, project_days, studio_days,
+  // proofs_delete_at, days_left, notice, proofs_deleted_at}. The photo card's line says when the proofs go (and, inside the
+  // 14-day window, offers 延後 30 天 / 不要刪); the 專案設定 modal's 毛片保存 field sets the project's own number.
+  const RET_ERRORS = {
+    proofs_deleted: '毛片已經依設定刪除，不能再修改',
+    proofs_not_scheduled: '這個專案沒有設定自動刪除，不需要延後',
+    retention_too_long: '保存天數最多 3650 天，不能再延後',
+    retention_changed: '設定剛剛被改過，請重新整理再試一次',
+    invalid_body: '設定格式不正確',
+    proof_retention_unavailable: '毛片自動刪除尚未啟用',
+  };
+  // POST .../proofs-retention: {ok: true, pr} or {ok: false, message}
+  async function postRetention(body) {
+    try {
+      const r = await fetch(`${WORKER_URL}/api/admin/projects/${encodeURIComponent(currentProjectId)}/proofs-retention`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${getToken()}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) return { ok: false, message: RET_ERRORS[data.code] || data.error || `失敗（${r.status}）` };
+      return data && data.proof_retention ? { ok: true, pr: data.proof_retention } : { ok: false, message: '回應格式不正確' };
+    } catch (e) {
+      return { ok: false, message: '無法連線到 Worker' };
+    }
+  }
+  function applyRetention(pr) {
+    if (!currentProject) return;
+    currentProject.proof_retention = pr;
+    renderRetentionLine();
+    renderRetentionBlock();
+  }
+  function renderRetentionLine() {
+    const el = $id('pd-expiry');
+    const project = currentProject;
+    if (!el || !project) return;
+    const pr = project.proof_retention;
+    el.replaceChildren();
+    el.classList.remove('pd-expiry--warn');
+    let text = '', actions = false;
+    if (pr && pr.available) {
+      const deletedDay = taipeiDateText(pr.proofs_deleted_at);
+      const atDay = taipeiDateText(pr.proofs_delete_at);
+      if (deletedDay) text = `毛片已於 ${deletedDay} 依設定刪除`;
+      else if (pr.days > 0 && atDay) {
+        text = `毛片將於 ${atDay} 刪除${Number.isFinite(pr.days_left) ? `（剩 ${pr.days_left} 天）` : ''}`;
+        actions = pr.notice === true;
+      }
+    }
+    if (!text) { el.hidden = true; return; }
+    const span = document.createElement('span');
+    span.id = 'pd-expiry-text';
+    span.textContent = text;
+    el.append(span);
+    el.classList.toggle('pd-expiry--warn', actions);
+    if (actions) {
+      const box = document.createElement('span');
+      box.className = 'pd-expiry-actions';
+      const err = document.createElement('span');
+      err.id = 'pd-ret-line-err';
+      err.className = 'err';
+      err.setAttribute('role', 'alert');
+      for (const [id, label, body] of [['pd-ret-postpone', '延後 30 天', { action: 'postpone' }], ['pd-ret-never', '不要刪', { action: 'never' }]]) {
+        const b = document.createElement('button');
+        b.id = id; b.type = 'button'; b.className = 'btn btn-outline'; b.textContent = label;
+        b.addEventListener('click', async () => {
+          err.textContent = '';
+          box.querySelectorAll('button').forEach(x => { x.disabled = true; });
+          const r = await postRetention(body);
+          if (r.ok) { applyRetention(r.pr); return; }
+          err.textContent = r.message;
+          box.querySelectorAll('button').forEach(x => { x.disabled = false; });
+        });
+        box.append(b);
+      }
+      el.append(box, err);
+    }
+    el.hidden = false;
+  }
+  const RET_PRESETS = [90, 180, 365];
+  function retentionChoice(pr) {
+    const d = pr.project_days;
+    if (d === null || d === undefined) return 'studio';
+    if (d === 0) return 'never';
+    return RET_PRESETS.includes(d) ? String(d) : 'custom';
+  }
+  function renderRetentionBlock() {
+    const box = $id('pd-retention');
+    const project = currentProject;
+    if (!box || !project) return;
+    const pr = project.proof_retention;
+    if (!pr || !pr.available) {
+      box.innerHTML = '<h4>毛片保存</h4><div class="pd-note">毛片自動刪除尚未啟用。</div>';
+      return;
+    }
+    const deletedDay = taipeiDateText(pr.proofs_deleted_at);
+    if (pr.proofs_deleted_at) {
+      box.innerHTML = `<h4>毛片保存</h4>
+        <select id="pd-ret-select" class="field" aria-label="毛片保存" disabled><option>已刪除</option></select>
+        <div class="pd-note">毛片已於 ${escHtml(deletedDay)} 依設定刪除，不能再修改。精修成品不受影響。</div>`;
+      return;
+    }
+    const studioText = pr.studio_days > 0 ? `${pr.studio_days} 天` : '不自動刪';
+    const choice = retentionChoice(pr);
+    box.innerHTML = `
+      <h4>毛片保存</h4>
+      <label for="pd-ret-select">客人確認完成後，毛片保留多久</label>
+      <select id="pd-ret-select" class="field">
+        <option value="studio">跟工作室設定（目前：${escHtml(studioText)}）</option>
+        <option value="never">不自動刪</option>
+        ${RET_PRESETS.map(n => `<option value="${n}">客人確認後 ${n} 天</option>`).join('')}
+        <option value="custom">自訂天數…</option>
+      </select>
+      <input id="pd-ret-custom" class="field" type="number" min="14" max="3650" step="1" inputmode="numeric" aria-label="自訂天數（14–3650）" placeholder="14–3650 天"
+        value="${choice === 'custom' ? escHtml(pr.project_days) : ''}" ${choice === 'custom' ? '' : 'hidden'}>
+      <div class="pd-note">從客人按下確認完成起算；到期前 14 天會提醒你。精修成品不會被刪。</div>
+      <button id="pd-ret-save" class="btn btn-accent" type="button">儲存</button>
+      <div id="pd-ret-err" class="err" role="alert"></div>
+      <div id="pd-ret-ok" class="ok-msg"></div>`;
+    const select = box.querySelector('#pd-ret-select');
+    const custom = box.querySelector('#pd-ret-custom');
+    const errEl = box.querySelector('#pd-ret-err');
+    const okEl = box.querySelector('#pd-ret-ok');
+    const btn = box.querySelector('#pd-ret-save');
+    select.value = choice;
+    select.addEventListener('change', () => {
+      custom.hidden = select.value !== 'custom';
+      if (select.value === 'custom') custom.focus();
+    });
+    btn.addEventListener('click', async () => {
+      errEl.textContent = ''; okEl.textContent = '';
+      let want;
+      if (select.value === 'studio') want = null;
+      else if (select.value === 'never') want = 0;
+      else if (select.value === 'custom') {
+        const raw = custom.value.trim();
+        want = raw === '' ? NaN : Number(raw);
+        if (!Number.isInteger(want) || want < 14 || want > 3650) { errEl.textContent = '自訂天數需為 14–3650 的整數'; return; }
+      } else want = Number(select.value);
+      const before = Number.isInteger(pr.project_days) ? pr.project_days : null;
+      if (want === before) { okEl.textContent = '沒有變更'; return; }
+      btn.disabled = true; select.disabled = true; custom.disabled = true;
+      const r = await postRetention({ days: want });
+      if (!r.ok) {
+        errEl.textContent = r.message;
+        btn.disabled = false; select.disabled = false; custom.disabled = false;
+        return;
+      }
+      applyRetention(r.pr);
+      const ok = $id('pd-ret-ok');
+      if (ok) ok.textContent = '已儲存';
     });
   }
   function deliveryNoticeText(project, link, expiryDate) {

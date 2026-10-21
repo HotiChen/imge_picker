@@ -3,6 +3,7 @@
 // Shared by more than one file in test/suites/; helpers used by a single suite file stay in that file.
 import { PIXEL } from './env.mjs';
 import { PHOTOS } from './editor-mocks.mjs';
+import { guestProofsInfoFake, proofRetentionInfoFake, postProofsRetentionFake, studioProofDaysFake } from './proof-retention-fake.mjs';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Guest picking (docs/guest-picking.md) — index.html?t=<pick token> and the
@@ -137,7 +138,7 @@ export const isProjectTypeInputFake = v => v === null || v === '' || (typeof v =
 export function settingsShapeFake(st) {
   const x = st.default_extra_max ?? null;
   return { studio_name: null, booking_url: null, default_pick_limit: null, default_extra_price: null,
-    has_logo: false, pick_link_message: null,
+    has_logo: false, pick_link_message: null, proof_retention_days: 0,
     link_message_submitted: null, link_message_delivered: null, link_message_done: null, ...st, default_extra_max: x,
     effective_default_extra_max: isExtraMaxFake(x) ? x : EXTRA_MAX_DEFAULT_FAKE };
 }
@@ -162,6 +163,10 @@ export function expiryOfFake(uploaded, truncated) {
   };
 }
 
+// worker.js GET /api/admin/projects/:id/expiry since the R2 lifecycle rule was retired: every date null, R2 not asked
+// (docs/delivery.md "Photo expiry"). The dated answers above (expiryOfFake) are only for opts.legacyExpiryUploaded.
+const retiredExpiryFake = () => ({ expires_at: null, earliest_uploaded: null, count: null, truncated: false });
+
 export function pickFakeWorker(opts = {}) {
   const settings = { ...(opts.settings || {}) };
   const state = {
@@ -174,6 +179,10 @@ export function pickFakeWorker(opts = {}) {
       extra_max: opts.extraMax ?? null,   // NULL = a project from before the feature: no plan cap
       folders: opts.folders || ['20260819/'],
       owner_picker_id: null,
+      // proof retention (docs/delivery.md "Proof retention"): the raw columns the admin detail also carries
+      proof_retention_days: opts.projectRetentionDays ?? null,
+      proofs_deleted_at: opts.proofsDeletedAt ?? null,
+      proofs_delete_next_at: opts.proofsDeleteNextAt ?? null,
       phase: opts.phase || 'picking',
       modified_after_submit: 0,
       archived_at: opts.archivedAt || null,
@@ -249,6 +258,7 @@ export function pickFakeWorker(opts = {}) {
   // action changed something). opts.eventsStatus answers GET .../events with that status instead.
   state.events = (opts.events || []).map((e, i) => ({ id: i + 1, actor: 'photographer', data: null, ...e }));
   const logEvent = (kind, actor, at, data = null) => state.events.push({ id: state.events.length + 1, at, kind, actor, data });
+  state.retentionPosts = [];
   state.expiryCalls = { admin: 0, pick: 0 };   // how many times each expiry route was asked
   const requests = [];
 
@@ -390,10 +400,13 @@ export function pickFakeWorker(opts = {}) {
         return send({ products: opts.shopProducts || [], ordering: opts.ordering ?? null }, 200);
       }
 
-      // GET /api/pick/expiry (worker.js, docs/delivery.md "Photo expiry"): link (401) -> method (405, Allow: GET) ->
-      // not delivered = 200 {expires_at: null, days_left: null} -> {expires_at, days_left} of the finals' earliest upload
-      // + 180 days (days_left = whole days rounded up, never below 0). opts.expiryUploaded = {proofs, finals}: the earliest
-      // upload of each (ISO or null); opts.expiryFail = 'net' | a status. Counted in state.expiryCalls.pick.
+      // GET /api/pick/expiry (worker.js, docs/delivery.md "Photo expiry" + "Proof retention"): link (401) -> method (405,
+      // Allow: GET) -> 200 {expires_at: null, days_left: null, proofs: {proofs_delete_at, days_left, notice, proofs_deleted_at,
+      // can_download}} for any live link, delivered or not (the finals' date is retired). The proofs part is computed from
+      // the project (confirmed_at + the days in effect, the studio's number in settings.proof_retention_days), the seat
+      // (X-Picker-Key = the owner) and allow_proof_download. opts.retentionAvailable === false = before the migration.
+      // opts.legacyExpiryUploaded = {finals}: the OLD dated answer, only to exercise the page's still-present date code.
+      // opts.expiryFail = 'net' | a status. Counted in state.expiryCalls.pick.
       if (u.pathname === '/api/pick/expiry') {
         state.expiryCalls.pick++;
         if (opts.expiryFail === 'net') return route.abort('failed');
@@ -401,11 +414,15 @@ export function pickFakeWorker(opts = {}) {
         if (!shareTok || state.project.archived_at) return json({ error: 'Unauthorized' }, 401);
         const send = (data, status, extra) => route.fulfill({ status, contentType: 'application/json', headers: { 'Cache-Control': 'private, no-store', 'Vary': 'X-Share-Token', ...(extra || {}) }, body: JSON.stringify(data) });
         if (method !== 'GET') return send({ error: 'Method not allowed' }, 405, { Allow: 'GET' });
-        const scope = pickScopeFake(state.project);
-        if (scope.mode !== 'delivered') return send({ expires_at: null, days_left: null }, 200);
-        const exp = expiryOfFake((opts.expiryUploaded || {}).finals, false);
-        const days_left = exp.expires_at === null ? null : Math.max(0, Math.ceil((Date.parse(exp.expires_at) - nowMs()) / 86400000));
-        return send({ expires_at: exp.expires_at, days_left }, 200);
+        const picker = pickerKey ? findByKey(pickerKey) : null;
+        const isOwner = !!picker && state.project.owner_picker_id === picker.id;
+        const proofs = guestProofsInfoFake(state.project, studioProofDaysFake(state.settings.proof_retention_days), opts.retentionAvailable !== false, isOwner, nowMs());
+        if (opts.legacyExpiryUploaded && pickScopeFake(state.project).mode === 'delivered') {
+          const exp = expiryOfFake(opts.legacyExpiryUploaded.finals, false);
+          const days_left = exp.expires_at === null ? null : Math.max(0, Math.ceil((Date.parse(exp.expires_at) - nowMs()) / 86400000));
+          return send({ expires_at: exp.expires_at, days_left, proofs }, 200);
+        }
+        return send({ expires_at: null, days_left: null, proofs }, 200);
       }
 
       // ── Co-picking routes (worker.js "Co-picking", docs/co-picking.md). Order of checks as the Worker: link (401: no
@@ -852,7 +869,8 @@ export function pickFakeWorker(opts = {}) {
           kind: r.kind, marks: r.marks, finals: r.finals, message_auto: r.message_auto, photo_count: r.photo_count,
         }));
         return json({
-          project: { ...state.project, open_revision_count: openRevisions().length },
+          project: { ...state.project, open_revision_count: openRevisions().length,
+            proof_retention: proofRetentionInfoFake(state.project, studioProofDaysFake(state.settings.proof_retention_days), opts.retentionAvailable !== false, nowMs()) },
           owner: owner ? { id: owner.id, name: owner.name } : null,
           pickers, selections, tokens, submissions,
           unnotified_submissions: unnotifiedCountFake(state.submissions),
@@ -906,17 +924,43 @@ export function pickFakeWorker(opts = {}) {
         return json({ ok: true });
       }
       // GET /api/admin/projects/:id/expiry (worker.js, docs/delivery.md "Photo expiry"): {proofs, finals} with
-      // {expires_at, earliest_uploaded, count, truncated} each; finals null while final_folders is. Fed by
-      // opts.expiryUploaded = {proofs, finals} (earliest upload, ISO or null), opts.expiryTruncated, opts.expiryFail.
+      // {expires_at, earliest_uploaded, count, truncated} each; finals null while final_folders is. Every date is null now
+      // (retired with the R2 lifecycle rule). opts.legacyExpiryUploaded = {proofs, finals} (earliest upload, ISO or null) +
+      // opts.expiryTruncated gives the OLD dated answer, only to exercise the page's still-present date code (the notice
+      // text); opts.expiryFail = 'net' | a status.
       if (/^\/api\/admin\/projects\/[^/]+\/expiry$/.test(u.pathname)) {
         state.expiryCalls.admin++;
         if (opts.expiryFail === 'net') return route.abort('failed');
         if (typeof opts.expiryFail === 'number') return json({ error: 'boom' }, opts.expiryFail);
         if (state.deleted || decodeURIComponent(u.pathname.split('/')[4]) !== state.project.id) return json({ error: 'Not found' }, 404);
         if (method !== 'GET') return route.fulfill({ status: 405, contentType: 'application/json', headers: { Allow: 'GET' }, body: JSON.stringify({ error: 'Method not allowed' }) });
-        const up = opts.expiryUploaded || {};
         const hasFinals = Array.isArray(state.project.final_folders) && state.project.final_folders.length > 0;
-        return json({ proofs: expiryOfFake(up.proofs, !!opts.expiryTruncated), finals: hasFinals ? expiryOfFake(up.finals, !!opts.expiryTruncated) : null });
+        if (opts.legacyExpiryUploaded) {
+          const up = opts.legacyExpiryUploaded;
+          return json({ proofs: expiryOfFake(up.proofs, !!opts.expiryTruncated), finals: hasFinals ? expiryOfFake(up.finals, !!opts.expiryTruncated) : null });
+        }
+        return json({ proofs: retiredExpiryFake(), finals: hasFinals ? retiredExpiryFake() : null });
+      }
+      // POST /api/admin/projects/:id/proofs-retention and GET /api/admin/proofs-retention (worker.js, docs/delivery.md
+      // "Proof retention"). The body rules, the answers and the 14 / 30 day floor are proof-retention-fake.mjs. Counted in
+      // state.retentionPosts (the bodies). opts.retentionAvailable === false = before the migration (500 on the POST).
+      // opts.retentionPostStatus = {status, body} forces an answer (after the id / method checks). The studio's number is
+      // settings.proof_retention_days; opts.upcoming overrides the GET's list.
+      if (/^\/api\/admin\/projects\/[^/]+\/proofs-retention$/.test(u.pathname)) {
+        if (state.deleted || decodeURIComponent(u.pathname.split('/')[4]) !== state.project.id) return json({ error: 'Not found' }, 404);
+        if (method !== 'POST') return route.fulfill({ status: 405, contentType: 'application/json', headers: { Allow: 'POST' }, body: JSON.stringify({ error: 'Method not allowed' }) });
+        state.retentionPosts.push(body);
+        if (opts.retentionPostStatus) return json(opts.retentionPostStatus.body, opts.retentionPostStatus.status);
+        const r = postProofsRetentionFake(state.project, body, studioProofDaysFake(state.settings.proof_retention_days), opts.retentionAvailable !== false, nowMs());
+        return json(r.body, r.status);
+      }
+      if (u.pathname === '/api/admin/proofs-retention') {
+        if (method !== 'GET') return route.fulfill({ status: 405, contentType: 'application/json', headers: { Allow: 'GET' }, body: JSON.stringify({ error: 'Method not allowed' }) });
+        const studio = studioProofDaysFake(state.settings.proof_retention_days);
+        if (opts.retentionAvailable === false) return json({ available: false, studio_days: 0, upcoming: [] });
+        const i = proofRetentionInfoFake(state.project, studio, true, nowMs());
+        const upcoming = opts.upcoming || (i.notice ? [{ id: state.project.id, title: state.project.title, proofs_delete_at: i.proofs_delete_at, days_left: i.days_left, days: i.days, source: i.source }] : []);
+        return json({ available: true, studio_days: studio, upcoming });
       }
       // GET /api/admin/projects/:id/events (worker.js): the newest 200, oldest first; another id is 404
       if (/^\/api\/admin\/projects\/[^/]+\/events$/.test(u.pathname) && method === 'GET') {
