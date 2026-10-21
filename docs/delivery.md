@@ -742,9 +742,9 @@ Frontend only; no Worker field was added. Top to bottom (`renderProjectDetail`):
   一般設定 = the old edit form (專案名稱 / 拍攝日期 / 攝影類別 and the read-only 資料夾 line; its own 儲存 sends one PATCH per
   changed field, then closes). 專案設定 = `#pd-proofdl` (毛片下載 switch) and `#pd-plan` (方案), same behaviour as before, drawn
   when the modal opens. A page refresh while it is open (a plan save re-reads the project) carries the open modal over, so what
-  is typed in 一般設定 is not lost. The rest of the menu: 看全部毛片, 複製交件通知文案 and 取消交件 (delivered), 開放修改, then
-  重設主人, 封存, 刪除 (no submissions) in the danger colour.
-- ⋯ menu (2026-10-20): items that do not apply stay in the same fixed order, grayed (`aria-disabled="true"`, token gray, never red, reason in small text on the item, a click does nothing, arrows skip them): 複製交件通知文案 / 取消交件 「尚未交件」; 開放修改 「還沒送出選片」 (= not delivered and phase picking, the Worker's own reopen condition); 看全部毛片 「還沒有毛片」 (listing says no 毛片 folder; never grayed while the listing is on its way; no href when grayed); 重設主人 「還沒有人認領」 (no seat owner); 刪除 「已有送出紀錄，不能刪」. 設定 always active; 封存 hidden only when archived. The 毛片 row's 看 in 照片 is a disabled button with 「還沒有毛片」 in the same case.
+  is typed in 一般設定 is not lost. The rest of the menu, in this fixed order (`renderMoreMenu`): 看全部毛片, 複製交件通知文案, 開放修改,
+  取消交件, a separator, then 重設主人, 封存 (left out while archived), 刪除 in the danger colour (8 items with 設定; see the grayed rule below).
+- ⋯ menu (2026-10-20): items that do not apply stay in the same fixed order, grayed (`aria-disabled="true"`, token gray, never red, reason in small text on the item with a 🔒 before it (4b4c475), a click does nothing, arrows skip them); the reasons, by item (not in menu order): 複製交件通知文案 / 取消交件 「尚未交件」; 開放修改 「還沒送出選片」 (= not delivered and phase picking, the Worker's own reopen condition); 看全部毛片 「還沒有毛片」 (listing says no 毛片 folder; never grayed while the listing is on its way; no href when grayed); 重設主人 「還沒有人認領」 (no seat owner); 刪除 「已有送出紀錄，不能刪」. 設定 always active; 封存 hidden only when archived. The 毛片 row's 看 in 照片 is a disabled button with 「還沒有毛片」 in the same case.
 - 挑選人與連結 (2026-10-20): the collapsed title row is two lines (title + a real 複製連結 button beside the toggle that copies the first live pick link and opens the same share dialog, grayed 「沒有有效連結」 with none; line 2 = the summary); each opened link row is two lines (token with ellipsis + 複製連結 / 撤銷 right-aligned; the badge below), nothing leaves the card at 320px.
 - 目前選取 (2026-10-20): its 「看照片 →」 link stays on the title row's line (no wrap), tap target >= 44px.
 - The collapsible sections are now 目前選取, 訂單 and 挑選人與連結 (the 設定 section and the 送出紀錄 section are gone); 交件 is no
@@ -799,7 +799,13 @@ deliver replaces `final_folders`, undeliver / reopen clear the stamp), so e.g. �
 
 Why: the R2 bucket `imagepicker` has a lifecycle rule that deletes every object 180 days after its upload (whole
 bucket, no prefix). Neither the photographer nor the client could see when. These two read-only routes give the
-date; the pages that show it (「照片保存到 X 月 X 日」) are a separate frontend step.
+date. The frontend that shows it was built 2026-10-20 (34b54a6, d961419; suite `99p-photo-expiry.mjs`):
+- admin.html project page, 照片 card: one line 「照片預計保存到 Y 年 M 月 D 日（剩 N 天）」 (`#pd-expiry`; the finals date once
+  delivered, warning colour at ≤ 30 days; not re-asked for the same project state within 5 minutes; silent on failure).
+- 複製交件通知文案 adds 「精修預計保存到 …，請在這之前下載保存。」 when the date is known.
+- 完成頁: a note beside 下載全部精修 (`#cpExpiry`, from `GET /api/pick/expiry` through `js/pick.js` `fetchExpiry`).
+- **Not built:** the 驗收頁 (delivered, not yet confirmed) shows no date; the guest pick page (before delivery) neither.
+  Dates are Asia/Taipei through `Util.fmtDate`.
 
 - `R2_LIFETIME_DAYS = 180` in worker.js mirrors the lifecycle rule: change the rule and the constant together.
 - It is an estimate: R2 counts from each object's `uploaded`, so a photo uploaded again starts its 180 days over.
@@ -826,4 +832,4 @@ date; the pages that show it (「照片保存到 X 月 X 日」) are a separate 
 
 (Status 2026-10-08: the zip of all finals shipped on the 完成頁, 下載全部精修.) Watermarks; a second link just for delivery;
 emailing the guest when delivered (can reuse the mail binding later);
-long-term storage past 180 days (the 180-day countdown is still to do).
+long-term storage past 180 days (the expiry date is shown since 2026-10-20, see "Photo expiry"; not on the 驗收頁).
