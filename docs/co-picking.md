@@ -1,5 +1,12 @@
 # Co-picking (協作者) — design, decided 2026-10-11
 
+**Status 2026-10-21 (checked against the code of `main` at d713634):** build order 1–5 below is built and merged (Worker
+`/api/pick/invites|join|collaborators|renewal`, worker tests `co-picking-*.test.mjs`; owner panel, join, collaborator mode,
+photographer view: browser suites 65–67, 70, 71; owner stats: suite 96). The migration `2026-10-13-co-picking.sql` has run
+in prod per Tim's verbal report of his `check-migrations.sql` run (2026-10-21, no saved output; `docs/backup.md` §四). Whether the `PICK_INVITE_SECRET` secret is
+set in prod cannot be seen from the repo (without it every co-picking route answers 500 `co_picking_unavailable`). Item 6 is
+not built.
+
 Tim's decisions, all agreed on 2026-10-11:
 
 - The seat holder (主人) can invite people to pick with them. It also covers the owner moving to another
