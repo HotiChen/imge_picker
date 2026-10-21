@@ -1998,6 +1998,11 @@
       clearTimeout(st._t);
       st._t = setTimeout(() => { st.textContent = ''; }, 2500);
     } else if (action === 'reopen') {
+      // reopen takes a delivery down with it (delivered_at and the client's confirmation are cleared), so say so
+      const p = currentProject || {};
+      const down = !p.delivered_at ? '' : p.client_confirmed_at
+        ? '\n已交件的精修成品會不再顯示，客人的確認也會清除。' : '\n已交件的精修成品會不再顯示。';
+      if (!confirm('開放修改後，客人的連結會回到選片畫面，可以重新修改選片；送出紀錄會保留。' + down + '\n確定要開放修改嗎？')) return;
       await projectAction('reopen');
     } else if (action === 'undeliver') {
       if (!confirm('取消交件後，客人的連結會回到選片畫面（唯讀），精修成品不再顯示。確定要取消交件嗎？')) return;
@@ -2544,7 +2549,8 @@
       ${noProofs(p) ? '<span class="pd-ver-meta">還沒有毛片</span>' : ''}<span class="pd-ver-actions">${noProofs(p) ? '<button type="button" class="btn btn-outline btn-locked" data-view disabled aria-disabled="true" title="還沒有毛片">看</button>' : `<a class="btn btn-outline" data-view href="index.html?project=${id}&amp;mode=all">看</a>`}${proofsUploadHtml(p)}</span></div>`];
     for (const f of finalRowsOf(p)) {
       // 改交這一版: while delivered, on every version the client does not see now (a repeat deliver of just it)
-      const revert = delivered.length && !delivered.includes(f)
+      // (not on an archived project: its links are dead, so 取消封存 comes first)
+      const revert = delivered.length && !delivered.includes(f) && !p.archived_at
         ? `<button class="btn btn-outline" type="button" data-revert-version data-folder="${escHtml(f)}">改交這一版</button>` : '';
       rows.push(`<div class="pd-ver" data-version="${escHtml(f)}"><span class="pd-ver-name">${escHtml(leafName(f))}</span>
         ${delivered.includes(f) ? '<span class="pd-ver-current" data-current-version>客人目前看的版本</span>' : ''}
