@@ -1,7 +1,7 @@
 # Backlog
 
 Decided or discussed, not yet built. Newest decisions at the top of each group.
-**Status refreshed 2026-10-08** (against `main` 25ae25a): items that have shipped are marked
+**Status refreshed 2026-10-21** (against `main` d713634; the previous refresh was 2026-10-08 at 25ae25a): items that have shipped are marked
 ✅ in place or moved to "Shipped since 2026-09-29" below; sections kept for their decisions
 say so in their heading.
 
@@ -72,7 +72,8 @@ widen to free sign-up / SaaS. No new big features outside this list.
    fee stays off until then.
 7. **Only then widen to full SaaS:** free sign-up → subscriptions. (Photographer
    accounts, multi-tenant isolation and per-photographer R2 paths are in
-   `docs/multi-photographer.md` (design only so far), to be built in its batches 1–5 before this step.)
+   `docs/multi-photographer.md`: batches 1–3 and invite-code sign-up are built and live, `PHOTOGRAPHER_ROUTES = "on"`;
+   batch 4 (per-photographer notification email) and the open self sign-up of batch 5 are not; see the status at the top of that file.)
 
 **Parked — do not start:** referral, client hub, online payment, vendor
 accounts, AI (layout or otherwise), more products, big operator console,
@@ -103,7 +104,14 @@ reference only.
   `GUEST_ORDERS` in `worker/wrangler.toml` (`off` default, `pilot` + `GUEST_ORDERS_PILOT`,
   `on`) after the privacy notice is reviewed and `2026-10-09-guest-orders.sql` has run.
   Pickup only, money flow deferred (`docs/guest-shop.md`, "S2 — Tim 的決定").
-- Test layout: browser suites split into `test/suites/NN-*.mjs` + `test/lib/*` (`test/README.md`).
+- Test layout: browser suites split into `test/suites/NN-*.mjs` + `test/lib/*` (`test/README.md`);
+  `test/run-parallel.mjs` runs the full browser suite in 3 workers.
+- Since 2026-10-08 (all on `main` as of d713634): co-picking (`docs/co-picking.md`); multi-photographer batches 1–3,
+  invite-code sign-up and one login form (`docs/multi-photographer.md`); deleting one photo; the 驗收頁 as the 毛片 page,
+  per-version view and 改交這一版, the redesigned project page (status card, ⋯ menu, 設定 modal, 準備中), the activity log
+  `project_events`, one live pick link per project (a new link revokes the old ones), photo expiry dates
+  (`docs/delivery.md`); Space picks on the guest page (`docs/guest-picking.md`); D1 weekly backup and Time Travel
+  workflows (`docs/backup.md`).
 
 ## Earlier roadmap notes (reference only — THE ORDER above wins)
 Done: back-office shell (dashboard, 已交付); studio settings (name, logo,
@@ -115,8 +123,9 @@ Design: `docs/products-orders.md`.
    project in admin and on the guest page. The platform is not the
    photographer's archive — they keep their originals.
    *Status: Worker done (2026-10-20): `GET /api/admin/projects/:id/expiry` and
-   `GET /api/pick/expiry` (`docs/delivery.md`, "Photo expiry"); the frontend
-   (admin + guest page) is not built yet.*
+   `GET /api/pick/expiry` (`docs/delivery.md`, "Photo expiry"). Frontend done (2026-10-20): a line on
+   the admin project page, the date in 複製交件通知文案, a note beside 下載全部精修 on the 完成頁.
+   Not built: the 驗收頁 (delivered, not yet confirmed) and the pick page show no date.*
 2. **B — guest shop.** Platform products (photo, price) on the pick page;
    the guest orders, the photographer confirms, payment by transfer. The main
    selling point. *Status: S1 (product info) and 我有興趣 live; S2 ordering built
@@ -235,8 +244,12 @@ Guest link only (owner and viewers); the photographer's own index.html keeps eve
 > 2026-10-19: 主人看協作者統計 built (docs/co-picking.md build order 5): per-person heart chips + tap-to-filter on the owner's pick page,
 > owner only. Still open: the owner page does not live-refresh collaborators' hearts.
 
-## Co-picking / collaborators (decided with Tim 2026-09-30 — design to be rewritten, not built)
+## Co-picking / collaborators (decided with Tim 2026-09-30 — HISTORY: superseded by `docs/co-picking.md`, built)
 Replaces the seat-passing proposal in docs/pick-handover.md §3+ (kept only as history).
+*Status 2026-10-21:* the design was rewritten on 2026-10-11 as `docs/co-picking.md` (8-digit invite codes, at most
+2 collaborators, owner-only submit) and built and merged (`2026-10-13-co-picking.sql`; browser suites 65–67, 70, 71, 96).
+The bullets below are the 2026-09-30 discussion; where they differ (colours per person, a reusable link, up to 5 people),
+`docs/co-picking.md` wins.
 - **Two people by default** (the first person + one collaborator, a couple);
   `max_pickers` per project, raisable for a family portrait.
 - Each person's ♥ has their own colour **and the first character of their name**
@@ -298,8 +311,8 @@ Still open:
   Security review: this widens what a live link can read.
 - ✅ Done: "no extra picks" is `extra_max = 0` (submit refuses above `pick_limit + extra_max`;
   a blank 加挑單價 still only hides the price).
-- Logo route per photographer (`/api/studio/:pid/logo`); today it always
-  serves the default studio — fine until a second photographer exists.
+- ✅ Done another way (multi-photographer batch 2b-3): `GET /api/pick/logo?t=` (the link's photographer) and
+  `GET /api/admin/settings/logo` (the caller's own); the public `/api/studio/logo` still serves only the default studio.
 - Strip bidi / zero-width characters from `studio_name` (spoofing only; admin-set).
 - Custom (non-platform) products for photographers — built, off by
   `CUSTOM_PRODUCTS`; ideas: invite a photographer's own print lab onto the
@@ -309,7 +322,7 @@ Still open:
 - Link a registered client account to a pick seat (`pickers.user_id`).
 - Storage usage tracking per photographer (limit by GB, not album count).
 - Cap the number of photo keys listed in the change-notification email.
-- ✅ 已做 2026-10-19（`claude/retouch-stage` 分支上的 agent 工作，未合併，待 Tim 實機驗）：**驗收頁就是毛片頁**
+- ✅ 已做 2026-10-19（`claude/retouch-stage`，已合併到 main（e1f573c），待 Tim 實機驗）：**驗收頁就是毛片頁**
   （Tim：「精修要修改的方式跟毛片一樣」）。交件、未確認時用標準照片格＋標準預覽（可縮放／平移，沒有 ♥），
   標示用毛片同一套（標示修改／完成、上方說明框、備註・標示清單），存進修改草稿（`PUT /api/pick/revision-pins`，
   Worker 不動）；底部一顆按鈕：沒標示「精修完成」→ 確認完成對話框，有標示「送出（N 張）」→ 送出對話框。
@@ -321,7 +334,7 @@ Still open:
   只有上一張／下一張＋下載。待討論：直接共用毛片的縮放模組 vs. 另做；注意交件圖庫只
   走 `pickFinals`，不可為此新增讀取路徑；縮放時要不要載入大圖（1200 → 原圖不可，仍只給 thumb）。
   **只記錄，尚未討論、尚未動工。**
-- ✅ 已做 2026-10-18（`claude/guest-delivery-fixes`，未合併，待 Tim 實機驗）：驗收頁的分享鈕已移除，只留完成頁 `cpShare`；測試 `85-share-on-completion-page.mjs`。
+- ✅ 已做 2026-10-18（`claude/guest-delivery-fixes`，已合併到 main（0446a18 起），待 Tim 實機驗）：驗收頁的分享鈕已移除，只留完成頁 `cpShare`；測試 `85-share-on-completion-page.mjs`。
 - 驗收頁（交件後、客人還沒確認完成）不該有「分享」鈕；只有確認後的完成頁（`cpShare`）才有
   （Tim 2026-10-15 確認：「完整頁面」＝完成頁）。做法：`js/pick.js` 只在 `cp` 時傳 `onShare`，
   `js/finals-gallery.js` 沒有 `onShare` 就不畫 `#fgShare`；完成頁分享不動。測試代價：
@@ -434,19 +447,18 @@ new product and not a shared album.
 - `node --check <file>.js` does not catch syntax errors on our Node (v22): there
   is no package.json, so the file is not treated as a module and an unbalanced
   paren still exits 0. Use `node --input-type=module --check < worker/worker.js`
-  (or add `"type": "module"` where that is correct) in CLAUDE.md's commands and
-  in `.github/workflows/deploy.yml`. The worker tests import worker.js as ESM,
+  (or add `"type": "module"` where that is correct) in CLAUDE.md's commands (done) and
+  in `.github/workflows/deploy.yml` (still a plain `node --check` loop, 2026-10-21). The worker tests import worker.js as ESM,
   so they do catch it; the CI syntax step for the frontend JS files does not.
-- Upload route (`PUT` to any unmatched path) also accepts admin requests under
-  `api/…` and stores them as R2 objects (e.g. `PUT /api/admin/projects/<id>/archive`
-  writes a junk object; only the admin token can do it, the 180-day lifecycle
-  removes it). Make the upload route refuse any key starting with `api/`.
+- ✅ Fixed (r2-hardening): the upload `PUT` answers 404 for a key whose first segment is `api` and writes nothing
+  (`worker/test/upload-paths.test.mjs`).
 - Browser E2E suite in CI (fix the flaky suites first: book_editor "no token
   is minted for an empty folder set", and mobile preview "preloads i±1 … at
   the responsive width bucket" — both pass alone, fail under load).
 - Password hashing: SHA-256 → PBKDF2 with legacy-hash compatibility.
 - WAF rate limit on login / register.
-- Upload: force Content-Type server-side, check magic bytes, 50MB per file.
+- Upload: check magic bytes, 50MB per file. (Content-Type is now checked server-side against the extension:
+  `uploadContentType`, `worker/test/upload-types.test.mjs`.)
 - `notifyUrl` allowlist on book submit.
 - Cloudflare Cache Rule `imhoti.tw/studio/*` → Bypass (removes the need to
   purge after every deploy).
@@ -459,8 +471,8 @@ new product and not a shared album.
 
 > Status 2026-10-08: the branch below was merged long ago (submit-time cap, drafts, pins and
 > the four `2026-09-30-*` migrations are all in `main`; the later migrations were written
-> assuming they had run). What is still open from this section: the co-picking questions
-> (nothing built), and "repeat submit over a lowered plan" (built as refuse; Tim's call).
+> assuming they had run). What is still open from this section: "repeat submit over a lowered plan" (built as refuse;
+> Tim's call). 2026-10-21: the co-picking questions were answered by `docs/co-picking.md` (built).
 
 Open — need Tim's answer:
 - Collaborator limit "最多五個人": 5 total (A + 4, recommended) or 5 collaborators?
