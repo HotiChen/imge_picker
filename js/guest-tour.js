@@ -30,14 +30,15 @@
     // a tap on the ring leaves the step; auto: advance by itself after the guest's own real tap.
     const FLOWS = {
         picking: [
-            { id: 'heart', text: '點愛心選這張。選好的照片會留給攝影師修圖。', target: () => first('.photo-card .pick-heart-btn') },
+            { id: 'heart', text: '這顆愛心是用來選照片的，選好的照片會留給攝影師修圖。先按「下一步」，等一下放大照片時再來點它。', target: () => first('.photo-card .pick-heart-btn') },
             { id: 'open', text: '點照片可以放大，看得更清楚。按「下一步」，幫你打開這張。', target: () => first('.photo-card'), onNext: 'open' },
-            { id: 'nav', modal: true, soft: true, text: '點左右兩邊的箭頭，或用手指左右滑，看上一張／下一張。', altText: '用手指左右滑，看上一張／下一張。', target: navTarget },
-            { id: 'lbheart', modal: true, text: '想選這張就點愛心。選了，才能標示修改。', target: lbHeart, skipIf: lbHearted, auto: () => lbHearted() },
-            { id: 'pin', modal: true, soft: true, text: '按這裡，再點照片上要修的位置。', altText: '選了愛心之後，這裡會出現「標示修改」：按它，再點照片上要修的位置。',
+            { id: 'nav', modal: true, soft: true, text: '點左右兩邊的箭頭，或用手指左右滑，看上一張／下一張（電腦可按鍵盤 ← →）。', altText: '用手指左右滑，看上一張／下一張。', target: navTarget },
+            { id: 'lbheart', modal: true, text: '想選這張就點愛心（電腦也可以按空白鍵）。選了，才能標示修改。', target: lbHeart, skipIf: lbHearted, auto: () => lbHearted() },
+            { id: 'pin', modal: true, soft: true, text: '按這裡，再點照片上要修的位置。', altText: '選了愛心之後，放大的照片上會出現「標示修改」：按它，再點照片上要修的位置。',
               target: () => first('#pickPinBtn'), skipIf: pinMode, auto: () => pinMode() },
-            { id: 'done', modal: true, soft: true, text: '點照片上要修的位置，寫下怎麼修；想標幾個位置都可以，標完按「完成」。', target: () => first('#pickPinDoneBtn') },
-            { id: 'submit', text: '選好了，按這裡送出。', target: () => first('#mobileActionBar:not(.pick-bar-off) #pickSubmitBtn') },
+            { id: 'done', modal: true, soft: true, text: '點照片上要修的位置，寫下怎麼修；想標幾個位置都可以，標完按「完成」。',
+              altText: '進入標示後，點照片上要修的位置寫下怎麼修；想標幾個位置都可以，標完按標示用的「完成」。', target: () => first('#pickPinDoneBtn') },
+            { id: 'submit', text: '選好了，按「完成提交」送給攝影師。', target: () => first('#mobileActionBar:not(.pick-bar-off) #pickSubmitBtn') },
         ],
         delivered: [
             // the 驗收頁 is the 毛片 page (docs/delivery.md): the standard cards and the one action button at the bottom

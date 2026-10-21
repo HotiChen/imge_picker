@@ -66,7 +66,7 @@ const nextBtn = page => page.click('.gt-next');
         texts.push(i.text); seenCounts.push(i.count);
         ok(`step ${step}: counter ${step}/7, popover inside the 390x844 viewport`, i.count === `${step}/7` && inside(i), JSON.stringify(i));
         ok(`step ${step}: focus is inside the card`, i.inCard);
-        if (step === 5 || step === 6) ok(`step ${step} is text only here (photo not ♥, not in pin mode): no ring`, !i.ring && i.text.includes(step === 5 ? '標示修改' : '完成') && i.text.includes('位置'), JSON.stringify(i));
+        if (step === 5 || step === 6) ok(`step ${step} is text only here (photo not ♥, not in pin mode): no ring`, !i.ring && i.text.includes(step === 5 ? '標示修改' : '標示用的「完成」') && i.text.includes('位置') && !i.text.includes('這裡'), JSON.stringify(i));
         else {
           ok(`step ${step}: a ring is on the target and the popover does not cover it`, !!i.ring && !overlap(i.card, i.ring), JSON.stringify(i));
           const sel = ['.photo-card .pick-heart-btn', '.photo-card', '#prevPhotoBtn, #nextPhotoBtn, .modal-nav-overlay', '#photoModal #modalPhotoRating .pick-heart-btn', null, null, '#pickSubmitBtn'][step - 1];
@@ -84,7 +84,7 @@ const nextBtn = page => page.click('.gt-next');
         if (step === 7) ok('last step\'s button reads 完成', i.next === '完成', i.next);
         if (step < 7) await nextBtn(page);
       }
-      ok('the seven texts are the specified ones', texts[0].includes('點愛心選這張') && texts[1].includes('放大') && texts[2].includes('左右') && texts[2].includes('滑') && texts[3].includes('愛心') && texts[4].includes('標示修改') && texts[5].includes('點照片上要修的位置') && texts[5].includes('完成') && !texts.join('').includes('備註・標示') && texts[6].includes('選好了，按這裡送出'), JSON.stringify(texts));
+      ok('the seven texts are the specified ones', texts[0].includes('先按「下一步」') && !texts[0].includes('點愛心選這張') && texts[0].includes('愛心') && texts[1].includes('放大') && texts[2].includes('左右') && texts[2].includes('滑') && texts[2].includes('← →') && texts[3].includes('愛心') && texts[3].includes('空白鍵') && texts[4].includes('標示修改') && texts[5].includes('點照片上要修的位置') && texts[5].includes('完成') && !texts.join('').includes('備註・標示') && texts[6] === '選好了，按「完成提交」送給攝影師。', JSON.stringify(texts));
       const after = await page.evaluate(() => ({ sh: document.documentElement.scrollHeight, c: JSON.stringify(document.querySelector('.photo-card').getBoundingClientRect()) }));
       ok('no layout shift: scrollHeight and the first card rect are unchanged while the tour ran', after.sh === shiftBefore.sh && after.c === shiftBefore.c, JSON.stringify([shiftBefore, after]));
       await page.click('.gt-back');
