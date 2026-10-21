@@ -51,7 +51,7 @@ for (const [name, o, want] of [
   ['客人選片中：沒有主按鈕', { phase: 'picking' },
     { stage: 'picking', label: '客人選片中', next: '下一步：等客人送出選片', primary: null }],
   ['選片完成・待精修：主按鈕「開始精修」', { phase: 'submitted' },
-    { stage: 'submitted', label: '選片完成・待精修', next: '下一步：開始精修（開始後客人不能再改選片）', primary: { id: 'pd-start-retouch-btn', text: '開始精修' } }],
+    { stage: 'submitted', label: '選片完成・待精修', next: '下一步：開始精修（開始後客人不能再改選片）。到「照片」卡下載需求表 (CSV)，交給修圖師', primary: { id: 'pd-start-retouch-btn', text: '開始精修' } }],
   ['精修中、還沒有任何精修資料夾：主按鈕「＋上傳精修」（交件在但不是主按鈕、不能按）', { phase: 'retouching' },
     { stage: 'retouching', label: '精修中', next: '下一步：上傳精修後交件', primary: { id: 'pd-upload-final-btn', text: '＋上傳精修', folder: 'shoot/精修/' }, deliverOff: true }],
   ['精修中、已有精修資料夾：主按鈕「交件」', { phase: 'retouching', bucketFolders: TWO_FINALS },
