@@ -1,8 +1,8 @@
 # Image Picker Studio — 攝影師選圖工作室
 
 攝影師的選圖工作室（imhoti.tw/studio）：照片上傳後把一條連結傳給客人，客人在手機上選片，
-攝影師收到選片結果、排相本、記錄加購訂單。目前是攝影師自用，方向是做成多攝影師的 SaaS
-（`projects.photographer_id` 已存在，目前都是 `default`）。
+攝影師收到選片結果、排相本、記錄加購訂單。`default` 是 Tim 自己；其他攝影師可用平台方發的邀請碼註冊
+（`docs/multi-photographer.md`），方向是做成多攝影師的 SaaS。
 
 ---
 
@@ -26,13 +26,14 @@
 |---|---|
 | `home.html` | 入口首頁（明亮版），登入後進 dashboard |
 | `dashboard.html` | 攝影師後台儀表板：專案、已交件狀態、營收、待辦（待確認訂單、未付款訂單等） |
-| `admin.html` | 專案 / 客戶管理。專案列表有搜尋、狀態與類別篩選、「待我處理」排序（篩選記在網址 hash）；點進專案是獨立的詳情畫面（可改名、拍攝日期、類別、方案）：分享連結（複製連結會跳出可直接傳給客人的訊息）、選片狀態、交件（含「＋上傳精修」、預填上次精修資料夾）、客人的修改輪次與標示、客人興趣、訂單（含客人自助下的單）、下載選片 / 需求表 CSV。詳情的各區塊（交件、設定、目前選取、訂單、送出紀錄、挑選人與連結）可收合（展開狀態記在瀏覽器 localStorage，只是便利） |
+| `admin.html` | 專案 / 客戶管理。專案列表有搜尋、狀態與類別篩選、「待我處理」排序（篩選記在網址 hash）；點進專案是獨立的詳情畫面（可改名、拍攝日期、類別、方案）：分享連結（複製連結會跳出可直接傳給客人的訊息）、選片狀態、交件（含「＋上傳精修」、預填上次精修資料夾）、客人的修改輪次與標示、客人興趣、訂單（含客人自助下的單）、下載選片 / 需求表 CSV。詳情頁上方是狀態卡、⋯ 選單（設定 modal 在這裡）；可收合的區塊是目前選取、訂單、挑選人與連結（展開狀態記在瀏覽器 localStorage，只是便利；`docs/delivery.md`「The photographer's project page」） |
 | `settings.html` | 工作室設定（名稱、logo、預設方案、匯款資訊）與商品目錄（從平台加入商品、定價） |
 | `orders.html` | 訂單列表與編輯 |
-| `operator.html` | 平台營運者（OPERATOR_TOKEN）管理平台商品（含相本最少 / 最多頁數、加頁價格、出血 mm） |
+| `operator.html` | 平台營運者（OPERATOR_TOKEN）管理平台商品（含相本最少 / 最多頁數、加頁價格、出血 mm）、審核攝影師帳號、發攝影師邀請碼 |
+| `register.html` | 攝影師用邀請碼註冊（帳號直接開通） |
 | `upload.html` | 上傳照片到 R2（手機版面、失敗的檔案可重試）；從專案進來（`?project=<id>`）時返回鍵回專案 |
 | `index.html` | 選圖介面：客人用選片連結開啟（首次使用導覽、選片、標示修改 pins、交件後的精修 gallery 與驗收頁、確認後的完成頁）；攝影師從專案的「看照片」進入是唯讀的 Review 模式（`js/project-view.js`，沒有標注工具，pins 列在右欄 / 照片下方） |
-| `client-login.html` | 客戶登入 |
+| `client-login.html` | 舊的客戶登入（`LEGACY_CLIENT_ACCOUNTS = "off"`：路由已關閉） |
 | `ping.html` | 連線診斷 |
 | `book_editor/` | 相本排版：`index.html` 編輯器（自動排版、匯出 JPG ZIP）、`view.html` 客戶預覽 / 核准 |
 | `r2_designer/` | 自由排版畫布（Fabric.js） |
@@ -41,6 +42,7 @@
 `delivery.md`（交件、客戶確認、完成頁、拍攝日期 / 類別 / 改名）、`revision-pins.md`（交件後的修改標示）、
 `project-plan.md`（方案與加挑上限）、`dashboard-settings.md`、`products-orders.md`、`guest-shop.md`
 （客人商店與自助訂購）、`album-preview.md`（相本排版引擎與客人預覽）、`pick-handover.md`（協作者提案，大部分是歷史）、
+`co-picking.md`（協作者，已做）、`multi-photographer.md`（多攝影師，各批狀態寫在開頭）、`backup.md`（D1 備份、還原、migration 檢查）、
 `photographer-interviews.md`、`claude-template.md`（給新 repo 的 CLAUDE.md 範本）。
 `CLAUDE.md` 是工作約定。`CHANGELOG.md`、`DEVELOPMENT_LOG.md`（Google Drive 時代）與
 `design_handoff_studio_dark/`（舊設計稿）只是歷史。
@@ -49,12 +51,13 @@
 
 | 路徑 | 內容 |
 |---|---|
-| `worker/` | `worker.js`（API，一個檔案）、`wrangler.toml`、`schema.sql`、`migrations/`（手動執行的 SQL）、`test/`（Worker 測試） |
+| `worker/` | `worker.js`（API，一個檔案）、`wrangler.toml`、`schema.sql`、`migrations/`（手動執行的 SQL）、`test/`（Worker 測試）、`tools/`（migration 檢查與備份用的小工具，見 `docs/backup.md`） |
 | `js/` `css/` | 各頁共用的前端程式與樣式。`util.js` 是共用小工具（`escHtml`、`fmtDate`、`todayTaipei`、`formatPrice`），要比用到它的 script 先載入；`pick.js` 客人頁；`project-view.js` 攝影師 Review；`app.js` 共用照片格與預覽；`finals-gallery.js` / `completion-page.js` / `album-preview.js` 交件後畫面；`guest-order.js` 客人訂購；`guest-tour.js` 首次導覽；`side-nav.js` + `css/side-nav.css` 攝影師頁面側邊選單（手機是一排 pill） |
 | `book_editor/` | 相本編輯器與排版引擎（`js/auto_layout.js`、`js/spread_templates.js`），自己的 CSS 與 `test/` |
 | `test/` | 瀏覽器測試（`run.mjs` 只是 runner，suite 在 `suites/NN-<主題>.mjs`，共用假 Worker 與 helper 在 `lib/`），說明見 `test/README.md` |
 | `docs/` | 設計文件（上表） |
 | `.github/workflows/deploy.yml` | CI 與部署 |
+| `.github/workflows/d1-backup.yml`、`d1-time-travel.yml` | D1 每週加密備份到 Google Drive、手動 Time Travel 還原（`docs/backup.md`） |
 
 返回鍵慣例（攝影師頁面）：左上角「← 返回」或「← 上一層」，高 44px。
 
@@ -110,10 +113,12 @@ Push 到 `main` 才會部署（`.github/workflows/deploy.yml`）：
 
 ### Secrets 與變數（只列名稱，值不進 repo）
 
-- Secrets（`wrangler secret put <名稱>`）：`PHOTOGRAPHER_TOKEN`、`OPERATOR_TOKEN`、`PHOTOGRAPHER_EMAIL`
+- Secrets（`wrangler secret put <名稱>`）：`PHOTOGRAPHER_TOKEN`、`OPERATOR_TOKEN`、`PHOTOGRAPHER_EMAIL`、`PICK_INVITE_SECRET`（協作者邀請碼）、
+  `PHOTOGRAPHER_INVITE_SECRET`（攝影師邀請碼）、`TURNSTILE_SECRET`（自助註冊，開關目前關）；選用的 var `TURNSTILE_HOSTNAME`
 - `[vars]`（`worker/wrangler.toml`）：`NOTIFY_FROM`、`CUSTOM_PRODUCTS`（預設 `off`）、
   `GUEST_ORDERS`（客人自助訂購：`off` 預設 / `pilot` 只開 `GUEST_ORDERS_PILOT` 列的專案 id（逗號分隔）/ `on`；
-  其他值或打錯都算關）
+  其他值或打錯都算關）、`LEGACY_CLIENT_ACCOUNTS`（`off`）、`PHOTOGRAPHER_SIGNUP`（`off`）、`PHOTOGRAPHER_ROUTES`（`on`）；
+  這些開關都是只有 `"on"`（或 `pilot`）才開，其他值都算關（寫在 `worker/wrangler.toml` 的註解）
 - Bindings：R2 `imagepicker`、D1 `DB`、send_email `NOTIFY_EMAIL`
 
 **任何 token 都不能放進 `js/config.js`**：它是公開檔案。攝影師 token 只在登入時由使用者輸入，
@@ -126,30 +131,42 @@ Schema 只做 append-only 變更（`ALTER TABLE ... ADD COLUMN`）。SQL 放在 
 Console 一次只能跑一句，檔案內多句要一句一句貼；ALTER 不能重跑（第二次會 "duplicate column name"，代表已跑過，可忽略）。
 沒跑的 migration 不會弄壞其他功能：Worker 會退回舊行為，只有用到新欄位的那一個動作回 500（各檔開頭註解寫明）。
 
-目前全部的 migration（檔名日期序；**repo 看不到 D1，哪些已經跑過只有 Tim 知道**，下表「跑了嗎」要由他確認）：
+目前全部的 migration（檔名日期序；repo 看不到 D1。下表「跑了嗎」依 Tim 2026-10-21 在 D1 Console 跑 `worker/tools/check-migrations.sql`
+後的口頭回報（沒有留存輸出，`docs/backup.md` §四）：只有 guest-orders 刻意未跑，其餘都已套用）：
 
 | 檔案 | 新增 | 備註 / 順序 | 跑了嗎 |
 |---|---|---|---|
-| `2026-09-27-guest-picking.sql` | `projects` `pickers` `submissions` `selections` `project_members`、`share_tokens.project_id` | 最早，客人選片 | 待 Tim 確認 |
-| `2026-09-28-project-archive.sql` | `projects.archived_at` | 在 guest-picking 之後 | 待 Tim 確認 |
-| `2026-09-28-dashboard-settings.sql` | `projects.delivered_at`、`studio_settings` | 在 archive 之後 | 待 Tim 確認 |
-| `2026-09-29-products-orders.sql` | `products`、`product_options`、訂單相關表、平台商品 | 在 dashboard-settings 之後 | backlog 記載已跑（products / orders ✅） |
-| `2026-09-30-delivery.sql` | `projects.final_folders`、`allow_proof_download` | 交件 | 待 Tim 確認 |
-| `2026-09-30-retouch-pins.sql` | `selections.marks`、`submissions.marks` | 在 delivery 之後 | 待 Tim 確認 |
-| `2026-09-30-extra-max.sql` | `projects.extra_max`、`studio_settings.default_extra_max` | 在 retouch-pins 之後 | 待 Tim 確認 |
-| `2026-10-04-client-confirm.sql` | `projects.client_confirmed_at/_by`、`revision_requests` | 4 句；在 extra-max 之後 | 待 Tim 確認 |
-| `2026-10-06-product-min-pages.sql` | `platform_products.min_pages` | 在 client-confirm 之後 | 待 Tim 確認 |
-| `2026-10-06-product-max-pages.sql` | `platform_products.max_pages` | 與 min-pages 各自獨立 | 待 Tim 確認 |
-| `2026-10-07-revision-pins.sql` | `revision_requests.marks/finals/message_auto`、`revision_pins` | 4 句；在 client-confirm 之後 | 待 Tim 確認 |
-| `2026-10-07-product-bleed.sql` | `platform_products.bleed_mm` | 出血 | 待 Tim 確認 |
-| `2026-10-07-product-extra-page-price.sql` | `platform_products.extra_page_price` | 加頁價格 | 待 Tim 確認 |
-| `2026-10-07-project-shoot-date.sql` | `projects.shoot_date` | 與 project-type 各自獨立 | 待 Tim 確認 |
-| `2026-10-07-project-type.sql` | `projects.project_type` | 專案類別 | 待 Tim 確認 |
-| `2026-10-08-product-interests.sql` | 表 `product_interests` | 「我有興趣」；沒跑時 `POST /api/pick/interest` 回 500 | 待 Tim 確認 |
-| `2026-10-09-guest-orders.sql` | `orders`（request_id、聯絡資料、consent…）、`order_items.list_price/layout`、`studio_settings.transfer_info`，11 句 | **S2：打開 `GUEST_ORDERS` 之前一定要跑**（沒跑時客人訂單路由回 500 `orders_unavailable`、設定的匯款資訊存不進去） | 待 Tim 確認 |
-| `2026-10-10-pick-link-message.sql` | `studio_settings.pick_link_message` | 設定裡「傳給客人的選片訊息」預設文字；沒跑時存這個欄位回 500 `pick_link_message_unavailable`，複製連結視窗用內建預設 | 待 Tim 確認 |
+| `2026-09-27-guest-picking.sql` | `projects` `pickers` `submissions` `selections` `project_members`、`share_tokens.project_id` | 最早，客人選片 | 已跑 |
+| `2026-09-28-project-archive.sql` | `projects.archived_at` | 在 guest-picking 之後 | 已跑 |
+| `2026-09-28-dashboard-settings.sql` | `projects.delivered_at`、`studio_settings` | 在 archive 之後 | 已跑 |
+| `2026-09-29-products-orders.sql` | `products`、`product_options`、訂單相關表、平台商品 | 在 dashboard-settings 之後 | 已跑 |
+| `2026-09-30-delivery.sql` | `projects.final_folders`、`allow_proof_download` | 交件 | 已跑 |
+| `2026-09-30-retouch-pins.sql` | `selections.marks`、`submissions.marks` | 在 delivery 之後 | 已跑 |
+| `2026-09-30-extra-max.sql` | `projects.extra_max`、`studio_settings.default_extra_max` | 在 retouch-pins 之後 | 已跑 |
+| `2026-10-04-client-confirm.sql` | `projects.client_confirmed_at/_by`、`revision_requests` | 4 句；在 extra-max 之後 | 已跑 |
+| `2026-10-06-product-min-pages.sql` | `platform_products.min_pages` | 在 client-confirm 之後 | 已跑 |
+| `2026-10-06-product-max-pages.sql` | `platform_products.max_pages` | 與 min-pages 各自獨立 | 已跑 |
+| `2026-10-07-revision-pins.sql` | `revision_requests.marks/finals/message_auto`、`revision_pins` | 4 句；在 client-confirm 之後 | 已跑 |
+| `2026-10-07-product-bleed.sql` | `platform_products.bleed_mm` | 出血 | 已跑 |
+| `2026-10-07-product-extra-page-price.sql` | `platform_products.extra_page_price` | 加頁價格 | 已跑 |
+| `2026-10-07-project-shoot-date.sql` | `projects.shoot_date` | 與 project-type 各自獨立 | 已跑 |
+| `2026-10-07-project-type.sql` | `projects.project_type` | 專案類別 | 已跑 |
+| `2026-10-08-product-interests.sql` | 表 `product_interests` | 「我有興趣」；沒跑時 `POST /api/pick/interest` 回 500 | 已跑 |
+| `2026-10-09-guest-orders.sql` | `orders`（request_id、聯絡資料、consent…）、`order_items.list_price/layout`、`studio_settings.transfer_info`，11 句 | **S2：打開 `GUEST_ORDERS` 之前一定要跑**（沒跑時客人訂單路由回 500 `orders_unavailable`、設定的匯款資訊存不進去） | **刻意未跑**（`GUEST_ORDERS = "off"`） |
+| `2026-10-10-pick-link-message.sql` | `studio_settings.pick_link_message` | 設定裡「傳給客人的選片訊息」預設文字；沒跑時存這個欄位回 500 `pick_link_message_unavailable`，複製連結視窗用內建預設 | 已跑 |
+| `2026-10-11-photographers.sql` | 表 `photographers`、`photographer_sessions`、`photographer_signups`、`photographer_login_failures` | 多攝影師第 1 批（`docs/multi-photographer.md`） | 已跑 |
+| `2026-10-12-indexes.sql` | 索引 `idx_pickers_key`、`idx_share_tokens_project` | 只加索引 | 已跑 |
+| `2026-10-13-co-picking.sql` | 表 `pick_invites`、`project_collaborators`、`pick_join_failures` | 協作者（`docs/co-picking.md`） | 已跑 |
+| `2026-10-14-product-category.sql` | `platform_products.category` | 商品分類（另有一句從說明文字回填分類的 UPDATE） | 已跑 |
+| `2026-10-15-photographer-must-change-password.sql` | `photographers.must_change_password` | 在 photographers 之後 | 已跑 |
+| `2026-10-16-link-messages.sql` | `studio_settings.link_message_submitted/_delivered/_done` | 各階段的連結訊息範本 | 已跑 |
+| `2026-10-17-share-token-owner.sql` | `share_tokens.photographer_id` | 多攝影師第 3 批 | 已跑 |
+| `2026-10-18-photographer-invites.sql` | 表 `photographer_invites` + 索引 | 邀請碼；在 photographers 之後 | 已跑 |
+| `2026-10-20-project-events.sql` | 表 `project_events` + 索引 | 專案活動紀錄 | 已跑 |
 
-`worker/schema.sql` 是這些的合併版（新資料庫可以照它建）。
+`worker/schema.sql` 是這些的合併版（新資料庫可以照它建）。新增 migration 後要重跑 `node worker/tools/gen-migration-check.mjs`
+更新 `worker/tools/check-migrations.sql`（不然 worker 測試 `migration-check.test.mjs` 會失敗）。
+
 ---
 
 ## 測試
@@ -163,14 +180,15 @@ node --input-type=module --check < worker/worker.js   # 抓得到語法錯；單
 node --test book_editor/test/*.test.mjs
 node book_editor/test/render-templates.mjs <outDir>   # 把模板庫畫成 PNG 總覽
 
-# 瀏覽器（幾分鐘；Playwright 在 repo 外，Chromium 在 /opt/pw-browsers）
-NODE_PATH=/tmp/pwinstall/node_modules node test/run.mjs
+# 瀏覽器（Playwright 在 repo 外，Chromium 在 /opt/pw-browsers）
+# 全部（約 10 分鐘，3 個平行 worker；合併前跑全部時只用這個）
+NODE_PATH=/tmp/pwinstall/node_modules node test/run-parallel.mjs
 # 只跑 suite 名稱含該文字的（| 分隔多個；沒有任何 suite 符合會失敗）
 ONLY=<suite 名稱片段> NODE_PATH=/tmp/pwinstall/node_modules node test/run.mjs
 ```
 
-開發時只跑相關測試，commit / merge 前全部跑。**CI 只跑 Worker 測試**（瀏覽器與相本測試要自己跑）。
-瀏覽器 suite 的寫法、檔案配置與 `ONLY` 見 `test/README.md`（suite 檔案編號 01–56，沒有 44）。
+開發時只跑相關測試，commit / merge 前依改動的風險決定跑哪些（`CLAUDE.md`「Which tests before commit/merge」）。**CI 只跑 Worker 測試**（瀏覽器與相本測試要自己跑）。
+瀏覽器 suite 的寫法、檔案配置與 `ONLY` 見 `test/README.md`（`ls test/suites` 為準；2026-10-21 是 114 個檔案，編號 01–99 加字母尾碼，沒有 44、94）。
 
 已知 flaky（高負載下才紅、單獨跑會過）列在 `CLAUDE.md`：book_editor「no token is minted for an empty folder set」
 等數個 suite。看到紅燈先用 `ONLY=` 單獨重跑，不要直接當成 regression。
