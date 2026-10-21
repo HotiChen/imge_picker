@@ -6,7 +6,7 @@
 **狀態（2026-10-21，對照 main d713634 核對）**：第 1、2a、2b-0..3、3 批、第 3 批安全審查補強、刪除照片、邀請碼（Worker + 前端）
 都已合併上線；`worker/wrangler.toml` 的 `PHOTOGRAPHER_ROUTES = "on"`（e44a679），`PHOTOGRAPHER_SIGNUP = "off"`。
 正式 D1 已跑 `2026-10-11-photographers`、`2026-10-15-photographer-must-change-password`、`2026-10-17-share-token-owner`、
-`2026-10-18-photographer-invites`（Tim 2026-10-21 用 `check-migrations.sql` 核對，見 `docs/backup.md` §四）。
+`2026-10-18-photographer-invites`（Tim 2026-10-21 跑 `check-migrations.sql` 後口頭回報，無留存輸出；見 `docs/backup.md` §四）。
 下面各批的筆記保留當時的寫法（例如「Tim 還沒跑過」「`PHOTOGRAPHER_ROUTES` 仍是 off」「前端尚未改」），以這段為準。
 - **已做**：帳號表、登入／登出／`/me`、operator 審核清單（核准／拒絕／停用／恢復／重設密碼）、強制改密碼；
   operator 發邀請碼（綁 email）→ `register.html` 用邀請碼註冊、直接 active（頁面寫「照片 180 天後自動刪除，請自行保留原檔」）；
@@ -171,7 +171,7 @@ Tim 的決定：除了「自助註冊 → 待審核」，operator 可以發**邀
      `approved_at = created_at`、PBKDF2、`must_change_password` 不寫 → 預設 0）、session INSERT、釋放限速列都以「這個碼的 `used_by` 是我這個新 id」為條件。
      所以兩個人同時用同一個碼只會建立一個帳號；email 衝突時碼不會被用掉、既有帳號（含 suspended、id 為 `default` 的列）完全不變；
      若衝突的是 pending 申請、被 reject 後，同一組碼還能用。查碼時排除用過／撤銷／過期的列並取最早的活碼，所以同 email 同碼的舊列不會擋住新的。
-- **must_change_password migration 還沒跑時**（寫作時的 prod 現況；2026-10-21 已確認正式庫跑過）：註冊照常 201，回應的 `must_change_password` 是 `null`（和登入一致）。但守門會把
+- **must_change_password migration 還沒跑時**（寫作時的 prod 現況；依 Tim 2026-10-21 的回報，正式庫已跑過）：註冊照常 201，回應的 `must_change_password` 是 `null`（和登入一致）。但守門會把
   `null` 當「未知」：這個 session 除了 `/me`、`/logout` 以外都 500 `password_change_unavailable`。所以**開放邀請之前要先跑 2026-10-15 的 migration**。
 - **接受的取捨**（審查後確認，不再修）：
   - **鎖住單一受邀者**：知道某位受邀者 email 的人，每送 5 次錯碼就能讓**那個 email** 15 分鐘無法用邀請碼註冊（其他人不受影響）。
