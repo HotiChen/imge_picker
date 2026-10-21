@@ -7,10 +7,10 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@600;900&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/revision-rounds-view.css?v=20261021a">
-<link rel="stylesheet" href="css/side-nav.css?v=20261021a">
-<link rel="stylesheet" href="css/studio-who.css?v=20261021a">
-<link rel="stylesheet" href="css/guest-order-card.css?v=20261021a">
+<link rel="stylesheet" href="css/revision-rounds-view.css?v=20261021b">
+<link rel="stylesheet" href="css/side-nav.css?v=20261021b">
+<link rel="stylesheet" href="css/studio-who.css?v=20261021b">
+<link rel="stylesheet" href="css/guest-order-card.css?v=20261021b">
 <style>
   /* Bright theme, shared with home.html / dashboard.html / settings.html — cream
      ground, white cards, dark ink, warm accent, soft pastel pills. The photographer's
@@ -490,7 +490,7 @@
   .ord-editor-foot { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end; margin-top: 8px; }
   .ord-editor-foot .field { padding: 6px 8px; font-size: 13px; }
 </style>
-<script src="js/photographer-session.js?v=20261021a"></script>
+<script src="js/photographer-session.js?v=20261021b"></script>
 </head>
 <body>
 
@@ -637,18 +637,18 @@
   </div>
 </div>
 
-<script src="js/shoot-types.js?v=20261021a"></script>
-<script src="js/project-folders.js?v=20261021a"></script>
-<script src="js/build-version.js?v=20261021a"></script>
-<script src="js/password-toggle.js?v=20261021a"></script>
-<script src="js/unified-login.js?v=20261021a"></script>
-<script src="js/util.js?v=20261021a"></script>
-<script src="js/side-nav.js?v=20261021a"></script>
-<script src="js/studio-who.js?v=20261021a"></script>
-<script src="js/orders-common.js?v=20261021a"></script>
-<script src="js/selection-export.js?v=20261021a"></script>
-<script src="js/pin-layer.js?v=20261021a"></script>
-<script src="js/revision-rounds-view.js?v=20261021a"></script>
+<script src="js/shoot-types.js?v=20261021b"></script>
+<script src="js/project-folders.js?v=20261021b"></script>
+<script src="js/build-version.js?v=20261021b"></script>
+<script src="js/password-toggle.js?v=20261021b"></script>
+<script src="js/unified-login.js?v=20261021b"></script>
+<script src="js/util.js?v=20261021b"></script>
+<script src="js/side-nav.js?v=20261021b"></script>
+<script src="js/studio-who.js?v=20261021b"></script>
+<script src="js/orders-common.js?v=20261021b"></script>
+<script src="js/selection-export.js?v=20261021b"></script>
+<script src="js/pin-layer.js?v=20261021b"></script>
+<script src="js/revision-rounds-view.js?v=20261021b"></script>
 <script>
 (function() {
   const WORKER_URL = 'https://imagepicker.hotichen.workers.dev';
@@ -1998,6 +1998,11 @@
       clearTimeout(st._t);
       st._t = setTimeout(() => { st.textContent = ''; }, 2500);
     } else if (action === 'reopen') {
+      // reopen takes a delivery down with it (delivered_at and the client's confirmation are cleared), so say so
+      const p = currentProject || {};
+      const down = !p.delivered_at ? '' : p.client_confirmed_at
+        ? '\n已交件的精修成品會不再顯示，客人的確認也會清除。' : '\n已交件的精修成品會不再顯示。';
+      if (!confirm('開放修改後，客人的連結會回到選片畫面，可以重新修改選片；送出紀錄會保留。' + down + '\n確定要開放修改嗎？')) return;
       await projectAction('reopen');
     } else if (action === 'undeliver') {
       if (!confirm('取消交件後，客人的連結會回到選片畫面（唯讀），精修成品不再顯示。確定要取消交件嗎？')) return;
@@ -2544,7 +2549,8 @@
       ${noProofs(p) ? '<span class="pd-ver-meta">還沒有毛片</span>' : ''}<span class="pd-ver-actions">${noProofs(p) ? '<button type="button" class="btn btn-outline btn-locked" data-view disabled aria-disabled="true" title="還沒有毛片">看</button>' : `<a class="btn btn-outline" data-view href="index.html?project=${id}&amp;mode=all">看</a>`}${proofsUploadHtml(p)}</span></div>`];
     for (const f of finalRowsOf(p)) {
       // 改交這一版: while delivered, on every version the client does not see now (a repeat deliver of just it)
-      const revert = delivered.length && !delivered.includes(f)
+      // (not on an archived project: its links are dead, so 取消封存 comes first)
+      const revert = delivered.length && !delivered.includes(f) && !p.archived_at
         ? `<button class="btn btn-outline" type="button" data-revert-version data-folder="${escHtml(f)}">改交這一版</button>` : '';
       rows.push(`<div class="pd-ver" data-version="${escHtml(f)}"><span class="pd-ver-name">${escHtml(leafName(f))}</span>
         ${delivered.includes(f) ? '<span class="pd-ver-current" data-current-version>客人目前看的版本</span>' : ''}

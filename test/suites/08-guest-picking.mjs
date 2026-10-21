@@ -213,7 +213,7 @@ await suite('guest picking — a free seat blocks on a name, then loads an edita
       await page.waitForTimeout(300);
       const err1 = await page.textContent('#pickSubmitErr');
       ok('a missing relationship is refused with the server’s own message',
-        err1 === '請選擇與新人的關係', err1);
+        err1 === '請選擇與被攝者的關係', err1);
 
       await page.selectOption('#pickSubmitRelationship', '朋友');
       await page.fill('#pickSubmitEmail', 'not-an-email');

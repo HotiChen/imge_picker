@@ -218,7 +218,7 @@ Frontend facts that the Worker contract below does not say (`js/pick.js`, `js/ap
   change or delete by the owner still goes through. Tests: `worker/test/selection-attribution.test.mjs`,
   `test/suites/90-no-op-saves.mjs`. Still open: the owner's page does not refresh the selections while it is open (only the
   collaborator's does), so it can show an older picture than the server.
-- **The submit form remembers** 與新人的關係 and Email per link on this device after a submit that went through (`pick_submit:<token>`).
+- **The submit form remembers** 與被攝者的關係 and Email per link on this device after a submit that went through (`pick_submit:<token>`).
 - Delivered views: `docs/delivery.md` (the finals gallery, the 驗收頁, the 完成頁), `docs/revision-pins.md`.
 
 ## Schema

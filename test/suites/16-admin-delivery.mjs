@@ -324,6 +324,7 @@ const pfWaitFinalsLink = page => page.waitForSelector('#pd-upload-final-btn[data
       await page.waitForSelector('[data-delivered-status]', { timeout: 3000 });
       await page.click('#dn-close-btn');
       ok('delivered first (positive case)', m.state.project.delivered_at !== null && (await page.textContent('#pd-status-label')) === '客人確認中');
+      page.once('dialog', d => d.accept());   // 開放修改 asks first
       await moreClick(page, '#pd-reopen-btn');   // 開放修改 is in the ⋯ menu
       // the detail re-rendered in picking (載入中… in between has no #pd-delivery)
       await page.waitForFunction(() => document.getElementById('pd-status-label')?.textContent === '客人選片中' &&

@@ -232,10 +232,12 @@ const initAdmin = `(${ADMIN.toString()})();${CLIP}`;
     await page.click('#pd-reset-seat-btn');
     await page.waitForFunction(() => document.getElementById('pd-meta')?.textContent.includes('尚無人認領'), null, { timeout: 4000 }).catch(() => {});
     ok('重設主人 asked first, then POSTed reset-seat', /重設選片人/.test(said) && posts(m, 'reset-seat').length === 1, said);
+    let saidReopen = '';
+    page.once('dialog', d => { saidReopen = d.message(); d.accept(); });
     await page.click('#pd-more-btn');
     await page.click('#pd-reopen-btn');
     await page.waitForFunction(() => document.getElementById('pd-status')?.dataset.stage === 'picking', null, { timeout: 4000 }).catch(() => {});
-    ok('開放修改 POSTed reopen and the card is 客人選片中', posts(m, 'reopen').length === 1 && (await page.textContent('#pd-status-label')).trim() === '客人選片中');
+    ok('開放修改 asked first, then POSTed reopen and the card is 客人選片中', /開放修改/.test(saidReopen) && posts(m, 'reopen').length === 1 && (await page.textContent('#pd-status-label')).trim() === '客人選片中');
     return out;
   }, { before: m.attach, initScript: initAdmin });
 }

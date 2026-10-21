@@ -662,7 +662,7 @@ export function pickFakeWorker(opts = {}) {
         const picker = pickerKey ? findByKey(pickerKey) : null;
         const isOwner = !!picker && state.project.owner_picker_id === picker.id;
         if (!isOwner) return json({ error: '只有挑選人可以送出' }, 403);
-        if (!PICK_RELATIONSHIPS.includes(body?.relationship)) return json({ error: '請選擇與新人的關係' }, 400);
+        if (!PICK_RELATIONSHIPS.includes(body?.relationship)) return json({ error: '請選擇與被攝者的關係' }, 400);
         let mail = null;
         if (body.email !== undefined && body.email !== null && body.email !== '') {
           if (!/^[^\s@]+@[^\s@]+$/.test(body.email)) return json({ error: 'Email 格式不正確' }, 400);

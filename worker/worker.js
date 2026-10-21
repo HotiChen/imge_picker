@@ -7416,7 +7416,7 @@ async function routeRequest(request, env, ctx) {
         if (read.refused) return read.refused;
         const { body } = read;
         const { relationship, email } = (body && typeof body === 'object') ? body : {};
-        if (!PICK_RELATIONSHIPS.includes(relationship)) return jsonErr('請選擇與新人的關係');
+        if (!PICK_RELATIONSHIPS.includes(relationship)) return jsonErr('請選擇與被攝者的關係');
         let mail = null;
         if (email !== undefined && email !== null) {
           if (typeof email !== 'string') return jsonErr('Invalid email');

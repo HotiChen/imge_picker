@@ -2243,7 +2243,7 @@
             modal.classList.add('active');
         },
         // The submit form's 關係 / Email, kept per link on this device after a submit that went through (never after a
-        // refused one), so a second submit does not ask 與新人的關係 again.
+        // refused one), so a second submit does not ask 與被攝者的關係 again.
         _submitMemoKey() { return `pick_submit:${this.token}`; },
         _recallSubmit() {
             try {
@@ -2331,7 +2331,7 @@
                 this._syncTour();
                 this.showRetouchLocked();
             } else if (errEl) {
-                // a real, server-authored message (e.g. 請選擇與新人的關係,
+                // a real, server-authored message (e.g. 請選擇與被攝者的關係,
                 // Email 格式不正確) rather than a made-up one
                 errEl.textContent = (data && data.error) || '送出失敗，請再試一次';
             }

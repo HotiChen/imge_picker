@@ -144,6 +144,7 @@ for (const [name, o0, want] of CASES) {
     await waitReady(page);
     await openMore(page);
     ok('開放修改 is active here', await page.$eval('#pd-reopen-btn', b => b.getAttribute('aria-disabled') !== 'true'));
+    page.once('dialog', d => d.accept());   // 開放修改 asks first
     await page.click('#pd-reopen-btn');
     await page.waitForTimeout(300);
     ok('POST .../reopen was sent', m.requests.some(r => r.method === 'POST' && r.path.endsWith('/reopen')));
