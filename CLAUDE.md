@@ -211,8 +211,10 @@ empty scan passes.
 - Never put PHOTOGRAPHER_TOKEN or any secret in `js/config.js` (it is public).
 
 ## Standing facts
-- R2 lifecycle deletes every object 180 days after upload (whole bucket, no
-  prefix). Anything meant to last (logos, long-term copies) must live elsewhere.
+- The R2 180-day lifecycle rule was removed by Tim (confirm in Cloudflare before relying on
+  it). Nothing expires on its own; only proofs are auto-deleted, by the daily cron, when
+  the photographer sets a retention (default off, finals never; `docs/delivery.md`
+  "Proof retention").
 - The r2.dev public URL is disabled; all reads go through the Worker's token gates.
 - `photographer_id` exists on projects; 'default' is Tim. Other photographers can sign up with an
   operator invite code (`PHOTOGRAPHER_ROUTES = "on"`); open self sign-up is still off
