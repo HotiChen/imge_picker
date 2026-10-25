@@ -32,7 +32,8 @@ list and run order is in `README.md`.
   `retouching`, so a delivered project is a retouching project and every guest
   save/submit is refused with 409 `retouching`. `reopen` clears the stamp too
   (delivered always implies retouching).
-- **Logo lives in D1**, not R2 (the bucket's lifecycle deletes after 180 days).
+- **Logo lives in D1**, not R2 (R2 no longer deletes on a schedule, but the logo is account data and stays with the
+  database; proofs are deleted only by the photographer's own retention setting).
   ≤ 200 KB, PNG / JPEG / WebP decided by magic bytes only; the client's
   Content-Type is ignored and SVG/anything else is 415. Re-sniffed when served,
   so a hand-edited row cannot serve anything else.

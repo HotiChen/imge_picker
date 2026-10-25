@@ -814,10 +814,11 @@ therefore no longer true, and the routes stopped giving it:
   (finals null while `final_folders` is). It no longer asks R2 anything.
 - `GET /api/pick/expiry` (any live pick link; a dead link is 401; another method 405): always
   `{expires_at: null, days_left: null}`, and no R2 call.
-- The pages built on it (admin.html `#pd-expiry`, 複製交件通知文案's 「精修預計保存到 …」 line, the 完成頁 `#cpExpiry` via
-  `js/pick.js` `fetchExpiry`) already hide the line on a null date, so they went quiet without a page change. The
-  browser fake (`test/lib/pick-fake.mjs`) and suite `99p-photo-expiry.mjs` still model the old dated answers; they
-  test the pages' rendering, not the Worker, and can be retired with the pages' expiry code.
+- The pages' dated code was removed (2026-10-25): admin.html no longer asks `/api/admin/projects/:id/expiry` at all
+  (`#pd-expiry` is only the proofs' deletion status; 複製交件通知文案 is the plain text, without the 「精修預計保存到 …」
+  line), `js/pick.js` `fetchExpiry` returns only `{proofs}`, and the 完成頁 has no `#cpExpiry` (only `#cpProofsNote`).
+  The browser fake keeps the null-date answers only (`test/lib/pick-fake.mjs`); suite `99p-photo-expiry.mjs` checks the
+  null answer shows nothing. The Worker routes themselves stay (null dates) for any old page still cached.
 - `R2_LIFETIME_DAYS` and `folderExpiry` were removed from worker.js. Tests: `worker/test/photo-expiry.test.mjs`
   (null dates, no R2 call, the same auth / tenant / method rules).
 - **The Cloudflare lifecycle rule must not delete (to confirm in Cloudflare; not checkable from the repo).** Tim's

@@ -154,19 +154,17 @@
             return this._json('/api/pick/shop', { headers: this.headers(), signal: ctl ? ctl.signal : undefined })
                 .finally(() => clearTimeout(timer));
         },
-        // GET /api/pick/expiry (docs/delivery.md, "Photo expiry"): until when the delivered finals stay. The Worker
-        // scans R2 for it, so it is asked at most once per page load (the promise is kept) and never polled. Resolves
-        // to {expires_at, days_left, proofs} or null on any failure. expires_at / days_left are null now (the finals' date is
-        // retired); `proofs` = {proofs_delete_at, days_left, notice, proofs_deleted_at, can_download} (docs/delivery.md,
-        // "Proof retention"), null when the Worker did not send an object.
+        // GET /api/pick/expiry (docs/delivery.md, "Photo expiry" + "Proof retention"): asked at most once per page load (the
+        // promise is kept) and never polled. Resolves to {proofs} or null on any failure. The finals' date is retired (the
+        // Worker sends null and this page ignores it); `proofs` = {proofs_delete_at, days_left, notice, proofs_deleted_at,
+        // can_download}, null when the Worker did not send an object.
         fetchExpiry() {
             if (!this._expiryP) {
                 this._expiryP = this._json('/api/pick/expiry', { headers: this.headers() })
                     .then(r => {
                         const d = r && r.ok && r.data && typeof r.data === 'object' ? r.data : null;
                         if (!d) return null;
-                        return { expires_at: typeof d.expires_at === 'string' ? d.expires_at : null, days_left: d.days_left,
-                            proofs: d.proofs && typeof d.proofs === 'object' ? d.proofs : null };
+                        return { proofs: d.proofs && typeof d.proofs === 'object' ? d.proofs : null };
                     }, () => null);
             }
             return this._expiryP;

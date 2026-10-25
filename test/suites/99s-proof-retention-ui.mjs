@@ -278,7 +278,7 @@ for (const [why, o] of [
   await suite(`99s retention line — ${why}: no line, no old 預計保存 text, the card still works`, URL_, async page => {
     const out = [], ok = line(out);
     await settle(page);
-    ok('the expiry route was asked (the page ran its code)', m.state.expiryCalls.admin === 1, String(m.state.expiryCalls.admin));
+    ok('the retired admin /expiry route is not asked any more', m.state.expiryCalls.admin === 0, String(m.state.expiryCalls.admin));
     ok('no line', (await lineText(page)) === null && !/毛片將於|毛片已於|預計保存/.test(await page.textContent('#pd-photos')));
     ok('positive: the download button is usable', await page.$eval('#pd-download-btn', b => !b.disabled && b.getClientRects().length > 0));
     return out;

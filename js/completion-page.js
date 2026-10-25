@@ -168,15 +168,13 @@
             const dl = el('section', 'cp-sec cp-download', null, 'cpDownload');
             const dlBtn = btn('cpDownloadAll', 'cp-btn cp-btn--solid', '下載全部精修');
             dlBtn.addEventListener('click', () => this._downloadAll(dlBtn));
-            const expiryNote = el('p', 'cp-expiry', null, 'cpExpiry');
-            expiryNote.hidden = true;
             // 毛片: the entry back to the proofs list + when they are deleted (shown only from GET /api/pick/expiry `proofs`)
             const proofsBtn = btn('cpProofsBtn', 'cp-btn cp-btn--line cp-btn--proofs', '下載毛片');
             proofsBtn.hidden = true;
             proofsBtn.addEventListener('click', () => { if (this.ctx && this.ctx.onOpenProofs) this.ctx.onOpenProofs(); });
             const proofsNote = el('p', 'cp-expiry', null, 'cpProofsNote');
             proofsNote.hidden = true;
-            dl.append(el('h2', 'cp-h2', '帶回家'), el('p', 'cp-sub', '把全部精修照片打包成一個檔案，存進你的手機或電腦。'), dlBtn, expiryNote, proofsBtn, proofsNote);
+            dl.append(el('h2', 'cp-h2', '帶回家'), el('p', 'cp-sub', '把全部精修照片打包成一個檔案，存進你的手機或電腦。'), dlBtn, proofsBtn, proofsNote);
 
             // 5. album (4., the shop, is inserted before this one if the Worker has products)
             const alb = el('section', 'cp-sec cp-album', null, 'cpAlbum');
@@ -338,10 +336,8 @@
             }
         },
 
-        // ── 照片保存期限 (docs/delivery.md, "Photo expiry") ────────────────────
-        // One answer per page load (pick.js keeps the promise): {expires_at, days_left} (the guest route has no
-        // `truncated`, so no 估計 here; the 30-day mark is the Worker's whole-day count, as the photographer's page counts it). No date or any failure = the
-        // note stays hidden; 30 days or fewer left gets a more visible (still calm) style. The date is read in Asia/Taipei.
+        // One answer per page load (pick.js keeps the promise): {proofs}. The finals' own date is gone (the R2 lifecycle
+        // rule is retired, docs/delivery.md "Photo expiry"); only the 毛片 part is shown. Any failure = nothing shown.
         _loadExpiry() {
             const tok = ++this._expiryTok;
             const cfg = this.ctx;
@@ -351,15 +347,6 @@
             p.then(r => {
                 if (tok !== this._expiryTok || !this.isMounted()) return;
                 this._showProofs(r && r.proofs);
-                const note = this.root.querySelector('#cpExpiry');
-                const at = r && typeof r.expires_at === 'string' ? Date.parse(r.expires_at) : NaN;
-                if (!note || !Number.isFinite(at)) return;
-                const [y, m, d] = Util.fmtDate(at, 'ymd').split('/');
-                note.textContent = at <= Date.now()
-                    ? '照片已超過預計保存期限，請盡快下載保存'
-                    : `照片預計保存到 ${y} 年 ${m} 月 ${d} 日，請在這之前下載保存`;
-                note.classList.toggle('cp-expiry--soon', Number.isFinite(r.days_left) && r.days_left <= 30);
-                note.hidden = false;
             }, () => {});
         },
 

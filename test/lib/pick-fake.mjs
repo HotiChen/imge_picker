@@ -152,19 +152,9 @@ export function revisionMessageFake(v) {
   if (!t || [...t].length > 1000) return null;
   return t;
 }
-// worker.js folderExpiry's answer for a folder whose earliest upload is `uploaded` (ISO, or null = no photos)
-export function expiryOfFake(uploaded, truncated) {
-  const at = uploaded ? Date.parse(uploaded) : null;
-  return {
-    expires_at: at === null ? null : new Date(at + 180 * 86400000).toISOString(),
-    earliest_uploaded: at === null ? null : new Date(at).toISOString(),
-    count: at === null ? 0 : 1,
-    truncated: at === null ? false : truncated,
-  };
-}
-
 // worker.js GET /api/admin/projects/:id/expiry since the R2 lifecycle rule was retired: every date null, R2 not asked
-// (docs/delivery.md "Photo expiry"). The dated answers above (expiryOfFake) are only for opts.legacyExpiryUploaded.
+// (docs/delivery.md "Photo expiry"). The admin page no longer asks it; the route stays so a call is counted
+// (state.expiryCalls.admin) and answers as the real Worker does.
 const retiredExpiryFake = () => ({ expires_at: null, earliest_uploaded: null, count: null, truncated: false });
 
 export function pickFakeWorker(opts = {}) {
@@ -405,7 +395,6 @@ export function pickFakeWorker(opts = {}) {
       // can_download}} for any live link, delivered or not (the finals' date is retired). The proofs part is computed from
       // the project (confirmed_at + the days in effect, the studio's number in settings.proof_retention_days), the seat
       // (X-Picker-Key = the owner) and allow_proof_download. opts.retentionAvailable === false = before the migration.
-      // opts.legacyExpiryUploaded = {finals}: the OLD dated answer, only to exercise the page's still-present date code.
       // opts.expiryFail = 'net' | a status. Counted in state.expiryCalls.pick.
       if (u.pathname === '/api/pick/expiry') {
         state.expiryCalls.pick++;
@@ -417,11 +406,6 @@ export function pickFakeWorker(opts = {}) {
         const picker = pickerKey ? findByKey(pickerKey) : null;
         const isOwner = !!picker && state.project.owner_picker_id === picker.id;
         const proofs = guestProofsInfoFake(state.project, studioProofDaysFake(state.settings.proof_retention_days), opts.retentionAvailable !== false, isOwner, nowMs());
-        if (opts.legacyExpiryUploaded && pickScopeFake(state.project).mode === 'delivered') {
-          const exp = expiryOfFake(opts.legacyExpiryUploaded.finals, false);
-          const days_left = exp.expires_at === null ? null : Math.max(0, Math.ceil((Date.parse(exp.expires_at) - nowMs()) / 86400000));
-          return send({ expires_at: exp.expires_at, days_left, proofs }, 200);
-        }
         return send({ expires_at: null, days_left: null, proofs }, 200);
       }
 
@@ -925,9 +909,8 @@ export function pickFakeWorker(opts = {}) {
       }
       // GET /api/admin/projects/:id/expiry (worker.js, docs/delivery.md "Photo expiry"): {proofs, finals} with
       // {expires_at, earliest_uploaded, count, truncated} each; finals null while final_folders is. Every date is null now
-      // (retired with the R2 lifecycle rule). opts.legacyExpiryUploaded = {proofs, finals} (earliest upload, ISO or null) +
-      // opts.expiryTruncated gives the OLD dated answer, only to exercise the page's still-present date code (the notice
-      // text); opts.expiryFail = 'net' | a status.
+      // (retired with the R2 lifecycle rule). The admin page does not ask it any more: suites assert state.expiryCalls.admin
+      // stays 0. opts.expiryFail = 'net' | a status.
       if (/^\/api\/admin\/projects\/[^/]+\/expiry$/.test(u.pathname)) {
         state.expiryCalls.admin++;
         if (opts.expiryFail === 'net') return route.abort('failed');
@@ -935,10 +918,6 @@ export function pickFakeWorker(opts = {}) {
         if (state.deleted || decodeURIComponent(u.pathname.split('/')[4]) !== state.project.id) return json({ error: 'Not found' }, 404);
         if (method !== 'GET') return route.fulfill({ status: 405, contentType: 'application/json', headers: { Allow: 'GET' }, body: JSON.stringify({ error: 'Method not allowed' }) });
         const hasFinals = Array.isArray(state.project.final_folders) && state.project.final_folders.length > 0;
-        if (opts.legacyExpiryUploaded) {
-          const up = opts.legacyExpiryUploaded;
-          return json({ proofs: expiryOfFake(up.proofs, !!opts.expiryTruncated), finals: hasFinals ? expiryOfFake(up.finals, !!opts.expiryTruncated) : null });
-        }
         return json({ proofs: retiredExpiryFake(), finals: hasFinals ? retiredExpiryFake() : null });
       }
       // POST /api/admin/projects/:id/proofs-retention and GET /api/admin/proofs-retention (worker.js, docs/delivery.md
