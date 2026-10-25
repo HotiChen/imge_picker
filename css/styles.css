@@ -205,25 +205,6 @@ body {
   flex-shrink: 0;
 }
 
-.expiry-badge {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  font-family: var(--font-mono);
-  font-size: 10px;
-  color: var(--reject);
-  border: 1px solid var(--reject);
-  padding: 2px 7px;
-  white-space: nowrap;
-  overflow: hidden;
-  max-height: 24px;
-  flex-shrink: 1;
-  min-width: 0;
-}
-
-.expiry-badge .icon { font-size: 10px; flex-shrink: 0; }
-.expiry-badge .label { opacity: .7; font-size: 9px; }
-
 .header-center {
   display: flex;
   align-items: center;

@@ -30,7 +30,7 @@ const GUI_STUDIO = { name: '海邊影像工作', booking_url: 'https://booking.e
 const GUI_TITLE = '<b>阿明</b> 婚禮 & 家人';
 const GUI_GONE = ['#sidebarToggle', '#sidebarBackdrop', 'aside.sidebar', '.sidebar', '.flags-grid', '[data-annotated]',
   '#sortBy', '#syncSidebarSection', '.star-filter', '#clearFiltersBtn', '#filterSelectedBtn', '#submitJobBtn',
-  '#studioBookingLink', '.logo-label', '#buildVersion', '#headerSortBtn', '#backupDataBtn', '#resetAllDataBtn', '#expiryBadge'];
+  '#studioBookingLink', '.logo-label', '#buildVersion', '#headerSortBtn', '#backupDataBtn', '#resetAllDataBtn'];
 
 {
   const m = pickFakeWorker({ ownerName: 'Zoe', ownerKey: 'ZOE-KEY', folders: ['A/', 'B/'], photosByFolder: GUI_PHOTOS,
@@ -219,7 +219,7 @@ const GUI_GONE = ['#sidebarToggle', '#sidebarBackdrop', 'aside.sidebar', '.sideb
       await page.waitForSelector('.photo-card', { timeout: 5000 });
       await page.waitForFunction(() => document.querySelector('.logo-name')?.textContent === '海邊影像工作', null, { timeout: 5000 });
       const gone = ['#sidebarToggle', '#sidebarBackdrop', '#guestBar', '.flags-grid', '[data-annotated]', '#sortBy', '#syncSidebarSection',
-        '.star-filter', '#clearFiltersBtn', '#submitJobBtn', '#studioBookingLink', '.logo-label', '#buildVersion', '#headerSortBtn', '#headerViewBtn', '#expiryBadge'];
+        '.star-filter', '#clearFiltersBtn', '#submitJobBtn', '#studioBookingLink', '.logo-label', '#buildVersion', '#headerSortBtn', '#headerViewBtn'];
       const present = await page.evaluate(sels => sels.filter(s => document.querySelector(s)), gone);
       ok('photographer-only elements are null in the DOM', present.length === 0, JSON.stringify(present));
       const sb = await page.evaluate(() => {

@@ -32,7 +32,7 @@ export default async function register() {
           (await attr('#reg-code', 'inputmode')) === 'numeric' && (await attr('#reg-code', 'maxlength')) === '8');
         ok('the password field is new-password and has a show/hide eye', (await attr('#reg-password', 'autocomplete')) === 'new-password' && (await page.$('.pw-eye')) !== null);
         ok('the 10–200 characters rule is on the page', (await page.textContent('body')).includes('10–200'));
-        ok('the 180-day notice is shown', (await page.textContent('body')).includes('照片 180 天後自動刪除，請自行保留原檔'));
+        ok('the retention notice is shown, the old 180-day wording is gone', (await page.textContent('body')).includes('照片不會因保存期限自動刪除；毛片是否刪除由攝影師設定') && !(await page.textContent('body')).includes('180 天'));
         ok('the page tells crawlers to stay away', (await page.$('meta[name="robots"][content*="noindex"]')) !== null);
         ok('cream theme: --bg is #fff8ee and the body paints it', (await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--bg').trim())) === '#fff8ee' &&
           (await page.evaluate(() => getComputedStyle(document.body).backgroundColor)) === 'rgb(255, 248, 238)');

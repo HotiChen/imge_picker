@@ -182,7 +182,6 @@ class App {
                     this.renderPhotoGrid();
                 }
                 this.updateStats();
-                this.updateExpiryCountdown(result.projectCreatedTime);
 
                 // 同步資料夾樹
                 const normalizedPath = driveManager.currentFolderId;
@@ -600,53 +599,6 @@ class App {
         this.updateBulkUI();
         this.renderPhotoGrid();
         toast.info(`已全選目前過濾出的 ${this.filteredPhotos.length} 張照片`);
-    }
-
-    updateExpiryCountdown(serverCreatedTime) {
-        // 設定銷毀天數為 180 天
-        const EXPIRY_DAYS = 180;
-        const folderId = driveManager.currentFolderId || 'default';
-        let expiryDate = localStorage.getItem('project_expiry_' + folderId);
-
-        // 如果資料夾物件帶有最早的上傳時間，則以此為準重新計算過期日
-        if (serverCreatedTime) {
-            const createdDate = new Date(serverCreatedTime);
-            createdDate.setDate(createdDate.getDate() + EXPIRY_DAYS);
-            expiryDate = createdDate.toISOString();
-            localStorage.setItem('project_expiry_' + folderId, expiryDate);
-        }
-
-        // 如果都沒有，才初始化一個全新的倒數（以現在起算）
-        if (!expiryDate) {
-            const date = new Date();
-            date.setDate(date.getDate() + EXPIRY_DAYS);
-            expiryDate = date.toISOString();
-            localStorage.setItem('project_expiry_' + folderId, expiryDate);
-        }
-
-        const updateTimer = () => {
-            const now = new Date().getTime();
-            const distance = new Date(expiryDate).getTime() - now;
-
-            const days = Math.floor(distance / (1000 * 60 * 60 * 24));
-            const hours = Math.floor((distance % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
-            const minutes = Math.floor((distance % (1000 * 60 * 60)) / (1000 * 60));
-
-            const badge = document.getElementById('expiryBadge');
-            const timer = document.getElementById('expiryTimer');
-
-            if (distance < 0) {
-                if (badge) badge.style.display = 'none';
-                return;
-            }
-
-            if (badge) badge.style.display = 'flex';
-            if (timer) timer.textContent = `${days}天 ${hours}時 ${minutes}分`;
-        };
-
-        updateTimer();
-        if (this.expiryInterval) clearInterval(this.expiryInterval);
-        this.expiryInterval = setInterval(updateTimer, 60000); // 每一分鐘更新一次
     }
 
     async setBulkRating(rating) {

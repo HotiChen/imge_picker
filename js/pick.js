@@ -1387,7 +1387,7 @@
              // the one submit button is the bottom bar's #pickSubmitBtn; the
              // header 完成挑圖 stays only for the ?folder= mode (index.html)
              'submitJobBtn', 'sidebarToggle', 'sidebarBackdrop',
-             'headerSortBtn', 'headerViewBtn', 'expiryBadge']
+             'headerSortBtn', 'headerViewBtn']
                 .forEach(id => document.getElementById(id)?.remove());
             document.querySelector('.header-vsep')?.remove();
             document.querySelector('.logo-label')?.remove();
