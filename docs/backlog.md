@@ -5,6 +5,47 @@ Decided or discussed, not yet built. Newest decisions at the top of each group.
 ✅ in place or moved to "Shipped since 2026-09-29" below; sections kept for their decisions
 say so in their heading.
 
+## Where we stopped (2026-10-25) — read this first in a new session
+
+**On main (shipped):** proof auto-delete (毛片自動刪除, `docs/delivery.md` "Proof retention"): per-project and studio retention
+(default off; counted from the client's 確認完成; 14-day notice with 延後 30 天 / 不要刪; daily cron `17 19 * * *`;
+finals never deleted); the completion page's 下載毛片 entry; the 180-day expiry notice retired. The migration
+`2026-10-21-proof-retention.sql` has been run in prod (check = 0 rows). R2 lifecycle (Tim, 2026-10-25): the delete rule is
+replaced by "move to Infrequent Access after 400 days" plus Cloudflare's default multipart-abort rule; nothing in R2 expires.
+
+**Cleanup branch `claude/expiry-cleanup` (4340ef6, 4814b74, + `?v=20261025a`):** removes the dead 180-day date code on the
+completion page / admin / pick fake, the `#expiryBadge` countdown, and fixes register.html's "180 天後自動刪除" text.
+If this line is still here and `git log main` lacks those commits, it has not been merged yet.
+
+**Tim still has to do / decide**
+1. Real-device checks (iPhone Safari, LINE in-app) of: project settings 毛片保存 field, the 延後 / 不要刪 buttons, the
+   completion page 下載毛片 (does it reach the real proofs?), index.html header without the countdown.
+2. Cloudflare → Workers → imagepicker → Triggers: confirm cron `17 19 * * *` is listed. Before the first real deletion, test on a
+   throwaway project (retention ≥14 days) and read the activity log (`proofs_delete_planned`).
+3. D1 backup setup is still waiting on Tim (token with D1 Edit, rclone authorize, secrets `RCLONE_CONF_B64` and
+   `BACKUP_PASSPHRASE`, a manual run, Time Travel `info`): `docs/backup.md`.
+4. Open decisions: 精修 1/2 merge approach (A both folders, B overwrite, C overlay, D copy-then-overwrite; Claude recommends D);
+   block 開放修改 after proofs are deleted (the pick page would be empty; not blocked today); an archived check on the Worker
+   deliver route (recommended); the 驗收頁 notice (largely superseded).
+5. Purchase flow: S2 ordering stays off. For a pilot, the 11 `2026-10-09-guest-orders.sql` statements must run first and a privacy
+   page must exist (Claude offered to draft it).
+
+**Known limits of proof retention:** two confirmed projects sharing one proofs folder never delete it (skipped every 7 days);
+a partly deleted folder still shows can_download until finished; the default photographer's albums are re-read each run (max 25);
+the 45-call per-run budget and the Free plan's 10 ms CPU per cron run are not verified on Cloudflare.
+
+**Small leftovers:** album preview 390px swipe is flaky under load (green alone; add to CLAUDE.md's flaky list);
+`deploy.yml`'s frontend syntax check is a plain `node --check` (misses ESM errors); `js/drive.js` still returns an unused
+`projectCreatedTime`; stale 180-day text remains in `docs/multi-photographer.md` (12, 19, 349, 414, 426, 436),
+`docs/guest-shop.md` (738, 805, 1045, 1112), `docs/revision-pins.md` (329, 625, 707); `docs/album-preview.md`,
+`docs/products-orders.md`, `docs/guest-shop.md` were never audited; worker/test fakes and `test/lib/proof-retention-fake.mjs`
+mirror the Worker by hand (update both when the contract changes).
+
+**Dropped:** the long-term KEEP second bucket (branches deleted 2026-10-25; R2 no longer deletes, so it is not needed).
+
+**Working agreement reminders:** merge to main only on Tim's 「合併」; end every merge reply with 「合併後你要確認」
+(`CLAUDE.md`); agents work in worktrees from the right base and never push.
+
 ## THE ORDER (agreed with Tim 2026-09-29 — the only main line)
 Run one real job end to end → connect Album / Proof / Delivery → build
 multi-photographer in batches (open registration, operator approval, scope up
