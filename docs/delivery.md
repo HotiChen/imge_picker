@@ -580,7 +580,10 @@ removed anything from R2. Worker only (the button comes later); no migration.
     (`_thumbs/<w>/<key>.thumb`, smallest width first). `failed` (only when
     non-empty): thumbnails whose delete threw; they stay as orphans (nothing
     reads a thumbnail without its original except the old-round thumbnail
-    route; R2's 180-day lifecycle removes them). Logical keys, never a
+    route). Once the Cloudflare lifecycle rule only moves objects to
+    Infrequent Access (Tim's decision, to confirm there), R2 will not delete
+    them, so orphan thumbnails stay in the bucket and cost storage until
+    someone cleans them up. Logical keys, never a
     `_t/<id>/` prefix. `Cache-Control: private, no-store`.
   - 400 `{error, code: 'invalid_key'}`: empty, a folder (ends in `/`), the
     Worker's own `_…` namespaces (`_t/`, `_thumbs/`, `_books/`, `_assets/`), a
@@ -802,7 +805,8 @@ History: from 2026-10-20 two read-only routes estimated when the bucket's lifecy
 days after upload, whole bucket) would start deleting a project's photos, by scanning R2 for the earliest upload.
 Tim decided (2026-10-21) to remove that lifecycle rule in Cloudflare and let the Worker delete **proofs only**, on the
 photographer's own setting, counted from the client's confirmation (see "Proof retention" below); finals are never deleted.
-The 180-day date is therefore no longer true, and the routes stopped giving it:
+On 2026-10-25 Tim chose to replace the delete action with an Infrequent Access transition (below). The 180-day date is
+therefore no longer true, and the routes stopped giving it:
 
 - `GET /api/admin/projects/:id/expiry` (requirePhotographer, scoped to the caller: another photographer's project is
   404 as for none; another method on one's own project 405; `ADMIN_ONLY_HEADERS`): same shape as before,
@@ -816,12 +820,14 @@ The 180-day date is therefore no longer true, and the routes stopped giving it:
   test the pages' rendering, not the Worker, and can be retired with the pages' expiry code.
 - `R2_LIFETIME_DAYS` and `folderExpiry` were removed from worker.js. Tests: `worker/test/photo-expiry.test.mjs`
   (null dates, no R2 call, the same auth / tenant / method rules).
-- **Until Tim removes the lifecycle rule in Cloudflare it still deletes everything at 180 days**, now without a date
-  shown anywhere.
+- **The Cloudflare lifecycle rule must not delete (to confirm in Cloudflare; not checkable from the repo).** Tim's
+  decision (2026-10-25): replace the 180-day delete action with "transition to Infrequent Access" (storage class only;
+  the Worker reads the same; reads are billed extra and objects have a 30-day minimum storage charge). Until that is
+  done, R2 still deletes everything at the old rule's age, with no date shown anywhere.
 
 ## Proof retention (毛片自動刪除, Worker, 2026-10-21)
 
-Why: Tim is removing the bucket's whole-bucket 180-day lifecycle rule. Finals must stay; proofs should not pile up
+Why: Tim is replacing the bucket's whole-bucket 180-day delete rule with an Infrequent Access transition. Finals must stay; proofs should not pile up
 forever. So the Worker deletes a project's **proofs** on the photographer's own schedule, counted from the client's
 confirmation. **Default off**: until the photographer picks a number nothing is ever deleted.
 
@@ -932,8 +938,9 @@ nothing in a request names a key or folder.
 1. D1 Console: `worker/migrations/2026-10-21-proof-retention.sql`, four lines one by one; then the migration check
    (`docs/backup.md` §四) shows 0 rows.
 2. Merge / deploy; Cloudflare → Workers → imagepicker → Settings → Triggers: the cron `17 19 * * *` is listed.
-3. Only then, Cloudflare → R2 → imagepicker → Settings → Object lifecycle rules: delete the 180-day rule (until then
-   R2 still deletes everything at 180 days).
+3. Cloudflare → R2 → imagepicker → Settings → Object lifecycle rules: no rule may delete objects; the one rule is
+   "move to Infrequent Access" (suggest 365 days; a prefix that avoids `_thumbs/` and logos if the layout allows).
+   Confirm there; until then R2 may still delete at the old age.
 4. Pick a studio number in 設定 when the page has it (until then nothing is deleted). Tests:
    `worker/test/proof-retention.test.mjs`.
 
@@ -941,4 +948,4 @@ nothing in a request names a key or folder.
 
 (Status 2026-10-08: the zip of all finals shipped on the 完成頁, 下載全部精修.) Watermarks; a second link just for delivery;
 emailing the guest when delivered (can reuse the mail binding later);
-long-term storage: the 180-day lifecycle rule is being replaced by proof retention (see "Photo expiry").
+long-term storage: the 180-day delete rule is being replaced by an Infrequent Access transition plus proof retention (see "Photo expiry").

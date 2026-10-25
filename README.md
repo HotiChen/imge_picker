@@ -15,8 +15,8 @@
 | 照片儲存 | R2 bucket `imagepicker`（所有讀取都經過 Worker 的 token 閘門；r2.dev 公開網址已關閉） |
 | 資料庫 | D1 `imagepicker-db`（專案、分享連結、選片、訂單、設定等，結構見 `worker/schema.sql`） |
 
-注意：R2 有 lifecycle，**上傳 180 天後刪除 bucket 內所有物件**（沒有 prefix 例外）。
-要長期保存的東西（logo、長期備份）不能放在這個 bucket。
+注意：R2 的 lifecycle 規則已決定改為把舊物件轉成「不常存取」儲存層、**不刪除**（2026-10-25 Tim 決定，請在 Cloudflare 確認已改）；
+在確認之前，舊的「180 天刪除」可能仍在生效。讀取不常存取的物件要另外計費；毛片是否自動刪除由專案／工作室設定決定（預設不刪）。
 
 ---
 
