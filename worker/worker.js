@@ -1087,6 +1087,18 @@ function albumNames(value, key, depth = 0) {
 function parsedOrText(text) {
   try { return JSON.parse(text); } catch { return String(text); }
 }
+// What an order line's stored layout holds for the photo locks, to hand to
+// albumNames: a guest's Layout JSON v2 (S3) as parsed (its cover's and every
+// slot's photo_key are in it, anything odd too), or its text when it does not
+// parse. null for no layout and for a v1 layout (請攝影師排版 names no photo:
+// the final_folders rule covers it). A cancelled order's layout is not
+// selected at all (the queries blank it).
+function layoutNaming(layout) {
+  if (typeof layout !== 'string') return null;
+  let v;
+  try { v = JSON.parse(layout); } catch { return layout; }
+  return isPlainObject(v) && v.v === 2 ? v : null;
+}
 
 // The most albums one delete reads. Each is an R2 get, a subrequest; on the
 // Workers Free plan a request may make 50 (the documented limit for external
@@ -1152,7 +1164,9 @@ async function photoInAlbum(env, key) {
 // - on any order line of an order of `ownerId`'s (order_items.photo_keys,
 //   every status, a cancelled order too), or under the final_folders of the
 //   order's project when the line is an album with a layout (a guest album
-//   of all the finals) → photo_in_order. One D1 statement;
+//   of all the finals), or named in a guest's layout (v2, S3:
+//   layoutNaming — an order not cancelled; it outlives a 更換精修 to
+//   other finals) → photo_in_order. One D1 statement;
 //   checked before the albums, which cost an R2 read per book.
 // - frozen in a round the old-round thumbnail route serves (GET
 //   /api/pick/rounds/:id/photo): the pins of any revision_requests row, the
@@ -1182,7 +1196,8 @@ async function photoLock(env, ownerId, key) {
     // Before the guest-order migration there is no layout column, and so no
     // such line: the listed keys alone (the retry names no layout).
     const orderLines = withLayout => env.DB.prepare(
-      `SELECT i.photo_keys, ${withLayout ? "i.kind = 'album' AND i.layout IS NOT NULL" : '0'} AS all_finals, p.final_folders ` +
+      `SELECT i.photo_keys, ${withLayout ? "i.kind = 'album' AND i.layout IS NOT NULL" : '0'} AS all_finals, p.final_folders, ` +
+      `${withLayout ? "CASE WHEN o.status <> 'cancelled' THEN i.layout END" : 'NULL'} AS layout ` +
       'FROM order_items i JOIN orders o ON o.id = i.order_id ' +
       'LEFT JOIN projects p ON p.id = o.project_id AND p.photographer_id = o.photographer_id ' +
       `WHERE o.photographer_id = ? AND (i.photo_keys <> '[]'${withLayout ? " OR (i.kind = 'album' AND i.layout IS NOT NULL)" : ''})`
@@ -1204,7 +1219,8 @@ async function photoLock(env, ownerId, key) {
   // value that does not parse locks a key its text contains
   if ((frozen || []).some(r => albumNames(parsedOrText(r.v), key))) held.add('photo_in_round');
   if ((lines || []).some(l => albumNames(parsedOrText(l.photo_keys), key) ||
-      (l.all_finals === 1 && foldersColumnCovers(l.final_folders, key)))) held.add('photo_in_order');
+      (l.all_finals === 1 && foldersColumnCovers(l.final_folders, key)) ||
+      albumNames(layoutNaming(l.layout), key))) held.add('photo_in_order');
   const code = Object.keys(PHOTO_LOCKS).find(c => held.has(c));
   if (code) return code;
   if (ownerId !== DEFAULT_PHOTOGRAPHER_ID) return null;
@@ -2915,12 +2931,14 @@ async function proofsHeld(run, p, folders, finals, nowMs, cache) {
     }
     // every order line of this photographer's, any status (photoLock's rule)
     const orderLines = withLayout => run.DB.prepare(
-      `SELECT i.photo_keys, ${withLayout ? "i.kind = 'album' AND i.layout IS NOT NULL" : '0'} AS all_finals, q.final_folders ` +
+      `SELECT i.photo_keys, ${withLayout ? "i.kind = 'album' AND i.layout IS NOT NULL" : '0'} AS all_finals, q.final_folders, ` +
+      `${withLayout ? "CASE WHEN o.status <> 'cancelled' THEN i.layout END" : 'NULL'} AS layout ` +
       'FROM order_items i JOIN orders o ON o.id = i.order_id ' +
       'LEFT JOIN projects q ON q.id = o.project_id AND q.photographer_id = o.photographer_id WHERE o.photographer_id = ?'
     ).bind(owner).all();
     const { results: lines } = await withoutMissingColumn(() => orderLines(true), () => orderLines(false));
-    if (lines.some(l => names(parsedOrText(l.photo_keys)) || (l.all_finals === 1 && columnTouches(l.final_folders)))) return 'in_order';
+    if (lines.some(l => names(parsedOrText(l.photo_keys)) || (l.all_finals === 1 && columnTouches(l.final_folders)) ||
+        names(layoutNaming(l.layout)))) return 'in_order';
   } catch (e) {
     if (isMissingSchema(e)) return 'check_unavailable';
     throw e;
@@ -3548,6 +3566,11 @@ const GUEST_ORDER_LAYOUT_BODY_MAX = 96 * 1024;
 // the stored layout, as the Worker serialises it, in UTF-8 bytes
 const ALBUM_LAYOUT_MAX = 64 * 1024;
 const ALBUM_LAYOUT_SPREADS_MAX = PAGE_BOUND_MAX;
+// a slot's crop x / y: display offsets in slot widths / heights. The planner's
+// cropFor gives up to (r − 1) / 2 with r the photo-to-slot aspect ratio, so a
+// 3:1 panorama on the A4 cover is about 1.6: ±1 would refuse what the engine
+// makes. Only drawn, never a read, so a generous bound costs nothing.
+const ALBUM_CROP_MAX = 5;
 // The spread templates a guest layout may name, id → slot count: a copy of
 // book_editor/js/spread_templates.js (docs/album-preview.md) that the Worker
 // can read without loading the library. guest-album-layout.test.mjs fails
@@ -3711,12 +3734,12 @@ function guestContact(v) {
 // One photo of a guest layout (the cover or an inner slot) as stored:
 // {photo_key, fit, crop: {x, y, scale: 1}}, or null when it is not one — a
 // key pickKeyValid takes, fit 'contain' or 'cover', crop x and y finite
-// numbers within ±1, scale exactly 1. Nothing else is kept.
+// numbers within ±ALBUM_CROP_MAX, scale exactly 1. Nothing else is kept.
 function albumLayoutSlot(s) {
   if (!isPlainObject(s) || typeof s.photo_key !== 'string' || !s.photo_key || !pickKeyValid(s.photo_key)) return null;
   if (s.fit !== 'contain' && s.fit !== 'cover') return null;
   const c = s.crop;
-  const within = v => typeof v === 'number' && Number.isFinite(v) && v >= -1 && v <= 1;
+  const within = v => typeof v === 'number' && Number.isFinite(v) && v >= -ALBUM_CROP_MAX && v <= ALBUM_CROP_MAX;
   if (!isPlainObject(c) || !within(c.x) || !within(c.y) || c.scale !== 1) return null;
   return { photo_key: s.photo_key, fit: s.fit, crop: { x: c.x, y: c.y, scale: 1 } };
 }

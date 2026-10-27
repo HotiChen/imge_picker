@@ -819,6 +819,53 @@ test('the all_finals lock follows the order\'s own project, of this photographer
   assert.equal((await del(w.env, F3, w.C.token)).status, 200);
 });
 
+// A guest's own layout (Layout JSON v2, S3) names its photos: they stay locked
+// while the order is not cancelled, even once the project's finals moved
+// elsewhere (更換精修), where the all_finals rule no longer reaches them.
+const v2 = (...keys) => ({
+  v: 2, mode: 'auto', cover: { photo_key: keys[0], fit: 'cover', crop: { x: 1.6, y: 0, scale: 1 } },
+  spreads: keys.slice(1).map(k => ({ template: 'hero-bleed', slots: [{ photo_key: k, fit: 'contain', crop: { x: 0, y: 0, scale: 1 } }] })),
+  back: null,
+});
+test('locked: a photo a guest layout (v2) names — cover or slot — on an order not cancelled is 409 photo_in_order, whatever the finals are now', async () => {
+  for (const status of ['requested', 'confirmed', 'fulfilled']) {
+    const w = await world();
+    // the order's project is delivered from FINAL2 now: X (shoot/x/) and F1 are under no finals
+    rawProject(w.env, 'a2', 'default', JSON.stringify(['elsewhere/']), { final_folders: JSON.stringify([FINAL2]) });
+    const id = albumOrder(w.env, 'default', 'a2', v2(X, F1));
+    w.env.DB._db.prepare('UPDATE orders SET status = ? WHERE id = ?').run(status, id);
+    await refusedWithNothingDeleted(w, () => del(w.env, X, SECRET), 409, 'photo_in_order');
+    await refusedWithNothingDeleted(w, () => del(w.env, F1, SECRET), 409, 'photo_in_order');
+    assert.equal((await body(await lockOf(w.env, X, SECRET))).json.code, 'photo_in_order', `${status}: the lock route too`);
+    assert.equal((await del(w.env, F3, SECRET)).status, 200, `${status}: a photo the layout does not name is free`);
+  }
+});
+
+test('a guest layout on a cancelled order holds nothing beyond the all_finals rule; v1 names no photo; another photographer\'s layout never locks', async () => {
+  const w = await world();
+  rawProject(w.env, 'a2', 'default', JSON.stringify(['elsewhere/']), { final_folders: JSON.stringify([FINAL2]) });
+  const id = albumOrder(w.env, 'default', 'a2', v2(X, F1));
+  w.env.DB._db.prepare("UPDATE orders SET status = 'cancelled' WHERE id = ?").run(id);
+  albumOrder(w.env, 'default', 'a2', { v: 1, mode: 'photographer', source: 'all_finals', spreads: 10, photo_key: F3 });
+  albumOrder(w.env, w.B.id, 'a2', v2(F2, F2));
+  assert.equal((await del(w.env, X, SECRET)).status, 200, 'cancelled');
+  assert.equal((await del(w.env, F1, SECRET)).status, 200, 'cancelled');
+  assert.equal((await del(w.env, F3, SECRET)).status, 200, 'a v1 layout names no photo');
+  assert.equal((await del(w.env, F2, SECRET)).status, 200, 'B\'s order');
+  // the all_finals rule still holds on the cancelled line: a2's finals stay locked
+  await refusedWithNothingDeleted(w, () => del(w.env, G1, SECRET), 409, 'photo_in_order');
+});
+
+test('a guest layout that does not parse locks a key its text contains (fail closed); a URL-encoded key in a v2 layout locks too', async () => {
+  const w = await world();
+  rawProject(w.env, 'a2', 'default', JSON.stringify(['elsewhere/']), { final_folders: JSON.stringify([FINAL2]) });
+  albumOrder(w.env, 'default', 'a2', `{"v":2,"spreads":[{"slots":[{"photo_key":"${X}"`);
+  albumOrder(w.env, 'default', 'a2', v2(encodeURIComponent(F1)));
+  await refusedWithNothingDeleted(w, () => del(w.env, X, SECRET), 409, 'photo_in_order');
+  await refusedWithNothingDeleted(w, () => del(w.env, F1, SECRET), 409, 'photo_in_order');
+  assert.equal((await del(w.env, F3, SECRET)).status, 200);
+});
+
 test('before the guest-order migration (no order_items.layout) no line can carry a layout: listed keys still lock, nothing else; no 500', async () => {
   const w = await world();
   const schema = FRESH.replace(/list_price    INTEGER,\n\s*layout        TEXT\n\);/, 'list_price    INTEGER\n);');

@@ -443,6 +443,31 @@ test('an order line naming one of the proofs (any status) — skipped as in_orde
   await skipped(env, 'in_order');
 });
 
+// a guest album line whose Layout JSON v2 names `key` (S3); a hand-made row: a
+// guest layout can only name finals, so a proof in one is a hand edit, but the
+// rule is the photo lock's (layoutNaming)
+function layoutOrder(env, projectId, key, status) {
+  const now = iso(Date.now());
+  const layout = { v: 2, mode: 'auto', cover: null, spreads: [{ template: 'hero-bleed', slots: [{ photo_key: key, fit: 'contain', crop: { x: 0, y: 0, scale: 1 } }] }], back: null };
+  env.DB._db.prepare("INSERT INTO orders (id, photographer_id, project_id, source, status, created_at, updated_at) VALUES ('o2', 'default', ?, 'guest', ?, ?, ?)").run(projectId, status, now, now);
+  env.DB._db.prepare("INSERT INTO order_items (id, order_id, kind, name, unit_price, qty, photo_keys, layout) VALUES ('i2', 'o2', 'album', '相本', 10, 1, '[]', ?)").run(JSON.stringify(layout));
+}
+test('a guest layout (v2) naming one of the proofs on an order not cancelled — skipped as in_order; cancelled, the proofs go', async () => {
+  for (const status of ['requested', 'confirmed', 'fulfilled']) {
+    const env = setup();
+    await studio(env, 90);
+    const p = await confirmed(env);
+    layoutOrder(env, p.id, PA, status);
+    await skipped(env, 'in_order');
+  }
+  const env = setup();
+  await studio(env, 90);
+  const p = await confirmed(env);
+  layoutOrder(env, p.id, PA, 'cancelled');
+  await cron(env, confirmedAt(env) + 90 * DAY);
+  assert.ok(!has(env, PA), 'a cancelled order\'s layout holds nothing');
+});
+
 test('a skip waits 7 days before the next check (not re-logged every day), and a cleared reason then lets the delete run', async () => {
   const env = setup();
   await studio(env, 90);

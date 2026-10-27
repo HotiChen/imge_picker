@@ -106,13 +106,15 @@ test('the layout is rebuilt server-side: extra fields dropped everywhere, mirror
   assert.ok(!itemRows(env)[0].layout.includes('evil') && !itemRows(env)[0].layout.includes(PA));
 });
 
-test('the cover may repeat one inner photo; cover null and back absent are fine; crop at exactly ±1 is fine', async () => {
+test('the cover may repeat one inner photo; cover null and back absent are fine; crop at exactly ±5 and a panorama\'s 1.6 are fine', async () => {
   const { env, c, p } = await ready();
   for (const layout of [
     layoutOf(10),                                   // cover = K(1), also spread 1
     layoutOf(10, { cover: null }),
     (({ back, ...l }) => l)(layoutOf(10)),
-    layoutOf(10, { cover: slot(F2, { crop: { x: 1, y: -1, scale: 1 } }) }),
+    layoutOf(10, { cover: slot(F2, { crop: { x: 5, y: -5, scale: 1 } }) }),
+    // a 3:1 panorama on the A4 cover: cropFor gives about 1.6
+    layoutOf(10, { cover: slot(F2, { fit: 'cover', crop: { x: 1.6, y: 0, scale: 1 } }) }),
   ]) {
     const res = await placeOrder(env, p, albumOrder(c, layout));
     assert.equal(res.status, 201, await res.clone().text());
@@ -224,13 +226,13 @@ test('invalid_layout: an inner photo twice (same spread or another); the cover i
   await refused(env, p, albumOrder(c, sameSpread), 400, 'invalid_layout', 'K(77) twice on one spread');
 });
 
-test('invalid_layout: fit contain|cover only; crop finite numbers within ±1, scale exactly 1', async () => {
+test('invalid_layout: fit contain|cover only; crop finite numbers within ±5, scale exactly 1', async () => {
   const { env, c, p } = await ready();
   const slotCases = [
     ['fit fill', { fit: 'fill' }], ['fit missing', { fit: undefined }], ['fit Cover', { fit: 'Cover' }],
     ['crop missing', { crop: undefined }], ['crop null', { crop: null }], ['crop an array', { crop: [0, 0, 1] }],
-    ['x over 1', { crop: { x: 1.000001, y: 0, scale: 1 } }], ['x under -1', { crop: { x: -1.5, y: 0, scale: 1 } }],
-    ['y over 1', { crop: { x: 0, y: 2, scale: 1 } }], ['y under -1', { crop: { x: 0, y: -1.0001, scale: 1 } }],
+    ['x over 5', { crop: { x: 5.000001, y: 0, scale: 1 } }], ['x under -5', { crop: { x: -5.5, y: 0, scale: 1 } }],
+    ['y over 5', { crop: { x: 0, y: 6, scale: 1 } }], ['y under -5', { crop: { x: 0, y: -5.0001, scale: 1 } }],
     ['x a string', { crop: { x: '0', y: 0, scale: 1 } }], ['y missing', { crop: { x: 0, scale: 1 } }], ['x null', { crop: { x: null, y: 0, scale: 1 } }],
     ['x huge', { crop: { x: 1e308, y: 0, scale: 1 } }],
     ['scale 2', { crop: { x: 0, y: 0, scale: 2 } }], ['scale 0.5', { crop: { x: 0, y: 0, scale: 0.5 } }],
