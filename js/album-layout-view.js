@@ -7,7 +7,7 @@
 //   1. PURE (node-testable, test/unit/album-layout-view.test.mjs): pagesOf(layout, SpreadTemplates) -> pages with
 //      geometry and file names, listText, drawBox, imageUrl, baseName. Never throws on a malformed layout.
 //   2. DOM: open({layout, opener}). Everything the guest controls (photo keys, template ids, file names) goes in with
-//      createElement / textContent / setAttribute ONLY. There is no innerHTML / insertAdjacentHTML / outerHTML here.
+//      createElement / textContent / setAttribute ONLY. No HTML string is ever built from them.
 //
 // Read-only: nothing is stored and nothing is written. The only request besides the photos is the studio-token mint
 // (POST /api/auth/studio-token, js/studio-token.js's own trade) because an <img> cannot send an Authorization header.
