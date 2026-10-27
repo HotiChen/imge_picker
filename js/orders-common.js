@@ -262,10 +262,12 @@
       if (v2) {
         const n = Array.isArray(v2.spreads) ? v2.spreads.length : null;
         it.appendChild(el('span', 'gc-spreads', n === null ? '客人排的版面' : `${n} 跨頁・客人排的版面`));
+        // the new book's name: 客人名 — 專案名 (whichever the card has; the viewer falls back to 客人排版匯入)
+        const importName = [c && !c.erased_at && c.name, o.project_title].filter(x => typeof x === 'string' && x.trim()).map(x => x.trim()).join(' — ');
         const vb = el('button', 'btn btn-ghost gc-layout', '查看排版');
         vb.type = 'button';
         vb.setAttribute('data-view-layout', '');
-        vb.addEventListener('click', () => { if (window.AlbumLayoutView) window.AlbumLayoutView.open({ layout: v2, opener: vb }); });
+        vb.addEventListener('click', () => { if (window.AlbumLayoutView) window.AlbumLayoutView.open({ layout: v2, opener: vb, name: importName }); });
         it.appendChild(vb);
       }
       const differs = i.list_price != null && Number(i.list_price) !== Number(i.unit_price);

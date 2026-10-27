@@ -9,8 +9,9 @@
 //   2. DOM: open({layout, opener}). Everything the guest controls (photo keys, template ids, file names) goes in with
 //      createElement / textContent / setAttribute ONLY. No HTML string is ever built from them.
 //
-// Read-only: nothing is stored and nothing is written. The only request besides the photos is the studio-token mint
-// (POST /api/auth/studio-token, js/studio-token.js's own trade) because an <img> cannot send an Authorization header.
+// Nothing of the ORDER is stored or written. The requests besides the photos: the studio-token mint (POST
+// /api/auth/studio-token, js/studio-token.js's own trade; an <img> cannot send an Authorization header) and, only when
+// 匯入 book editor is pressed and confirmed, one PUT /api/books/<new id> (a new album; book_editor/js/import_layout.js).
 // Photos are thumbnails only: GET <worker>/<key>?w=1200&t=<studio token>, never an original, never ?download.
 (function () {
   const MAX_SPREADS = 200;          // the Worker's own cap (docs/guest-shop.md); a longer list is cut, not rendered
@@ -109,27 +110,100 @@
     return b;
   };
 
-  // SpreadTemplates is a classic-script `const`: reachable by name, not as window.SpreadTemplates. Loaded on the first
-  // press, from beside this script, with this script's own ?v= stamp.
-  let templatesP = null;
-  function loadTemplates() {
-    if (typeof SpreadTemplates !== 'undefined') return Promise.resolve(SpreadTemplates);
-    if (templatesP) return templatesP;
-    templatesP = new Promise(resolve => {
+  // SpreadTemplates and ImportLayout are classic-script `const`s: reachable by name, not as window.X. Each is loaded on the
+  // first press that needs it, from beside this script, with this script's own ?v= stamp (one load per name, retried after a
+  // failed one).
+  const libs = {};
+  function loadLib(rel, name, present) {
+    const have = present();
+    if (have) return Promise.resolve(have);
+    if (libs[name]) return libs[name];
+    libs[name] = new Promise(resolve => {
       let src = '';
       try {
-        const u = new URL('../book_editor/js/spread_templates.js', SCRIPT_SRC);
+        const u = new URL(rel, SCRIPT_SRC);
         const v = new URL(SCRIPT_SRC).searchParams.get('v');
         if (v) u.searchParams.set('v', v);
         src = u.href;
       } catch (e) { resolve(null); return; }
       const s = document.createElement('script');
       s.setAttribute('src', src);
-      s.addEventListener('load', () => resolve(typeof SpreadTemplates !== 'undefined' ? SpreadTemplates : null));
-      s.addEventListener('error', () => { templatesP = null; resolve(null); });
+      s.addEventListener('load', () => { const got = present() || null; if (!got) libs[name] = null; resolve(got); });
+      s.addEventListener('error', () => { libs[name] = null; resolve(null); });
       document.head.appendChild(s);
     });
-    return templatesP;
+    return libs[name];
+  }
+  const loadTemplates = () => loadLib('../book_editor/js/spread_templates.js', 'templates', () => (typeof SpreadTemplates !== 'undefined' ? SpreadTemplates : null));
+  // the converter of a guest layout into a book_editor book (book_editor/js/import_layout.js), for 匯入 book editor
+  const loadImporter = () => loadLib('../book_editor/js/import_layout.js', 'importer', () => (typeof ImportLayout !== 'undefined' ? ImportLayout : null));
+
+  // A new book id the way book_editor makes one (book_editor.js _generateId).
+  function newBookId() {
+    if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID();
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+      const r = Math.random() * 16 | 0;
+      return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+    });
+  }
+  function editorUrl(id) {
+    const u = new URL('../book_editor/index.html', SCRIPT_SRC || location.href);
+    u.search = '';
+    u.searchParams.set('id', id);
+    return u.href;
+  }
+  const importFail = (code, status) => {
+    if (code === 'no-token') return '請先登入攝影師帳號再匯入';
+    if (status === 401) return '登入已過期，請重新登入後再試';
+    if (status === 400) return '伺服器拒絕了這份排版，沒有建立相本';
+    return `儲存失敗（${status ? `HTTP ${status}` : '連不上伺服器'}），沒有建立相本，可以再按一次`;
+  };
+
+  // 匯入 book editor: build the book from the layout, PUT it under a NEW id, open it. Once per viewer: busy / done disables
+  // the button, so a second press creates nothing. The order is never touched (only a new _books/<id>.json is written).
+  async function importBook(v) {
+    if (v.importing || v.imported) return;
+    const say = (text, err) => { v.importStatus.textContent = text; v.importStatus.classList.toggle('alv-import-err', !!err); };
+    if (!window.confirm('會建立一本新的相本，客人的訂單不會改變')) return;
+    v.importing = true;
+    v.importBtn.disabled = true;
+    say('匯入中…');
+    try {
+      let token = '';
+      try { token = sessionStorage.getItem('studio_token') || ''; } catch (e) { token = ''; }
+      if (!token) { say(importFail('no-token'), true); return; }
+      const [templates, importer] = await Promise.all([loadTemplates(), loadImporter()]);
+      if (!templates || !importer) { say('載入匯入工具失敗，請重新整理後再試', true); return; }
+      let book;
+      try { book = importer.layoutToBook(v.layout, { name: v.bookName, templates }); }
+      catch (e) { say(`這份排版無法匯入：${e && e.message ? e.message : '格式不正確'}`, true); return; }
+      const id = newBookId();
+      let res;
+      try {
+        res = await fetch(`${workerUrl()}/api/books/${encodeURIComponent(id)}`, {
+          method: 'PUT', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify(book),
+        });
+      } catch (e) { say(importFail('net', 0), true); return; }
+      if (!res.ok) { say(importFail('http', res.status), true); return; }
+      v.imported = id;
+      const url = editorUrl(id);
+      v.importBtn.textContent = '已匯入';
+      v.importStatus.textContent = '';
+      v.importStatus.classList.remove('alv-import-err');
+      const a = el('a', 'alv-import-link', '已匯入，開啟');
+      a.setAttribute('href', url);
+      a.setAttribute('data-alv-import-link', '');
+      // window.open WITHOUT noopener, like js/app.js opens book_editor: the new tab inherits a copy of sessionStorage, so the
+      // editor finds the photographer's studio_token (a target=_blank link is noopener and would meet the login overlay).
+      // The URL is this site's own page. If the browser blocks the pop-up, the link is a fresh click.
+      const openIt = () => { try { return window.open(url, '_blank'); } catch (e) { return null; } };
+      a.addEventListener('click', e => { e.preventDefault(); openIt(); });
+      v.importStatus.appendChild(a);
+      openIt();
+    } finally {
+      v.importing = false;
+      if (!v.imported) v.importBtn.disabled = false;
+    }
   }
 
   // The read-only thumbnail token (js/studio-token.js's trade), cached until close to its deadline.
@@ -287,18 +361,24 @@
     fallback.setAttribute('rows', '5');
     fallback.setAttribute('aria-label', '排版清單');
     fallback.hidden = true;
-    side.append(names, copy, copyStatus, fallback);
+    const importBtn = button('btn btn-ghost alv-import', '匯入 book editor');
+    importBtn.setAttribute('data-alv-import', '');
+    const importStatus = el('div', 'alv-import-status');
+    importStatus.setAttribute('role', 'status');
+    importStatus.setAttribute('data-alv-import-status', '');
+    side.append(names, copy, copyStatus, fallback, importBtn, importStatus);
     body.append(main, side);
     root.append(bar, body);
 
     const v = { root, title, count, stage, names, prev, next, copyStatus, fallback, pages: [], index: 0, token: '', base: workerUrl(),
+      importBtn, importStatus, importing: false, imported: '', layout: o.layout, bookName: typeof o.name === 'string' ? o.name : '',
       opener: o.opener || null, prevOverflow: document.body.style.overflow };
     v.onKey = e => {
       if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); return; }
       if (e.key === 'ArrowLeft') { e.preventDefault(); go(v, -1); return; }
       if (e.key === 'ArrowRight') { e.preventDefault(); go(v, 1); return; }
       if (e.key === 'Tab') {                       // keep Tab inside the dialog
-        const f = [...root.querySelectorAll('button, textarea')].filter(x => !x.disabled && !x.hidden && x.getClientRects().length);
+        const f = [...root.querySelectorAll('button, textarea, a[href]')].filter(x => !x.disabled && !x.hidden && x.getClientRects().length);
         if (!f.length) { e.preventDefault(); return; }
         const first = f[0], last = f[f.length - 1], at = document.activeElement;
         if (e.shiftKey && (at === first || at === root)) { e.preventDefault(); last.focus(); }
@@ -311,6 +391,7 @@
     prev.addEventListener('click', () => go(v, -1));
     next.addEventListener('click', () => go(v, 1));
     copy.addEventListener('click', () => copyList(v));
+    importBtn.addEventListener('click', () => importBook(v));
     let sx = null, sy = 0;
     stage.addEventListener('touchstart', e => { const t = e.touches[0]; if (e.touches.length === 1 && t) { sx = t.clientX; sy = t.clientY; } else sx = null; }, { passive: true });
     stage.addEventListener('touchend', e => {
