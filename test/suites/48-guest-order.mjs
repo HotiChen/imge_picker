@@ -4,7 +4,7 @@
 // Registered by test/run.mjs in file-name order. Suite names start with "guest order" (ONLY="guest order").
 import { base, suite } from '../lib/harness.mjs';
 import { MOBILE } from '../lib/env.mjs';
-import { ALB_DESK, albumWorld } from '../lib/album-world.mjs';
+import { ALB_DESK, albReady, albumWorld } from '../lib/album-world.mjs';
 import { shopProductsFake, SHOP_PRINT_FAKE, SHOP_ALBUM_FAKE } from '../lib/pick-fake.mjs';
 import { ordersWorld, ORDERING } from '../lib/guest-orders-fake.mjs';
 
@@ -29,6 +29,21 @@ const catalogue = () => [
   { ...SHOP_ALBUM_FAKE, extra_page_price: 150 },
   { ...SHOP_ALBUM_FAKE, id: 'prod-album-x', name: '無頁數相本', min_pages: null, max_pages: null, image_url: null, options: [{ id: 'opt-x-1', label: '', price: 9000 }] },
 ];
+// the album product is ordered through the preview's editor (S3): a catalogue whose album takes 2–30 spreads so 12 photos fit
+const catalogueEditable = (album = {}) => catalogue().map(p => (p.id === 'prod-album' ? { ...p, min_pages: 2, ...album } : p));
+// album card 訂購 -> the preview editor -> lay out (as planned) -> the whole-book review to the last page -> 確認送出 -> the product step
+async function albumToProduct(page) {
+  await page.waitForSelector('#albumPreviewBtn', { timeout: 6000 });
+  await click(page, '.go-order-btn[data-product-id="prod-album"]');
+  await albReady(page);
+  await page.waitForFunction(() => [...document.querySelectorAll('#albumViewer img')].every(i => i.complete), null, { timeout: 10000 });
+  await click(page, '#albumCheckout');
+  await page.waitForSelector('#albumSubmit', { timeout: 4000 });
+  for (let g = 0; g < 60 && !(await page.evaluate(() => document.getElementById('albumNext').disabled)); g++) { await click(page, '#albumNext'); await page.waitForTimeout(40); }
+  await click(page, '#albumSubmit');
+  await click(page, '#albumConfirmYes');
+  await step(page, 'product');
+}
 // o.ordering: undefined = the standard one, null = the switch is off
 const world = (o = {}) => {
   const products = o.products || catalogue();
@@ -177,47 +192,49 @@ const layout = (page, label, ok) => page.evaluate(() => {
   }, { before: w.before, initScript: OWNER, contextOptions: MOBILE });
 }
 
-// ── 3. album: the price formula
+// ── 3. album: the card opens the preview editor (S3); the layout's spread count prices the line
 {
-  const w = world();
-  await sx('album: spreads between min and max, price = option + (spreads − min) × extra_page_price per copy, the POST carries spreads (no photo_key)', async (page, ok) => {
+  const w = world({ products: catalogueEditable() });
+  await sx('album: 訂購 opens the preview editor (no spreads stepper); after the review the layout fixes the spreads, price = option + (spreads − min) × extra_page_price per copy, the POST carries the layout (no spreads, no photo_key)', async (page, ok) => {
     await ready(page);
-    await click(page, '.go-order-btn[data-product-id="prod-album"]');
-    await step(page, 'product');
+    await albumToProduct(page);
+    const n = +/(\d+) 跨頁・照你排的版面/.exec(await sheetText(page))?.[1];
+    ok('positive: the product step names the layout\'s spread count and it is inside 2–30', n >= 2 && n <= 30, String(n));
     await click(page, '.go-opt[data-option-id="opt-album-2"]');
-    ok('positive: spreads start at the minimum (10) and the draft price is the bare option price NT$7,000', (await $(page, '#goDraftPrice')) === '單價 NT$7,000　小計 NT$7,000' && (await $(page, '#goSheet .go-step-n')) === '10', await $(page, '#goDraftPrice'));
-    ok('no photo grid for an album and the explanation names min, max and the extra-page price', await count(page, '.go-photo') === 0 && (await sheetText(page)).includes('含 10 跨頁，最多 30 跨頁') && (await sheetText(page)).includes('NT$150'));
-    ok('the spreads stepper cannot go below the minimum', await page.evaluate(() => document.querySelector('#goSheet .go-sec .go-step-minus').disabled));
-    for (let i = 0; i < 3; i++) await click(page, '#goSheet .go-sec .go-step-plus');
-    ok('13 spreads: 7000 + (13 − 10) × 150 = NT$7,450', (await $(page, '#goDraftPrice')) === '單價 NT$7,450　小計 NT$7,450', await $(page, '#goDraftPrice'));
-    await page.evaluate(() => { const s = [...document.querySelectorAll('#goSheet .go-sec--row .go-step-plus')]; s[0].click(); s[0].click(); });
-    ok('2 copies -> 小計 NT$14,900', (await $(page, '#goDraftPrice')) === '單價 NT$7,450　小計 NT$14,900', await $(page, '#goDraftPrice'));
+    const unit = 7000 + (n - 2) * 150;
+    const fmt = v => `NT$${v.toLocaleString('en-US')}`;
+    ok(`the draft price is 7000 + (${n} − 2) × 150`, (await $(page, '#goDraftPrice')) === `單價 ${fmt(unit)}　小計 ${fmt(unit)}`, await $(page, '#goDraftPrice'));
+    ok('no photo grid, and the spread count cannot be changed here (the only stepper is the quantity)', await count(page, '.go-photo') === 0 && await count(page, '#goSheet .go-stepper') === 1);
+    await page.evaluate(() => { document.querySelector('#goSheet .go-sec--row .go-step-plus').click(); });
+    ok('2 copies -> 小計 is twice the unit', (await $(page, '#goDraftPrice')) === `單價 ${fmt(unit)}　小計 ${fmt(unit * 2)}`, await $(page, '#goDraftPrice'));
     await click(page, '#goAdd');
     await step(page, 'cart');
-    ok('cart: 13 跨頁・全部精修, total NT$14,900', (await sheetText(page)).includes('13 跨頁') && (await $(page, '#goCartTotal')) === '合計 NT$14,900', await sheetText(page));
+    ok('cart: the spread count and the total', (await sheetText(page)).includes(`${n} 跨頁`) && (await $(page, '#goCartTotal')) === `合計 ${fmt(unit * 2)}`, await sheetText(page));
     await toReview(page);
     await click(page, '#goSubmit');
     await step(page, 'receipt');
-    const b = w.posts()[0].body;
-    ok('body line = {option_id, qty:2, spreads:13}, expected_total 14900', JSON.stringify(b.lines) === JSON.stringify([{ option_id: 'opt-album-2', qty: 2, spreads: 13 }]) && b.expected_total === 14900, JSON.stringify(b));
-    ok('the fake Worker priced it the same (no price_changed): 201 and a stored total of 14900', w.orders.length === 1 && w.orders[0].total === 14900 && w.orders[0].items[0].spreads === 13);
+    const b = w.posts()[0].body, l = b.lines[0];
+    ok('body line = { layout, option_id, qty: 2 } and nothing else; expected_total as shown', b.lines.length === 1 && JSON.stringify(Object.keys(l).sort()) === JSON.stringify(['layout', 'option_id', 'qty']) && l.option_id === 'opt-album-2' && l.qty === 2 && b.expected_total === unit * 2, JSON.stringify(Object.keys(l)));
+    ok('the layout is v2 with the spread count the price used', l.layout.v === 2 && l.layout.spreads.length === n);
+    ok('the fake Worker priced it the same (no price_changed): 201, stored total and spreads', w.orders.length === 1 && w.orders[0].total === unit * 2 && w.orders[0].items[0].spreads === n);
   }, { before: w.before, initScript: OWNER, contextOptions: MOBILE });
 }
 {
-  const w = world({ products: [{ ...SHOP_PRINT_FAKE }, { ...SHOP_ALBUM_FAKE, extra_page_price: null, min_pages: 12, max_pages: 30 }] });
-  await sx('album with no extra_page_price: fixed at min_pages spreads (no stepper above), priced at the bare option price', async (page, ok) => {
+  const w = world({ products: [{ ...SHOP_PRINT_FAKE }, { ...SHOP_ALBUM_FAKE, extra_page_price: null, min_pages: 2, max_pages: 30 }] });
+  await sx('album with no extra_page_price: only exactly min_pages spreads can be sent — the editor blocks 送出結帳 for any other count, and says why', async (page, ok) => {
     await ready(page);
+    await page.waitForSelector('#albumPreviewBtn', { timeout: 6000 });
     await click(page, '.go-order-btn[data-product-id="prod-album"]');
-    await step(page, 'product');
-    await click(page, '.go-opt[data-option-id="opt-album-1"]');
-    ok('positive: 12 跨頁 is shown as fixed, with no spreads stepper (only the quantity one) and price NT$5,000',
-      (await sheetText(page)).includes('12 跨頁（此相本不能加頁）') && await count(page, '#goSheet .go-stepper') === 1 && (await $(page, '#goDraftPrice')).includes('NT$5,000'), await sheetText(page));
+    await albReady(page);
+    const r = await page.evaluate(() => ({ n: AlbumPreview.currentLayout().spreads.length, dis: document.getElementById('albumCheckout').disabled, warn: !document.getElementById('albumPagesWarn').hidden }));
+    ok('positive: the editor is up with a plan; 送出結帳 is enabled exactly when the plan has 2 spreads, else blocked with the reason',
+      r.n >= 1 && r.dis === (r.n !== 2) && r.warn === (r.n !== 2), JSON.stringify(r));
   }, { before: w.before, initScript: OWNER, contextOptions: MOBILE });
 }
 
 // ── 4. cart rules and caps
 {
-  const w = world({ ordering: { ...ORDERING, max_lines: 2, print_qty_max: 3, album_qty_max: 2 } });
+  const w = world({ products: catalogueEditable(), ordering: { ...ORDERING, max_lines: 2, print_qty_max: 3, album_qty_max: 2 } });
   await sx('caps from `ordering`: print qty max, album qty max, max_lines; the same option + photo twice is ONE line; remove works', async (page, ok) => {
     await ready(page);
     await addPrint(page, { photo: KEY1, qty: 1 });
@@ -245,8 +262,7 @@ const layout = (page, label, ok) => page.evaluate(() => {
     ok('removing the last line shows the empty cart with no way forward', (await sheetText(page)).includes('還沒有加入任何項目') && await count(page, '#goToContact') === 0);
     // album qty cap
     await page.evaluate(() => document.querySelector('#goLayer .go-close').click());
-    await click(page, '.go-order-btn[data-product-id="prod-album"]');
-    await step(page, 'product');
+    await albumToProduct(page);
     await click(page, '.go-opt[data-option-id="opt-album-1"]');
     await page.evaluate(() => { const s = document.querySelector('#goSheet .go-sec--row .go-step-plus'); s.click(); s.click(); s.click(); });
     ok('album qty stops at album_qty_max 2', (await $(page, '#goSheet .go-sec--row .go-step-n')) === '2' && await page.evaluate(() => document.querySelector('#goSheet .go-sec--row .go-step-plus').disabled));

@@ -16,13 +16,60 @@
 // delay: ms to hold every POST; force: {status, body} for the next POST only (an answer the page cannot
 // provoke by itself); leakTransfer: a misbehaving Worker that sends transfer_info on a requested order;
 // missingKeys: finals that are not in R2 (photo_not_found).
+import { createRequire } from 'node:module';
 import { WORKER } from './delivery-helpers.mjs';
+
+// S3 (docs/guest-shop.md, 「S3 — 客人相本排版」): an album line may carry `layout` (Layout JSON v2) instead of `spreads`.
+// The template whitelist is the book editor's own SpreadTemplates (id -> slot count), the same file the browser loads.
+const SpreadTemplates = createRequire(import.meta.url)('../../book_editor/js/spread_templates.js');
+const TEMPLATE_SLOTS = new Map(SpreadTemplates.TEMPLATES.map(t => [t.id, t.slots.length]));
+// worker.js bookPhotoIdSafe: a key the layout may carry (no quote, <, >, backtick, backslash, control / bidi character, BOM, lone surrogate)
+export const UNSAFE_KEY_CHAR = /["<>`\\\x00-\x1f\x7f-\x9f\u{61c}\u{200e}\u{200f}\u{2028}\u{2029}\u{202a}-\u{202e}\u{2066}-\u{2069}\u{feff}\u{d800}-\u{dfff}]/u;
+export const CROP_LIMIT = 5;
+export const LAYOUT_MAX_BYTES = 64 * 1024;
+export const BODY_MAX_PLAIN = 32 * 1024;
+export const BODY_MAX_LAYOUT = 96 * 1024;
 
 export const ORDERING = { consent_version: 'v1', delivery_methods: ['pickup'], max_lines: 20, print_qty_max: 10, album_qty_max: 3 };
 const UUID4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const PHONE = /^[0-9+\-() ]{6,20}$/;
 const CTRL = /[\u0000-\u001F\u007F‪-‮⁦-⁩‎‏]/;
 const whole = (v, lo, hi) => Number.isSafeInteger(v) && v >= lo && v <= hi;
+const isObj = v => !!v && typeof v === 'object' && !Array.isArray(v);
+
+// The Worker's serialisation of a layout, as the doc describes it: anything wrong -> null (400 invalid_layout, nothing is written),
+// extra fields dropped. `finals` is checked separately (not_in_finals is a 403 with the same test the print lines use).
+export function serializeLayout(l) {
+  if (!isObj(l) || l.v !== 2 || l.mode !== 'auto') return null;
+  if (!Array.isArray(l.spreads) || l.spreads.length < 1 || l.spreads.length > 200) return null;
+  const slotOut = x => {
+    if (!isObj(x) || typeof x.photo_key !== 'string' || !x.photo_key || x.photo_key.length > 1024 || UNSAFE_KEY_CHAR.test(x.photo_key) || x.photo_key.endsWith('/')) return null;
+    if (x.fit !== 'contain' && x.fit !== 'cover') return null;
+    if (!isObj(x.crop)) return null;
+    const { x: cx, y: cy, scale } = x.crop;
+    if (![cx, cy].every(n => typeof n === 'number' && Number.isFinite(n) && Math.abs(n) <= CROP_LIMIT) || scale !== 1) return null;
+    return { photo_key: x.photo_key, fit: x.fit, crop: { x: cx, y: cy, scale: 1 } };
+  };
+  const out = { v: 2, mode: 'auto', cover: null, spreads: [], back: null };
+  if (l.cover !== null && l.cover !== undefined) { out.cover = slotOut(l.cover); if (!out.cover) return null; }
+  const seen = new Set();
+  for (const sp of l.spreads) {
+    if (!isObj(sp) || !TEMPLATE_SLOTS.has(sp.template) || !Array.isArray(sp.slots) || sp.slots.length !== TEMPLATE_SLOTS.get(sp.template)) return null;
+    const o = { template: sp.template };
+    if (sp.mirrored === true) o.mirrored = true;
+    o.slots = [];
+    for (const x of sp.slots) {
+      const y = slotOut(x);
+      if (!y || seen.has(y.photo_key)) return null;          // an inside photo is there at most once
+      seen.add(y.photo_key);
+      o.slots.push(y);
+    }
+    out.spreads.push(o);
+  }
+  if (l.back !== null && l.back !== undefined) { if (!isObj(l.back)) return null; out.back = {}; }
+  if (new TextEncoder().encode(JSON.stringify(out)).length > LAYOUT_MAX_BYTES) return null;
+  return out;
+}
 
 export function ordersWorld(w, o = {}) {
   const products = o.products;                    // the /shop list
@@ -105,7 +152,9 @@ export function ordersWorld(w, o = {}) {
     if (!picker) return err(403, 'not_owner');
     if (!ordering) return err(403, 'ordering_disabled');
     if (!state.project.delivered_at || !state.project.client_confirmed_at) return err(409, 'not_confirmed');
-    if (bodyText.length > 32 * 1024) return err(413, 'too_large', { max: 32768 });
+    const hasLayout = !!(body && Array.isArray(body.lines) && body.lines.some(x => isObj(x) && x.layout !== undefined));
+    const bodyMax = hasLayout ? BODY_MAX_LAYOUT : BODY_MAX_PLAIN;      // 96 KB only when an album line carries a layout
+    if (new TextEncoder().encode(bodyText).length > bodyMax) return err(413, 'too_large', { max: bodyMax });
     if (!body || typeof body !== 'object' || Array.isArray(body)) return err(400, 'invalid_body');
     if (typeof body.request_id !== 'string' || !UUID4.test(body.request_id)) return err(400, 'invalid_request_id');
     const lines = body.lines;
@@ -116,16 +165,22 @@ export function ordersWorld(w, o = {}) {
     }
     for (const l of lines) if (!whole(l.qty, 1, 10)) return err(400, 'invalid_qty');
     const seen = new Set();
+    const layouts = new Map();       // line -> the serialised layout
     for (const l of lines) {
-      const album = l.spreads !== undefined && l.photo_key === undefined;
-      if (!album) {
+      const album = (l.spreads !== undefined || l.layout !== undefined) && l.photo_key === undefined;
+      if (l.layout !== undefined && l.spreads !== undefined) return err(400, 'invalid_spreads');   // a layout brings its own spread count
+      if (l.layout !== undefined) {
+        const lay = serializeLayout(l.layout);
+        if (!lay) return err(400, 'invalid_layout');
+        layouts.set(l, lay);
+      } else if (!album) {
         if (typeof l.photo_key !== 'string' || !l.photo_key || l.photo_key.length > 256 || CTRL.test(l.photo_key) || l.photo_key.endsWith('/')) return err(400, 'invalid_photo_key');
       } else if (!whole(l.spreads, 1, 200)) return err(400, 'invalid_spreads');
       const k = album ? `a|${l.option_id}` : `p|${l.option_id}|${l.photo_key}`;
       if (seen.has(k)) return err(400, 'duplicate_line');
       seen.add(k);
     }
-    for (const l of lines) if (l.photo_key === undefined && l.spreads === undefined) return err(400, 'invalid_spreads');
+    for (const l of lines) if (l.photo_key === undefined && l.spreads === undefined && l.layout === undefined) return err(400, 'invalid_spreads');
     const c = body.contact;
     const okStr = (v, lo, hi) => typeof v === 'string' && v.trim().length >= lo && v.trim().length <= hi && !CTRL.test(v);
     if (!c || typeof c !== 'object' || !okStr(c.name, 1, 50)) return err(400, 'invalid_contact');
@@ -150,22 +205,31 @@ export function ordersWorld(w, o = {}) {
       const { p, op } = hit;
       const album = p.kind === 'album';
       if (album && l.photo_key !== undefined) return err(400, 'invalid_lines');
-      if (!album && l.spreads !== undefined) return err(400, 'invalid_lines');
-      let unit = op.price, name_photo = null, spreads = null;
+      if (!album && (l.spreads !== undefined || l.layout !== undefined)) return err(400, 'invalid_lines');
+      let unit = op.price, name_photo = null, spreads = null, layoutOut = null;
       if (!album) {
         if (!fin.includes(l.photo_key)) return err(403, 'not_in_finals');
         if (ctl.missingKeys.has(l.photo_key)) return err(404, 'photo_not_found');
         name_photo = l.photo_key.split('/').pop();
       } else {
         if (p.min_pages == null) return err(400, 'album_not_orderable');
-        if (l.spreads < p.min_pages) return err(400, 'pages_below_min', { min: p.min_pages });
-        if (p.max_pages != null && l.spreads > p.max_pages) return err(400, 'pages_above_max', { max: p.max_pages });
-        if (l.spreads > p.min_pages && p.extra_page_price == null) return err(400, 'extra_pages_unpriced');
+        const lay = layouts.get(l);
+        const n = lay ? lay.spreads.length : l.spreads;
+        if (n < p.min_pages) return err(400, 'pages_below_min', { min: p.min_pages });
+        if (p.max_pages != null && n > p.max_pages) return err(400, 'pages_above_max', { max: p.max_pages });
+        if (n > p.min_pages && p.extra_page_price == null) return err(400, 'extra_pages_unpriced');
+        if (lay) {
+          const keys = [...(lay.cover ? [lay.cover.photo_key] : []), ...lay.spreads.flatMap(sp => sp.slots.map(x => x.photo_key))];
+          const folders = state.project.final_folders || [];
+          if (keys.some(k => !folders.some(f => k.startsWith(f)))) return err(403, 'not_in_finals');     // outside the final folders
+          if (keys.some(k => !w.files.includes(k) || ctl.missingKeys.has(k))) return err(404, 'photo_not_found');   // inside them, but no such object
+        }
         if (!whole(l.qty, 1, ordering.album_qty_max)) return err(400, 'invalid_qty');
-        unit = op.price + (l.spreads - p.min_pages) * (p.extra_page_price || 0);
-        spreads = l.spreads;
+        unit = op.price + (n - p.min_pages) * (p.extra_page_price || 0);
+        spreads = n;
+        layoutOut = lay || null;
       }
-      items.push({ kind: p.kind, name: p.name, option_label: op.label, qty: l.qty, unit_price: unit, photo_name: name_photo, spreads });
+      items.push({ kind: p.kind, name: p.name, option_label: op.label, qty: l.qty, unit_price: unit, photo_name: name_photo, spreads, layout: layoutOut });
       quote.push({ option_id: l.option_id, qty: l.qty, unit_price: unit });
     }
     const total = items.reduce((a, i) => a + i.unit_price * i.qty, 0);
