@@ -2006,7 +2006,7 @@ function pageBoundsFit(set, cols) {
 // spread = 1 P), `product` the line's platform product ({kind, min_pages,
 // max_pages}). null when it fits or the product is not an album (no bounds);
 // otherwise the 400 code. Pure and self-contained (a test takes its source).
-// Not called yet: no order path carries an album layout.
+// Called by guestOrderLines only (an S2 spreads line, an S3 layout line).
 function albumPagesProblem(spreads, product) {
   if (!(Number.isSafeInteger(spreads) && spreads >= 0)) return 'invalid_layout';
   if (!product || product.kind !== 'album') return null;
@@ -2027,7 +2027,7 @@ function albumPagesProblem(spreads, product) {
 // pages_above_max: refused, never priced) or the cost leaves the safe-integer
 // range. Below min_pages it is {0, 0}: that refusal is albumPagesProblem's.
 // Pure; calls only albumPagesProblem (a test takes both sources).
-// Not called yet: no order path carries an album layout.
+// Called by guestOrderLines only (an S2 spreads line, an S3 layout line).
 function albumExtraPagesCost(product, spreads) {
   if (!product || product.kind !== 'album') return null;
   const price = product.extra_page_price;
@@ -3542,6 +3542,26 @@ const GUEST_ALBUM_QTY_MAX = 3;
 const GUEST_OPEN_ORDERS_MAX = 3;
 const GUEST_ORDERS_MAX = 20;
 const GUEST_ORDER_BODY_MAX = 32 * 1024;
+// a body carrying an album layout (Layout JSON v2, S3) may be this big; every
+// other body stays at GUEST_ORDER_BODY_MAX (readGuestOrderBody)
+const GUEST_ORDER_LAYOUT_BODY_MAX = 96 * 1024;
+// the stored layout, as the Worker serialises it, in UTF-8 bytes
+const ALBUM_LAYOUT_MAX = 64 * 1024;
+const ALBUM_LAYOUT_SPREADS_MAX = PAGE_BOUND_MAX;
+// The spread templates a guest layout may name, id → slot count: a copy of
+// book_editor/js/spread_templates.js (docs/album-preview.md) that the Worker
+// can read without loading the library. guest-album-layout.test.mjs fails
+// when the two drift. A Map, so no prototype name is an id.
+const ALBUM_TEMPLATE_SLOTS = new Map(Object.entries({
+  'hero-bleed': 1, 'hero-frame': 1, 'hero-wide': 1, 'solo-right': 1, 'solo-left': 1, 'pair-portraits': 2,
+  'pair-stagger': 2, 'pair-bleed-small': 2, 'pair-landscapes': 2, 'one-two-right': 3, 'two-one-left': 3,
+  'one-two-golden': 3, 'one-two-wide': 3, 'three-portraits': 3, 'triptych': 3, 'big-three': 4, 'three-big': 4,
+  'quad-stacks': 4, 'quad-columns': 4, 'gallery-4': 4, 'quad-stagger': 4, 'wide-three-one': 4, 'cascade-4': 4,
+  'hero-strip': 4, 'grid4-big': 5, 'big-grid4': 5, 'collage-5a': 5, 'collage-5b': 5, 'five-wide': 5,
+  'portrait-five': 5, 'portrait-six': 6, 'trios': 6, 'triple-bands': 6, 'triple-ladder': 6, 'triple-airy': 6,
+  'collage-3-4': 7, 'collage-4-3': 7, 'mosaic-7': 7, 'seven-wide': 7, 'portrait-seven': 7, 'grid-4-4': 8,
+  'mosaic-4-4': 8, 'bands-4-4': 8
+}));
 const GUEST_OPTION_ID_MAX = 200;
 // the privacy notice the order form shows; a new text bumps it, and a page
 // still showing the old one is refused (consent_required)
@@ -3688,10 +3708,95 @@ function guestContact(v) {
   return { name, phone, line };
 }
 
+// One photo of a guest layout (the cover or an inner slot) as stored:
+// {photo_key, fit, crop: {x, y, scale: 1}}, or null when it is not one — a
+// key pickKeyValid takes, fit 'contain' or 'cover', crop x and y finite
+// numbers within ±1, scale exactly 1. Nothing else is kept.
+function albumLayoutSlot(s) {
+  if (!isPlainObject(s) || typeof s.photo_key !== 'string' || !s.photo_key || !pickKeyValid(s.photo_key)) return null;
+  if (s.fit !== 'contain' && s.fit !== 'cover') return null;
+  const c = s.crop;
+  const within = v => typeof v === 'number' && Number.isFinite(v) && v >= -1 && v <= 1;
+  if (!isPlainObject(c) || !within(c.x) || !within(c.y) || c.scale !== 1) return null;
+  return { photo_key: s.photo_key, fit: s.fit, crop: { x: c.x, y: c.y, scale: 1 } };
+}
+
+// A guest album layout, Layout JSON v2 (docs/guest-shop.md, 「S3 — 客人相本
+// 排版」): {v: 2, mode: 'auto', cover: slot | null, spreads: [{template,
+// mirrored?: true, slots: [slot]}], back: null | {}}. Returns {json, keys,
+// spreads} — the Worker's own serialisation (in that key order, every other
+// field dropped), every photo key it names (for the finals check, which is
+// guestOrderLines'), and the spread count — or null (400 invalid_layout). The
+// rules: a template in ALBUM_TEMPLATE_SLOTS with exactly its slot count;
+// every inner photo at most once (the cover may be one of them); at most
+// ALBUM_LAYOUT_SPREADS_MAX spreads; the serialisation at most
+// ALBUM_LAYOUT_MAX bytes. A missing cover or back reads null. Pure: reads
+// nothing, never touches R2 (a key here is only ever compared with folders).
+function albumLayoutV2(raw) {
+  if (!isPlainObject(raw) || raw.v !== 2 || raw.mode !== 'auto') return null;
+  if (!Array.isArray(raw.spreads) || raw.spreads.length > ALBUM_LAYOUT_SPREADS_MAX) return null;
+  let cover = null;
+  if (raw.cover !== undefined && raw.cover !== null) {
+    cover = albumLayoutSlot(raw.cover);
+    if (!cover) return null;
+  }
+  const inner = new Set();
+  const spreads = [];
+  for (const sp of raw.spreads) {
+    if (!isPlainObject(sp)) return null;
+    const count = ALBUM_TEMPLATE_SLOTS.get(sp.template);
+    if (count === undefined) return null;
+    if (sp.mirrored !== undefined && typeof sp.mirrored !== 'boolean') return null;
+    if (!Array.isArray(sp.slots) || sp.slots.length !== count) return null;
+    const slots = [];
+    for (const one of sp.slots) {
+      const slot = albumLayoutSlot(one);
+      if (!slot || inner.has(slot.photo_key)) return null;
+      inner.add(slot.photo_key);
+      slots.push(slot);
+    }
+    spreads.push(sp.mirrored === true ? { template: sp.template, mirrored: true, slots } : { template: sp.template, slots });
+  }
+  let back = null;
+  if (raw.back !== undefined && raw.back !== null) {
+    if (!isPlainObject(raw.back)) return null;
+    back = {};
+  }
+  const json = JSON.stringify({ v: 2, mode: 'auto', cover, spreads, back });
+  if (new TextEncoder().encode(json).byteLength > ALBUM_LAYOUT_MAX) return null;
+  return { json, keys: cover ? [cover.photo_key, ...inner] : [...inner], spreads: spreads.length };
+}
+
+// Whether a parsed POST /api/pick/orders body carries an album layout (some
+// line with a layout object): only such a body may pass GUEST_ORDER_BODY_MAX.
+const carriesAlbumLayout = body =>
+  isPlainObject(body) && Array.isArray(body.lines) && body.lines.some(l => isPlainObject(l) && isPlainObject(l.layout));
+
+// A POST /api/pick/orders body: {body} or {refused: Response}. Read as a
+// stream cut off at GUEST_ORDER_LAYOUT_BODY_MAX (413, max that), then judged:
+// a body over GUEST_ORDER_BODY_MAX — by its bytes or its Content-Length — is
+// 413 with that max unless it parses and carries an album layout; a body
+// that does not parse is 400 'Invalid JSON' under that cap.
+async function readGuestOrderBody(request) {
+  const tooLarge = max => ({ refused: jsonOk({ error: '資料太大', code: 'too_large', max }, 413) });
+  const bytes = await readBodyCapped(request, GUEST_ORDER_LAYOUT_BODY_MAX);
+  if (!bytes) return tooLarge(GUEST_ORDER_LAYOUT_BODY_MAX);
+  const declared = Number(request.headers.get('Content-Length'));
+  const over = bytes.byteLength > GUEST_ORDER_BODY_MAX || (Number.isFinite(declared) && declared > GUEST_ORDER_BODY_MAX);
+  let body;
+  try { body = JSON.parse(new TextDecoder().decode(bytes)); } catch {
+    return over ? tooLarge(GUEST_ORDER_BODY_MAX) : { refused: jsonErr('Invalid JSON') };
+  }
+  if (over && !carriesAlbumLayout(body)) return tooLarge(GUEST_ORDER_BODY_MAX);
+  return { body };
+}
+
 // A POST /api/pick/orders body, checked without the database, in the order the
 // codes are documented: {order: {requestId, lines: [{option_id, qty,
-// photo_key?, spreads?}], contact, note, expected}} or {bad: code, max?}.
-// Nothing money-related is read: the lines keep only these four fields.
+// photo_key?, spreads?, layout?}], contact, note, expected}} or {bad: code, max?}.
+// Nothing money-related is read: the lines keep only these five fields. A
+// line's layout (albumLayoutV2: 400 invalid_layout) sets its spreads; a
+// spreads sent beside it that says otherwise is 400 invalid_spreads.
 function guestOrderBody(body) {
   if (!isPlainObject(body)) return { bad: 'invalid_body' };
   if (typeof body.request_id !== 'string' || !REQUEST_ID.test(body.request_id)) return { bad: 'invalid_request_id' };
@@ -3707,7 +3812,15 @@ function guestOrderBody(body) {
     if (seen.has(same)) return { bad: 'duplicate_line' };
     seen.add(same);
     if (l.spreads !== undefined && !(Number.isSafeInteger(l.spreads) && l.spreads >= 1 && l.spreads <= PAGE_BOUND_MAX)) return { bad: 'invalid_spreads' };
-    lines.push({ option_id: l.option_id, qty: l.qty, photo_key: l.photo_key, spreads: l.spreads });
+    // an album layout (S3): its spread count is the line's; a spreads sent
+    // with it must say the same
+    let layout;
+    if (l.layout !== undefined) {
+      layout = albumLayoutV2(l.layout);
+      if (!layout) return { bad: 'invalid_layout' };
+      if (l.spreads !== undefined && l.spreads !== layout.spreads) return { bad: 'invalid_spreads' };
+    }
+    lines.push({ option_id: l.option_id, qty: l.qty, photo_key: l.photo_key, spreads: layout ? layout.spreads : l.spreads, layout });
   }
   const contact = guestContact(body.contact);
   if (!contact) return { bad: 'invalid_contact' };
@@ -3726,8 +3839,10 @@ function guestOrderBody(body) {
 // photographer's guest shop right now (readGuestShop: visible, active, its
 // platform product and option active, at or above the platform price) — 404
 // product_not_offered; the line fits its kind (a print names one final, an
-// album a spread count and 1–3 copies); a print's photo is in the finals of the
-// delivery up now — 403 not_in_finals — and in R2 — 404 photo_not_found; an
+// album a spread count and 1–3 copies); a print's photo and every photo an
+// album layout names are in the finals of the delivery up now — 403
+// not_in_finals — and a print's photo in R2 — 404 photo_not_found (a layout's
+// photos are not looked up: up to 1,601 heads); an
 // album's spreads fit its platform product (an album with no min_pages is not
 // orderable; extra spreads cost extra_page_price each, and above min_pages
 // with no such price it is refused). The snapshot (name, label, price, cost,
@@ -3751,7 +3866,9 @@ async function guestOrderLines(env, project, finals, wanted) {
     }
   }
   const prints = wanted.filter(l => l.photo_key !== undefined);
-  if (prints.some(l => !pickKeyAllowed({ folders: finals }, l.photo_key))) return { fail: [403, 'not_in_finals'] };
+  // a print's photo and every photo an album layout names: the same check
+  const named = [...prints.map(l => l.photo_key), ...wanted.flatMap(l => (l.layout ? l.layout.keys : []))];
+  if (named.some(key => !pickKeyAllowed({ folders: finals }, key))) return { fail: [403, 'not_in_finals'] };
   const photos = bucketFor(env, owner);
   const found = await Promise.all(prints.map(l => photos.head(l.photo_key)));
   if (found.some(o => !o)) return { fail: [404, 'photo_not_found'] };
@@ -3777,7 +3894,7 @@ async function guestOrderLines(env, project, finals, wanted) {
     if (row.kind !== 'album') return { ...row, layout: null };
     return {
       ...row, unit_price: row.unit_price + extras[i],
-      layout: JSON.stringify({ v: 1, mode: 'photographer', source: 'all_finals', spreads: l.spreads }),
+      layout: l.layout ? l.layout.json : JSON.stringify({ v: 1, mode: 'photographer', source: 'all_finals', spreads: l.spreads }),
     };
   });
   if (lines.some(l => !isMoney(l.unit_price))) return { fail: [400, 'extra_pages_unpriced'] };
@@ -3822,7 +3939,9 @@ async function guestOrdersFor(env, project, pickerId, orderId = null) {
     id: o.id, status: o.status, created_at: o.created_at, confirmed_at: o.confirmed_at, cancelled_at: o.cancelled_at,
     items: items.filter(i => i.order_id === o.id).map(i => {
       const key = parsePhotoKeys(i.photo_keys)[0];
-      const spreads = parseLayout(i.layout)?.spreads;
+      // v1 (請攝影師排版) carries the count, v2 (the guest's layout) the spreads
+      const stored = parseLayout(i.layout)?.spreads;
+      const spreads = Array.isArray(stored) ? stored.length : stored;
       return {
         kind: i.kind, name: i.name, option_label: i.option_label, qty: i.qty, unit_price: i.unit_price,
         photo_name: i.kind === 'print' && typeof key === 'string' ? key.split('/').pop() : null,
@@ -7229,7 +7348,7 @@ async function routeRequest(request, env, ctx) {
         const scope = pickReadScope(s);
         const notConfirmed = () => out({ error: '確認完成後才能訂購', code: 'not_confirmed' }, 409);
         if (scope.mode !== 'delivered' || !project.client_confirmed_at) return notConfirmed();
-        const read = await readJsonCapped(request, GUEST_ORDER_BODY_MAX);
+        const read = await readGuestOrderBody(request);
         if (read.refused) {
           // the 413 / Invalid JSON answer, no-store like every other here
           for (const [k, v] of Object.entries(SHARED_LINK_HEADERS)) read.refused.headers.set(k, v);

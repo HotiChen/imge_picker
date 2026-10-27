@@ -1373,3 +1373,19 @@ reset the previous holder's 3 `requested` orders block the new holder until the 
 
 ### 沒驗證／待 Tim
 `GUEST_ORDERS` 仍是 `off`；iPhone／LINE 內建瀏覽器的點選、換照片流程與 8 張的小格子；真實案子的排版品質；個資聲明審閱。
+
+### Worker — built (2026-10-27, `worker/test/guest-album-layout.test.mjs`)
+- Album line `{option_id, qty, layout}`; `albumLayoutV2` (pure, reads nothing) checks and rebuilds it, `guestOrderLines`
+  checks every photo it names (cover too) with the same `pickKeyAllowed({folders: finals})` as a print line → 403
+  `not_in_finals`. Layout photos are **not** looked up in R2 (a print's photo is: `photo_not_found`); up to 1,601 heads.
+- Template table: `ALBUM_TEMPLATE_SLOTS` in `worker.js` (a `Map`, so `__proto__` is no id); the test fails when it
+  drifts from `book_editor/js/spread_templates.js`.
+- Stored exactly as `{v, mode, cover, spreads: [{template, mirrored?, slots: [{photo_key, fit, crop: {x, y, scale}}]}], back}`
+  (`mirrored` only when `true`, `back` `null` or `{}`; a missing `cover` / `back` reads `null`). The 64 KB cap is on
+  these UTF-8 bytes. `photo_keys` stays `[]` (the photo locks still treat the line as all finals).
+- 0 spreads is not `invalid_layout`: it is `pages_below_min` (every orderable album has `min_pages` ≥ 1).
+- Body: read with a 96 KB stream cap (over it → 413 `max: 98304`, whatever the body is); over 32 KB (bytes or
+  `Content-Length`) → 413 `max: 32768` unless it parses and some line has a layout object. Under 32 KB a non-JSON
+  body is still 400 `Invalid JSON`.
+- The guest view's `spreads` (and the email's 「N 跨頁」) count a v2 layout's spreads. `js/orders-common.js` shows
+  「N 跨頁」 only for a v1 layout (`Number.isInteger(layout.spreads)`): the photographer-side view is work package 3.
