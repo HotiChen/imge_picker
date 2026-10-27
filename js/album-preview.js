@@ -27,6 +27,12 @@
 // own report says whether they were met; boundsHint() turns "not met" into one kind sentence, shown in
 // the viewer's footer and handed to AlbumPreview.onResult for the page behind it.
 //
+// Edit mode (docs/guest-shop.md, "S3 — 客人相本排版"): ONLY when the page hands over AlbumPreview.order (the caller is the
+// seat owner of a confirmed project, ordering is on and the album product is orderable: js/completion-page.js decides),
+// the viewer lets the guest swap photos slot by slot (never the template, never the spread count), step back through the
+// last HISTORY_MAX layouts (in memory only), and send the book to js/guest-order.js as a Layout JSON v2 after a
+// whole-book review. Without AlbumPreview.order the viewer is exactly the read-only preview (no edit markup at all).
+//
 // Every string that came from outside (photo keys) only ever reaches
 // img.src as a property — no innerHTML anywhere in this file, so a file name
 // that is markup stays text. book_editor.js / exporter.js are not loaded.
@@ -61,6 +67,21 @@
     const DOUBLE_TAP_DIST = 40;
     const HINT_MS = 4500;     // the zoom hint stays this long (or until the first touch)
     const HINT_FADE_MS = 400;
+
+    // Edit mode (see the header): a swapped-in photo whose bare share of its slot (AutoLayout.util.wasteOf) is above this gets
+    // the shape notice. The planner's own hard waste line is also 30%.
+    const SHAPE_WASTE_WARN = 0.3;
+    const HISTORY_MAX = 5;                  // 上一版: the last five layouts, in memory only
+    const LAYOUT_MAX_BYTES = 64 * 1024;     // what the Worker accepts of a Layout JSON
+    // The Worker refuses a layout key with a quote, <, >, backtick, backslash, a control or bidi character, BOM or a lone surrogate
+    // (worker.js bookPhotoIdSafe, the same rule). In edit mode such a photo is left out of the book rather than producing a layout
+    // the Worker would answer 400 invalid_layout.
+    const KEY_MAX = 1024;
+    const UNSAFE_KEY_CHAR = /["<>`\\\x00-\x1f\x7f-\x9f\u{61c}\u{200e}\u{200f}\u{2028}\u{2029}\u{202a}-\u{202e}\u{2066}-\u{2069}\u{feff}\u{d800}-\u{dfff}]/u;
+    const keySafe = id => typeof id === 'string' && id.length <= KEY_MAX && !UNSAFE_KEY_CHAR.test(id);
+    const UNAVAILABLE = '訂購暫時無法使用，排版已保留，請稍後再試';
+    const round3 = n => Math.round(n * 1000) / 1000;
+    const clonePlan = plan => JSON.parse(JSON.stringify(plan));
 
     const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
     const text = (tag, cls, t, id) => {
@@ -229,6 +250,8 @@
         ids.sort(AutoLayout.util.naturalCompare);
         const capped = ids.length > cfg.MAX_PHOTOS;
         if (capped) ids = ids.slice(0, cfg.MAX_PHOTOS);
+        let skipped = 0;
+        if (cfg.order) { const safe = ids.filter(keySafe); skipped = ids.length - safe.length; ids = safe; }   // edit mode: only keys the Worker accepts
         if (ids.length < 2) return { kind: 'few' };
 
         const urlFor = id => window.driveManager.getImageUrl({ id }, 400);
@@ -251,6 +274,7 @@
         if (dup > 0) notes.push(`已略過 ${dup} 張相近的照片`);
         if (capped) notes.push(`已先用前 ${cfg.MAX_PHOTOS} 張排版`);
         if (failed > 0) notes.push(`${failed} 張照片讀取失敗，未放入相本`);
+        if (skipped > 0) notes.push(`${skipped} 張照片的檔名含特殊字元，未放入相本`);
         return { kind: 'ready', plan, notes, hint: boundsHint(plan, ok - dup), items, photoCount: ok - dup };
     }
 
@@ -290,6 +314,13 @@
         return pages;
     }
 
+    // Edit mode is on only when the page handed over AlbumPreview.order for an orderable album and nothing has been ordered yet.
+    function canEdit(items) {
+        const o = AlbumPreview.order;
+        return !!(o && !o.locked && o.product && typeof o.submit === 'function' && Number.isFinite(o.min) && Number.isFinite(o.max)
+            && Array.isArray(items) && typeof AutoLayout !== 'undefined' && AutoLayout.util && AutoLayout.util.cropFor && AutoLayout.util.wasteOf);
+    }
+
     // ── the viewer ────────────────────────────────────────────────────────
     const Viewer = {
         el: null, stage: null, ctl: null, runId: 0, off: [], opener: null,
@@ -299,6 +330,9 @@
         lastTap: null, touchAt: 0, mouse: null,
         hint: null, hintTimer: null, hintFade: null,
         items: null, photoCount: 0, variant: 0, basePlan: null, sig: '', cueTimer: null,   // re-layout: the analysed photos and the layout number (0 = the first)
+        // edit mode (only with AlbumPreview.order): the plan being edited, the in-memory 上一版 stack, an open overlay (picker / confirm)
+        edit: false, cur: null, history: [], dirty: false, reviewing: false, reached: false, overlay: null, lastFocus: null, downAt: null,
+        hintNow: null, byId: null,
 
         isOpen() { return !!this.el; },
 
@@ -337,12 +371,13 @@
             stage.addEventListener('pointermove', e => this.onPointerMove(e));
             stage.addEventListener('pointerup', e => this.onPointerEnd(e));
             stage.addEventListener('pointercancel', e => this.onPointerEnd(e));
+            stage.addEventListener('click', e => this.onSlotClick(e));
 
             this.folders = folders;
             this.run();
         },
 
-        close() {
+        close(skipFocus) {
             if (!this.el) return;
             this.runId++;
             if (this.ctl) { this.ctl.abort(); this.ctl = null; }
@@ -353,12 +388,14 @@
             this.el = this.stage = this.foot = null;
             this.pages = []; this.g = null; this.index = 0; this.mouse = null; this.lastTap = null; this.hint = null;
             this.items = null; this.basePlan = null; this.variant = 0; this.sig = ''; clearTimeout(this.cueTimer);     // closing forgets the layout number: nothing is stored
+            this.edit = false; this.cur = null; this.history = []; this.dirty = false; this.reviewing = false; this.reached = false;   // and the swaps and the 上一版 stack
+            this.overlay = null; this.lastFocus = null; this.downAt = null; this.hintNow = null; this.byId = null;
             this.zoom = { s: 1, x: 0, y: 0 };
             document.documentElement.classList.remove('album-open');
             const btn = document.getElementById('albumPreviewBtn');
             const back = btn || this.opener;
             this.opener = null;
-            if (back && typeof back.focus === 'function' && document.contains(back)) back.focus();
+            if (!skipFocus && back && typeof back.focus === 'function' && document.contains(back)) back.focus();
         },
 
         // one run: prepare -> list -> analyze -> plan -> show. A retry is a new run.
@@ -449,8 +486,13 @@
         showAlbum(plan, notes, hint) {
             this.setState('ready');
             this.stage.dataset.zoomable = 'true';       // CSS: the stage takes the touches itself (touch-action: none)
-            this.pages = pagesOf(plan);
+            this.cur = clonePlan(plan);
+            this.pages = pagesOf(this.cur);
             this.sig = planSignature(plan);
+            this.hintNow = hint;
+            this.history = []; this.dirty = false; this.reviewing = false; this.reached = false; this.byId = null;
+            this.edit = canEdit(this.items);
+            this.el.dataset.edit = this.edit ? 'true' : 'false';
             const note = text('div', 'album-note', notes.join('・'), 'albumNote');
             note.hidden = notes.length === 0;
             // the bounds could not be met: said plainly, above the page buttons (present only then)
@@ -461,12 +503,18 @@
             label.setAttribute('aria-live', 'polite');
             const row = text('div', 'album-nav'); row.append(prev, label, next);
             if (bounds) this.foot.append(bounds);
-            this.foot.append(note, row, this.relayoutRow());
+            this.foot.append(note, row);
+            if (this.edit) this.foot.append(this.editRow());
+            this.foot.append(this.relayoutRow());
+            if (!this.edit && AlbumPreview.order && AlbumPreview.order.locked) {
+                this.foot.append(text('div', 'album-locked', '這本相本已送出訂單，排版無法再修改', 'albumLockedNote'));
+            }
             prev.addEventListener('click', () => this.go(-1));
             next.addEventListener('click', () => this.go(1));
             this.index = 0;
             this.show(0);
             next.focus();
+            this.refreshEdit();
             this.showHint();
         },
 
@@ -494,7 +542,7 @@
             side.append(status, cap);
             row.append(btns, side);
             again.addEventListener('click', () => this.again());
-            back.addEventListener('click', () => this.relayout(0, '已回到原本排法'));
+            back.addEventListener('click', () => this.guard(() => this.relayout(0, '已回到原本排法')));
             return row;
         },
 
@@ -513,7 +561,7 @@
                 let plan;
                 try { plan = planFor(this.items, AlbumPreview, v); } catch (e) { break; }
                 if (!plan || !plan.cover || !plan.spreads.length) break;
-                if (planSignature(plan) !== this.sig) { this.relayout(v, `已換成排法 ${v + 1}`, plan); return; }
+                if (planSignature(plan) !== this.sig) { this.guard(() => this.relayout(v, `已換成排法 ${v + 1}`, plan)); return; }
             }
             this.say('這本相本照片不多，目前只有這個排法');
         },
@@ -530,22 +578,32 @@
 
         // Swap to layout number `variant` (0 = the first one). The page index is kept when it still exists (clamped), the
         // counters and the bounds sentence follow the new plan, the cover title is drawn again with the cover.
+        // In edit mode the layout being left (swaps included) goes on the 上一版 stack first.
         relayout(variant, msg, given) {
             if (!this.el || !this.items || !this.pages.length) return;
             let plan;
             try { plan = given || (variant === 0 && this.basePlan ? this.basePlan : planFor(this.items, AlbumPreview, variant)); } catch (e) { return; }
             if (!plan || !plan.cover || !plan.spreads.length) return;
+            if (this.edit) this.pushHistory();
             this.variant = variant;
             this.sig = planSignature(plan);
+            this.cur = clonePlan(plan);
+            this.dirty = false;
+            this.paintPlan(boundsHint(plan, this.photoCount), msg);
+        },
+
+        // everything that follows a change of the whole plan (a re-layout, or 上一版): `this.cur`, `this.variant` are already set
+        paintPlan(hint, msg) {
+            this.hintNow = hint;
             this.hideHint();
             for (const s of [...this.stage.querySelectorAll('.album-slide')]) this.dropSlide(s);
-            this.pages = pagesOf(plan);
-            const hint = boundsHint(plan, this.photoCount);
+            this.pages = pagesOf(this.cur);
             const old = this.foot.querySelector('#albumBounds');
             if (old) old.remove();
             if (hint) this.foot.prepend(this.boundsEl(hint));
             const back = document.getElementById('albumRelayoutBack');
             const chip = document.getElementById('albumRelayoutChip');
+            const variant = this.variant;
             if (chip) { chip.hidden = variant === 0; chip.textContent = variant === 0 ? '' : `排法 ${variant + 1}`; }
             if (back) {
                 const hadFocus = document.activeElement === back;
@@ -555,7 +613,309 @@
             this.show(Math.min(this.index, this.pages.length - 1));
             this.cue();
             if (msg) this.say(msg);
+            this.refreshEdit();
             AlbumPreview.reportHint(hint);
+        },
+
+        // ── edit mode ──────────────────────────────────────────────────────────
+        // the photos by id, from the analysis (aspect and focus are what a new crop is made from)
+        photos() {
+            if (!this.byId) this.byId = new Map((this.items || []).filter(it => it && it.ok && typeof it.id === 'string').map(it => [it.id, it]));
+            return this.byId;
+        },
+        photo(id) { return this.photos().get(id) || null; },
+        // a slot's address: the cover, or spread n's slot s
+        refOf(pageIndex, si) {
+            const pg = this.pages[pageIndex];
+            if (!pg) return null;
+            if (pg.kind === 'cover') return si === 0 ? { cover: true } : null;
+            if (pg.kind === 'spread' && this.cur.spreads[pageIndex - 1] && this.cur.spreads[pageIndex - 1].slots[si]) return { n: pageIndex - 1, s: si };
+            return null;
+        },
+        slotAt(ref) { return ref.cover ? this.cur.cover : this.cur.spreads[ref.n].slots[ref.s]; },
+        aspectAt(ref) {
+            if (ref.cover) return COVER_ASPECT;
+            const sd = this.slotAt(ref).slot;
+            return sd.w * SPREAD_ASPECT / sd.h;
+        },
+        // the photo ids on the inside pages (the cover may repeat one of them; an inside photo is there once)
+        innerIds(except) {
+            const ids = new Set();
+            this.cur.spreads.forEach((sp, n) => sp.slots.forEach((x, s) => {
+                if (x.photoId && !(except && !except.cover && except.n === n && except.s === s)) ids.add(x.photoId);
+            }));
+            return ids;
+        },
+        // `id` drawn in the slot at `ref`: the slot keeps its place, its fit; the crop comes from the analysed focus
+        placed(ref, id) {
+            const old = this.slotAt(ref), it = this.photo(id);
+            if (old.fit === 'contain') return { photoId: id, fit: 'contain', crop: { x: 0, y: 0, scale: 1 }, slot: old.slot };
+            return { photoId: id, crop: AutoLayout.util.cropFor(it.aspect, this.aspectAt(ref), it.focus), slot: old.slot };
+        },
+        setSlot(ref, obj) { if (ref.cover) this.cur.cover = obj; else this.cur.spreads[ref.n].slots[ref.s] = obj; },
+        wasteAt(ref, id) { const it = this.photo(id); return it ? AutoLayout.util.wasteOf(it.aspect, this.aspectAt(ref)) : 0; },
+
+        // choose `id` for the slot at `ref`: a photo already on the inside pages EXCHANGES the two slots, any other replaces
+        choose(ref, id) {
+            const here = this.slotAt(ref);
+            if (!this.photo(id) || here.photoId === id) return false;
+            const notes = [];
+            let other = null;
+            if (!ref.cover) {
+                this.cur.spreads.forEach((sp, n) => sp.slots.forEach((x, s) => { if (!other && x.photoId === id && !(n === ref.n && s === ref.s)) other = { n, s }; }));
+            }
+            const mine = here.photoId;
+            if (other && !mine) { this.editSay('這格是空的，請選還沒用到的照片'); return false; }     // nothing to swap back, and a photo is never twice inside
+            const next = this.placed(ref, id);
+            if (other) {
+                const there = this.placed(other, mine);
+                this.setSlot(ref, next);
+                this.setSlot(other, there);
+                notes.push('這張已在書中，兩格已互換位置');
+                if (this.wasteAt(other, mine) > SHAPE_WASTE_WARN) notes.push('換過去的那張和那一格形狀不合，會留白或被裁切');
+            } else {
+                this.setSlot(ref, next);
+            }
+            if (this.wasteAt(ref, id) > SHAPE_WASTE_WARN) notes.push('這張和這格形狀不合，會留白或被裁切');
+            this.dirty = true;
+            this.redraw();
+            this.editSay(notes.length ? `${notes.join('。')}。` : '已換照片');
+            this.refreshEdit();
+            return true;
+        },
+        // draw the pages again from this.cur, on the page the guest is on
+        redraw() {
+            for (const s of [...this.stage.querySelectorAll('.album-slide')]) this.dropSlide(s);
+            this.pages = pagesOf(this.cur);
+            this.show(Math.min(this.index, this.pages.length - 1));
+        },
+        editSay(msg) {
+            const st = document.getElementById('albumEditNote');
+            if (!st) return;
+            st.textContent = '';
+            st.textContent = msg;
+        },
+
+        editRow() {
+            const row = text('div', 'album-edit');
+            const note = text('div', 'album-edit-note', '點一張照片，可以換成別張', 'albumEditNote');
+            note.setAttribute('role', 'status');
+            note.setAttribute('aria-live', 'polite');
+            const warn = text('div', 'album-edit-warn', '', 'albumPagesWarn');
+            warn.setAttribute('role', 'status');
+            warn.hidden = true;
+            const undo = button('albumUndo', 'album-relayout-btn album-edit-btn', '上一版');
+            undo.disabled = true;
+            const go = button('albumCheckout', 'album-relayout-btn album-edit-btn album-edit-go', '送出結帳');
+            const btns = text('div', 'album-edit-btns');
+            btns.append(undo, go);
+            row.append(note, warn, btns);
+            undo.addEventListener('click', () => this.undo());
+            go.addEventListener('click', () => this.startReview());
+            return row;
+        },
+        // 上一版 and 送出結帳 follow the state: the stack, and whether the spread count is one this book may have
+        refreshEdit() {
+            if (!this.edit || !this.el) return;
+            const undo = document.getElementById('albumUndo');
+            if (undo) { undo.disabled = this.history.length === 0; undo.dataset.count = String(this.history.length); }
+            const o = AlbumPreview.order, n = this.cur.spreads.length;
+            const bad = !o || n < o.min || n > o.max;
+            const go = document.getElementById('albumCheckout'), warn = document.getElementById('albumPagesWarn');
+            if (go) go.disabled = bad;
+            if (warn) { warn.hidden = !bad; warn.textContent = bad ? `不符合這本相本的頁數：目前 ${n} 個跨頁，這本相本是 ${o.min}–${o.max} 個跨頁` : ''; }
+        },
+        pushHistory() {
+            this.history.push({ cur: clonePlan(this.cur), variant: this.variant, sig: this.sig, dirty: this.dirty, hint: this.hintNow });
+            while (this.history.length > HISTORY_MAX) this.history.shift();
+        },
+        undo() {
+            if (!this.edit || !this.history.length || this.reviewing) return;
+            const s = this.history.pop();
+            this.variant = s.variant; this.sig = s.sig; this.cur = s.cur; this.dirty = s.dirty;
+            this.paintPlan(s.hint, '已回到上一版');
+        },
+        // 再次編排 / 回到原本 throw the swaps away: ask first (only when there is something to lose)
+        guard(run) {
+            if (!this.edit || !this.dirty) { run(); return; }
+            this.confirmBox('再次編排會取消你換過的照片，確定要繼續嗎？', '繼續編排', run, '先不要');
+        },
+
+        // ── the overlays: the candidate picker and the confirmation. The rest of the viewer is inert meanwhile. ──
+        openOverlay(node) {
+            this.closeOverlay(true);
+            this.lastFocus = document.activeElement;
+            this.overlay = node;
+            this.el.append(node);
+            for (const part of [this.stage, this.foot, this.el.querySelector('.album-viewer-bar')]) if (part) part.inert = true;
+        },
+        closeOverlay(quiet) {
+            if (!this.overlay) return;
+            this.overlay.remove();
+            this.overlay = null;
+            for (const part of [this.stage, this.foot, this.el.querySelector('.album-viewer-bar')]) if (part) part.inert = false;
+            const back = this.lastFocus;
+            this.lastFocus = null;
+            if (!quiet && back && this.el.contains(back) && !back.disabled && typeof back.focus === 'function') back.focus();
+        },
+        confirmBox(message, yesLabel, onYes, noLabel) {
+            const box = text('div', 'album-overlay album-confirm', null, 'albumConfirm');
+            box.setAttribute('role', 'alertdialog');
+            box.setAttribute('aria-modal', 'true');
+            box.setAttribute('aria-labelledby', 'albumConfirmText');
+            const card = text('div', 'album-overlay-card');
+            const yes = button('albumConfirmYes', 'btn btn-primary album-btn', yesLabel);
+            const no = button('albumConfirmNo', 'btn btn-outline album-btn', noLabel || '取消');
+            const acts = text('div', 'album-panel-actions');
+            acts.append(yes, no);
+            card.append(text('div', 'album-panel-title', message, 'albumConfirmText'), acts);
+            box.append(card);
+            yes.addEventListener('click', () => { this.closeOverlay(); onYes(); });
+            no.addEventListener('click', () => this.closeOverlay());
+            this.openOverlay(box);
+            no.focus();
+        },
+
+        // the candidate list for the slot at `ref`: this book's finals (thumbnails only), photos not on the inside pages first,
+        // photos of the slot's own orientation first, the ones already in the book dimmed and marked 已使用
+        openPicker(ref) {
+            const here = this.slotAt(ref);
+            const inner = this.innerIds(ref);
+            const slotAspect = this.aspectAt(ref);
+            const orient = a => (Math.abs(a - 1) <= 0.1 ? 'square' : a > 1 ? 'landscape' : 'portrait');
+            const want = orient(slotAspect);
+            const list = [...this.photos().values()].map((it, i) => ({ it, i, used: inner.has(it.id), cur: it.id === here.photoId, match: orient(it.aspect) === want }));
+            list.sort((a, b) => (a.used - b.used) || ((b.match ? 1 : 0) - (a.match ? 1 : 0)) || (a.i - b.i));
+            const box = text('div', 'album-overlay album-picker', null, 'albumPicker');
+            box.setAttribute('role', 'dialog');
+            box.setAttribute('aria-modal', 'true');
+            box.setAttribute('aria-label', '選一張照片');
+            const head = text('div', 'album-picker-head');
+            const close = button('albumPickerClose', 'album-icon-btn', '✕', '關閉');
+            head.append(text('span', 'album-picker-title', ref.cover ? '選封面照片' : '選一張照片換進這格'), close);
+            const grid = text('div', 'album-cands', null, 'albumCandidates');
+            const dm = window.driveManager;
+            for (const c of list) {
+                const b = button(null, 'album-cand', null);
+                b.dataset.photoId = c.it.id;
+                b.dataset.used = c.used ? 'true' : 'false';
+                b.dataset.match = c.match ? 'true' : 'false';
+                if (c.cur) b.dataset.current = 'true';
+                b.setAttribute('aria-label', c.cur ? '目前這張' : c.used ? '已使用的照片' : '照片');
+                const img = new Image();
+                img.alt = '';
+                img.loading = 'lazy';
+                img.decoding = 'async';
+                img.draggable = false;
+                img.src = dm.getImageUrl({ id: c.it.id }, 400);
+                b.append(img);
+                if (c.cur) b.append(text('span', 'album-cand-badge album-cand-current', '目前'));
+                else if (c.used) b.append(text('span', 'album-cand-badge', '已使用'));
+                b.addEventListener('click', () => { this.closeOverlay(true); this.choose(ref, c.it.id); this.focusAfterEdit(); });
+                grid.append(b);
+            }
+            box.append(head, grid);
+            close.addEventListener('click', () => this.closeOverlay());
+            this.openOverlay(box);
+            close.focus();
+        },
+        focusAfterEdit() {
+            const next = document.getElementById('albumNext');
+            if ((this.el && !this.el.contains(document.activeElement)) || document.activeElement === document.body) (next && !next.disabled ? next : this.el).focus();
+        },
+
+        // a tap on a photo of the current page opens its candidate list
+        onSlotClick(e) {
+            if (!this.edit || this.reviewing || this.overlay || !this.pages.length) return;
+            const d = this.downAt;
+            this.downAt = null;
+            if (d && Math.hypot(e.clientX - d.x, e.clientY - d.y) > TAP_SLOP) return;      // a drag that ended on a photo is not a tap
+            const box = e.target && e.target.closest ? e.target.closest('.album-slot') : null;
+            const slide = box && box.closest('.album-slide');
+            if (!box || box.dataset.slot === undefined || !slide || slide.dataset.current !== 'true') return;
+            const ref = this.refOf(+slide.dataset.index, +box.dataset.slot);
+            if (ref) this.openPicker(ref);
+        },
+
+        // ── 送出結帳: the whole book once, cover -> every spread -> back; 確認送出 opens only at the last page ──
+        startReview() {
+            if (!this.edit || this.reviewing || this.overlay) return;
+            const o = AlbumPreview.order;
+            const n = this.cur.spreads.length;
+            if (!o || n < o.min || n > o.max) { this.refreshEdit(); return; }
+            this.reviewing = true; this.reached = false;
+            this.el.dataset.review = 'true';
+            this.hideHint();
+            this.foot.querySelector('.album-edit').hidden = true;
+            this.foot.querySelector('.album-relayout').hidden = true;
+            const row = text('div', 'album-review', null, 'albumReview');
+            const msg = text('div', 'album-review-note', '請從封面翻到最後一頁，確認整本書。送出後無法修改。', 'albumReviewNote');
+            msg.setAttribute('role', 'status');
+            const back = button('albumReviewBack', 'album-relayout-btn album-edit-btn', '返回修改');
+            const go = button('albumSubmit', 'album-relayout-btn album-edit-btn album-edit-go', '確認送出');
+            go.disabled = true;
+            const btns = text('div', 'album-edit-btns');
+            btns.append(back, go);
+            row.append(msg, btns);
+            this.foot.append(row);
+            back.addEventListener('click', () => this.endReview());
+            go.addEventListener('click', () => this.confirmSubmit());
+            this.show(0);
+            const nx = document.getElementById('albumNext');
+            if (nx) nx.focus();
+        },
+        endReview() {
+            if (!this.reviewing) return;
+            this.reviewing = false; this.reached = false;
+            delete this.el.dataset.review;
+            const rv = this.foot.querySelector('#albumReview');
+            if (rv) rv.remove();
+            this.foot.querySelector('.album-edit').hidden = false;
+            this.foot.querySelector('.album-relayout').hidden = false;
+            const go = document.getElementById('albumCheckout');
+            if (go) go.focus();
+        },
+        noteReach() {
+            if (!this.reviewing || this.index !== this.pages.length - 1) return;
+            this.reached = true;
+            const go = document.getElementById('albumSubmit');
+            if (go) go.disabled = false;
+            const msg = document.getElementById('albumReviewNote');
+            if (msg) msg.textContent = '已看完整本書。送出後無法修改。';
+        },
+        confirmSubmit() {
+            if (!this.reviewing || !this.reached || this.overlay) return;
+            this.confirmBox('送出後排版無法修改，確定要送出嗎？', '確認送出', () => this.submit(), '再看看');
+        },
+        submit() {
+            const o = AlbumPreview.order;
+            const layout = this.layout();
+            const msg = document.getElementById('albumReviewNote');
+            const say = t => { if (msg) msg.textContent = t; };
+            if (!layout) return;
+            if (!o || o.locked || typeof o.submit !== 'function') { say(UNAVAILABLE); return; }
+            if (layout.spreads.length < o.min || layout.spreads.length > o.max) { say('不符合這本相本的頁數，請返回修改。'); return; }
+            if (new TextEncoder().encode(JSON.stringify(layout)).length > LAYOUT_MAX_BYTES) { say('這本相本內容太大，無法送出。'); return; }
+            // hand over first: the viewer goes only when the order sheet took it, else the layout stays here and the guest is told
+            let taken = false;
+            try { taken = o.submit(layout) !== false; } catch (e) { taken = false; }
+            if (!taken) { say(UNAVAILABLE); return; }
+            this.close(true);                  // the order sheet has the focus now
+        },
+        // Layout JSON v2 (docs/guest-shop.md): photo_key is the key the preview draws with; crops to 3 decimals; no spreads count
+        layout() {
+            if (!this.cur) return null;
+            const one = x => ({ photo_key: x.photoId, fit: x.fit === 'contain' ? 'contain' : 'cover',
+                crop: { x: round3((x.crop && x.crop.x) || 0), y: round3((x.crop && x.crop.y) || 0), scale: 1 } });
+            return { v: 2, mode: 'auto',
+                cover: this.cur.cover && this.cur.cover.photoId ? one(this.cur.cover) : null,
+                spreads: this.cur.spreads.map(sp => {
+                    const o = { template: sp.template };
+                    if (sp.mirrored) o.mirrored = true;
+                    o.slots = sp.slots.map(one);
+                    return o;
+                }),
+                back: this.cur.back ? {} : null };
         },
 
         // ── pages ──
@@ -595,6 +955,7 @@
             if (next) next.disabled = index === this.pages.length - 1;
             // a disabled button cannot keep the focus
             if (this.el && !this.el.contains(document.activeElement)) (next && !next.disabled ? next : prev || this.el).focus();
+            this.noteReach();
         },
 
         // a slide leaving the window gives its pictures back (a phone keeps a
@@ -638,12 +999,13 @@
             const bx = bleed / bw, by = bleed / PAGE_MM.h;
             if (bleed) page.dataset.bleed = String(bleed);
             const EDGE_TOL = 0.001;
-            pageData.slots.forEach(slot => {
+            pageData.slots.forEach((slot, slotIdx) => {
                 if (!slot || !slot.photoId || !slot.slot) return;
                 const sd = slot.slot;
                 const contain = slot.fit === 'contain';       // absent = cover, as layouts.js reads slot.fit
                 const box = text('div', 'album-slot');
                 if (contain) box.dataset.fit = 'contain';
+                if (Viewer.edit) box.dataset.slot = String(slotIdx);       // edit mode only: the read-only markup is untouched
                 if (!bleed) box.style.cssText = `left:${pct(sd.x)};top:${pct(sd.y)};width:${pct(sd.w)};height:${pct(sd.h)};`;
                 else {
                     let l = bx + sd.x * (1 - 2 * bx), t = by + sd.y * (1 - 2 * by);
@@ -778,7 +1140,7 @@
         // ── the hint (phone width only): one line, gone after a few seconds or at the first touch ──
         showHint() {
             if (window.innerWidth > PHONE_W || !this.stage) return;
-            const h = text('div', 'album-hint', '雙擊放大・橫放手機看更大', 'albumHint');
+            const h = text('div', 'album-hint', this.edit ? '點照片換圖・兩指放大' : '雙擊放大・橫放手機看更大', 'albumHint');
             h.setAttribute('aria-hidden', 'true');
             this.stage.appendChild(h);
             this.hint = h;
@@ -800,18 +1162,18 @@
         // ── input ──
         onKey(e) {
             if (!this.el) return;
-            if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); this.close(); return; }
+            if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); if (this.overlay) this.closeOverlay(); else this.close(); return; }
             if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
-                if (this.el.dataset.state !== 'ready') return;
+                if (this.el.dataset.state !== 'ready' || this.overlay) return;
                 e.preventDefault();
                 this.go(e.key === 'ArrowRight' ? 1 : -1);
                 return;
             }
             if (e.key === 'Tab') {      // the dialog is modal: Tab goes round inside it
-                const items = [...this.el.querySelectorAll('button:not([disabled])')];
+                const items = [...(this.overlay || this.el).querySelectorAll('button:not([disabled])')].filter(b => !b.closest('[inert]'));
                 if (!items.length) { e.preventDefault(); this.el.focus(); return; }
                 const first = items[0], last = items[items.length - 1], at = document.activeElement;
-                if (!this.el.contains(at) || (e.shiftKey && (at === first || at === this.el)) || (!e.shiftKey && at === last)) {
+                if (!(this.overlay || this.el).contains(at) || (e.shiftKey && (at === first || at === this.el)) || (!e.shiftKey && at === last)) {
                     e.preventDefault();
                     (e.shiftKey ? last : first).focus();
                 }
@@ -880,6 +1242,7 @@
             if (wasPinch && this.zoom.s <= ZOOM_SNAP) this.resetZoom(true);
         },
         onTap(x, y, time) {
+            if (this.edit) return;          // a tap picks a photo there (onSlotClick); zoom is the pinch and the wheel
             const last = this.lastTap;
             if (last && time - last.t <= DOUBLE_TAP_MS && Math.hypot(x - last.x, y - last.y) <= DOUBLE_TAP_DIST) {
                 this.lastTap = null;
@@ -918,12 +1281,13 @@
             this.zoomAt(this.zoom.s * Math.exp(-e.deltaY * unit * (e.ctrlKey ? 0.01 : 0.002)), e.clientX, e.clientY, false);
         },
         onDblClick(e) {
-            if (!this.pages.length) return;
+            if (!this.pages.length || this.edit) return;
             if (performance.now() - this.touchAt < 700) return;      // a touch double tap already did it
             this.hideHint();
             this.toggleZoom(e.clientX, e.clientY);
         },
         onPointerDown(e) {
+            if (this.edit) this.downAt = { x: e.clientX, y: e.clientY };
             if (e.pointerType !== 'mouse' || e.button !== 0 || !this.isZoomed()) return;
             this.mouse = { x: e.clientX, y: e.clientY };
             try { this.stage.setPointerCapture(e.pointerId); } catch (err) { /* no capture: the drag still works inside the stage */ }
@@ -955,6 +1319,15 @@
         bleedMm: 0,
         // the project title drawn at the top of the cover (js/completion-page.js sets it with the page; '' = nothing drawn)
         coverTitle: '',
+        // Editing + ordering (js/completion-page.js sets it for the seat owner of a confirmed project with ordering on and an orderable
+        // album product, else null = the read-only preview): { product, min, max, submit(layout), locked }. `min` / `max` are the spread
+        // counts the book may have, `submit` hands the Layout JSON v2 to js/guest-order.js. `locked` (set by lockOrder) ends editing.
+        order: null,
+        SHAPE_WASTE_WARN, HISTORY_MAX, LAYOUT_MAX_BYTES,
+        lockOrder() { if (this.order) this.order.locked = true; },
+        // the layout of the open viewer in edit mode (null otherwise); for the tests
+        currentLayout() { return Viewer.edit ? Viewer.layout() : null; },
+        _testViewer() { return Viewer; },       // for the browser suites only
         onResult: null,           // optional (hint: string | null) => void, called after every run (the page behind the viewer shows the hint)
         boundsHint,
 

@@ -111,6 +111,7 @@
             invalid_photo_key: ['有一張照片無法使用，請重新選擇。', 'cart'],
             duplicate_line: ['有項目重複了，請合併後再試。', 'cart'],
             invalid_spreads: ['相本的跨頁數不正確，請重新選擇。', 'cart'],
+            invalid_layout: ['相本的排版內容有誤，請回到相本預覽重新排版後再送出。', 'cart'],
             invalid_contact: ['聯絡資料有誤：請填姓名，以及電話或 LINE ID（至少一項）。', 'contact'],
             invalid_delivery: ['目前只提供面交。'],
             consent_required: ['請先勾選同意個資告知。', 'contact'],
@@ -118,11 +119,11 @@
             orders_unavailable: ['訂購功能暫時無法使用，請稍後再試，或直接聯絡攝影師。', null, false, true],
             shop_unavailable: ['商品資訊暫時無法使用，請稍後再試，或直接聯絡攝影師。', null, false, true],
             product_not_offered: ['有商品目前不提供了，請移除後再試。', 'cart'],
-            not_in_finals: ['有一張照片不在精修成品裡，請重新選擇。', 'cart'],
+            not_in_finals: ['有一張照片不在精修成品裡，請重新選擇。（相本排版請回到相本預覽重新排版）', 'cart'],
             photo_not_found: ['有一張照片找不到，請重新選擇。', 'cart'],
             album_not_orderable: ['這本相簿目前無法線上訂購，請直接聯絡攝影師。', 'cart'],
-            pages_below_min: ['相本跨頁數不足，請重新選擇。', 'cart'],
-            pages_above_max: ['相本跨頁數超過上限，請重新選擇。', 'cart'],
+            pages_below_min: ['相本跨頁數不足，不符合這本相本的頁數。', 'cart'],
+            pages_above_max: ['相本跨頁數超過上限，不符合這本相本的頁數。', 'cart'],
             extra_pages_unpriced: ['這本相簿不能加頁，請減少跨頁數。', 'cart'],
             delivery_changed: ['交件內容剛剛更新了，請重新整理頁面後再試。'],
             too_many_open_orders: ['你已經有 3 筆待確認的訂單，請等攝影師確認後再下新單。'],
@@ -168,8 +169,26 @@
             quote: null, error: '', receipt: null, bar: null, onChange: [] });
     }
 
+    // The album preview hands over a finished layout (Layout JSON v2, docs/guest-shop.md): the product step for that album, with the
+    // spread count fixed to the layout's. Returns false when ordering is not running.
+    function checkoutAlbum(product, layout) {
+        if (!S.ordering || !S.ctx || !product || product.kind !== 'album' || !layout || !Array.isArray(layout.spreads)) return false;
+        const single = product.options.length === 1 ? product.options[0] : null;
+        S.opener = document.querySelector('#albumPreviewBtn') || S.opener;
+        S.draft = { p: product, option: single, qty: 1, photo: null, spreads: layout.spreads.length, layout };
+        renderProduct();
+        return true;
+    }
+
+    // A print opens its product step. An album opens the album preview's editor (ctx.openAlbum): the guest lays the book out
+    // there and comes back through checkoutAlbum; there is no "photographer lays it out" line any more (docs/guest-shop.md S3).
     function orderButton(product, onTap) {
-        const b = btn('cp-btn cp-btn--solid go-order-btn', '訂購', () => { S.opener = b; openProduct(product); if (onTap) onTap(); });
+        const album = product.kind === 'album' && S.ctx && typeof S.ctx.openAlbum === 'function';
+        const b = btn('cp-btn cp-btn--solid go-order-btn', album ? '排版並訂購' : '訂購', () => {
+            S.opener = b;
+            if (album) S.ctx.openAlbum(b); else openProduct(product);
+            if (onTap) onTap();
+        });
         b.dataset.productId = product.id;
         return b;
     }
@@ -340,15 +359,24 @@
             }
             nodes.push(ps);
         } else {
+            // a book laid out in the album preview: the spread count is the layout's, it cannot be changed here
             const ss = el('section', 'go-sec');
-            ss.append(el('h3', 'go-h3', '跨頁數'));
+            ss.append(el('h3', 'go-h3', '你排好的相本'));
             const max = spreadsMax(p);
-            ss.append(el('p', 'go-sub', p.extraPagePrice != null && max > p.min
-                ? `含 ${p.min} 跨頁，最多 ${max} 跨頁；每多 1 跨頁加 ${money(p.extraPagePrice)}。使用你的全部精修，由攝影師排版。`
-                : `${p.min} 跨頁（此相本不能加頁）。使用你的全部精修，由攝影師排版。`));
-            if (max > p.min) {
-                ss.append(stepper(d.spreads, p.min, max, v => { d.spreads = Math.max(p.min, Math.min(max, v)); renderProduct(); }, '跨頁'));
-            } else ss.append(el('p', 'go-fixed', `${p.min} 跨頁`));
+            ss.append(el('p', 'go-fixed', `${d.spreads} 跨頁・照你排的版面印製（送出後無法修改）`));
+            // the Worker takes one line per album option: a second layout for the same option takes the first one's place
+            if (d.option && S.cart.some(l => l.layout && sameLine(l, d))) {
+                const rn = el('p', 'go-msg', '購物車裡已有這本相本，這次的排版會取代它');
+                rn.id = 'goReplaceNote';
+                rn.setAttribute('role', 'status');
+                ss.append(rn);
+            }
+            if (d.spreads < p.min || d.spreads > max) {
+                const bad = el('p', 'go-msg go-msg--err', `不符合這本相本的頁數（${p.min}–${max} 跨頁），請回到相本預覽調整。`);
+                bad.id = 'goLayoutBad';
+                bad.setAttribute('role', 'alert');
+                ss.append(bad);
+            }
             nodes.push(ss);
         }
 
@@ -359,7 +387,8 @@
         const unit = d.option ? unitPrice(p, d.option, d.spreads) : null;
         const exists = S.cart.some(l => sameLine(l, d));
         const full = !exists && S.cart.length >= S.ordering.max_lines;
-        const ready = !!d.option && (p.kind === 'album' || !!d.photo) && !full;
+        const layoutOk = p.kind !== 'album' || (!!d.layout && d.spreads >= p.min && d.spreads <= spreadsMax(p));
+        const ready = !!d.option && (p.kind === 'album' || !!d.photo) && !full && layoutOk;
         const foot = [];
         if (full) foot.push(el('p', 'go-msg go-msg--err', `一張訂單最多 ${S.ordering.max_lines} 個項目。`));
         const pl = el('p', 'go-price', unit == null ? '請先選擇規格' : `單價 ${money(unit)}　小計 ${money(unit * d.qty)}`);
@@ -382,12 +411,13 @@
         const hit = S.cart.find(l => sameLine(l, d));
         if (hit) {
             // the Worker refuses the same option + photo (or the same album option) twice: one line
-            if (p.kind === 'album') { hit.qty = d.qty; hit.spreads = d.spreads; hit.unit = unit; }
+            if (p.kind === 'album') { hit.qty = d.qty; hit.spreads = d.spreads; hit.unit = unit; hit.layout = d.layout || null; }
             else hit.qty = Math.min(qtyMax, hit.qty + d.qty);
         } else {
             if (S.cart.length >= S.ordering.max_lines) return;
             S.cart.push({ productId: p.id, kind: p.kind, name: p.name, optionId: d.option.id, optionLabel: d.option.label, qty: d.qty,
-                photo: p.kind === 'print' ? d.photo : null, spreads: p.kind === 'album' ? d.spreads : null, unit, qtyMax, product: p, option: d.option });
+                photo: p.kind === 'print' ? d.photo : null, spreads: p.kind === 'album' ? d.spreads : null, layout: p.kind === 'album' ? (d.layout || null) : null,
+                unit, qtyMax, product: p, option: d.option });
         }
         editedCart();
         changed();
@@ -397,7 +427,8 @@
 
     // ── step: the cart ──────────────────────────────────────────────────────
     function lineDetail(l) {
-        return l.kind === 'album' ? `${l.spreads} 跨頁・全部精修` : fileName(l.photo);
+        if (l.kind === 'album') return `${l.spreads} 跨頁・你排的版面（送出後無法修改）`;
+        return fileName(l.photo);
     }
     function renderCart() {
         const nodes = [head('訂單內容')];
@@ -553,7 +584,7 @@
         const body = {
             request_id: S.reqId,
             lines: S.cart.map(l => l.kind === 'album'
-                ? { option_id: l.optionId, qty: l.qty, spreads: l.spreads }
+                ? { option_id: l.optionId, qty: l.qty, layout: l.layout }       // an album line is always a layout (S3): no spreads next to it
                 : { option_id: l.optionId, qty: l.qty, photo_key: l.photo }),
             contact: { name: S.contact.name.trim() },
             delivery: { method: 'pickup' },
@@ -580,11 +611,13 @@
         S.inflight = false;
         if (!S.sheet) return;   // closed meanwhile; the cart and the request_id are kept
         if (r && r.ok && r.data && r.data.order) {
+            const hadLayout = S.cart.some(l => l.layout);
             S.receipt = r.data.order;
             S.cart = []; S.reqId = null; S.quote = null; S.error = ''; S.orders = null;
             S.consent = false;
             changed();
             renderReceipt();
+            if (hadLayout && S.ctx.onLayoutOrdered) { try { S.ctx.onLayoutOrdered(); } catch (e) { /* the page behind is not the order's business */ } }
             return;
         }
         const code = r && r.data && r.data.code;
@@ -709,7 +742,7 @@
     }
 
     window.GuestOrder = {
-        start, reset, close, orderButton, buildBar, orderable, cleanOrdering, unitPrice, spreadsMax, errorInfo, uuid4, PRIVACY_NOTICE,
+        start, reset, close, orderButton, checkoutAlbum, buildBar, orderable, cleanOrdering, unitPrice, spreadsMax, errorInfo, uuid4, PRIVACY_NOTICE,
         isOpen() { return !!S.layer; },
     };
 })();

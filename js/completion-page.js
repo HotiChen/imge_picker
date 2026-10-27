@@ -218,7 +218,8 @@
                 AlbumPreview.PLAN_OPTS = this._planBase || {};
                 AlbumPreview.onResult = null;
             }
-            if (window.AlbumPreview) AlbumPreview.coverTitle = '';
+            if (window.AlbumPreview) { AlbumPreview.coverTitle = ''; AlbumPreview.order = null; }
+            this._albumLocked = false;
             this._hadPlanBase = false; this._planBase = null;
             this.root = this.albumSec = null; this.coverKey = null;
             document.documentElement.classList.remove('cp-on');
@@ -412,6 +413,7 @@
             // 訂購 (js/guest-order.js) replaces 「我有興趣」 only when the Worker offers ordering AND this is the seat owner of a
             // confirmed project; otherwise (ordering null, a viewer, ordering switched off meanwhile) the page is what it always was
             const ordering = this._orderingOn();
+            this._setAlbumOrder(ordering ? products.find(x => x.kind === 'album') || null : null);
             const buildCard = p => {
                 const li = el('li', `cp-product cp-product--${p.kind}`);
                 if (p.image) {
@@ -445,7 +447,8 @@
                 body.append(opts);
                 // 「我有興趣」: the seat owner only (a viewer has no key and the Worker would answer 403)
                 const op = ordering ? { ...p, options: p.options.filter(o => o.id) } : null;
-                if (ordering && op.options.length && GuestOrder.orderable(op)) {
+                // an album is ordered through the preview's editor, which serves the one album product the planner uses (_setAlbumOrder)
+                if (ordering && op.options.length && GuestOrder.orderable(op) && (p.kind !== 'album' || (window.AlbumPreview && AlbumPreview.order && AlbumPreview.order.product.id === p.id))) {
                     const wrap = el('div', 'cp-interest');
                     wrap.append(GuestOrder.orderButton(op));
                     body.append(wrap);
@@ -489,6 +492,16 @@
             return sec;
         },
 
+        // The album preview's edit mode (js/album-preview.js `order`) exists only when ordering is running (seat owner, confirmed,
+        // switch on) AND the album product (the one whose page range the planner uses) is orderable; else the preview is read-only.
+        _setAlbumOrder(album) {
+            if (!window.AlbumPreview) return;
+            const op = album ? { ...album, options: album.options.filter(o => o.id) } : null;
+            if (!op || !op.options.length || !window.GuestOrder || !GuestOrder.orderable(op)) { AlbumPreview.order = null; return; }
+            AlbumPreview.order = { product: op, min: op.min, max: GuestOrder.spreadsMax(op), locked: !!this._albumLocked,
+                submit: layout => GuestOrder.checkoutAlbum(op, layout) };
+        },
+
         // true when the 訂購 flow is on for this mount (see _buildShop). Starting it resets the cart, so it is called once per build.
         _orderingOn() {
             const c = this.ctx || {};
@@ -496,11 +509,14 @@
             return GuestOrder.start({
                 ordering: this._ordering, api: c.orderApi, listFinals: c.listFinals, thumbUrl: c.thumbUrl, root: this.root,
                 onOrderingDisabled: () => this._orderingOff_(),
+                openAlbum: opener => { if (window.AlbumPreview) AlbumPreview.open(opener); },
+                onLayoutOrdered: () => { this._albumLocked = true; if (window.AlbumPreview) AlbumPreview.lockOrder(); },
             });
         },
         // the Worker said ordering_disabled: the shop goes back to 「我有興趣」
         _orderingOff_() {
             this._orderOff = true;
+            if (window.AlbumPreview) AlbumPreview.order = null;
             if (window.GuestOrder) GuestOrder.close();
             const old = this.root && this.root.querySelector('#cpShop');
             if (old && this._products) { const fresh = this._buildShop(this._products); old.replaceWith(fresh); }
