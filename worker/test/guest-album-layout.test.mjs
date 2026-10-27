@@ -10,10 +10,11 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import {
-  WORKER, s2Schema, ready, printLine, albumLine, orderBody, placeOrder, myOrders, cancelOrder,
+  WORKER, s2Schema, ready as readyBase, printLine, albumLine, orderBody, placeOrder, myOrders, cancelOrder,
   orderRows, itemRows, dbSnapshot, adminOrders, code, walk, deliver, confirm,
-  F1, F2, F3, PA, G1, FINAL, FINAL2, pick, guest,
+  F1, F2, F3, PA, G1, FINAL, FINAL2, pick, guest, OBJECTS, FRESH,
 } from './guest-order-helpers.mjs';
+import { fakeBucket } from './fakes.mjs';
 
 const require = createRequire(import.meta.url);
 const SpreadTemplates = require('../../book_editor/js/spread_templates.js');
@@ -25,9 +26,18 @@ function workerTemplateTable() {
   return new Function(`return ${m[1]};`)();
 }
 
-// keys under the finals folder (the layout keys are judged by folder, like a
-// print line's; none of these is read from R2 by the order route)
+// photos under the finals folder; every layout photo must be a real object
+// there (listed from R2), so ready() puts them all in the bucket
 const K = i => `${FINAL}L${String(i).padStart(3, '0')}.jpg`;
+const SIZED = (i, long) => `${FINAL}${String(i).padStart(4, '0')}-${'k'.repeat(long ? 61 : 60)}.jpg`;
+const SEEDED = [
+  ...Array.from({ length: 300 }, (_, i) => K(i + 1)),
+  ...Array.from({ length: 420 }, (_, i) => [SIZED(i, false), SIZED(i, true)]).flat(),
+  ...Array.from({ length: 10 }, (_, i) => `${FINAL2}n${i}.jpg`),
+];
+// over 1000 objects under FINAL: the listing takes two pages
+const LAYOUT_OBJECTS = { ...OBJECTS, ...Object.fromEntries(SEEDED.map(k => [k, 'L'])) };
+const ready = (opts = {}) => readyBase({ objects: LAYOUT_OBJECTS, ...opts });
 const slot = (photo_key, over = {}) => ({ photo_key, fit: 'contain', crop: { x: 0, y: 0, scale: 1 }, ...over });
 // n spreads of one photo each ('hero-bleed'), photos K(1)…K(n), cover K(1)
 function layoutOf(n, over = {}) {
@@ -266,7 +276,7 @@ const bytes = s => new TextEncoder().encode(s).byteLength;
 // over max_pages (30), so a layout under the cap answers pages_above_max and
 // one over it invalid_layout
 function sizedLayout(size) {
-  const key = (i, pad) => `${FINAL}${String(i).padStart(4, '0')}-${'k'.repeat(i < pad ? 61 : 60)}.jpg`;
+  const key = (i, pad) => SIZED(i, i < pad);
   const build = pad => ({
     v: 2, mode: 'auto', cover: null,
     spreads: Array.from({ length: 105 }, (_, s) => ({ template: 'quad-stacks', slots: [0, 1, 2, 3].map(j => slot(key(s * 4 + j, pad))) })),
@@ -429,6 +439,105 @@ test('body cap: under 32 KB a malformed body is still 400 Invalid JSON, a layout
   assert.equal(res.status, 400);
   assert.equal((await res.json()).error, 'Invalid JSON');
   assert.equal((await placeOrder(env, p, albumOrder(c, layoutOf(10)))).status, 201);
+});
+
+// ─── every layout photo is a real object in the finals ──────────────────────
+
+test('photo_not_found: a layout photo (inner or cover) under the finals folder but not in R2 — 404, nothing written', async () => {
+  const { env, c, p } = await ready();
+  for (const key of [`${FINAL}nope.jpg`, `${FINAL}other-shoot/z.jpg`, `${FINAL}${PA}`, `${FINAL}x/shoot/毛片/y.jpg`, `${FINAL}L001.JPG`, `${FINAL}L001.jpg.thumb`]) {
+    for (const where of ['inner', 'cover']) {
+      const layout = layoutOf(10);
+      if (where === 'inner') layout.spreads[6].slots[0].photo_key = key;
+      else layout.cover.photo_key = key;
+      await refused(env, p, albumOrder(c, layout), 404, 'photo_not_found', `${where} ${key}`);
+    }
+  }
+  // the positive: a real one in a sub-folder of the finals
+  const sub = `${FINAL}sub/s1.jpg`;
+  await env.imagepicker.put(sub, 'S');
+  const layout = layoutOf(10);
+  layout.spreads[6].slots[0].photo_key = sub;
+  assert.equal((await placeOrder(env, p, albumOrder(c, layout))).status, 201);
+});
+
+// the bucket's list calls, by prefix
+function countLists(env) {
+  const seen = [];
+  const list = env.imagepicker.list.bind(env.imagepicker);
+  env.imagepicker.list = o => { seen.push(o?.prefix); return list(o); };
+  return seen;
+}
+
+test('the finals are listed only for a layout, only the folders its photos are under, page by page', async () => {
+  const env0 = await ready();
+  // FINAL and FINAL2 both delivered; the layout only uses FINAL
+  assert.equal((await deliver(env0.env, env0.p.id, [FINAL, FINAL2])).status, 200);
+  assert.equal((await confirm(env0.env, env0.p.token, env0.p.key)).status, 200);
+  const { env, c, p } = env0;
+  const seen = countLists(env);
+  assert.equal((await placeOrder(env, p, orderBody(c))).status, 201);
+  assert.deepEqual(seen, [], 'a print order lists nothing');
+  assert.equal((await placeOrder(env, p, albumOrder(c, layoutOf(10)))).status, 201);
+  assert.deepEqual(seen, [FINAL, FINAL], 'FINAL only, two pages (over 1000 objects)');
+  // a photo on the second page is found
+  // the last one in the bucket's own order (the fake sorts with localeCompare)
+  const inFinal = [...env.imagepicker._store.keys()].filter(k => k.startsWith(FINAL)).sort((x, y) => x.localeCompare(y));
+  const late = inFinal[inFinal.length - 1];
+  assert.ok(inFinal.length > 1000 && SEEDED.includes(late));
+  const layout = layoutOf(10);
+  layout.spreads[2].slots[0].photo_key = late;
+  assert.equal((await placeOrder(env, p, albumOrder(c, layout))).status, 201, 'second page');
+});
+
+test('finals folders inside one another (or named twice) are listed once, as the outer one', async () => {
+  const { env, c, p } = await ready();
+  const sub = `${FINAL}sub/`;
+  await env.imagepicker.put(`${sub}s1.jpg`, 'S');
+  assert.equal((await deliver(env, p.id, [sub, FINAL, FINAL.slice(0, -1), sub])).status, 200);
+  assert.equal((await confirm(env, p.token, p.key)).status, 200);
+  const seen = countLists(env);
+  const layout = layoutOf(10);
+  layout.spreads[3].slots[0].photo_key = `${sub}s1.jpg`;
+  assert.equal((await placeOrder(env, p, albumOrder(c, layout))).status, 201);
+  assert.deepEqual(seen, [FINAL, FINAL], 'FINAL alone (two pages), never sub/ again');
+});
+
+test('a finals listing that does not finish within the page cap fails closed: 500 finals_unavailable, nothing written', async () => {
+  const { env, c, p } = await ready();
+  // 1 object a page: far more pages than the cap
+  env.imagepicker = fakeBucket(LAYOUT_OBJECTS, { pageSize: 1 });
+  const seen = countLists(env);
+  await refused(env, p, albumOrder(c, layoutOf(10)), 500, 'finals_unavailable', 'page cap');
+  assert.equal(seen.length, 10, 'stops at the cap');
+  // a listing that says truncated with no cursor: also not finished
+  env.imagepicker = fakeBucket(LAYOUT_OBJECTS);
+  const list = env.imagepicker.list.bind(env.imagepicker);
+  env.imagepicker.list = async o => ({ ...(await list(o)), truncated: true, cursor: undefined });
+  await refused(env, p, albumOrder(c, layoutOf(10)), 500, 'finals_unavailable', 'no cursor');
+});
+
+test('invalid_layout: a photo_key with a character an album may not hold (quotes, < >, backtick, backslash, bidi, BOM, lone surrogate)', async () => {
+  const { env, c, p } = await ready();
+  for (const ch of ['"', '<', '>', '`', '\\', '\u202e', '\u2066', '\u200e', '\u061c', '\ufeff', '\ud800', '\udfff']) {
+    for (const where of ['inner', 'cover']) {
+      const key = `${FINAL}a${ch}b.jpg`;
+      // in R2 too, so only the character refuses it
+      await env.imagepicker.put(key, 'X');
+      const layout = layoutOf(10);
+      if (where === 'inner') layout.spreads[1].slots[0].photo_key = key;
+      else layout.cover.photo_key = key;
+      await refused(env, p, albumOrder(c, layout), 400, 'invalid_layout', `${where} U+${ch.codePointAt(0).toString(16)}`);
+    }
+  }
+  // the repro: markup in a key never reaches the database
+  const evil = `${FINAL}x" onerror="alert(document.cookie)<img src=x>.jpg`;
+  await env.imagepicker.put(evil, 'X');
+  await refused(env, p, albumOrder(c, layoutOf(10, { cover: slot(evil) })), 400, 'invalid_layout', 'markup');
+  // ' and & stay allowed, as in an album
+  const fine = `${FINAL}it's & co.jpg`;
+  await env.imagepicker.put(fine, 'X');
+  assert.equal((await placeOrder(env, p, albumOrder(c, layoutOf(10, { cover: slot(fine) })))).status, 201);
 });
 
 // ─── the wiring ──────────────────────────────────────────────────────────────

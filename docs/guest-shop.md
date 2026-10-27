@@ -1360,7 +1360,7 @@ reset the previous holder's 3 `requested` orders block the new holder until the 
   back: null | {} }
 ```
 - 驗證（Worker，全部不過就 400 `invalid_layout`，什麼都不寫）：`template` ∈ Worker 內的白名單 **id → slot 數**（與 `book_editor/js/spread_templates.js` 的對照測試，漂移就失敗）；
-  slots 數＝模板的；每個 `photo_key` ∈ 這次交件的精修（走既有 `not_in_finals` 的同一個判斷，不新開讀取路徑）；內頁每個 key 至多一次，封面可與內頁重複一次；
+  slots 數＝模板的；每個 `photo_key` 在這次交件的精修資料夾裡（走既有 `not_in_finals` 的同一個判斷，資料夾外 → 403 `not_in_finals`），**而且是 R2 裡真的存在的照片**（2026-10-27 安全審查後加：只看資料夾前綴時可以塞不存在、甚至夾帶標記的 key；用 R2 list 列出 layout 用到的精修資料夾，最多 10 頁共 10,000 張，列不完 → 500 `finals_unavailable`；資料夾裡但不存在 → 404 `photo_not_found`，與 print 行相同）；`photo_key` 也要過相本的字元規則 `bookPhotoIdSafe`（不收引號、`< >`、反引號、反斜線、bidi 控制字元、BOM、孤立 surrogate）；內頁每個 key 至多一次，封面可與內頁重複一次；
   `fit` ∈ `contain|cover`；crop 為有限數且在 ±5 內（2026-10-27 由 ±1 放寬：引擎的 `cropFor` 給到 (r−1)/2，r＝照片與格子的長寬比之比，3:1 全景放在 A4 封面約 1.6；crop 只用來畫，不是讀取，放寬不增加風險），scale 恆為 1；跨頁數 ≤ 200；總大小 ≤ 64 KB；多餘欄位丟掉（伺服器自己重新序列化）。
 - 跨頁數 ＝ `layout.spreads.length`，走 `albumPagesProblem`（`pages_below_min` / `pages_above_max`），價錢走既有 `unit_price = 價 + (spreads − min_pages) × extra_page_price`。**請求裡有 layout 時，不再接受獨立的 `spreads`**（兩者不一致就 400）。
 - 沒有 layout 的相本行（舊的 S2 行為，`mode: 'photographer'`）**保留不動**，攝影師端仍讀得懂；這版只是客人端不再送出它。
@@ -1377,16 +1377,21 @@ reset the previous holder's 3 `requested` orders block the new holder until the 
 ### Worker — built (2026-10-27, `worker/test/guest-album-layout.test.mjs`)
 - Album line `{option_id, qty, layout}`; `albumLayoutV2` (pure, reads nothing) checks and rebuilds it, `guestOrderLines`
   checks every photo it names (cover too) with the same `pickKeyAllowed({folders: finals})` as a print line → 403
-  `not_in_finals`. Layout photos are **not** looked up in R2 (a print's photo is: `photo_not_found`); up to 1,601 heads.
+  `not_in_finals`, then that each is a real object: `finalsPresent` lists (R2 list, no delimiter, sub-folders
+  included) only the finals folders those photos are under, at most `LAYOUT_FINALS_PAGES_MAX` = 10 pages of 1000 for
+  the whole order; missing → 404 `photo_not_found`, not finished (cap, or truncated without a cursor) → 500
+  `finals_unavailable`. A print-only order lists nothing.
 - Template table: `ALBUM_TEMPLATE_SLOTS` in `worker.js` (a `Map`, so `__proto__` is no id); the test fails when it
   drifts from `book_editor/js/spread_templates.js`.
 - Stored exactly as `{v, mode, cover, spreads: [{template, mirrored?, slots: [{photo_key, fit, crop: {x, y, scale}}]}], back}`
   (`mirrored` only when `true`, `back` `null` or `{}`; a missing `cover` / `back` reads `null`). The 64 KB cap is on
   these UTF-8 bytes. `photo_keys` stays `[]` (the photo locks still treat the line as all finals of its project).
 - Photo locks: besides that all-finals rule, every photo a v2 layout names (cover and slots) is locked —
-  `photoLock` → 409 `photo_in_order`, the proof-folder check (`proofsHeld`, proof retention) → `in_order` — while the
-  order is **not cancelled**, so a 更換精修 to other finals cannot orphan an ordered layout (`layoutPhotoKeys`; a layout
-  that does not parse counts by its text; v1 names no photo). Note the asymmetry: `photo_keys` lock on every status,
+  `photoLock` → 409 `photo_in_order` (**exact** key), the proof-folder check (`proofsHeld`, proof retention) →
+  `in_order` (`folderCovers` on each key) — while the order is **not cancelled**, so a 更換精修 to other finals cannot
+  orphan an ordered layout (`layoutNaming`). Only a v1 layout is exempt; a layout that does not parse, or parses as
+  anything but a well-formed v2 (another version, no version, a malformed shape), counts by the substring rule
+  (fail closed). Note the asymmetry: `photo_keys` lock on every status,
   a cancelled order too.
 - 0 spreads is not `invalid_layout`: it is `pages_below_min` (every orderable album has `min_pages` ≥ 1).
 - Body: read with a 96 KB stream cap (over it → 413 `max: 98304`, whatever the body is); over 32 KB (bytes or

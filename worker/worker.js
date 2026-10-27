@@ -1087,17 +1087,40 @@ function albumNames(value, key, depth = 0) {
 function parsedOrText(text) {
   try { return JSON.parse(text); } catch { return String(text); }
 }
-// What an order line's stored layout holds for the photo locks, to hand to
-// albumNames: a guest's Layout JSON v2 (S3) as parsed (its cover's and every
-// slot's photo_key are in it, anything odd too), or its text when it does not
-// parse. null for no layout and for a v1 layout (請攝影師排版 names no photo:
-// the final_folders rule covers it). A cancelled order's layout is not
-// selected at all (the queries blank it).
+// What an order line's stored layout holds for the photo locks: null for no
+// layout and for a v1 layout (請攝影師排版 names no photo: the final_folders
+// rule covers it); {keys} — the exact photo_keys — for a well-formed guest
+// Layout JSON v2 (S3: the cover's and every slot's, as albumLayoutV2 writes
+// them); otherwise {scan} — the parsed value, or the text when it does not
+// parse — for albumNames' substring rule (fail closed: anything odd counts by
+// what it contains). A cancelled order's layout is not selected at all (the
+// queries blank it).
 function layoutNaming(layout) {
   if (typeof layout !== 'string') return null;
   let v;
-  try { v = JSON.parse(layout); } catch { return layout; }
-  return isPlainObject(v) && v.v === 2 ? v : null;
+  try { v = JSON.parse(layout); } catch { return { scan: layout }; }
+  if (isPlainObject(v) && v.v === 1) return null;
+  const keys = isPlainObject(v) && v.v === 2 ? layoutV2Keys(v) : null;
+  return keys ? { keys } : { scan: v };
+}
+// The photo_keys of a parsed v2 layout, or null when it is not shaped as one
+// (cover null or a slot; spreads a list of objects whose slots are lists of
+// slots; a slot an object with a string photo_key).
+function layoutV2Keys(v) {
+  const isSlot = x => isPlainObject(x) && typeof x.photo_key === 'string';
+  if (!(v.cover === null || v.cover === undefined || isSlot(v.cover)) || !Array.isArray(v.spreads)) return null;
+  const keys = v.cover ? [v.cover.photo_key] : [];
+  for (const sp of v.spreads) {
+    if (!isPlainObject(sp) || !Array.isArray(sp.slots) || !sp.slots.every(isSlot)) return null;
+    for (const x of sp.slots) keys.push(x.photo_key);
+  }
+  return keys;
+}
+// Whether a layoutNaming result holds: `exact` on each of its keys, `scan` on
+// what it scans; null holds nothing.
+function layoutHolds(naming, exact, scan) {
+  if (!naming) return false;
+  return naming.keys ? naming.keys.some(exact) : scan(naming.scan);
 }
 
 // The most albums one delete reads. Each is an R2 get, a subrequest; on the
@@ -1220,7 +1243,7 @@ async function photoLock(env, ownerId, key) {
   if ((frozen || []).some(r => albumNames(parsedOrText(r.v), key))) held.add('photo_in_round');
   if ((lines || []).some(l => albumNames(parsedOrText(l.photo_keys), key) ||
       (l.all_finals === 1 && foldersColumnCovers(l.final_folders, key)) ||
-      albumNames(layoutNaming(l.layout), key))) held.add('photo_in_order');
+      layoutHolds(layoutNaming(l.layout), k => k === key, v => albumNames(v, key)))) held.add('photo_in_order');
   const code = Object.keys(PHOTO_LOCKS).find(c => held.has(c));
   if (code) return code;
   if (ownerId !== DEFAULT_PHOTOGRAPHER_ID) return null;
@@ -2938,7 +2961,7 @@ async function proofsHeld(run, p, folders, finals, nowMs, cache) {
     ).bind(owner).all();
     const { results: lines } = await withoutMissingColumn(() => orderLines(true), () => orderLines(false));
     if (lines.some(l => names(parsedOrText(l.photo_keys)) || (l.all_finals === 1 && columnTouches(l.final_folders)) ||
-        names(layoutNaming(l.layout)))) return 'in_order';
+        layoutHolds(layoutNaming(l.layout), k => folders.some(f => folderCovers(f, k)), names))) return 'in_order';
   } catch (e) {
     if (isMissingSchema(e)) return 'check_unavailable';
     throw e;
@@ -3571,6 +3594,9 @@ const ALBUM_LAYOUT_SPREADS_MAX = PAGE_BOUND_MAX;
 // 3:1 panorama on the A4 cover is about 1.6: ±1 would refuse what the engine
 // makes. Only drawn, never a read, so a generous bound costs nothing.
 const ALBUM_CROP_MAX = 5;
+// R2 list pages (1000 objects each) one order may read to find its layout's
+// photos in the finals (finalsPresent): 10,000 finals
+const LAYOUT_FINALS_PAGES_MAX = 10;
 // The spread templates a guest layout may name, id → slot count: a copy of
 // book_editor/js/spread_templates.js (docs/album-preview.md) that the Worker
 // can read without loading the library. guest-album-layout.test.mjs fails
@@ -3628,7 +3654,7 @@ const GUEST_ORDER_ERRORS = {
   invalid_delivery: '目前只提供面交取件', consent_required: '請先閱讀並勾選個資告知', invalid_note: `備註最多 ${ORDER_NOTE_MAX} 字`,
   product_not_offered: '這個商品目前無法訂購', not_in_finals: '只能訂購這次交件的精修照片', photo_not_found: '找不到這張照片',
   album_not_orderable: '這本相本請直接聯絡攝影師訂購', pages_below_min: '相本頁數少於最少頁數', pages_above_max: '相本頁數超過最多頁數',
-  invalid_layout: '相本頁數不正確', extra_pages_unpriced: '這本相本無法加頁，請選最少頁數或聯絡攝影師',
+  invalid_layout: '相本頁數不正確', finals_unavailable: '暫時無法確認照片，請稍後再試或聯絡攝影師', extra_pages_unpriced: '這本相本無法加頁，請選最少頁數或聯絡攝影師',
 };
 
 // Whether guest ordering is open for this project (the projects row): never
@@ -3733,10 +3759,13 @@ function guestContact(v) {
 
 // One photo of a guest layout (the cover or an inner slot) as stored:
 // {photo_key, fit, crop: {x, y, scale: 1}}, or null when it is not one — a
-// key pickKeyValid takes, fit 'contain' or 'cover', crop x and y finite
-// numbers within ±ALBUM_CROP_MAX, scale exactly 1. Nothing else is kept.
+// key pickKeyValid and bookPhotoIdSafe take (the album rule: no quote,
+// < >, backtick, backslash, bidi, BOM or lone surrogate), fit 'contain' or
+// 'cover', crop x and y finite numbers within ±ALBUM_CROP_MAX, scale exactly
+// 1. Nothing else is kept.
 function albumLayoutSlot(s) {
-  if (!isPlainObject(s) || typeof s.photo_key !== 'string' || !s.photo_key || !pickKeyValid(s.photo_key)) return null;
+  if (!isPlainObject(s) || typeof s.photo_key !== 'string' || !s.photo_key) return null;
+  if (!pickKeyValid(s.photo_key) || !bookPhotoIdSafe(s.photo_key)) return null;
   if (s.fit !== 'contain' && s.fit !== 'cover') return null;
   const c = s.crop;
   const within = v => typeof v === 'number' && Number.isFinite(v) && v >= -ALBUM_CROP_MAX && v <= ALBUM_CROP_MAX;
@@ -3890,11 +3919,19 @@ async function guestOrderLines(env, project, finals, wanted) {
   }
   const prints = wanted.filter(l => l.photo_key !== undefined);
   // a print's photo and every photo an album layout names: the same check
-  const named = [...prints.map(l => l.photo_key), ...wanted.flatMap(l => (l.layout ? l.layout.keys : []))];
+  const layoutKeys = wanted.flatMap(l => (l.layout ? l.layout.keys : []));
+  const named = [...prints.map(l => l.photo_key), ...layoutKeys];
   if (named.some(key => !pickKeyAllowed({ folders: finals }, key))) return { fail: [403, 'not_in_finals'] };
   const photos = bucketFor(env, owner);
   const found = await Promise.all(prints.map(l => photos.head(l.photo_key)));
   if (found.some(o => !o)) return { fail: [404, 'photo_not_found'] };
+  // a layout's photos: real objects in those finals, by listing the folders
+  // they are under (a few list calls, not a head per photo)
+  if (layoutKeys.length) {
+    const present = await finalsPresent(photos, finals, layoutKeys);
+    if (!present) return { fail: [500, 'finals_unavailable'] };
+    if (layoutKeys.some(k => !present.has(k))) return { fail: [404, 'photo_not_found'] };
+  }
   const extras = [];
   for (const l of wanted) {
     const p = offered.get(l.option_id);
@@ -3922,6 +3959,31 @@ async function guestOrderLines(env, project, finals, wanted) {
   });
   if (lines.some(l => !isMoney(l.unit_price))) return { fail: [400, 'extra_pages_unpriced'] };
   return { lines };
+}
+
+// The keys of every object under the finals folders that cover one of
+// `keys`, listed from R2 (`photos`: bucketFor's, logical keys), or null when
+// the listing does not finish within LAYOUT_FINALS_PAGES_MAX pages of 1000
+// in all (fail closed: 500 finals_unavailable) — the order route's
+// subrequests are budgeted (Workers Free: 50).
+// A folder inside another one listed (or the same one twice) is listed once,
+// as part of the outer one.
+async function finalsPresent(photos, finals, keys) {
+  const used = [...new Set(finals.filter(f => keys.some(k => folderCovers(f, k))).map(f => (f.endsWith('/') ? f : `${f}/`)))];
+  const outer = used.filter(f => !used.some(g => g !== f && folderCovers(g, f)));
+  const present = new Set();
+  let pages = 0;
+  for (const prefix of outer) {
+    let cursor;
+    do {
+      if (++pages > LAYOUT_FINALS_PAGES_MAX) return null;
+      const listed = await photos.list(cursor === undefined ? { prefix } : { prefix, cursor });
+      for (const o of listed.objects || []) present.add(o.key);
+      if (listed.truncated && !listed.cursor) return null;
+      cursor = listed.truncated ? listed.cursor : undefined;
+    } while (cursor !== undefined);
+  }
+  return present;
 }
 
 // An order line as an INSERT that only lands while `gate` (SQL, with its

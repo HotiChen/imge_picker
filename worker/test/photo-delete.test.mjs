@@ -856,14 +856,41 @@ test('a guest layout on a cancelled order holds nothing beyond the all_finals ru
   await refusedWithNothingDeleted(w, () => del(w.env, G1, SECRET), 409, 'photo_in_order');
 });
 
-test('a guest layout that does not parse locks a key its text contains (fail closed); a URL-encoded key in a v2 layout locks too', async () => {
+test('a guest layout (v2) locks exactly the keys it names: not a key one of them contains (the forged `<finals>/other-shoot/z.jpg`), not a URL-encoded one', async () => {
   const w = await world();
+  const Z = 'other-shoot/z.jpg';
+  await w.env.imagepicker.put(Z, 'Z');
   rawProject(w.env, 'a2', 'default', JSON.stringify(['elsewhere/']), { final_folders: JSON.stringify([FINAL2]) });
-  albumOrder(w.env, 'default', 'a2', `{"v":2,"spreads":[{"slots":[{"photo_key":"${X}"`);
-  albumOrder(w.env, 'default', 'a2', v2(encodeURIComponent(F1)));
-  await refusedWithNothingDeleted(w, () => del(w.env, X, SECRET), 409, 'photo_in_order');
-  await refusedWithNothingDeleted(w, () => del(w.env, F1, SECRET), 409, 'photo_in_order');
-  assert.equal((await del(w.env, F3, SECRET)).status, 200);
+  // hand-made rows: the order route no longer takes a key that is not a real final
+  albumOrder(w.env, 'default', 'a2', v2(`${FINAL}${Z}`, `${FINAL}x/${X}`, encodeURIComponent(F1)));
+  assert.equal((await del(w.env, Z, SECRET)).status, 200, 'B2: other-shoot/z.jpg is not locked');
+  assert.equal((await del(w.env, X, SECRET)).status, 200, 'a key inside a longer one');
+  assert.equal((await del(w.env, F1, SECRET)).status, 200, 'URL-encoded: only a hand-made row could hold it');
+  // the exact key does lock
+  albumOrder(w.env, 'default', 'a2', v2(F3));
+  await refusedWithNothingDeleted(w, () => del(w.env, F3, SECRET), 409, 'photo_in_order');
+});
+
+test('a guest layout that does not parse, or parses as anything but v1 / a well-formed v2, locks a key its text contains (fail closed)', async () => {
+  const shapes = [
+    k => `{"v":2,"spreads":[{"slots":[{"photo_key":"${k}"`,                    // does not parse
+    k => JSON.stringify({ v: 3, photos: [k] }),                                  // another version
+    k => JSON.stringify([k]),                                                    // not an object
+    k => JSON.stringify({ photo_key: k }),                                       // no version
+    k => JSON.stringify({ v: 2, mode: 'auto', cover: null, spreads: { 0: { slots: [{ photo_key: k }] } }, back: null }), // spreads not a list
+    k => JSON.stringify({ v: 2, cover: k, spreads: [] }),                        // cover not a slot
+    k => JSON.stringify({ v: 2, cover: null, spreads: [{ slots: [k] }] }),       // a slot not an object
+    k => JSON.stringify({ v: 2, cover: null, spreads: [{ slots: { a: { photo_key: k } } }] }), // slots not a list
+    k => JSON.stringify({ v: 2, cover: null, spreads: [{ slots: [{ photo_key: [k] }] }] }),    // photo_key not a string
+    k => JSON.stringify({ v: 2, cover: null, spreads: [k] }),                    // a spread not an object
+  ];
+  for (const [i, shape] of shapes.entries()) {
+    const w = await world();
+    rawProject(w.env, 'a2', 'default', JSON.stringify(['elsewhere/']), { final_folders: JSON.stringify([FINAL2]) });
+    albumOrder(w.env, 'default', 'a2', shape(X));
+    await refusedWithNothingDeleted(w, () => del(w.env, X, SECRET), 409, 'photo_in_order');
+    assert.equal((await del(w.env, F3, SECRET)).status, 200, `shape ${i}: another photo is free`);
+  }
 });
 
 test('before the guest-order migration (no order_items.layout) no line can carry a layout: listed keys still lock, nothing else; no 500', async () => {

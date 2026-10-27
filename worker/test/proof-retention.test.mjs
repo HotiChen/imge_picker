@@ -468,6 +468,26 @@ test('a guest layout (v2) naming one of the proofs on an order not cancelled —
   assert.ok(!has(env, PA), 'a cancelled order\'s layout holds nothing');
 });
 
+test('a guest layout (v2) holds the proofs only by a key under them, not by a folder name its text contains (the forged `<finals>/x/shoot/毛片/y.jpg`)', async () => {
+  const env = setup();
+  await studio(env, 90);
+  const p = await confirmed(env);
+  layoutOrder(env, p.id, `${FINAL}x/${PA}`, 'requested');
+  await cron(env, confirmedAt(env) + 90 * DAY);
+  assert.ok(!has(env, PA), 'C: the proofs go');
+  assert.equal(events(env, 'proofs_delete_skipped').length, 0);
+});
+
+test('a guest layout that does not parse holds the proofs by its text (fail closed)', async () => {
+  const env = setup();
+  await studio(env, 90);
+  const p = await confirmed(env);
+  const now = iso(Date.now());
+  env.DB._db.prepare("INSERT INTO orders (id, photographer_id, project_id, source, status, created_at, updated_at) VALUES ('o3', 'default', ?, 'guest', 'requested', ?, ?)").run(p.id, now, now);
+  env.DB._db.prepare("INSERT INTO order_items (id, order_id, kind, name, unit_price, qty, photo_keys, layout) VALUES ('i3', 'o3', 'album', '相本', 10, 1, '[]', ?)").run(`{"v":2,"x":"${PA}"`);
+  await skipped(env, 'in_order');
+});
+
 test('a skip waits 7 days before the next check (not re-logged every day), and a cleared reason then lets the delete run', async () => {
   const env = setup();
   await studio(env, 90);
