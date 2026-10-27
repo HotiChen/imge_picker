@@ -1319,3 +1319,57 @@ reset the previous holder's 3 `requested` orders block the new holder until the 
 - Not verified outside node:sqlite: D1's handling of the gated `INSERT … SELECT` with the unique index (several
   NULLs), D1's error wording for a missing column inside a batch, `R2.head` on real keys, real email delivery and
   how the Chinese subject shows in Gmail.
+
+## S3 — 客人相本排版：Tim 的決定與規格（2026-10-27，蓋過上面所有 S3 舊段落）
+
+> 舊 S3 段（「S3 — album preview」、「Layout JSON」`full-bleed…4-grid`、`mode: 'photographer'`）寫於相本改成 A4 跨頁＋43 種模板之前，
+> **已過時**；`docs/album-preview.md` 的引擎（`AutoLayout.planSpreads`、`variant`、`SpreadTemplates`）才是現況。
+
+### Tim 的決定
+- 電腦先自動排一版（`planSpreads`，與完成頁預覽同一引擎）。
+- **可以整版重排**（`再次編排`）；**可以逐格換照片**，**不能換版型、不能增減跨頁**（頁數＝電腦排出來的跨頁數）。
+- 排好後按「送出結帳」進 S2 的訂單流程；**排版存起來**（`order_items.layout`），**送出後不能再改**（客人端沒有改的路；要改請攝影師處理，不在這版）。
+- **拿掉「請攝影師排版」**：客人不想自己動手就用自動排版。新單的 `mode` 只有 `auto`。
+- 警告訊息（見下）。**上一版**：保留最近 5 版。
+- 已使用的照片在候選清單的縮圖上標「已使用」，沒用到的排前面。（`book_editor` 的 `_getPlacedPhotoIds()` 是沒接上的殘留，客人端另寫，不載入 `book_editor.js`。）
+
+### 客人端行為
+- 入口與預覽沿用完成頁的相本預覽（`js/album-preview.js`）；編輯與結帳按鈕只在**客人是座位擁有者、已確認、訂購開關開啟、該相本商品可訂（`min_pages` 非 null）**時出現，否則維持純預覽。
+- 換照片：點某一格 → 候選清單（該專案已交付精修；沒用到的在前，形狀相符的在前，已使用的標「已使用」）。選到已使用的 → **兩格互換**；沒用到的 → 取代。
+  封面格可換，封面照片可以和內頁重複（引擎本來就允許）；內頁每張最多一次。換進來的照片用 `analyze` 已算好的 focus 重算 crop。
+- 再次編排：照原有 `variant` 機制，但會丟掉已換的照片，所以要先確認。
+- 上一版：每次「再次編排」前把**當下完整狀態**（含換過的照片）放進記憶體堆疊（最多 5 版），「上一版」彈出。離開頁面就沒了，不存 D1、不存 localStorage。
+- 送出前：全書預覽（封面→每跨頁→封底）要翻到最後一頁才能按「確認送出」，並顯示「送出後無法修改」。
+
+### 警告
+| 時機 | 內容 | 行為 |
+|---|---|---|
+| 再次編排 | 會取消你換過的照片 | 確認才執行 |
+| 換照片，形狀不合（`wasteOf` 超過門檻） | 這張和這格形狀不合，會留白或被裁切 | 提醒，可繼續 |
+| 換照片，已在書中 | 這張已在書中，兩格會互換位置 | 提醒 |
+| 送出 | 送出後排版無法修改 | 確認才送出 |
+| 跨頁數不在商品範圍 | 不符合這本相本的頁數 | 擋住（Worker 也擋） |
+| ~~解析度太低~~ | **這版不做**：專案沒有存原圖像素尺寸（S2 Q11 已決定另開上傳小任務） | — |
+
+### Layout JSON v2（Worker 自己的序列化；大小 ≤ 64 KB）
+```
+{ v: 2, mode: 'auto',
+  cover: { photo_key, fit, crop: {x, y, scale: 1} } | null,
+  spreads: [ { template: <SpreadTemplates id>, mirrored?: true,
+               slots: [ { photo_key, fit, crop: {x, y, scale: 1} } ] } ],   // slots 順序＝模板 slots 順序
+  back: null | {} }
+```
+- 驗證（Worker，全部不過就 400 `invalid_layout`，什麼都不寫）：`template` ∈ Worker 內的白名單 **id → slot 數**（與 `book_editor/js/spread_templates.js` 的對照測試，漂移就失敗）；
+  slots 數＝模板的；每個 `photo_key` ∈ 這次交件的精修（走既有 `not_in_finals` 的同一個判斷，不新開讀取路徑）；內頁每個 key 至多一次，封面可與內頁重複一次；
+  `fit` ∈ `contain|cover`；crop 為有限數且在 ±1 內；跨頁數 ≤ 200；總大小 ≤ 64 KB；多餘欄位丟掉（伺服器自己重新序列化）。
+- 跨頁數 ＝ `layout.spreads.length`，走 `albumPagesProblem`（`pages_below_min` / `pages_above_max`），價錢走既有 `unit_price = 價 + (spreads − min_pages) × extra_page_price`。**請求裡有 layout 時，不再接受獨立的 `spreads`**（兩者不一致就 400）。
+- 沒有 layout 的相本行（舊的 S2 行為，`mode: 'photographer'`）**保留不動**，攝影師端仍讀得懂；這版只是客人端不再送出它。
+- `POST /api/pick/orders` 的 body 上限由 32 KB 提高到 96 KB，**僅在有相本 layout 時**；其他情況維持 32 KB。
+
+### 工作切分（風險 → 角色）
+1. Worker：layout v2 驗證＋頁數＋價錢＋body 上限＋對照測試＋變異測試（High，opus；之後安全審查）。
+2. 客人端：換照片／上一版／警告／全書預覽／結帳串接（Normal，sonnet；`js/album-preview.js` 新增編輯模式，`js/guest-order.js` 相本行送 layout）。
+3. 攝影師端唯讀預覽 layout（`orders.html`／`admin.html`，Normal；較晚）。
+
+### 沒驗證／待 Tim
+`GUEST_ORDERS` 仍是 `off`；iPhone／LINE 內建瀏覽器的點選、換照片流程與 8 張的小格子；真實案子的排版品質；個資聲明審閱。
