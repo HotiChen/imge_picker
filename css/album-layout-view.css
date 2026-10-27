@@ -1,0 +1,53 @@
+/* Read-only viewer of a guest's album layout (js/album-layout-view.js), opened by 「查看排版」 on a guest album line
+   (orders.html, admin.html). Photographer pages: the cream theme (--bg #fff8ee); every token has the cream value as its
+   fallback, because the viewer hangs off <body>. Scoped under .alv / .gc-layout; css/styles.css is not touched. */
+.gc-layout { margin-top: 4px; min-height: 44px; padding: 0 16px; border: 1px solid var(--accent-dim, #ffd9a8); border-radius: 999px; background: var(--surface, #fff); color: var(--ink-90, #231b12); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; }
+.gc-layout:hover { border-color: var(--accent, #f5a13b); }
+
+.alv { position: fixed; inset: 0; z-index: 2000; display: flex; flex-direction: column; background: var(--bg, #fff8ee); color: var(--ink-90, #231b12); font-family: 'IBM Plex Sans', sans-serif; font-size: 14px; outline: none; }
+.alv-bar { flex: none; display: flex; align-items: center; gap: 12px; padding: 0 8px 0 16px; min-height: 52px; background: var(--surface, #fff); border-bottom: 1px solid var(--rule, #efe6d8); }
+.alv-title { font-weight: 600; flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.alv-count { flex: none; font-family: 'IBM Plex Mono', monospace; font-size: 13px; color: var(--ink-70, #5b4d3c); }
+.alv-close, .alv-nav { flex: none; min-width: 44px; min-height: 44px; border: 1px solid var(--rule, #efe6d8); border-radius: 999px; background: var(--surface, #fff); color: var(--ink-90, #231b12); font: inherit; font-size: 22px; line-height: 1; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; }
+.alv-close { font-size: 18px; }
+.alv-close:hover, .alv-nav:hover:not(:disabled) { border-color: var(--accent, #f5a13b); background: var(--card, #fff3df); }
+.alv-nav:disabled { opacity: 0.35; cursor: default; }
+.alv-close:focus-visible, .alv-nav:focus-visible, .alv-copy:focus-visible { outline: 2px solid var(--accent, #f5a13b); outline-offset: 2px; }
+
+.alv-body { flex: 1 1 auto; min-height: 0; display: flex; gap: 16px; padding: 16px; overflow: auto; }
+.alv-main { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 8px; }
+.alv-stage { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; justify-content: center; touch-action: pan-y; }
+.alv-side { flex: 0 0 260px; min-width: 0; display: flex; flex-direction: column; gap: 10px; align-self: flex-start; }
+.alv-side-h { font-size: 12px; color: var(--ink-55, #8a7b68); }
+.alv-names { margin: 0; padding: 0 0 0 1.6em; font-family: 'IBM Plex Mono', monospace; font-size: 12px; line-height: 1.7; color: var(--ink-90, #231b12); overflow-wrap: anywhere; unicode-bidi: plaintext; }
+.alv-name, .alv-none { unicode-bidi: isolate; }
+.alv-none { list-style: none; margin-left: -1.6em; color: var(--ink-55, #8a7b68); }
+.alv-copy { min-height: 44px; padding: 0 16px; border: 1px solid var(--accent, #f5a13b); border-radius: 999px; background: var(--accent-dim, #ffd9a8); color: var(--ink-90, #231b12); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; }
+.alv-copy-status { min-height: 18px; font-size: 12px; color: var(--ink-70, #5b4d3c); }
+.alv-fallback { width: 100%; box-sizing: border-box; font-family: 'IBM Plex Mono', monospace; font-size: 12px; padding: 8px; border: 1px solid var(--rule, #efe6d8); border-radius: 8px; background: var(--surface, #fff); color: var(--ink-90, #231b12); }
+.alv-loading { color: var(--ink-55, #8a7b68); }
+
+/* the page: white paper, spreads are two A4 pages (the aspect is set inline), the fold is a faint line */
+.alv-page { position: relative; background: #fff; box-shadow: 0 2px 14px rgba(35, 27, 18, 0.18); max-width: 100%; max-height: 100%; width: 100%; overflow: hidden; }
+.alv-page[data-kind="cover"], .alv-page[data-kind="back"] { width: min(100%, calc(min(70vh, 640px) * 0.7071)); }
+.alv-page[data-kind="spread"] { width: min(100%, calc(min(70vh, 640px) * 1.4142)); }
+.alv-fold { position: absolute; left: 50%; top: 0; bottom: 0; width: 1px; background: rgba(35, 27, 18, 0.12); z-index: 2; pointer-events: none; }
+.alv-slot { position: absolute; overflow: hidden; background: #f3ede2; }
+.alv-img { position: absolute; max-width: none; user-select: none; -webkit-user-drag: none; }
+.alv-missing { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; padding: 4px; box-sizing: border-box; text-align: center; background: repeating-linear-gradient(135deg, #f3ede2, #f3ede2 8px, #fbf6ec 8px, #fbf6ec 16px); border: 1px dashed var(--danger, #c0392b); color: var(--ink-70, #5b4d3c); font-size: 11px; overflow: hidden; }
+.alv-missing-why { font-weight: 600; color: var(--danger, #c0392b); }
+.alv-missing-name { font-family: 'IBM Plex Mono', monospace; font-size: 10px; max-width: 100%; overflow-wrap: anywhere; unicode-bidi: isolate; }
+.alv-bad, .alv-blank { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; text-align: center; padding: 12px; color: var(--ink-70, #5b4d3c); font-size: 14px; }
+.alv-bad { color: var(--danger, #c0392b); font-weight: 600; }
+.alv-stage > .alv-bad { position: static; }
+
+@media (max-width: 768px) {
+  .alv-body { flex-direction: column; gap: 12px; padding: 12px 8px; }
+  .alv-main { flex: none; flex-wrap: wrap; justify-content: space-between; gap: 8px; }
+  .alv-stage { order: 0; flex: 1 1 100%; }
+  .alv-prev { order: 1; }
+  .alv-next { order: 2; }
+  .alv-page[data-kind="cover"], .alv-page[data-kind="back"] { width: min(100%, calc(min(52vh, 420px) * 0.7071)); }
+  .alv-page[data-kind="spread"] { width: 100%; }
+  .alv-side { flex: none; width: 100%; padding: 0 8px; box-sizing: border-box; align-self: stretch; }
+}

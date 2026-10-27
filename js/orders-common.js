@@ -257,6 +257,17 @@
       }
       const sp = i.layout && Number.isInteger(i.layout.spreads) ? i.layout : null;
       if (sp) it.appendChild(el('span', 'gc-spreads', `${sp.spreads} 跨頁${sp.mode === 'photographer' ? ' · 請攝影師排版' : ''}`));
+      // Layout JSON v2 (the guest laid it out): the count and a read-only viewer (js/album-layout-view.js)
+      const v2 = !sp && i.layout && i.layout.v === 2 ? i.layout : null;
+      if (v2) {
+        const n = Array.isArray(v2.spreads) ? v2.spreads.length : null;
+        it.appendChild(el('span', 'gc-spreads', n === null ? '客人排的版面' : `${n} 跨頁・客人排的版面`));
+        const vb = el('button', 'btn btn-ghost gc-layout', '查看排版');
+        vb.type = 'button';
+        vb.setAttribute('data-view-layout', '');
+        vb.addEventListener('click', () => { if (window.AlbumLayoutView) window.AlbumLayoutView.open({ layout: v2, opener: vb }); });
+        it.appendChild(vb);
+      }
       const differs = i.list_price != null && Number(i.list_price) !== Number(i.unit_price);
       it.appendChild(el('span', 'gc-price', differs ? `定價 ${money(i.list_price)} → 單價 ${money(i.unit_price)}` : `單價 ${money(i.unit_price)}`));
       items.appendChild(it);

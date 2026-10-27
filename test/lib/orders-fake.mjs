@@ -624,6 +624,14 @@ export const PROD_SERVICE_OFF = { id: 'prod-svc', kind: 'service', name: '急件
   has_image: false, image_type: null, image_updated_at: null, created_at: '', updated_at: '', platform_product_id: null,
   options: [{ id: 'opt-svc', label: '', price: 500, cost: 0, active: 1, sort: 0 }] };
 export const clone = x => JSON.parse(JSON.stringify(x));
+// Layout JSON v2 as the Worker stores and the admin order read returns it (worker.js albumLayoutV2 / parseLayout; docs/guest-shop.md):
+// {v, mode, cover: {photo_key, fit, crop:{x,y,scale}} | null, spreads: [{template, mirrored?, slots:[{photo_key, fit, crop}]}], back: null | {}}.
+// `mirrored` only when true; scale is always 1. A slot is a key or {key, fit, crop}.
+export const layoutV2 = ({ cover = null, spreads = [], back = null } = {}) => {
+  const one = s => { const o = typeof s === 'string' ? { key: s } : s; return { photo_key: o.key, fit: o.fit || 'contain', crop: { x: o.crop?.x ?? 0, y: o.crop?.y ?? 0, scale: 1 } }; };
+  return { v: 2, mode: 'auto', cover: cover ? one(typeof cover === 'string' ? { key: cover, fit: 'cover' } : cover) : null,
+    spreads: spreads.map(sp => ({ template: sp.template, ...(sp.mirrored ? { mirrored: true } : {}), slots: sp.slots.map(one) })), back };
+};
 export const waitText = (page, sel, pred, timeout = 4000) =>
   page.waitForFunction(([s, src]) => { const el = document.querySelector(s); return !!el && new Function('t', `return (${src})(t)`)(el.textContent); },
     [sel, pred.toString()], { timeout });
