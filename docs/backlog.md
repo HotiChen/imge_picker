@@ -345,6 +345,34 @@ Still open:
   `r2_photo_picker_annotations`) may still store fitted-photo pixels; not re-checked.
 - Minor: panning is unbounded (not re-checked).
 
+## Real job: 幼兒園畢業攝影 (Tim, 2026-10-27) — first real album job, NOT scheduled yet
+
+Timeline (Tim): 11 月開會 → 12 月排 → 3 月再拍一次 → 之後才排版送印. Exact dates not out yet. "下週五交件" was a slip: **there is
+no deadline now.** Nothing here is built; do not build before the March shoot is in (counts, folders and page numbers will change).
+
+What Tim wants (decided 2026-10-27):
+- **One album per child.** Most pages are locked (a shared, designed class book); only a few pages let the parent swap photos.
+- The photos a parent may choose from: the shared class folder + **that child's own folder** (Tim sorts them by hand into folders).
+- The swappable pages are **pre-filled automatically** with that child's photos; the parent only swaps.
+- Q2 = the locked pages are made from one shared folder, laid out automatically (re-layout until Tim is happy).
+
+Finding (read from the code, 2026-10-27): `book_editor` already does most of it, and the Worker enforces it:
+page `locked` (PATCH `/api/books/:id` → 403 on a locked page), photos must be inside the book's `clientFolders` and inside the
+folders snapshotted on the share link (`/api/books/:id/share`), the client viewer (`book_editor/view.html`) swaps only unlocked
+pages, 儲存修改 then 批准, `_duplicateBook` copies a book. So the plan is **master book → duplicate per child → one share link per
+child with folders = [shared, child]**. No Worker change expected.
+
+Gaps (build later, Normal risk, frontend only): (1) a **bulk generator** (per child folder: duplicate the master, auto-fill the
+swappable slots from that folder, mint the link, give Tim a child → link table to paste into LINE); (2) a **bulk 300 dpi export**
+(25 books by hand is too slow; not checked whether it exists); (3) **payment is not in this flow**: 批准 only notifies Tim. The
+guest-order flow shipped 2026-10-27 (S3: `docs/guest-shop.md`, whole book auto-laid-out by the computer) is the wrong tool for this
+job and stays dark (`GUEST_ORDERS=off`).
+
+Do now (no code): (a) try the manual flow with 2–3 children (master, lock a page, duplicate, share link) on Tim's iPhone and a
+parent's phone; (b) fix the folder layout now so the March shoot drops in: `全班共用/` and `個人/<孩子>/`; (c) ask the school in
+November: may parents see each other's children's photos (decides the folders), the photo / publishing consent, and who pays for the
+album (decides whether any payment flow is needed). Children are minors: review the privacy notice before any link goes out.
+
 ## Deferred features
 - ✅ Done: edit a project's 張數 / 加挑單價 / 最多可加選 after creation
   (`PATCH /api/admin/projects/:id`, 編輯方案; `docs/project-plan.md`). Submissions snapshot
