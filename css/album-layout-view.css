@@ -12,7 +12,7 @@
 .alv-close { font-size: 18px; }
 .alv-close:hover, .alv-nav:hover:not(:disabled) { border-color: var(--accent, #f5a13b); background: var(--card, #fff3df); }
 .alv-nav:disabled { opacity: 0.35; cursor: default; }
-.alv-close:focus-visible, .alv-nav:focus-visible, .alv-copy:focus-visible { outline: 2px solid var(--accent, #f5a13b); outline-offset: 2px; }
+.alv-close:focus-visible, .alv-nav:focus-visible, .alv-copy:focus-visible, .alv-import:focus-visible, .alv-import-link:focus-visible { outline: 2px solid var(--accent, #f5a13b); outline-offset: 2px; }
 
 .alv-body { flex: 1 1 auto; min-height: 0; display: flex; gap: 16px; padding: 16px; overflow: auto; }
 .alv-main { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 8px; }
@@ -23,6 +23,11 @@
 .alv-name, .alv-none { unicode-bidi: isolate; }
 .alv-none { list-style: none; margin-left: -1.6em; color: var(--ink-55, #8a7b68); }
 .alv-copy { min-height: 44px; padding: 0 16px; border: 1px solid var(--accent, #f5a13b); border-radius: 999px; background: var(--accent-dim, #ffd9a8); color: var(--ink-90, #231b12); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; }
+.alv-import { min-height: 44px; padding: 0 16px; border: 1px solid var(--rule, #efe6d8); border-radius: 999px; background: var(--surface, #fff); color: var(--ink-90, #231b12); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; }
+.alv-import:disabled { opacity: .6; cursor: default; }
+.alv-import-status { min-height: 18px; font-size: 12px; color: var(--ink-70, #5b4d3c); }
+.alv-import-status.alv-import-err { color: var(--danger, #c0392b); }
+.alv-import-link { display: inline-flex; align-items: center; min-height: 44px; color: var(--ink-90, #231b12); font-weight: 600; }
 .alv-copy-status { min-height: 18px; font-size: 12px; color: var(--ink-70, #5b4d3c); }
 .alv-fallback { width: 100%; box-sizing: border-box; font-family: 'IBM Plex Mono', monospace; font-size: 12px; padding: 8px; border: 1px solid var(--rule, #efe6d8); border-radius: 8px; background: var(--surface, #fff); color: var(--ink-90, #231b12); }
 .alv-loading { color: var(--ink-55, #8a7b68); }
