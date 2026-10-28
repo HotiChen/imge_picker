@@ -7,11 +7,11 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@600;900&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/revision-rounds-view.css?v=20261027c">
-<link rel="stylesheet" href="css/side-nav.css?v=20261027c">
-<link rel="stylesheet" href="css/studio-who.css?v=20261027c">
-<link rel="stylesheet" href="css/guest-order-card.css?v=20261027c">
-<link rel="stylesheet" href="css/album-layout-view.css?v=20261027c">
+<link rel="stylesheet" href="css/revision-rounds-view.css?v=20261027d">
+<link rel="stylesheet" href="css/side-nav.css?v=20261027d">
+<link rel="stylesheet" href="css/studio-who.css?v=20261027d">
+<link rel="stylesheet" href="css/guest-order-card.css?v=20261027d">
+<link rel="stylesheet" href="css/album-layout-view.css?v=20261027d">
 <style>
   /* Bright theme, shared with home.html / dashboard.html / settings.html — cream
      ground, white cards, dark ink, warm accent, soft pastel pills. The photographer's
@@ -224,6 +224,17 @@
   .pl-count { font-size: 12px; color: var(--ink-55); margin-bottom: 8px; min-height: 1em; }
   #proj-type-other { margin-top: 6px; }
   /* 交件 notice dialog */
+  /* 轉出精挑相片 XMP dialog */
+  .xmp-box { padding: 16px 18px; gap: 10px; overflow-y: auto; }
+  .xmp-box h4 { margin: 0; font-size: 15px; }
+  .xmp-box .xmp-note { color: var(--ink-55); font-size: 12px; line-height: 1.6; margin: 0; }
+  .xmp-box label.xmp-row { display: flex; flex-direction: column; gap: 4px; font-size: 13px; font-weight: 600; color: var(--ink-90); }
+  .xmp-box select { min-height: 44px; font-size: 16px; font-family: inherit; padding: 0 10px; border: 1px solid var(--accent-dim); border-radius: 10px; background: var(--surface); color: var(--ink-90); }
+  .xmp-box select:disabled { opacity: .5; }
+  .xmp-box .xmp-count { font-size: 14px; font-weight: 600; margin: 0; }
+  .xmp-box .xmp-warn { color: var(--danger); font-size: 12px; line-height: 1.6; margin: 0; }
+  .xmp-box .xmp-caveat { background: var(--card); border-radius: 10px; padding: 8px 10px; }
+  .xmp-box .btn { min-height: 44px; }
   .dn-box { padding: 16px 18px; gap: 10px; }
   .dn-box h4 { margin: 0; font-size: 15px; }
   .dn-box .dn-note { color: var(--ink-55); font-size: 12px; line-height: 1.6; margin: 0; }
@@ -495,7 +506,7 @@
   .ord-editor-foot { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end; margin-top: 8px; }
   .ord-editor-foot .field { padding: 6px 8px; font-size: 13px; }
 </style>
-<script src="js/photographer-session.js?v=20261027c"></script>
+<script src="js/photographer-session.js?v=20261027d"></script>
 </head>
 <body>
 
@@ -642,19 +653,21 @@
   </div>
 </div>
 
-<script src="js/shoot-types.js?v=20261027c"></script>
-<script src="js/project-folders.js?v=20261027c"></script>
-<script src="js/build-version.js?v=20261027c"></script>
-<script src="js/password-toggle.js?v=20261027c"></script>
-<script src="js/unified-login.js?v=20261027c"></script>
-<script src="js/util.js?v=20261027c"></script>
-<script src="js/side-nav.js?v=20261027c"></script>
-<script src="js/studio-who.js?v=20261027c"></script>
-<script src="js/orders-common.js?v=20261027c"></script>
-<script src="js/album-layout-view.js?v=20261027c"></script>
-<script src="js/selection-export.js?v=20261027c"></script>
-<script src="js/pin-layer.js?v=20261027c"></script>
-<script src="js/revision-rounds-view.js?v=20261027c"></script>
+<script src="js/shoot-types.js?v=20261027d"></script>
+<script src="js/project-folders.js?v=20261027d"></script>
+<script src="js/build-version.js?v=20261027d"></script>
+<script src="js/password-toggle.js?v=20261027d"></script>
+<script src="js/unified-login.js?v=20261027d"></script>
+<script src="js/util.js?v=20261027d"></script>
+<script src="js/side-nav.js?v=20261027d"></script>
+<script src="js/studio-who.js?v=20261027d"></script>
+<script src="js/orders-common.js?v=20261027d"></script>
+<script src="js/album-layout-view.js?v=20261027d"></script>
+<script src="js/selection-export.js?v=20261027d"></script>
+<script src="js/xmp-export.js?v=20261027d"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script src="js/pin-layer.js?v=20261027d"></script>
+<script src="js/revision-rounds-view.js?v=20261027d"></script>
 <script>
 (function() {
   const WORKER_URL = 'https://imagepicker.hotichen.workers.dev';
@@ -2128,6 +2141,7 @@
         <div class="pd-photos-dl">
           <button id="pd-download-btn" class="btn btn-outline" type="button">下載選片</button>
           <button id="pd-download-csv-btn" class="btn btn-outline" type="button" title="檔名、客人備註、標示（給修圖師）">下載需求表 (CSV)</button>
+          <button id="pd-xmp-btn" class="btn btn-outline" type="button" title="給 Lightroom 的 .xmp 檔：星等、色標、旗標">轉出精挑相片 XMP</button>
         </div>
       ${secHtml('selections', `<div id="pd-selections-details"><div class="table-wrap"><table><thead><tr><th>照片</th><th>♥</th><th>備註</th><th>選片人</th><th>更新時間</th></tr></thead>
           <tbody>${selected.length ? selected.map(s => `<tr>
@@ -2237,6 +2251,7 @@
     });
     document.getElementById('pd-download-btn').addEventListener('click', () => downloadSelectedKeys(project, selected));
     document.getElementById('pd-download-csv-btn').addEventListener('click', () => downloadSelectionCsv(project, selected));
+    document.getElementById('pd-xmp-btn').addEventListener('click', e => showXmpDialog(project, selected, e.currentTarget));
     initOrders(project, selected.map(x => x.photo_key));
     refreshSecSummaries();
   }
@@ -3739,6 +3754,111 @@
   // No start-retouch question: that stays with 下載選片.
   function downloadSelectionCsv(project, selected) {
     saveBlobAs(new Blob([window.SelectionExport.selectionsToCsv(selected)], { type: 'text/csv;charset=utf-8' }), project, 'csv');
+  }
+
+  // 轉出精挑相片 XMP (js/xmp-export.js): Lightroom sidecars for the photos the client picked.
+  // The settings live only in this dialog and in this browser's localStorage; nothing goes to the Worker.
+  const XMP_KEY = 'xmp_export_settings_v1';
+  function loadXmpSettings() {
+    let raw = null;
+    try { raw = JSON.parse(localStorage.getItem(XMP_KEY)); } catch (e) { raw = null; }
+    return window.XmpExport.normalizeSettings(raw);
+  }
+  function saveXmpSettings(settings) {
+    try { localStorage.setItem(XMP_KEY, JSON.stringify(settings)); } catch (e) { /* storage unavailable: the dialog still works */ }
+  }
+  let closeXmpDialog = null;
+  function showXmpDialog(project, selected, opener) {
+    if (closeXmpDialog) closeXmpDialog();
+    const X = window.XmpExport;
+    const settings = loadXmpSettings();
+    const mk = (tag, props = {}, text) => { const el = document.createElement(tag); Object.assign(el, props); if (text !== undefined) el.textContent = text; return el; };
+    const overlay = mk('div', { id: 'pd-xmp-dialog', className: 'picker-overlay' });
+    const box = mk('div', { className: 'picker-box xmp-box' });
+    box.setAttribute('role', 'dialog');
+    box.setAttribute('aria-modal', 'true');
+    box.setAttribute('aria-labelledby', 'xmp-title');
+    const h = mk('h4', { id: 'xmp-title' }, '轉出精挑相片 XMP');
+    const intro = mk('p', { className: 'xmp-note' }, '給 Lightroom 的 .xmp 檔，只轉出客人挑的照片。只會有星等、色標、旗標，不含客人的備註。設定只存在這個瀏覽器，不會送到伺服器。');
+    const selectRow = (id, label, options, value) => {
+      const row = mk('label', { className: 'xmp-row' }, label);
+      row.htmlFor = id;
+      const sel = mk('select', { id });
+      for (const [v, t] of options) sel.appendChild(mk('option', { value: String(v) }, t));
+      sel.value = String(value);
+      row.appendChild(sel);
+      return [row, sel];
+    };
+    const colours = X.LABELS.map(c => [c, `${X.LABEL_ZH[c]}色 (${c})`]);
+    const [ratingRow, ratingSel] = selectRow('xmp-rating', '星等', [['off', '不設定'], ['follow', '跟客人的星等'], ...[1, 2, 3, 4, 5].map(n => [n, `固定 ${n} 星`])], settings.rating);
+    const [labelRow, labelSel] = selectRow('xmp-label', '色標', [['off', '不設定'], ...colours], settings.label);
+    const [pinsRow, pinsSel] = selectRow('xmp-label-pins', '有修改標示（釘子）的照片改用', [['same', '跟上面一樣'], ...colours], settings.labelPins);
+    const [flagRow, flagSel] = selectRow('xmp-flag', '旗標', [['off', '不設定'], ['pick', 'Pick（選取）']], settings.flag);
+    const count = mk('p', { id: 'xmp-count', className: 'xmp-count' });
+    count.setAttribute('role', 'status');
+    const warn = mk('div', { id: 'xmp-warn' });
+    const caveat = mk('p', { className: 'xmp-note xmp-caveat' }, '請不要解壓縮到已經有 .xmp 的資料夾，同名檔會蓋掉 Lightroom 的修圖設定。放在 RAW 旁邊、檔名相同，然後在 Lightroom 選照片 → 中繼資料 → 從檔案讀取中繼資料。旗標 (Pick) 還沒用真正的 Lightroom 驗證過，請先拿一張照片試試。');
+    const err = mk('p', { id: 'xmp-err', className: 'xmp-warn' });
+    err.setAttribute('role', 'alert');
+    const actions = mk('div', { className: 'dn-actions' });
+    const dl = mk('button', { id: 'xmp-download', type: 'button', className: 'btn btn-accent' }, '下載 zip');
+    const close = mk('button', { id: 'xmp-close', type: 'button', className: 'btn btn-ghost' }, '關閉');
+    actions.append(dl, close);
+    box.append(h, intro, ratingRow, labelRow, pinsRow, flagRow, count, warn, caveat, err, actions);
+    overlay.appendChild(box);
+    document.body.appendChild(overlay);
+
+    const current = () => X.normalizeSettings({ rating: ratingSel.value, label: labelSel.value, labelPins: pinsSel.value, flag: flagSel.value });
+    const pickedCount = (selected || []).filter(x => x && x.rating >= 1).length;
+    const warnLine = text => warn.appendChild(mk('p', { className: 'xmp-warn' }, text));
+    const names = list => list.slice(0, 5).join('、') + (list.length > 5 ? `…等 ${list.length} 張` : '');
+    let plan = null;
+    const refresh = () => {
+      const s = current();
+      pinsSel.disabled = s.label === 'off';
+      plan = X.planExport(s, selected);
+      warn.textContent = '';
+      if (pickedCount === 0) count.textContent = '客人還沒有挑任何照片，沒有東西可以轉出。';
+      else if (!plan.files.length && !plan.collisions.length && !plan.skipped.length) count.textContent = '三個設定都是「不設定」，沒有東西可以轉出。';
+      else count.textContent = `將轉出 ${plan.files.length} 個 XMP（其中 ${plan.pinned} 張有修改標示）`;
+      if (plan.collisions.length) warnLine(`有 ${plan.collisions.length} 張和別張照片檔名相同（不同資料夾），只轉出第一張，這些沒有轉出：${names(plan.collisions.map(c => c.photo_key))}`);
+      if (plan.skipped.length) warnLine(`有 ${plan.skipped.length} 張的檔名無法使用，沒有轉出：${names(plan.skipped.map(c => String(c.photo_key)))}`);
+      dl.disabled = !plan.files.length;
+    };
+    for (const el of [ratingSel, labelSel, pinsSel, flagSel]) {
+      el.addEventListener('change', () => { err.textContent = ''; saveXmpSettings(current()); refresh(); });
+    }
+    refresh();
+
+    const onKey = e => { if (e.key === 'Escape') done(); };
+    const done = () => {
+      overlay.remove();
+      document.removeEventListener('keydown', onKey);
+      if (closeXmpDialog === done) closeXmpDialog = null;
+      if (opener && opener.isConnected) opener.focus();
+    };
+    closeXmpDialog = done;
+    document.addEventListener('keydown', onKey);
+    close.addEventListener('click', done);
+    overlay.addEventListener('click', e => { if (e.target === overlay) done(); });
+    dl.addEventListener('click', async () => {
+      err.textContent = '';
+      if (!plan || !plan.files.length) return;
+      if (typeof window.JSZip !== 'function') { err.textContent = '壓縮元件沒載入（請檢查網路後重新整理）'; return; }
+      dl.disabled = true;
+      try {
+        const zip = new window.JSZip();
+        for (const f of plan.files) zip.file(f.name, f.text);
+        zip.file('README.txt', X.readme());
+        const blob = await zip.generateAsync({ type: 'blob' });
+        saveBlobAs(blob, project, 'zip', 'xmp');
+      } catch (e) {
+        err.textContent = '產生 zip 失敗，請再試一次';
+      } finally {
+        dl.disabled = !plan.files.length;
+      }
+    });
+    ratingSel.focus();
   }
 
   function saveBlobAs(blob, project, ext, label = 'selected') {
