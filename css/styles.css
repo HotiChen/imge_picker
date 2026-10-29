@@ -821,6 +821,20 @@ body {
 
 @keyframes spin { to { transform: rotate(360deg); } }
 
+/* a button waiting on the network: a small ring before its label */
+.btn-busy::before {
+  content: '';
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  margin-right: 8px;
+  vertical-align: -2px;
+  border: 2px solid rgba(255,255,255,.4);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: spin .8s linear infinite;
+}
+
 .loading-state p { font-size: 13px; color: var(--ink-55); }
 
 /* The picking page scrolls inside .content, under a header and a status bar that stay put. The footer used to add 41px

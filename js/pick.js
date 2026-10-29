@@ -2294,7 +2294,11 @@
             const email = emailEl ? emailEl.value.trim() : '';
             if (errEl) errEl.textContent = '';
 
-            if (btn) btn.disabled = true;
+            // The save + submit round trip can take a few seconds: show it is working, and block a second tap.
+            const cancelBtn = document.getElementById('pickSubmitCancelBtn');
+            const idleLabel = btn ? btn.textContent : '';
+            if (btn) { btn.disabled = true; btn.classList.add('btn-busy'); btn.textContent = '送出中…'; btn.setAttribute('aria-busy', 'true'); }
+            if (cancelBtn) cancelBtn.disabled = true;
             let ok = false, status = 0, data = {};
             try {
                 await this.flush();
@@ -2306,7 +2310,8 @@
                 }
                 ({ ok, status, data } = await this.submitPicks({ relationship, email: email || undefined }));
             } finally {
-                if (btn) btn.disabled = false;
+                if (btn) { btn.disabled = false; btn.classList.remove('btn-busy'); btn.textContent = idleLabel; btn.removeAttribute('aria-busy'); }
+                if (cancelBtn) cancelBtn.disabled = false;
             }
 
             if (ok) {
