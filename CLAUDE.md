@@ -33,6 +33,10 @@ jobs end to end first; no new big feature outside that list.
 - D1 backup / restore / migration check: `docs/backup.md` (`.github/workflows/d1-backup.yml`,
   `d1-time-travel.yml`; `worker/tools/`: `gen-migration-check.mjs` → `check-migrations.sql`,
   `verify-backup.mjs`, `prune-backups.mjs`).
+- Album layout, guest → photographer (2026-10-30): `js/album-layout-view.js` (the 「查看排版」 read-only viewer on order cards),
+  `book_editor/js/import_layout.js` (「匯入 book editor」), `js/xmp-export.js` (轉出精挑相片 XMP, `docs/xmp-export.md`). Browser suites
+  `test/suites/99t-album-edit.mjs`, `99u-order-layout-view.mjs`, `99v-import-layout.mjs`, `99w-xmp-export.mjs`; unit tests `test/unit/*.test.mjs`
+  (`node --test test/unit/*.test.mjs`, CI does not run them); worker `worker/test/guest-album-layout.test.mjs`.
 
 ## Talking with Tim
 - Reply in Traditional Chinese, short: what's wrong, how to fix it.
@@ -100,7 +104,8 @@ Commands:
   (a filter matching nothing fails; `test/README.md`)
 - Browser, full suite (~10 min, 3 parallel workers): `NODE_PATH=/tmp/pwinstall/node_modules node test/run-parallel.mjs`
   (`JOBS=4` is faster but less proven; a file that throws or hangs is reported as FAIL and the run goes on).
-  Size on 2026-10-21 (d713634): browser 114 files / 1353 suites (684 s, all green); worker 1831 tests.
+  Size on 2026-10-29 (full run): browser 120 files / 1446 suites; worker 1912 tests. (2026-10-21, d713634: browser 114 files /
+  1353 suites, 684 s, all green; worker 1831 tests.)
   - Playwright lives outside the repo; Chromium at /opt/pw-browsers. In the cloud
     session `/tmp/pwinstall` does not exist: use `NODE_PATH=/opt/node-tools/node_modules`.
 - CI runs the worker suite only, not the browser suite.
@@ -129,6 +134,9 @@ Seen once in a full run, green 3/3 alone and in all 126 admin suites together: a
 Also flaky, seen on the base too (c574078 failed 2 of 3 alone; 1 of 3 on HEAD): "guest tour lightbox (390px) … step 3/7 (navigation)" (the ring position on the real prev/next controls).
 Also seen once under load, green alone: dashboard "全部待處理歸零…" (3000ms waitForURL timeout). When the full suite shows
 only these, re-run the failing suite alone with `ONLY=` before calling it a regression.
+In the cloud session on 2026-10-29/30 the full run-parallel shows 7 failures that also fail on the untouched base cfdeb49: suite 10
+(mobile preview preload i±1/i±2, 2), suite 26 (album preview 1280px "one analysis per photo again" 3 + album preview 390px "tapping 下一頁 flips" 1),
+suite 61 (成果相簿燈箱（手機）loading ring, 1). Not confirmed on Tim's machine.
 
 Visual/contrast tests need a floor on how many elements were scanned, or an
 empty scan passes.
@@ -186,6 +194,9 @@ empty scan passes.
   (`pilot` + `GUEST_ORDERS_PILOT` project ids, or `on`); any other value, a typo included,
   counts as off. Before it is turned on, `2026-10-09-guest-orders.sql` (11 statements, one by
   one) must have been run and the privacy notice reviewed (`docs/guest-shop.md`).
+- A guest album layout (`order_items.layout`, v2) is the Worker's own serialisation (`albumLayoutV2`). Every photo key in it must be a
+  real object in the delivered finals; a non-cancelled order's layout locks those photos. Guest routes never return the layout object
+  (they show only its spread count); only the admin read does.
 
 ## Decided not to do (do not re-propose without new evidence)
 - Service / Package / Template, quotes, contracts, booking, CRM: scope creep.

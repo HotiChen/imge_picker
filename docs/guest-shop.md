@@ -5,8 +5,11 @@
 > 客人端 `js/guest-order.js`；攝影師端 `orders.html`／`admin.html`／`settings.html`／`dashboard.html`）。
 > 開啟條件：Tim 跑完 `worker/migrations/2026-10-09-guest-orders.sql`（11 句，一句一句），個資聲明有人審閱、填好匯款資訊，
 > 再把 `worker/wrangler.toml` 的 `GUEST_ORDERS` 改成 `pilot`（加 `GUEST_ORDERS_PILOT` 專案名單）試跑，確認後才改 `on`；其他值或打錯字一律當關。
-> S3（客人換照片／刪照片／調順序）**還沒建**：`order_items.layout` 欄位已存在，目前只寫
-> `{"v":1,"mode":"photographer","source":"all_finals","spreads":N}`。
+> **S3（客人相本排版）已建，在 main 上（2026-10-30 收尾）**；Tim 的決定與規格見文末 **「S3 — 客人相本排版」**。
+> Worker 驗證 Layout JSON v2 寫進 `order_items.layout`；客人端是 `js/album-preview.js` 的編輯模式（逐格換照片、再次編排、上一版、全書預覽後才能確認送出）
+> 加 `js/guest-order.js` 的 `checkoutAlbum`；相本卡的按鈕現在是「排版並訂購」。「請攝影師排版」已從客人端拿掉；Worker 仍接受沒有 layout 的 `spreads` 相本行。
+> 未建：低解析度警告（專案沒有存照片像素尺寸，需要另開上傳端的小任務）。攝影師端「查看排版」與「匯入 book editor」也已在 main。
+> 以上的 S3 舊段落（「S3 — album preview」、「Album page range」下的 S3 敘述）已被取代，只留作歷史。
 > 「我有興趣」：表 `product_interests`、`POST /api/pick/interest`，每個產品每 24 小時最多寄一封信（`2026-10-08-product-interests.sql`）。
 > S2 的設計稿在文末 **「S2 客人自助訂購 — 設計稿（2026-10-08 改版）」**（該段開頭的狀態已更新為「已實作」）；
 > 下面 2026-09-30 的 S2 內容（Decisions 的 S2 部分、Data model 的 s2 migration、API 的 S2 列、
@@ -197,6 +200,8 @@ at all (removed from the DOM). S1 ends with 「聯絡攝影師訂購」 until S2
 States: loading, empty shop, promo/no promo, `price_changed` (show new total,
 ask again), `shop_closed`, 429, offline. The page holds no secret beyond the
 guest's own order key and link token.
+
+> 已被取代（S3）：現況見文末 **「S3 — 客人相本排版」**。以下是 2026-09-30 的草案，`mode: 'photographer'` 與 v1 控制項已不是現況。
 
 **S3 — album preview** (under the album line, before 加入購物車)
 - Runs `AutoLayout.run()` in the guest browser from `?w=400` thumbnails; pages
@@ -507,6 +512,8 @@ last-seen stamp).
 
 ## Album page range — where the refusal lives (S3, not built yet)
 
+> 2026-10-30：S3 已建（見文末 **「S3 — 客人相本排版」**）；頁數檢查現在走 `albumPagesProblem`，下面的「S3 …」敘述是 2026-10-08 的假設，不是現況。
+>
 > 2026-10-08：S2 改版建議**提早在 S2 接上**兩個 helper：S2 的相本行沒有 layout，但客人選一個
 > 跨頁數 `spreads`（§3.3，待 Tim 答 §11 Q10）。下面「S3 用 `layout.pages.length`」的規則到 S3 仍然適用。
 
@@ -1321,6 +1328,13 @@ reset the previous holder's 3 `requested` orders block the new holder until the 
   how the Chinese subject shows in Gmail.
 
 ## S3 — 客人相本排版：Tim 的決定與規格（2026-10-27，蓋過上面所有 S3 舊段落）
+
+> **狀態（2026-10-30，main）：已建。** 下面「Worker — built」是 Worker 的實作細節。
+> - 客人端：`js/album-preview.js` 編輯模式；`js/guest-order.js` `checkoutAlbum`（相本行送 layout）。
+> - 攝影師端唯讀：`js/album-layout-view.js`，「查看排版」按鈕在 `orders.html`、`admin.html` 的訂單卡（`js/orders-common.js` guestCard）；檔名清單與「複製排版清單」。
+> - 「匯入 book editor」：`book_editor/js/import_layout.js`（`ImportLayout.layoutToBook`）把 layout 轉成一般可編輯的相本（A4 跨頁用自訂版型），`PUT /api/books/<新 id>`，開 `book_editor/index.html?id=<id>`。
+> - 未驗證：匯入後相本的 PDF 尺寸／出血；真機（iPhone、LINE 內建瀏覽器）；正式站的實際伺服。
+> - 仍然 dark：`GUEST_ORDERS=off`。
 
 > 舊 S3 段（「S3 — album preview」、「Layout JSON」`full-bleed…4-grid`、`mode: 'photographer'`）寫於相本改成 A4 跨頁＋43 種模板之前，
 > **已過時**；`docs/album-preview.md` 的引擎（`AutoLayout.planSpreads`、`variant`、`SpreadTemplates`）才是現況。

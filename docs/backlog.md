@@ -7,6 +7,20 @@ say so in their heading.
 
 ## Where we stopped (2026-10-25) — read this first in a new session
 
+**2026-10-30 — on main (newest; the 2026-10-25 block below is still true):**
+- Guest album layout S3 (`docs/guest-shop.md`, 「S3 — 客人相本排版」): built. The guest swaps photos in the album preview, re-lays out,
+  checks the whole book, then sends it with the order. The Worker validates the layout and locks the photos a live order names.
+- Photographer side: 「查看排版」 read-only viewer on order cards (`js/album-layout-view.js`); 「匯入 book editor」 turns a guest layout
+  into a normal editable book (`book_editor/js/import_layout.js`). Not verified: PDF size / bleed of an imported book, real phone, production serving.
+- 轉出精挑相片 XMP (`docs/xmp-export.md`, `js/xmp-export.js`): built, admin dialog next to the CSV button. Not verified against real Lightroom
+  (the pick flag `xmpDM:pick` especially).
+- Still dark: `GUEST_ORDERS=off`. Nothing can be bought through the shop yet.
+- Only Tim can do: (1) check the GitHub Actions deploy and Purge Everything; (2) confirm `2026-10-09-guest-orders.sql` was run
+  (`docs/backup.md` §四; needed before any pilot); (3) try the XMP in real Lightroom; (4) review the privacy notice before `GUEST_ORDERS`
+  is changed; (5) real phone check of the album editor (iPhone Safari, LINE in-app browser).
+- Open: whether 再次編排 should always confirm (today it confirms only when swaps exist); low-resolution warning needs upload-time
+  image dimensions (a new small task); the GUEST_ORDERS pilot; the 幼兒園 batch generator waits for the March shoot.
+
 **On main (shipped):** proof auto-delete (毛片自動刪除, `docs/delivery.md` "Proof retention"): per-project and studio retention
 (default off; counted from the client's 確認完成; 14-day notice with 延後 30 天 / 不要刪; daily cron `17 19 * * *`;
 finals never deleted); the completion page's 下載毛片 entry; the 180-day expiry notice retired. The migration
@@ -372,6 +386,9 @@ Do now (no code): (a) try the manual flow with 2–3 children (master, lock a pa
 parent's phone; (b) fix the folder layout now so the March shoot drops in: `全班共用/` and `個人/<孩子>/`; (c) ask the school in
 November: may parents see each other's children's photos (decides the folders), the photo / publishing consent, and who pays for the
 album (decides whether any payment flow is needed). Children are minors: review the privacy notice before any link goes out.
+
+Design note (checked 2026-10-30): Tim wants cute background art / frames for the album pages. `book_editor` supports a page background
+image (`bgImage`: fit, opacity, repeat) but has **no per-photo frame, border or overlay layer**. Design discussion still open.
 
 ## Deferred features
 - ✅ Done: edit a project's 張數 / 加挑單價 / 最多可加選 after creation
