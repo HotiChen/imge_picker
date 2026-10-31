@@ -29,6 +29,7 @@ export function ordersFake(opts = {}) {
     extra: opts.extra || { count: null, pick_limit: null, extra_price: null, extra: 0, fee: 0, order_id: null, order_extra: null, matches: true },
     delivered: opts.delivered || {},   // project id -> delivered now? (absent = true)
     migrated: opts.migrated !== false, // false = the S2 guest-order columns are not there (erase-contact answers 500 orders_unavailable)
+    hold: null,              // a promise: admin product PUTs wait for it (test keeps a request in flight)
     inject: null,            // (method, path, body) => {status, body} | null
     calls: [],
     n: 0,
@@ -235,7 +236,7 @@ export function ordersFake(opts = {}) {
   const CUSTOM_MONEY = [['price', 'invalid_price'], ['cost', 'invalid_cost', 0]];
   const PLATFORM_MONEY = [['vendor_cost', 'invalid_vendor_cost'], ['platform_price', 'invalid_platform_price']];
   // productFields(): kind/name/description/photo_count/sort of a body
-  function checkFields(body, partial, kinds) {
+  function checkFields(body, partial, kinds, guestVisible = false) {
     const set = {};
     if (!partial || 'kind' in body) { if (!kinds.includes(body.kind)) return { bad: 'invalid_kind' }; set.kind = body.kind; }
     if (!partial || 'name' in body) {
@@ -252,6 +253,11 @@ export function ordersFake(opts = {}) {
       const v = body.photo_count;
       if (v !== null && !(Number.isSafeInteger(v) && v >= 1 && v <= 500)) return { bad: 'invalid_photo_count' };
       set.photo_count = v;
+    }
+    // worker.js productFields: guest_visible true / false / 0 / 1 only, stored as 0 / 1
+    if (guestVisible && 'guest_visible' in body) {
+      if (![true, false, 0, 1].includes(body.guest_visible)) return { bad: 'invalid_guest_visible' };
+      set.guest_visible = body.guest_visible ? 1 : 0;
     }
     if ('sort' in body) { if (!(Number.isSafeInteger(body.sort) && body.sort >= 0)) return { bad: 'invalid_sort' }; set.sort = body.sort; }
     return { set };
@@ -420,7 +426,7 @@ export function ordersFake(opts = {}) {
       if (!p) return { status: 404, body: { error: 'Not found' } };
       if (p.platform_product_id) {
         if (['kind', 'name', 'description', 'photo_count', 'min_pages', 'max_pages', 'bleed_mm', 'extra_page_price', 'category'].some(k => k in body)) return bad('platform_managed');
-        const f = checkFields(body, true, []);
+        const f = checkFields(body, true, [], true);
         if (f.bad) return bad(f.bad);
         let opts = null;
         if ('options' in body) {
@@ -439,10 +445,11 @@ export function ordersFake(opts = {}) {
           });
         }
         if ('sort' in f.set) p.sort = f.set.sort;
+        if ('guest_visible' in f.set) p.guest_visible = f.set.guest_visible;
         return { body: { product: viewProduct(p) } };
       }
       if (!st.customProducts) return customOff;
-      const f = checkFields(body, true, ['album', 'print', 'service']);
+      const f = checkFields(body, true, ['album', 'print', 'service'], true);
       if (f.bad) return bad(f.bad);
       if (f.set.kind !== undefined && f.set.kind !== 'service') return bad('platform_only');
       let opts = null;
@@ -589,6 +596,7 @@ export function ordersFake(opts = {}) {
       // refused on /api/admin and the photographer's on /api/operator
       if (!isPublic && (h['authorization'] || null) !== (isOperator ? `Bearer ${st.operatorToken}` : 'Bearer adm'))
         return route.fulfill({ status: 401, contentType: 'application/json', body: JSON.stringify({ error: 'Unauthorized' }) });
+      if (st.hold && method === 'PUT' && /^\/api\/admin\/products\//.test(p)) await st.hold;   // a test keeps the request in flight
       const res = handle(method, p, u.searchParams, body || {}, bytes) || { status: 404, body: { error: 'Not found' } };
       if (res.raw) return route.fulfill({ status: res.status || 200, contentType: res.type, body: res.raw });
       route.fulfill({ status: res.status || 200, contentType: 'application/json', body: JSON.stringify(res.body) });
