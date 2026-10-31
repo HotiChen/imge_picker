@@ -7,8 +7,8 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@600;900&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/side-nav.css?v=20261027d">
-<link rel="stylesheet" href="css/studio-who.css?v=20261027d">
+<link rel="stylesheet" href="css/side-nav.css?v=20261031a">
+<link rel="stylesheet" href="css/studio-who.css?v=20261031a">
 <style>
   /* Bright design, approved by Tim (design-canvas spec: /tmp/claude-0/light-design.html) —
      cream ground, white cards, dark ink text, warm accent, soft pastel pills. */
@@ -101,6 +101,12 @@
   .opt-off { opacity: .55; }
   .warn-below, .warn-hidden { color: var(--danger); font-weight: 600; }
   .warn-hidden { display: block; margin-top: 2px; }
+  .gv-box { margin-top: 8px; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; font-size: 12px; }
+  .gv-switch { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; min-width: 44px; cursor: pointer; font-size: 13px; color: var(--ink-90); }
+  .gv-switch input { width: 22px; height: 22px; flex: none; cursor: pointer; accent-color: var(--accent); }
+  .gv-switch input:disabled { cursor: progress; }
+  .gv-box .warn-hidden { flex-basis: 100%; margin-top: 0; }
+  .prod-help { margin: 0 0 8px; }
   .pick-row { display: flex; gap: 10px; align-items: center; margin: 6px 0; flex-wrap: wrap; }
   .pick-tick { display: flex; gap: 6px; align-items: center; min-width: 120px; margin: 0; font-size: 13px; color: var(--ink-90); }
   .panel-stat { color: var(--ink-90); font-size: 14px; font-weight: 500; margin-bottom: 8px; }
@@ -126,7 +132,7 @@
   @media (max-width: 768px) { #account-section .field, #account-section .btn { min-height: 44px; font-size: 16px; } }
   #set-link-messages .btn-ghost { min-height: 44px; min-width: 44px; margin-top: 8px; background: transparent; border: 1px solid var(--border); color: var(--ink-90); }
 </style>
-<script src="js/photographer-session.js?v=20261027d"></script>
+<script src="js/photographer-session.js?v=20261031a"></script>
 </head>
 <body>
 
@@ -271,6 +277,7 @@
     <h2>商品</h2>
     <div class="panel">
       <div class="panel-body">
+        <div class="hint prod-help" id="prod-help">打開後，客人在完成頁看得到這個商品（先要有至少一個價格不低於平台價的規格）</div>
         <div id="prod-list"><div class="hint">載入中…</div></div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;">
           <button id="plat-add-btn" class="btn btn-accent" type="button">從平台加入</button>
@@ -306,12 +313,12 @@
   </main>
 </div>
 
-<script src="js/build-version.js?v=20261027d"></script>
-<script src="js/util.js?v=20261027d"></script>
-<script src="js/password-toggle.js?v=20261027d"></script>
-<script src="js/side-nav.js?v=20261027d"></script>
-<script src="js/studio-who.js?v=20261027d"></script>
-<script src="js/orders-common.js?v=20261027d"></script>
+<script src="js/build-version.js?v=20261031a"></script>
+<script src="js/util.js?v=20261031a"></script>
+<script src="js/password-toggle.js?v=20261031a"></script>
+<script src="js/side-nav.js?v=20261031a"></script>
+<script src="js/studio-who.js?v=20261031a"></script>
+<script src="js/orders-common.js?v=20261031a"></script>
 <script>
 (function () {
   const WORKER_URL = 'https://imagepicker.hotichen.workers.dev';
@@ -750,6 +757,28 @@
       return Number.isFinite(price) && Number.isFinite(floor) && price < floor;
     }
 
+    // 「顯示給客人」: guest_visible is 0 / 1 (or a boolean) as the Worker reads it
+    function guestOn(p) { return Number(p.guest_visible) === 1; }
+    // why an ON product still does not reach the guest shop (readGuestShop: active, platform
+    // active, and at least one active option the platform still lists at or above its price)
+    function guestHiddenReason(p) {
+      if (!p.active) return '已打開，但這個商品已下架，客人看不到';
+      if (platformGone(p)) return '已打開，但平台已下架這個商品，客人看不到';
+      if (!activeOptions(p).some(o => !optionGone(p, o) && !underFloor(o))) return '已打開，但目前沒有客人買得到的規格';
+      return '';
+    }
+    // only adopted products reach the guest shop (a custom service never does)
+    function guestBoxHtml(p) {
+      if (!p.platform_product_id) return '';
+      const on = guestOn(p);
+      const why = on ? guestHiddenReason(p) : '';
+      const control = p.active
+        ? `<label class="gv-switch"><input type="checkbox" data-guest-visible${on ? ' checked' : ''}> 顯示給客人</label>`
+        : '';
+      return `<div class="gv-box">${control}<span class="pill${on ? '' : ' pill-off'}" data-guest-status="${on ? 'on' : 'off'}">${on ? '客人看得到' : '客人看不到'}</span>${
+        why ? `<span class="warn-hidden" data-warn="guest-shop-hidden">${O.esc(why)}</span>` : ''}</div>`;
+    }
+
     function productRowHtml(p) {
       const adopted = !!p.platform_product_id;
       const gone = platformGone(p);
@@ -789,6 +818,7 @@
           ${adopted && O.bleedText(p) ? `<span class="hint" data-bleed>${O.esc(O.bleedText(p))}</span>` : ''}
           ${p.description ? `<div class="hint">${O.esc(p.description)}</div>` : ''}
           <ul class="prod-opts">${opts}</ul>
+          ${guestBoxHtml(p)}
         </div>
         <div class="prod-actions">
           ${locked ? '' : '<button type="button" class="btn btn-outline btn-sm" data-edit>編輯</button>'}
@@ -1142,6 +1172,29 @@
       const r = await api(`/api/admin/products/${encodeURIComponent(p.id)}/${retire ? 'retire' : 'restore'}`, 'POST');
       if (!r.ok) { say(false, O.errorText(r.data, r.status)); return; }
       await loadProducts();
+    });
+
+    // 顯示給客人: PUT exactly {guest_visible}; locked while in flight; on failure the box goes back
+    prodList.addEventListener('change', async e => {
+      const box = e.target.closest('[data-guest-visible]');
+      if (!box) return;
+      const rowEl = box.closest('.prod-row');
+      const p = rowEl && products.find(x => x.id === rowEl.dataset.productId);
+      if (!p || box.disabled) return;
+      const want = box.checked;
+      box.disabled = true;
+      say(true, '');
+      let r;
+      try { r = await api(`/api/admin/products/${encodeURIComponent(p.id)}`, 'PUT', { guest_visible: want }); }
+      catch (err) { r = { ok: false, status: 0, data: { error: '無法連線到 Worker' } }; }
+      if (!r.ok) {
+        say(false, O.errorText(r.data, r.status));
+        if (rowEl.isConnected) { box.checked = !want; box.disabled = false; }
+        return;
+      }
+      const saved = r.data && r.data.product;
+      p.guest_visible = saved && saved.guest_visible !== undefined ? saved.guest_visible : (want ? 1 : 0);
+      if (rowEl.isConnected) rowEl.outerHTML = productRowHtml(p);
     });
 
     fileInput.addEventListener('change', async function () {
