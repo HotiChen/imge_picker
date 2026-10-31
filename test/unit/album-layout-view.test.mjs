@@ -146,3 +146,45 @@ test('imageUrl: thumbnail only (w=1200), encoded per segment, token in t=, never
   assert.equal(V.imageUrl('https://w.example', 'a.jpg', ''), 'https://w.example/a.jpg?w=1200');
   assert.equal(V.imageUrl('https://w.example', '', 't'), '');
 });
+
+// ── background (docs/guest-shop.md "S3 第一步"): the table is ImportLayout.BACKGROUND_COLORS, the one copy ──
+const IL = require('../../book_editor/js/import_layout.js');
+const COLORS = IL.BACKGROUND_COLORS;
+const NINE = { white: '#ffffff', cream: '#fff8ee', butter: '#fff4cc', blush: '#fde8ec', peach: '#ffe5d4', mint: '#e3f4e8', sky: '#e1effb', lavender: '#eee8fa', gray: '#eeeeee' };
+const NAMES = { white: '白', cream: '奶油', butter: '奶黃', blush: '粉', peach: '蜜桃', mint: '薄荷', sky: '天空', lavender: '薰衣草', gray: '灰' };
+const withBg = bg => layoutOf([{ template: 'pair-portraits', slots: [s('a.jpg'), s('b.jpg')] }], { background: bg, back: {} });
+
+test('background: each of the nine ids colours the cover, the spread and the back (floor: all nine)', () => {
+  assert.deepEqual({ ...COLORS }, NINE);
+  let n = 0;
+  for (const [id, hex] of Object.entries(NINE)) {
+    const r = V.pagesOf(withBg({ type: 'color', value: id }), T, COLORS);
+    assert.deepEqual(r.pages.map(p => p.kind), ['cover', 'spread', 'back']);
+    assert.deepEqual(r.pages.map(p => p.bg), [hex, hex, hex], id);
+    assert.deepEqual(r.background, { id, name: NAMES[id], hex }, id);
+    n++;
+  }
+  assert.equal(n, 9);
+});
+
+test('background: none / null / no table -> white and no label; garbage never throws and is white', () => {
+  const white = r => r.pages.every(p => p.bg === '#ffffff') && r.pages.length === 3;
+  for (const bg of [undefined, null]) { const r = V.pagesOf(withBg(bg), T, COLORS); assert.ok(white(r)); assert.equal(r.background, null); }
+  assert.ok(white(V.pagesOf(withBg({ type: 'color', value: 'cream' }), T)));          // table unavailable
+  assert.equal(V.pagesOf(withBg({ type: 'color', value: 'cream' }), T).background, null);
+  const hostile = [{ type: 'image', value: 'cream' }, { type: 'image', url: 'x' }, { type: 'color', value: 'red' }, { type: 'color', value: '#ff0000' },
+    { type: 'color', value: 'url(javascript:1)' }, { type: 'color', value: '__proto__' }, { type: 'color', value: 'constructor' }, { type: 'color', value: 'toString' },
+    { type: 'color', value: ['cream'] }, { type: 'color', value: { toString: 'cream' } }, { type: 'color' }, { type: 'colour', value: 'cream' }, 'cream', 7, [], true, { value: 'cream' }];
+  for (const bg of hostile) {
+    const r = V.pagesOf(withBg(bg), T, COLORS);
+    assert.ok(white(r), JSON.stringify(bg));
+    assert.equal(r.background, null, JSON.stringify(bg));
+  }
+  assert.equal(hostile.length, 17);
+});
+
+test('background: a table that is itself garbage (hex not #rrggbb) is white', () => {
+  const r = V.pagesOf(withBg({ type: 'color', value: 'cream' }), T, { cream: 'red; background:url(x)' });
+  assert.ok(r.pages.every(p => p.bg === '#ffffff'));
+  assert.equal(r.background, null);
+});

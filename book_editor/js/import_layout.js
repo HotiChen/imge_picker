@@ -23,6 +23,18 @@ const ImportLayout = (() => {
     const NAME_MAX = 60;
     const DEFAULT_NAME = '客人排版匯入';
 
+    // The guest layout's whole-book colour (Layout JSON v2 `background: {type:'color', value:<id>}`, docs/guest-shop.md "S3 第一步").
+    // THE one client-side id -> hex table (js/album-layout-view.js reads this one too; the Worker holds its own, a test compares).
+    const BACKGROUND_COLORS = Object.freeze({
+        white: '#ffffff', cream: '#fff8ee', butter: '#fff4cc', blush: '#fde8ec', peach: '#ffe5d4',
+        mint: '#e3f4e8', sky: '#e1effb', lavender: '#eee8fa', gray: '#eeeeee',
+    });
+    // -> the hex of a valid background, or null (absent, garbage, wrong type, an unknown id, type 'image': all "white").
+    function backgroundHex(bg) {
+        if (!bg || typeof bg !== 'object' || Array.isArray(bg) || bg.type !== 'color' || typeof bg.value !== 'string') return null;
+        return Object.prototype.hasOwnProperty.call(BACKGROUND_COLORS, bg.value) ? BACKGROUND_COLORS[bg.value] : null;
+    }
+
     const isObj = v => !!v && typeof v === 'object' && !Array.isArray(v);
     const round6 = n => Math.round(n * 1e6) / 1e6;
 
@@ -65,12 +77,13 @@ const ImportLayout = (() => {
         const bleed = typeof o.bleedMm === 'number' && Number.isFinite(o.bleedMm) && o.bleedMm >= 0 && o.bleedMm <= 10 ? o.bleedMm : 3;
         const now = typeof o.now === 'number' && Number.isFinite(o.now) ? o.now : Date.now();
 
+        const paper = backgroundHex(layout.background);   // null = white, exactly as before
         const pages = [];
         const custom = {};
         let n = 0;
         const page = (type, layoutId, slots) => ({
             id: `page-imp-${now}-${n++}`, type, layout: layoutId, slots,
-            bg: '#ffffff', bgImage: null, textLayers: [], locked: false,
+            bg: paper || '#ffffff', bgImage: null, textLayers: [], locked: false,
         });
 
         // cover (an empty cover page when the guest did not set one)
@@ -118,6 +131,6 @@ const ImportLayout = (() => {
         };
     }
 
-    return { layoutToBook, cleanName, keySafe, DEFAULT_NAME, NAME_MAX };
+    return { layoutToBook, cleanName, keySafe, backgroundHex, BACKGROUND_COLORS, DEFAULT_NAME, NAME_MAX };
 })();
 if (typeof module !== 'undefined' && module.exports) module.exports = ImportLayout;

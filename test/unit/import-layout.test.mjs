@@ -162,3 +162,45 @@ test('the name: guest text is cleaned, truncated, defaulted', () => {
   const b = conv(layout([sp('solo-right', true)]), { name: '<script>' });
   assert.match(b._customLayouts['custom-solo-right-m'].name, /^客人排版・.+（鏡像）$/);
 });
+
+// ── background (docs/guest-shop.md "S3 第一步"): bg on EVERY page; absent -> byte-identical to before ──
+const NINE_BG = { white: '#ffffff', cream: '#fff8ee', butter: '#fff4cc', blush: '#fde8ec', peach: '#ffe5d4', mint: '#e3f4e8', sky: '#e1effb', lavender: '#eee8fa', gray: '#eeeeee' };
+
+test('BACKGROUND_COLORS: the nine ids, frozen', () => {
+  assert.deepEqual({ ...I.BACKGROUND_COLORS }, NINE_BG);
+  assert.ok(Object.isFrozen(I.BACKGROUND_COLORS));
+});
+
+test('background: every page (cover, inner, back-cover) gets bg = the hex, for all nine ids; the Worker still accepts', async () => {
+  let n = 0;
+  for (const [id, hex] of Object.entries(NINE_BG)) {
+    const b = conv(layout([sp('pair-portraits'), sp('solo-right', true)], { back: {}, background: { type: 'color', value: id } }));
+    assert.deepEqual(b.pages.map(p => p.type), ['cover', 'inner', 'inner', 'back-cover']);
+    assert.deepEqual(b.pages.map(p => p.bg), [hex, hex, hex, hex], id);
+    assert.equal((await workerPut(b)).status, 200, id);
+    n++;
+  }
+  assert.equal(n, 9);
+});
+
+test('background: absent / null gives the output byte for byte as without the field', () => {
+  const base = layout([sp('pair-portraits'), sp('solo-right', true)], { back: {} });
+  const plain = JSON.stringify(conv(base));
+  assert.ok(conv(base).pages.every(p => p.bg === '#ffffff'));
+  assert.equal(JSON.stringify(conv({ ...base, background: null })), plain);
+  assert.equal(JSON.stringify(conv({ ...base, background: undefined })), plain);
+});
+
+test('background: invalid values are ignored (white), never an error, never copied into the book', () => {
+  const base = layout([sp('solo-right')], { back: {} });
+  const plain = JSON.stringify(conv(base));
+  const bad = [{ type: 'image', value: 'cream' }, { type: 'color', value: 'red' }, { type: 'color', value: '#ff0000' }, { type: 'color', value: 'url(x)' },
+    { type: 'color', value: '__proto__' }, { type: 'color', value: 'toString' }, { type: 'color', value: ['cream'] }, { type: 'color' }, { type: 'x', value: 'cream' }, 'cream', 5, [], true];
+  for (const background of bad) {
+    const out = JSON.stringify(conv({ ...base, background }));
+    assert.equal(out, plain, JSON.stringify(background));
+  }
+  assert.equal(bad.length, 13);
+  assert.equal(I.backgroundHex({ type: 'color', value: 'mint' }), '#e3f4e8');
+  assert.equal(I.backgroundHex({ type: 'color', value: 'nope' }), null);
+});

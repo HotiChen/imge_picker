@@ -35,14 +35,30 @@
   }
   const keyOf = s => (isObj(s) && typeof s.photo_key === 'string' ? s.photo_key : '');
   const namesOf = slots => (Array.isArray(slots) ? slots : []).map(keyOf).filter(Boolean).map(baseName);
+  const WHITE = '#ffffff';
+  // Chinese names of the nine colour ids (labels only; the id -> hex table is ImportLayout.BACKGROUND_COLORS, the one copy).
+  const BG_NAMES = { white: '白', cream: '奶油', butter: '奶黃', blush: '粉', peach: '蜜桃', mint: '薄荷', sky: '天空', lavender: '薰衣草', gray: '灰' };
+  const has = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
+  // layout.background + the colour table -> { id, name, hex } for a valid colour, else null (white). Never throws.
+  function backgroundOf(layout, colors) {
+    const bg = isObj(layout) ? layout.background : null;
+    if (!isObj(bg) || bg.type !== 'color' || typeof bg.value !== 'string' || !isObj(colors) || !has(colors, bg.value)) return null;
+    const hex = colors[bg.value];
+    if (typeof hex !== 'string' || !/^#[0-9a-f]{6}$/i.test(hex)) return null;
+    return { id: bg.value, name: has(BG_NAMES, bg.value) ? BG_NAMES[bg.value] : '', hex };
+  }
   const slotOf = (s, box) => ({ key: keyOf(s), x: box.x, y: box.y, w: box.w, h: box.h, fit: isObj(s) && s.fit === 'contain' ? 'contain' : 'cover', crop: cropOf(isObj(s) ? s.crop : null) });
 
   // Layout JSON v2 -> { pages: [{label, kind, aspect, ok, slots:[{key,x,y,w,h,fit,crop}], names}], unreadable }.
   // `templates` is SpreadTemplates (byId). A spread whose template is unknown or whose slot count is not the template's
   // is { ok: false, slots: [] } but keeps the names it could read. `unreadable`: there is no list of spreads at all.
-  function pagesOf(layout, templates) {
+  // `colors` (optional) is ImportLayout.BACKGROUND_COLORS; each page carries `bg` (hex, '#ffffff' when none/invalid/no table)
+  // and the result `background` ({id, name, hex} or null).
+  function pagesOf(layout, templates, colors) {
     const pages = [];
-    if (!isObj(layout)) return { pages, unreadable: true };
+    if (!isObj(layout)) return { pages, unreadable: true, background: null };
+    const background = backgroundOf(layout, colors);
+    const bg = background ? background.hex : WHITE;
     const cover = layout.cover;
     if (isObj(cover) && keyOf(cover)) {
       pages.push({ label: '封面', kind: 'cover', aspect: COVER_ASPECT, ok: true, slots: [slotOf(cover, { x: 0, y: 0, w: 1, h: 1 })], names: namesOf([cover]) });
@@ -65,7 +81,8 @@
         }) });
     });
     if (isObj(layout.back)) pages.push({ label: '封底', kind: 'back', aspect: COVER_ASPECT, ok: true, slots: [], names: [] });
-    return { pages, unreadable };
+    pages.forEach(p => { p.bg = bg; });
+    return { pages, unreadable, background };
   }
 
   // `封面: IMG_001.jpg / 第1跨頁: IMG_002.jpg, IMG_003.jpg / …` for the print shop; pages without a file name are left out.
@@ -281,6 +298,8 @@
     v.next.disabled = v.index >= total - 1;
     v.stage.replaceChildren();
     v.names.replaceChildren();
+    v.bgLine.textContent = v.background ? `底色：${v.background.name}` : '';
+    v.bgLine.hidden = !v.background;
     if (!p) {
       v.stage.appendChild(el('div', 'alv-bad', '這份排版無法預覽'));
       v.names.appendChild(el('li', 'alv-none', '沒有可讀的檔名'));
@@ -290,6 +309,7 @@
     frame.setAttribute('data-kind', p.kind);
     frame.setAttribute('data-page', p.label);
     frame.style.aspectRatio = String(p.aspect);
+    frame.style.backgroundColor = p.bg || WHITE;
     if (p.kind === 'spread') frame.appendChild(el('div', 'alv-fold'));
     if (!p.ok) frame.appendChild(el('div', 'alv-bad', '這份排版無法預覽'));
     else if (p.kind === 'back') frame.appendChild(el('div', 'alv-blank', '封底（沒有照片）'));
@@ -366,11 +386,14 @@
     const importStatus = el('div', 'alv-import-status');
     importStatus.setAttribute('role', 'status');
     importStatus.setAttribute('data-alv-import-status', '');
-    side.append(names, copy, copyStatus, fallback, importBtn, importStatus);
+    const bgLine = el('div', 'alv-bg-line');
+    bgLine.setAttribute('data-alv-bg', '');
+    bgLine.hidden = true;
+    side.append(names, bgLine, copy, copyStatus, fallback, importBtn, importStatus);
     body.append(main, side);
     root.append(bar, body);
 
-    const v = { root, title, count, stage, names, prev, next, copyStatus, fallback, pages: [], index: 0, token: '', base: workerUrl(),
+    const v = { root, bgLine, background: null, title, count, stage, names, prev, next, copyStatus, fallback, pages: [], index: 0, token: '', base: workerUrl(),
       importBtn, importStatus, importing: false, imported: '', layout: o.layout, bookName: typeof o.name === 'string' ? o.name : '',
       opener: o.opener || null, prevOverflow: document.body.style.overflow };
     v.onKey = e => {
@@ -411,11 +434,12 @@
     root.focus();
 
     stage.appendChild(el('div', 'alv-loading', '載入中…'));
-    const [templates, token] = await Promise.all([loadTemplates(), studioToken()]);
+    const [templates, token, importer] = await Promise.all([loadTemplates(), studioToken(), loadImporter()]);
     if (current !== v) return;                      // closed while loading
     v.token = token;
-    const r = pagesOf(o.layout, templates);
+    const r = pagesOf(o.layout, templates, importer ? importer.BACKGROUND_COLORS : null);   // no table -> white, no label
     v.pages = r.pages;
+    v.background = r.background;
     render(v);
     refit(v);
   }
