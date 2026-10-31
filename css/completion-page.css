@@ -191,7 +191,20 @@ html.cp-on footer.app-footer { display: none !important; }
    whole-book review. The viewer is dark and outside .cp, so these are plain classes on the dark tokens. */
 .album-viewer[data-edit="true"] .album-slot { cursor: pointer; outline: 1px dashed rgba(0,0,0,.28); outline-offset: -1px; }
 .album-viewer[data-edit="true"][data-review="true"] .album-slot { cursor: default; outline: 0; }
-.album-edit { margin-top: 6px; display: flex; flex-direction: column; align-items: center; gap: 4px; }
+/* The toolbar (edit mode): the page row, then ONE action row (版型 | 背景 | 上一版 | 再次編排, equal width, 44px), 送出結帳 on its own
+   full-width row, the notes under it, and the quiet caption last. 4 columns while they fit 80px each, else they wrap 2 + 2 / 3 + 1. */
+.album-viewer[data-edit="true"] .album-nav { gap: 12px; }
+.album-edit { margin-top: 8px; width: 100%; display: flex; flex-direction: column; align-items: stretch; gap: 6px; }
+.album-actions { display: grid; grid-template-columns: repeat(auto-fit, minmax(76px, 1fr)); gap: 6px; }
+.album-actions .album-act { min-width: 0; width: 100%; padding: 0 6px; white-space: nowrap; }
+.album-actions .album-act[hidden] { display: none; }
+.album-actions .album-act:disabled { opacity: .5; }
+.album-edit > .album-edit-go { width: 100%; }
+.album-viewer[data-edit="true"] .album-relayout { margin-top: 4px; flex-wrap: wrap; gap: 6px 10px; }
+.album-viewer[data-edit="true"] .album-relayout-side { flex: 1 1 100%; align-items: center; text-align: center; }
+.album-viewer[data-edit="true"] .album-relayout-cap { text-align: center; font-size: 11px; line-height: 1.3; opacity: .85; }
+.album-viewer[data-edit="true"] .album-relayout-status:empty { min-height: 0; }
+.album-viewer[data-edit="true"] .album-relayout-btns:empty { display: none; }
 .album-edit[hidden], .album-review[hidden] { display: none; }
 .album-edit-note, .album-review-note { max-width: 36em; text-align: center; font-size: 13px; line-height: 1.4; color: var(--ink); overflow-wrap: anywhere; }
 .album-edit-warn { max-width: 36em; padding: 6px 10px; text-align: center; font-size: 13px; line-height: 1.4; color: var(--ink); background: var(--accent-dim); border-left: 3px solid var(--accent); }
@@ -227,3 +240,25 @@ html.cp-on .toast-title, html.cp-on .toast-message { color: #231b12; }
 html.cp-on .toast-message { font-size: 13px; }
 
 @media (prefers-reduced-motion: reduce) { .cp-cover { transition: none; } }
+
+/* the style choosers: 版型 (wireframes of the whole spread, the fold a line down the middle) and 背景 (nine swatches) */
+.album-mirror { flex: 0 0 auto; margin: 10px 12px 0; align-self: flex-start; }
+.album-mirror[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+.album-tpls { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 10px 12px calc(14px + env(safe-area-inset-bottom, 0px)); display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; align-content: start; }
+.album-tpl { min-height: 44px; padding: 8px; display: flex; flex-direction: column; gap: 6px; background: var(--card); border: 1px solid var(--border); color: var(--ink); cursor: pointer; -webkit-tap-highlight-color: transparent; text-align: center; }
+.album-tpl[data-current="true"] { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.album-tpl:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.album-tpl-wire { position: relative; display: block; width: 100%; aspect-ratio: 420 / 297; background: var(--bg-deep); border: 1px solid var(--ink-55);
+  background-image: linear-gradient(90deg, transparent calc(50% - .5px), var(--ink-55) calc(50% - .5px), var(--ink-55) calc(50% + .5px), transparent calc(50% + .5px)); }
+.album-tpl-slot { position: absolute; box-sizing: border-box; background: var(--ink-15); border: 1px solid var(--ink-70); }
+.album-tpl-slot[data-face="span"] { background: var(--accent-dim); border-color: var(--accent); }
+.album-tpl-name { font-size: 12px; line-height: 1.3; color: var(--ink-70); overflow-wrap: anywhere; }
+.album-tpl[data-current="true"] .album-tpl-name { color: var(--accent); }
+.album-bg-note { padding: 12px 16px 0; font-size: 13px; line-height: 1.4; color: var(--ink-70); }
+.album-swatches { padding: 12px 12px calc(14px + env(safe-area-inset-bottom, 0px)); display: grid; grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); gap: 10px; align-content: start; overflow-y: auto; }
+.album-swatch-btn { min-height: 76px; padding: 8px 4px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; background: var(--card); border: 1px solid var(--border); color: var(--ink); font-size: 13px; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.album-swatch-btn[aria-pressed="true"] { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.album-swatch-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.album-swatch { display: block; width: 44px; height: 44px; border-radius: 50%; border: 1px solid var(--ink-55); }
+.album-swatch-name { line-height: 1.2; }
+@media (max-height: 500px) { .album-viewer[data-edit="true"] .album-viewer-foot { flex-wrap: wrap; } .album-edit { width: auto; flex: 1 1 280px; } }

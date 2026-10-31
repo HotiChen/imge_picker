@@ -29,9 +29,10 @@
 //
 // Edit mode (docs/guest-shop.md, "S3 — 客人相本排版"): ONLY when the page hands over AlbumPreview.order (the caller is the
 // seat owner of a confirmed project, ordering is on and the album product is orderable: js/completion-page.js decides),
-// the viewer lets the guest swap photos slot by slot (never the template, never the spread count), step back through the
-// last HISTORY_MAX layouts (in memory only), and send the book to js/guest-order.js as a Layout JSON v2 after a
-// whole-book review. Without AlbumPreview.order the viewer is exactly the read-only preview (no edit markup at all).
+// the viewer lets the guest swap photos slot by slot, switch a spread to another template WITH THE SAME SLOT COUNT (版型, plus
+// 鏡像) and pick one background colour for the whole book (背景) (docs/guest-shop.md "S3 第一步"; never the spread count, never
+// which photos are used), step back through the last HISTORY_MAX layouts (in memory only), and send the book to js/guest-order.js
+// as a Layout JSON v2 after a whole-book review. Without AlbumPreview.order the viewer is exactly the read-only preview (no edit markup at all).
 //
 // Every string that came from outside (photo keys) only ever reaches
 // img.src as a property — no innerHTML anywhere in this file, so a file name
@@ -82,6 +83,14 @@
     const UNAVAILABLE = '訂購暫時無法使用，排版已保留，請稍後再試';
     const round3 = n => Math.round(n * 1000) / 1000;
     const clonePlan = plan => JSON.parse(JSON.stringify(plan));
+    // The one place the nine book colours live (id -> hex, in the Worker contract's order; the Worker keeps its own list of ids and a
+    // test compares them). `white` is the paper: a book that is white sends no `background` at all.
+    const BACKGROUND_COLORS = Object.freeze([
+        ['white', '#ffffff', '白'], ['cream', '#fff8ee', '奶油'], ['butter', '#fff4cc', '奶黃'], ['blush', '#fde8ec', '粉'],
+        ['peach', '#ffe5d4', '蜜桃'], ['mint', '#e3f4e8', '薄荷'], ['sky', '#e1effb', '天空'], ['lavender', '#eee8fa', '薰衣草'], ['gray', '#eeeeee', '灰'],
+    ].map(([id, hex, label]) => Object.freeze({ id, hex, label })));
+    const colorById = id => BACKGROUND_COLORS.find(c => c.id === id) || null;
+    const PAPER = BACKGROUND_COLORS[0].hex;
 
     const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
     const text = (tag, cls, t, id) => {
@@ -331,7 +340,7 @@
         hint: null, hintTimer: null, hintFade: null,
         items: null, photoCount: 0, variant: 0, basePlan: null, sig: '', cueTimer: null,   // re-layout: the analysed photos and the layout number (0 = the first)
         // edit mode (only with AlbumPreview.order): the plan being edited, the in-memory 上一版 stack, an open overlay (picker / confirm)
-        edit: false, cur: null, history: [], dirty: false, reviewing: false, reached: false, overlay: null, lastFocus: null, downAt: null,
+        edit: false, cur: null, bg: null, history: [], dirty: false, reviewing: false, reached: false, overlay: null, lastFocus: null, downAt: null,
         hintNow: null, byId: null,
 
         isOpen() { return !!this.el; },
@@ -388,7 +397,7 @@
             this.el = this.stage = this.foot = null;
             this.pages = []; this.g = null; this.index = 0; this.mouse = null; this.lastTap = null; this.hint = null;
             this.items = null; this.basePlan = null; this.variant = 0; this.sig = ''; clearTimeout(this.cueTimer);     // closing forgets the layout number: nothing is stored
-            this.edit = false; this.cur = null; this.history = []; this.dirty = false; this.reviewing = false; this.reached = false;   // and the swaps and the 上一版 stack
+            this.edit = false; this.cur = null; this.bg = null; this.history = []; this.dirty = false; this.reviewing = false; this.reached = false;   // and the swaps and the 上一版 stack
             this.overlay = null; this.lastFocus = null; this.downAt = null; this.hintNow = null; this.byId = null;
             this.zoom = { s: 1, x: 0, y: 0 };
             document.documentElement.classList.remove('album-open');
@@ -490,7 +499,7 @@
             this.pages = pagesOf(this.cur);
             this.sig = planSignature(plan);
             this.hintNow = hint;
-            this.history = []; this.dirty = false; this.reviewing = false; this.reached = false; this.byId = null;
+            this.history = []; this.dirty = false; this.reviewing = false; this.reached = false; this.byId = null; this.bg = null;
             this.edit = canEdit(this.items);
             this.el.dataset.edit = this.edit ? 'true' : 'false';
             const note = text('div', 'album-note', notes.join('・'), 'albumNote');
@@ -502,10 +511,13 @@
             const label = text('div', 'album-label', '', 'albumLabel');
             label.setAttribute('aria-live', 'polite');
             const row = text('div', 'album-nav'); row.append(prev, label, next);
+            const again = button('albumRelayout', 'album-relayout-btn', '再次編排');
+            again.addEventListener('click', () => this.again());
             if (bounds) this.foot.append(bounds);
+            // page row first (‹ 1 / 15 ›), then the actions, 送出結帳 on its own row, and the quiet caption last
             this.foot.append(note, row);
-            if (this.edit) this.foot.append(this.editRow());
-            this.foot.append(this.relayoutRow());
+            if (this.edit) this.foot.append(this.editRow(again));
+            this.foot.append(this.relayoutRow(again, this.edit));
             if (!this.edit && AlbumPreview.order && AlbumPreview.order.locked) {
                 this.foot.append(text('div', 'album-locked', '這本相本已送出訂單，排版無法再修改', 'albumLockedNote'));
             }
@@ -525,9 +537,9 @@
         },
 
         // 再次編排 / 回到原本: the same photos, another layout. Local only (the analysed items are kept), nothing stored.
-        relayoutRow() {
+        // In edit mode 再次編排 sits in the action row (editRow) and this row holds only 回到原本, the chip and the status / caption.
+        relayoutRow(again, edit) {
             const row = text('div', 'album-relayout');
-            const again = button('albumRelayout', 'album-relayout-btn', '再次編排');
             const back = button('albumRelayoutBack', 'album-relayout-btn album-relayout-back', '回到原本');
             back.hidden = true;
             const chip = text('span', 'album-relayout-chip', '', 'albumRelayoutChip');
@@ -537,11 +549,10 @@
             status.setAttribute('aria-live', 'polite');
             const cap = text('div', 'album-relayout-cap', '這是系統自動排版的示意，換個排法看看', 'albumRelayoutCap');
             const btns = text('div', 'album-relayout-btns');
-            btns.append(again, back, chip);
+            if (edit) btns.append(back, chip); else btns.append(again, back, chip);
             const side = text('div', 'album-relayout-side');
             side.append(status, cap);
             row.append(btns, side);
-            again.addEventListener('click', () => this.again());
             back.addEventListener('click', () => this.guard(() => this.relayout(0, '已回到原本排法')));
             return row;
         },
@@ -655,6 +666,56 @@
         setSlot(ref, obj) { if (ref.cover) this.cur.cover = obj; else this.cur.spreads[ref.n].slots[ref.s] = obj; },
         wasteAt(ref, id) { const it = this.photo(id); return it ? AutoLayout.util.wasteOf(it.aspect, this.aspectAt(ref)) : 0; },
 
+        // ── 版型 / 鏡像 / 背景 ──
+        pageColor() { const c = colorById(this.bg); return c ? c.hex : PAPER; },
+        // the template's slot `i` as this spread draws it: its fractions, left <-> right when mirrored (span stays span)
+        slotGeometry(ts, mirrored) {
+            return mirrored
+                ? { x: 1 - ts.x - ts.w, y: ts.y, w: ts.w, h: ts.h, face: ts.face === 'left' ? 'right' : ts.face === 'right' ? 'left' : ts.face }
+                : { x: ts.x, y: ts.y, w: ts.w, h: ts.h, face: ts.face };
+        },
+        // Spread `n` (0-based) drawn with template `id`, `mirrored` or not. Photo i stays in slot i (slots are in template order), the
+        // fit stays, the crop is made again for the NEW slot's shape (contain: 0,0,1 like the planner). Only a template of the library
+        // with the same slot count is taken; nothing else changes (spread count, cover, which photos). Returns false when refused.
+        applyTemplate(n, id, mirrored) {
+            const sp = this.cur && Number.isInteger(n) ? this.cur.spreads[n] : null;
+            const t = typeof id === 'string' ? SpreadTemplates.byId(id) : null;
+            if (!sp || !t || t.slots.length !== sp.slots.length) return false;
+            const m = !!mirrored;
+            sp.slots = sp.slots.map((x, i) => {
+                const slot = this.slotGeometry(t.slots[i], m);
+                const it = x.photoId ? this.photo(x.photoId) : null;
+                if (x.fit === 'contain') return { photoId: x.photoId, fit: 'contain', crop: { x: 0, y: 0, scale: 1 }, slot };
+                const crop = it ? AutoLayout.util.cropFor(it.aspect, slot.w * SPREAD_ASPECT / slot.h, it.focus) : x.crop;
+                return { photoId: x.photoId, crop, slot };
+            });
+            sp.template = t.id;
+            if (m) sp.mirrored = true; else delete sp.mirrored;
+            return true;
+        },
+        // 版型 / 鏡像 count as an edit: 再次編排 would throw them away, so it asks first
+        switchSpread(n, id, mirrored, msg) {
+            if (!this.applyTemplate(n, id, mirrored)) return false;
+            this.dirty = true;
+            this.redraw();
+            this.editSay(msg);
+            this.refreshEdit();
+            return true;
+        },
+        // the book's colour: an id of BACKGROUND_COLORS; white (the paper) is "none" and sends no `background`. Unknown ids are ignored.
+        setBackground(id) {
+            const c = colorById(id);
+            if (!c) return false;
+            this.bg = c.id === 'white' ? null : c.id;
+            this.paintBackground();
+            return true;
+        },
+        paintBackground() {
+            if (!this.stage) return;
+            const hex = this.pageColor();
+            this.stage.querySelectorAll('.album-page').forEach(p => { p.style.background = hex; });
+        },
+
         // choose `id` for the slot at `ref`: a photo already on the inside pages EXCHANGES the two slots, any other replaces
         choose(ref, id) {
             const here = this.slotAt(ref);
@@ -696,7 +757,7 @@
             st.textContent = msg;
         },
 
-        editRow() {
+        editRow(again) {
             const row = text('div', 'album-edit');
             const note = text('div', 'album-edit-note', '點一張照片，可以換成別張', 'albumEditNote');
             note.setAttribute('role', 'status');
@@ -704,19 +765,36 @@
             const warn = text('div', 'album-edit-warn', '', 'albumPagesWarn');
             warn.setAttribute('role', 'status');
             warn.hidden = true;
-            const undo = button('albumUndo', 'album-relayout-btn album-edit-btn', '上一版');
+            const act = (id, label) => button(id, 'album-relayout-btn album-edit-btn album-act', label);
+            const style = act(null, '版型');
+            style.dataset.albumStyle = '';
+            style.setAttribute('aria-haspopup', 'dialog');
+            const bg = act(null, '背景');
+            bg.dataset.albumBg = '';
+            bg.setAttribute('aria-haspopup', 'dialog');
+            const undo = act('albumUndo', '上一版');
             undo.disabled = true;
+            again.classList.add('album-edit-btn', 'album-act');
+            const actions = text('div', 'album-actions');
+            actions.append(style, bg, undo, again);
             const go = button('albumCheckout', 'album-relayout-btn album-edit-btn album-edit-go', '送出結帳');
-            const btns = text('div', 'album-edit-btns');
-            btns.append(undo, go);
-            row.append(note, warn, btns);
+            row.append(actions, go, note, warn);
+            style.addEventListener('click', () => this.openStyle());
+            bg.addEventListener('click', () => this.openBackground());
             undo.addEventListener('click', () => this.undo());
             go.addEventListener('click', () => this.startReview());
             return row;
         },
+        // the cover and the back are single pages: no 版型 there (it would be a different slot count anyway)
+        refreshStyleBtn() {
+            const b = this.foot && this.foot.querySelector('[data-album-style]');
+            const pg = this.pages[this.index];
+            if (b) b.hidden = !pg || pg.kind !== 'spread';
+        },
         // 上一版 and 送出結帳 follow the state: the stack, and whether the spread count is one this book may have
         refreshEdit() {
             if (!this.edit || !this.el) return;
+            this.refreshStyleBtn();
             const undo = document.getElementById('albumUndo');
             if (undo) { undo.disabled = this.history.length === 0; undo.dataset.count = String(this.history.length); }
             const o = AlbumPreview.order, n = this.cur.spreads.length;
@@ -726,19 +804,19 @@
             if (warn) { warn.hidden = !bad; warn.textContent = bad ? `不符合這本相本的頁數：目前 ${n} 個跨頁，這本相本是 ${o.min}–${o.max} 個跨頁` : ''; }
         },
         pushHistory() {
-            this.history.push({ cur: clonePlan(this.cur), variant: this.variant, sig: this.sig, dirty: this.dirty, hint: this.hintNow });
+            this.history.push({ cur: clonePlan(this.cur), bg: this.bg, variant: this.variant, sig: this.sig, dirty: this.dirty, hint: this.hintNow });
             while (this.history.length > HISTORY_MAX) this.history.shift();
         },
         undo() {
             if (!this.edit || !this.history.length || this.reviewing) return;
             const s = this.history.pop();
-            this.variant = s.variant; this.sig = s.sig; this.cur = s.cur; this.dirty = s.dirty;
+            this.variant = s.variant; this.sig = s.sig; this.cur = s.cur; this.bg = s.bg; this.dirty = s.dirty;
             this.paintPlan(s.hint, '已回到上一版');
         },
         // 再次編排 / 回到原本 throw the swaps away: ask first (only when there is something to lose)
         guard(run) {
             if (!this.edit || !this.dirty) { run(); return; }
-            this.confirmBox('再次編排會取消你換過的照片，確定要繼續嗎？', '繼續編排', run, '先不要');
+            this.confirmBox('再次編排會取消你換過的照片和版型，確定要繼續嗎？', '繼續編排', run, '先不要');
         },
 
         // ── the overlays: the candidate picker and the confirmation. The rest of the viewer is inert meanwhile. ──
@@ -818,6 +896,99 @@
             close.addEventListener('click', () => this.closeOverlay());
             this.openOverlay(box);
             close.focus();
+        },
+        // 版型: every template of the library with the SAME slot count as the current spread (never the cover / back), each as a small
+        // wireframe of the whole spread (the dashed line is the fold; a slot across it is a span slot); 鏡像 flips this spread.
+        openStyle() {
+            if (!this.edit || this.reviewing || this.overlay || !this.cur) return;
+            const pg = this.pages[this.index];
+            if (!pg || pg.kind !== 'spread') return;
+            const n = this.index - 1;
+            const sp = this.cur.spreads[n];
+            if (!sp) return;
+            const k = sp.slots.length;
+            const box = text('div', 'album-overlay album-style', null, 'albumStyle');
+            box.setAttribute('role', 'dialog');
+            box.setAttribute('aria-modal', 'true');
+            box.setAttribute('aria-label', '選版型');
+            const head = text('div', 'album-picker-head');
+            const close = button('albumStyleClose', 'album-icon-btn', '✕', '關閉');
+            head.append(text('span', 'album-picker-title', '選這一跨頁的版型'), close);
+            const mirror = button(null, 'album-relayout-btn album-mirror', '鏡像（左右對調）');
+            mirror.dataset.albumMirror = '';
+            const list = text('div', 'album-tpls', null, 'albumStyleList');
+            const draw = () => {
+                const m = !!this.cur.spreads[n].mirrored, curId = this.cur.spreads[n].template;
+                mirror.setAttribute('aria-pressed', String(m));
+                list.replaceChildren();
+                for (const t of SpreadTemplates.TEMPLATES) {
+                    if (t.slots.length !== k) continue;
+                    const b = button(null, 'album-tpl', null);
+                    b.dataset.templateId = t.id;
+                    const here = t.id === curId;
+                    if (here) { b.dataset.current = 'true'; b.setAttribute('aria-current', 'true'); }
+                    b.setAttribute('aria-label', `${t.name}${here ? '（目前）' : ''}`);
+                    const wire = text('span', 'album-tpl-wire');
+                    t.slots.forEach(ts => {
+                        const g = this.slotGeometry(ts, m);
+                        const r = text('span', 'album-tpl-slot');
+                        r.dataset.face = ts.face;
+                        r.style.cssText = `left:${+(g.x * 100).toFixed(3)}%;top:${+(g.y * 100).toFixed(3)}%;width:${+(g.w * 100).toFixed(3)}%;height:${+(g.h * 100).toFixed(3)}%;`;
+                        wire.append(r);
+                    });
+                    b.append(wire, text('span', 'album-tpl-name', t.name));
+                    b.addEventListener('click', () => {
+                        const quiet = t.id === this.cur.spreads[n].template;
+                        this.closeOverlay();
+                        if (!quiet) this.switchSpread(n, t.id, !!this.cur.spreads[n].mirrored, '已換版型');
+                        this.focusAfterEdit();
+                    });
+                    list.append(b);
+                }
+            };
+            mirror.addEventListener('click', () => {
+                const was = !!this.cur.spreads[n].mirrored;
+                if (this.switchSpread(n, this.cur.spreads[n].template, !was, was ? '已取消鏡像' : '已左右對調')) draw();
+            });
+            draw();
+            box.append(head, mirror, list);
+            close.addEventListener('click', () => this.closeOverlay());
+            this.openOverlay(box);
+            const here = list.querySelector('[data-current="true"]');
+            if (here && typeof here.scrollIntoView === 'function') here.scrollIntoView({ block: 'nearest' });
+            close.focus();
+        },
+        // 背景: nine swatches; the choice covers the cover, every spread and the back at once
+        openBackground() {
+            if (!this.edit || this.reviewing || this.overlay || !this.cur) return;
+            const box = text('div', 'album-overlay album-style', null, 'albumBg');
+            box.setAttribute('role', 'dialog');
+            box.setAttribute('aria-modal', 'true');
+            box.setAttribute('aria-label', '選背景顏色');
+            const head = text('div', 'album-picker-head');
+            const close = button('albumBgClose', 'album-icon-btn', '✕', '關閉');
+            head.append(text('span', 'album-picker-title', '整本相本的背景顏色'), close);
+            const grid = text('div', 'album-swatches');
+            const nowId = this.bg || 'white';
+            for (const c of BACKGROUND_COLORS) {
+                const b = button(null, 'album-swatch-btn', null, `${c.label}${c.id === nowId ? '（目前）' : ''}`);
+                b.dataset.bg = c.id;
+                b.setAttribute('aria-pressed', String(c.id === nowId));
+                const sw = text('span', 'album-swatch');
+                sw.style.background = c.hex;
+                b.append(sw, text('span', 'album-swatch-name', c.label));
+                b.addEventListener('click', () => {
+                    this.closeOverlay();
+                    this.setBackground(c.id);
+                    this.editSay(c.id === 'white' ? '背景已改回白色' : `背景已改成${c.label}`);
+                    this.focusAfterEdit();
+                });
+                grid.append(b);
+            }
+            box.append(head, text('div', 'album-bg-note', '整本相本（封面、每個跨頁、封底）用同一個顏色'), grid);
+            close.addEventListener('click', () => this.closeOverlay());
+            this.openOverlay(box);
+            (grid.querySelector('[aria-pressed="true"]') || close).focus();
         },
         focusAfterEdit() {
             const next = document.getElementById('albumNext');
@@ -915,7 +1086,8 @@
                     o.slots = sp.slots.map(one);
                     return o;
                 }),
-                back: this.cur.back ? {} : null };
+                back: this.cur.back ? {} : null,
+                ...(this.bg && colorById(this.bg) ? { background: { type: 'color', value: this.bg } } : {}) };      // no key at all = white, as before
         },
 
         // ── pages ──
@@ -953,6 +1125,7 @@
             const prev = document.getElementById('albumPrev'), next = document.getElementById('albumNext');
             if (prev) prev.disabled = index === 0;
             if (next) next.disabled = index === this.pages.length - 1;
+            if (this.edit) this.refreshStyleBtn();
             // a disabled button cannot keep the focus
             if (this.el && !this.el.contains(document.activeElement)) (next && !next.disabled ? next : prev || this.el).focus();
             this.noteReach();
@@ -988,7 +1161,7 @@
             const page = text('div', 'album-page');
             page.dataset.kind = pageData.kind;
             page.dataset.layout = pageData.layout;
-            page.style.background = '#ffffff';
+            page.style.background = Viewer.pageColor();     // the book's colour (white = the paper); a contain frame has no ground, so it shows through
             const pct = v => `${+(v * 100).toFixed(3)}%`;
             // Bleed: the page box is the whole printed sheet and the template's fractions are the finished page, which
             // sits inside it. Edge photos that fill their frame (cover) run on out to the sheet edge so the cut finds
@@ -1323,7 +1496,7 @@
         // album product, else null = the read-only preview): { product, min, max, submit(layout), locked }. `min` / `max` are the spread
         // counts the book may have, `submit` hands the Layout JSON v2 to js/guest-order.js. `locked` (set by lockOrder) ends editing.
         order: null,
-        SHAPE_WASTE_WARN, HISTORY_MAX, LAYOUT_MAX_BYTES,
+        SHAPE_WASTE_WARN, HISTORY_MAX, LAYOUT_MAX_BYTES, BACKGROUND_COLORS,
         lockOrder() { if (this.order) this.order.locked = true; },
         // the layout of the open viewer in edit mode (null otherwise); for the tests
         currentLayout() { return Viewer.edit ? Viewer.layout() : null; },
