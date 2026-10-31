@@ -182,10 +182,11 @@ empty scan passes.
   seat owner only, only while delivered. It never takes a key from the request. `pickReadScope`, the object
   route and `?list=` must not learn about old rounds. Thumbnails are served only as jpeg/png/webp/avif.
 
-- Guest ordering (S2) is built but dark: `GUEST_ORDERS` in `worker/wrangler.toml` is `off`
-  (`pilot` + `GUEST_ORDERS_PILOT` project ids, or `on`); any other value, a typo included,
-  counts as off. Before it is turned on, `2026-10-09-guest-orders.sql` (11 statements, one by
-  one) must have been run and the privacy notice reviewed (`docs/guest-shop.md`).
+- Guest ordering (S2) is a pilot since 2026-10-31: `GUEST_ORDERS` in `worker/wrangler.toml` is `pilot` and
+  `GUEST_ORDERS_PILOT` lists only Tim's test project 20261019 testing 1; every other project still shows only 「我有興趣」.
+  `on` opens every project; any other value, a typo included, counts as off. `2026-10-09-guest-orders.sql` (11 statements,
+  one by one) must have been run first (until then the pilot project's order routes answer 500 `orders_unavailable`, nothing
+  is written), and the privacy notice must be reviewed before `on` (`docs/guest-shop.md`).
 
 ## Decided not to do (do not re-propose without new evidence)
 - Service / Package / Template, quotes, contracts, booking, CRM: scope creep.

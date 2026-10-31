@@ -30,9 +30,9 @@ NOTIFY_FROM = "notify@imhoti.tw"
 CUSTOM_PRODUCTS = "off"
 # 客人自助訂購（docs/guest-shop.md S2）。"on" = 全開；"pilot" = 只開
 # GUEST_ORDERS_PILOT 列的專案（逗號分隔的 project id）；其他值或沒設都算關
-# （打錯字 = 關）。個資告知審過之前保持 "off"：客人只看到「我有興趣」。
-GUEST_ORDERS = "off"
-GUEST_ORDERS_PILOT = ""
+# （打錯字 = 關）。2026-10-31 起是 pilot（只開 Tim 的測試專案）；個資告知審過之前不要改成 "on"。
+GUEST_ORDERS = "pilot"
+GUEST_ORDERS_PILOT = "6f82b4ee-d10a-4c3d-b920-1197de6b915e"   # 20261019 testing 1 (Tim, 2026-10-31); 對外開放前審過個資告知再改 "on"
 # 舊的客戶帳號系統（POST /api/auth/register、/login，client-login.html）。只有 "on" 才開；
 # 其他值或沒設都算關（410 client_accounts_closed）。關閉原因：登入沒有限流、密碼只做一輪 SHA-256、註冊沒有上限。
 LEGACY_CLIENT_ACCOUNTS = "off"

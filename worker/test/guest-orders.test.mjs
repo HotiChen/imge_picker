@@ -72,11 +72,14 @@ test('migration: eleven statements, each runnable on its own, noted in schema.sq
   assert.throws(() => ins('o5', 'p', 'r'), /UNIQUE/);
 });
 
-test('wrangler.toml ships the switch off, with an empty pilot list, in [vars]', () => {
+test('wrangler.toml ships ordering as a pilot for exactly one project, never "on", in [vars]', () => {
   const toml = readFileSync(new URL('../wrangler.toml', import.meta.url), 'utf8');
   const vars = toml.slice(toml.indexOf('[vars]'));
-  assert.match(vars, /^GUEST_ORDERS = "off"$/m);
-  assert.match(vars, /^GUEST_ORDERS_PILOT = ""$/m);
+  // 2026-10-31 (Tim): pilot on his own test project 20261019 testing 1. "on" opens every project: that needs
+  // the privacy notice reviewed first (docs/guest-shop.md), so it must be a deliberate edit of this test too.
+  assert.match(vars, /^GUEST_ORDERS = "pilot"$/m);
+  assert.doesNotMatch(vars, /^GUEST_ORDERS = "on"/m);
+  assert.match(vars, /^GUEST_ORDERS_PILOT = "6f82b4ee-d10a-4c3d-b920-1197de6b915e"(\s+#.*)?$/m);
 });
 
 // ─── create ──────────────────────────────────────────────────────────────────

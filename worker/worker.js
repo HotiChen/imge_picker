@@ -3574,7 +3574,7 @@ async function sendRevisionRoundNotification(env, project, pickerName, note, pin
 // existing admin status route). Pickup only, no shipping (Tim, 2026-10-08).
 // Every price is the catalogue's, recomputed here; the body names options,
 // quantities, a final photo (prints) or a spread count (albums). Dark-launched:
-// GUEST_ORDERS (wrangler.toml) is "off" until the privacy notice is reviewed.
+// GUEST_ORDERS (wrangler.toml) is "pilot" (one test project) until the privacy notice is reviewed.
 // Change the limits here only.
 const GUEST_ORDER_LINES_MAX = 20;
 const GUEST_PRINT_QTY_MAX = 10;

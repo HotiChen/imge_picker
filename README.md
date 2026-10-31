@@ -83,7 +83,7 @@
   就是下一版。**絕不會自動確認**。設計：`docs/delivery.md`、`docs/revision-pins.md`。
 - **完成頁**：客人確認後，同一條連結變成淺色的完成頁（精修 gallery、拍攝日期、下載全部精修、商品區
   「把這段回憶留下來」與「我有興趣」、相本預覽）。
-- **客人自助訂購（S2）已做好但預設關閉**：由 `worker/wrangler.toml` 的 `GUEST_ORDERS` 控制（見下）。關閉時客人
+- **客人自助訂購（S2）：目前只有試營運專案開啟（`pilot`），其他專案關閉**：由 `worker/wrangler.toml` 的 `GUEST_ORDERS` 控制（見下）。關閉時客人
   只看到「我有興趣」。設計：`docs/guest-shop.md`。
 - **標示修改（pins，選片階段）**：客人在 ♥ 的照片上點位置放編號 pin，放下後自動跳出輸入框填文字；
   資料是 `selections.marks`（0–1 比例座標）。攝影師在 Review 看到，也可用「下載需求表 (CSV)」
@@ -116,7 +116,7 @@ Push 到 `main` 才會部署（`.github/workflows/deploy.yml`）：
 - Secrets（`wrangler secret put <名稱>`）：`PHOTOGRAPHER_TOKEN`、`OPERATOR_TOKEN`、`PHOTOGRAPHER_EMAIL`、`PICK_INVITE_SECRET`（協作者邀請碼）、
   `PHOTOGRAPHER_INVITE_SECRET`（攝影師邀請碼）、`TURNSTILE_SECRET`（自助註冊，開關目前關）；選用的 var `TURNSTILE_HOSTNAME`
 - `[vars]`（`worker/wrangler.toml`）：`NOTIFY_FROM`、`CUSTOM_PRODUCTS`（預設 `off`）、
-  `GUEST_ORDERS`（客人自助訂購：`off` 預設 / `pilot` 只開 `GUEST_ORDERS_PILOT` 列的專案 id（逗號分隔）/ `on`；
+  `GUEST_ORDERS`（客人自助訂購：`off` / `pilot`（目前） 只開 `GUEST_ORDERS_PILOT` 列的專案 id（逗號分隔）/ `on`；
   其他值或打錯都算關）、`LEGACY_CLIENT_ACCOUNTS`（`off`）、`PHOTOGRAPHER_SIGNUP`（`off`）、`PHOTOGRAPHER_ROUTES`（`on`）；
   這些開關都是只有 `"on"`（或 `pilot`）才開，其他值都算關（寫在 `worker/wrangler.toml` 的註解）
 - Bindings：R2 `imagepicker`、D1 `DB`、send_email `NOTIFY_EMAIL`
@@ -152,7 +152,7 @@ Console 一次只能跑一句，檔案內多句要一句一句貼；ALTER 不能
 | `2026-10-07-project-shoot-date.sql` | `projects.shoot_date` | 與 project-type 各自獨立 | 已跑 |
 | `2026-10-07-project-type.sql` | `projects.project_type` | 專案類別 | 已跑 |
 | `2026-10-08-product-interests.sql` | 表 `product_interests` | 「我有興趣」；沒跑時 `POST /api/pick/interest` 回 500 | 已跑 |
-| `2026-10-09-guest-orders.sql` | `orders`（request_id、聯絡資料、consent…）、`order_items.list_price/layout`、`studio_settings.transfer_info`，11 句 | **S2：打開 `GUEST_ORDERS` 之前一定要跑**（沒跑時客人訂單路由回 500 `orders_unavailable`、設定的匯款資訊存不進去） | **刻意未跑**（`GUEST_ORDERS = "off"`） |
+| `2026-10-09-guest-orders.sql` | `orders`（request_id、聯絡資料、consent…）、`order_items.list_price/layout`、`studio_settings.transfer_info`，11 句 | **S2：打開 `GUEST_ORDERS` 之前一定要跑**（沒跑時客人訂單路由回 500 `orders_unavailable`、設定的匯款資訊存不進去） | **以 Tim 在 D1 Console 實際執行為準**（`GUEST_ORDERS = "pilot"`；沒跑完時 pilot 專案的訂單路由回 500） |
 | `2026-10-10-pick-link-message.sql` | `studio_settings.pick_link_message` | 設定裡「傳給客人的選片訊息」預設文字；沒跑時存這個欄位回 500 `pick_link_message_unavailable`，複製連結視窗用內建預設 | 已跑 |
 | `2026-10-11-photographers.sql` | 表 `photographers`、`photographer_sessions`、`photographer_signups`、`photographer_login_failures` | 多攝影師第 1 批（`docs/multi-photographer.md`） | 已跑 |
 | `2026-10-12-indexes.sql` | 索引 `idx_pickers_key`、`idx_share_tokens_project` | 只加索引 | 已跑 |
