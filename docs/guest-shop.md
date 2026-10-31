@@ -1399,3 +1399,29 @@ reset the previous holder's 3 `requested` orders block the new holder until the 
   body is still 400 `Invalid JSON`.
 - The guest view's `spreads` (and the email's 「N 跨頁」) count a v2 layout's spreads. `js/orders-common.js` shows
   「N 跨頁」 only for a v1 layout (`Number.isInteger(layout.spreads)`): the photographer-side view is work package 3.
+
+## S3 第一步 — 換版型（同張數）、整本底色（Tim，2026-10-31）
+
+Tim 試過客人編輯畫面後的決定：客人要有設計自由（A）；**先做第一步**，底圖「圖片」留到之後（第二步，另行決定）。
+
+### 客人能做的
+- **版型**：每個跨頁可以換成**張數相同**的其他版型（`SpreadTemplates` 裡 slot 數相同的），另有「鏡像」開關。跨頁數、張數、價格都不變；slot i 的照片留在 slot i，裁切依新格子的形狀用 `AutoLayout.util.cropFor` 重算（`fit` 保持）。**不能**換成張數不同的版型（會動到哪些照片放進哪一跨）。封面是單頁、不在這裡換版型。
+- **底色**：整本（封面、每個跨頁、封底）一個底色，從白名單選。`fit: 'contain'` 的照片留白處會露出底色。
+
+### Layout JSON v2 的新欄位（向下相容，欄位可省略）
+```
+background?: null | { type: 'color', value: <id> }      // 省略／null = 白色（和現在一樣）
+```
+- 色 id 白名單（Worker 與客人端／攝影師端各持一份 id→hex，**對照測試**，漂移就失敗）：
+  `white #ffffff`, `cream #fff8ee`, `butter #fff4cc`, `blush #fde8ec`, `peach #ffe5d4`, `mint #e3f4e8`, `sky #e1effb`, `lavender #eee8fa`, `gray #eeeeee`。
+- `type: 'image'` **保留給第二步**：這一步 Worker 一律拒絕（400 `invalid_layout`），客人端也不送。任何其他 type、多餘欄位、非白名單 id 都是 400 `invalid_layout`。Worker 重新序列化 `{type:'color', value}`，丟掉其他欄位。
+- 版型：Worker 現有驗證已足夠（模板 id 在白名單、slot 數＝模板的 slot 數、每張內頁照片至多一次）；不加新規則。`mirrored` 本來就接受。
+
+### 其他畫面
+- 攝影師端：`js/album-layout-view.js` 唯讀檢視要畫底色；`book_editor/js/import_layout.js` 匯入時把底色寫進每一頁的 `bg`（編輯器本來就有頁面底色）。
+- 客人編輯畫面整理：頁碼列一行（‹ 1 / 15 ›）；動作列一排（版型、背景、上一版、再次編排）；「送出結帳」獨立一行；說明文字收在下面。「再次編排」仍然只在換過照片時才確認。
+
+### 工作切分
+1. Worker（High，opus）：`background` 驗證＋序列化＋對照測試＋變異測試；之後安全審查。
+2. 客人端（Normal，sonnet）：`js/album-preview.js`／`css/completion-page.css`：版型選擇、鏡像、底色選擇、畫面整理；`layout()` 帶 `background`。
+3. 攝影師端（Normal，sonnet）：檢視器畫底色、匯入帶 `bg`。
