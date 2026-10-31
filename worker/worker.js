@@ -3611,6 +3611,15 @@ const ALBUM_TEMPLATE_SLOTS = new Map(Object.entries({
   'collage-3-4': 7, 'collage-4-3': 7, 'mosaic-7': 7, 'seven-wide': 7, 'portrait-seven': 7, 'grid-4-4': 8,
   'mosaic-4-4': 8, 'bands-4-4': 8
 }));
+// The whole-book background colours a guest layout may name (S3 第一步,
+// docs/guest-shop.md), id → hex. The Worker only checks ids; the hex sits
+// beside them so guest-album-background.test.mjs can compare the table with
+// the client copies (book_editor/js/import_layout.js BACKGROUND_COLORS). A
+// Map, so no prototype name is an id.
+const ALBUM_BACKGROUND_COLORS = new Map(Object.entries({
+  white: '#ffffff', cream: '#fff8ee', butter: '#fff4cc', blush: '#fde8ec', peach: '#ffe5d4',
+  mint: '#e3f4e8', sky: '#e1effb', lavender: '#eee8fa', gray: '#eeeeee'
+}));
 const GUEST_OPTION_ID_MAX = 200;
 // the privacy notice the order form shows; a new text bumps it, and a page
 // still showing the old one is refused (consent_required)
@@ -3773,9 +3782,24 @@ function albumLayoutSlot(s) {
   return { photo_key: s.photo_key, fit: s.fit, crop: { x: c.x, y: c.y, scale: 1 } };
 }
 
+// A guest layout's whole-book background (S3 第一步): undefined or null is
+// none (null); {type: 'color', value: <an ALBUM_BACKGROUND_COLORS id>} is
+// rebuilt as exactly {type, value}, every other field dropped; anything else
+// — not a plain object, an array, type 'image' (step 2's, refused for now),
+// any other type, a value that is not a whitelisted id string — is undefined
+// (400 invalid_layout). Only the object's own type and value are read.
+function albumLayoutBackground(b) {
+  if (b === undefined || b === null) return null;
+  if (!isPlainObject(b) || !Object.hasOwn(b, 'type') || !Object.hasOwn(b, 'value')) return undefined;
+  if (b.type !== 'color' || typeof b.value !== 'string' || !ALBUM_BACKGROUND_COLORS.has(b.value)) return undefined;
+  return { type: 'color', value: b.value };
+}
+
 // A guest album layout, Layout JSON v2 (docs/guest-shop.md, 「S3 — 客人相本
 // 排版」): {v: 2, mode: 'auto', cover: slot | null, spreads: [{template,
-// mirrored?: true, slots: [slot]}], back: null | {}}. Returns {json, keys,
+// mirrored?: true, slots: [slot]}], back: null | {}, background?: {type:
+// 'color', value}} (albumLayoutBackground; written after back, and only when
+// there is one, so a layout without it is stored as before). Returns {json, keys,
 // spreads} — the Worker's own serialisation (in that key order, every other
 // field dropped), every photo key it names (for the finals check, which is
 // guestOrderLines'), and the spread count — or null (400 invalid_layout). The
@@ -3814,7 +3838,9 @@ function albumLayoutV2(raw) {
     if (!isPlainObject(raw.back)) return null;
     back = {};
   }
-  const json = JSON.stringify({ v: 2, mode: 'auto', cover, spreads, back });
+  const background = albumLayoutBackground(raw.background);
+  if (background === undefined) return null;
+  const json = JSON.stringify({ v: 2, mode: 'auto', cover, spreads, back, ...(background && { background }) });
   if (new TextEncoder().encode(json).byteLength > ALBUM_LAYOUT_MAX) return null;
   return { json, keys: cover ? [cover.photo_key, ...inner] : [...inner], spreads: spreads.length };
 }
