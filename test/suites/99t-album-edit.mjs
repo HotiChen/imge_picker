@@ -111,7 +111,7 @@ for (const [label, mk, ctx, initScript] of [
 // ── 2. the candidate list
 {
   const w = world();
-  await sx('tap a photo -> candidates: thumbnails only, unused first, matching shape first, used dimmed and marked 已使用', async (page, ok) => {
+  await sx('tap a photo -> candidates: thumbnails only, unused first, matching shape first, used marked 已用', async (page, ok) => {
     await open(page);
     const before = await layoutNow(page);
     await flipTo(page, 1);
@@ -126,8 +126,8 @@ for (const [label, mk, ctx, initScript] of [
     const un = cs.filter(c => !c.used && !c.cur), us = cs.filter(c => c.used);
     const sorted = g => { const k = g.map(c => c.match); const i = k.indexOf(false); return i === -1 || k.slice(i).every(m => !m); };
     ok('inside each group the photos of the slot\'s orientation come first', sorted(un) && sorted(us), JSON.stringify([un.map(c => c.match), us.map(c => c.match)]));
-    ok('used ones are dimmed (computed opacity < 0.6) and badged 已使用; free ones are full strength with no badge',
-      us.every(c => c.op < 0.6 && c.badge === '已使用') && cs.filter(c => !c.used && !c.cur).every(c => c.op === 1 && c.badge === ''), JSON.stringify(cs.map(c => [c.op, c.badge])));
+    ok('used ones carry the small 已用 mark; free ones are full strength with no mark (the dim itself is asserted in 99y: here every photo is used, so none is dimmed)',
+      us.every(c => c.badge === '已用') && cs.filter(c => !c.used && !c.cur).every(c => c.op === 1 && c.badge === ''), JSON.stringify(cs.map(c => [c.op, c.badge])));
     ok('the slot\'s own photo is marked 目前', cs.filter(c => c.cur).length === 1 && cs.find(c => c.cur).badge === '目前' && cs.find(c => c.cur).id === before.spreads[0].slots[0].photo_key);
     ok('thumbnails only: every src has ?w=400 and none is an original or a download', cs.every(c => /[?&]w=400/.test(c.src) && !/download/.test(c.src)), cs[0].src);
     const orig = w.log.filter(r => r.method === 'GET' && !r.list && r.w == null && r.key && /IMG_/.test(r.key));

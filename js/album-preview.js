@@ -777,7 +777,7 @@
         },
 
         // the candidate list for the slot at `ref`: this book's finals (thumbnails only), photos not on the inside pages first,
-        // photos of the slot's own orientation first, the ones already in the book dimmed and marked 已使用
+        // photos of the slot's own orientation first, the ones already in the book get a small 已用 mark (and a light dim when free photos are listed too)
         openPicker(ref) {
             const here = this.slotAt(ref);
             const inner = this.innerIds(ref);
@@ -794,6 +794,7 @@
             const close = button('albumPickerClose', 'album-icon-btn', '✕', '關閉');
             head.append(text('span', 'album-picker-title', ref.cover ? '選封面照片' : '選一張照片換進這格'), close);
             const grid = text('div', 'album-cands', null, 'albumCandidates');
+            grid.dataset.mixed = list.some(c => !c.used && !c.cur) ? 'true' : 'false';   // free photos exist next to used ones: only then the used ones are lightly dimmed
             const dm = window.driveManager;
             for (const c of list) {
                 const b = button(null, 'album-cand', null);
@@ -810,7 +811,7 @@
                 img.src = dm.getImageUrl({ id: c.it.id }, 400);
                 b.append(img);
                 if (c.cur) b.append(text('span', 'album-cand-badge album-cand-current', '目前'));
-                else if (c.used) b.append(text('span', 'album-cand-badge', '已使用'));
+                else if (c.used) b.append(text('span', 'album-cand-badge', '已用'));
                 b.addEventListener('click', () => { this.closeOverlay(true); this.choose(ref, c.it.id); this.focusAfterEdit(); });
                 grid.append(b);
             }
