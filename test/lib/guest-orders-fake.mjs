@@ -26,6 +26,9 @@ const TEMPLATE_SLOTS = new Map(SpreadTemplates.TEMPLATES.map(t => [t.id, t.slots
 // worker.js bookPhotoIdSafe: a key the layout may carry (no quote, <, >, backtick, backslash, control / bidi character, BOM, lone surrogate)
 export const UNSAFE_KEY_CHAR = /["<>`\\\x00-\x1f\x7f-\x9f\u{61c}\u{200e}\u{200f}\u{2028}\u{2029}\u{202a}-\u{202e}\u{2066}-\u{2069}\u{feff}\u{d800}-\u{dfff}]/u;
 export const CROP_LIMIT = 5;
+// Layout JSON v2 `background` (docs/guest-shop.md "S3 第一步"): absent / null = white, else exactly { type: 'color', value } with an id of this table.
+// The Worker re-serialises to { type, value } only; type 'image' and anything else is 400 invalid_layout. Kept in step with the Worker by hand here.
+export const BACKGROUND_IDS = Object.freeze(['white', 'cream', 'butter', 'blush', 'peach', 'mint', 'sky', 'lavender', 'gray']);
 export const LAYOUT_MAX_BYTES = 64 * 1024;
 export const BODY_MAX_PLAIN = 32 * 1024;
 export const BODY_MAX_LAYOUT = 96 * 1024;
@@ -67,6 +70,11 @@ export function serializeLayout(l) {
     out.spreads.push(o);
   }
   if (l.back !== null && l.back !== undefined) { if (!isObj(l.back)) return null; out.back = {}; }
+  if (l.background !== null && l.background !== undefined) {
+    const b = l.background;
+    if (!isObj(b) || b.type !== 'color' || typeof b.value !== 'string' || !BACKGROUND_IDS.includes(b.value)) return null;
+    out.background = { type: 'color', value: b.value };
+  }
   if (new TextEncoder().encode(JSON.stringify(out)).length > LAYOUT_MAX_BYTES) return null;
   return out;
 }
