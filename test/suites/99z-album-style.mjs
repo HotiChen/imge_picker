@@ -231,7 +231,7 @@ for (const fit of ['contain', 'cover']) {
 // ── 4. the photo picker on the new geometry
 {
   const w = world();
-  await sx('after a template switch the picker still swaps photos per slot (已使用 mark, exchange) on the new shapes', async (page, ok) => {
+  await sx('after a template switch the picker still swaps photos per slot (已用 mark, exchange) on the new shapes', async (page, ok) => {
     await open(page);
     const { l: before, n, k } = await withFirstMultiAlt(page);
     const alt = SpreadTemplates.TEMPLATES.find(t => t.slots.length === k && t.id !== before.spreads[n - 1].template);
@@ -240,7 +240,7 @@ for (const fit of ['contain', 'cover']) {
     await page.click('.album-slide[data-current="true"] .album-slot[data-slot="0"]');
     await page.waitForSelector('#albumPicker', { timeout: 3000 });
     const cs = await page.evaluate(() => [...document.querySelectorAll('#albumCandidates .album-cand')].map(b => ({ id: b.dataset.photoId, used: b.dataset.used === 'true', cur: b.dataset.current === 'true', badge: b.querySelector('.album-cand-badge')?.textContent ?? '' })));
-    ok('positive: 12 candidates, the slot\'s own photo is 目前, the other inside photos are 已使用', cs.length === 12 && cs.filter(c => c.cur).length === 1 && cs.find(c => c.cur).id === l1.spreads[n - 1].slots[0].photo_key && cs.filter(c => c.used).every(c => c.badge === '已使用') && cs.filter(c => c.used).length >= 3);
+    ok('positive: 12 candidates, the slot\'s own photo is 目前, the other inside photos are marked 已用', cs.length === 12 && cs.filter(c => c.cur).length === 1 && cs.find(c => c.cur).id === l1.spreads[n - 1].slots[0].photo_key && cs.filter(c => c.used).every(c => c.badge === '已用') && cs.filter(c => c.used).length >= 3);
     const other = cs.find(c => c.used && !c.cur);
     await page.evaluate(i => [...document.querySelectorAll('#albumCandidates .album-cand')].find(x => x.dataset.photoId === i).click(), other.id);
     await page.waitForFunction(() => !document.getElementById('albumPicker'), null, { timeout: 3000 });
