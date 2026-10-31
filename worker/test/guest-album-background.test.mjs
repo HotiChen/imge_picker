@@ -103,6 +103,16 @@ test('parity: book_editor/js/import_layout.js ImportLayout.BACKGROUND_COLORS equ
   assert.deepEqual({ ...table }, workerColorTable(), 'client and Worker colour tables drifted');
 });
 
+test('parity: js/album-preview.js (the guest editor) BACKGROUND_COLORS equals the Worker\'s table, id → hex', () => {
+  // the guest page holds its own copy (id, hex, 中文名); a colour added on one side only would be refused (400) or drawn wrong
+  const source = readFileSync(new URL('../../js/album-preview.js', import.meta.url), 'utf8');
+  const block = source.match(/const BACKGROUND_COLORS = Object\.freeze\(\[([\s\S]*?)\]\.map\(/);
+  assert.ok(block, 'js/album-preview.js has no BACKGROUND_COLORS table in the expected shape: the parity cannot be checked');
+  const rows = [...block[1].matchAll(/\['([a-z]+)',\s*'(#[0-9a-f]{6})',\s*'[^']+'\]/g)];
+  assert.equal(rows.length, Object.keys(workerColorTable()).length, 'the guest page and the Worker list a different number of colours');
+  assert.deepEqual(Object.fromEntries(rows.map(r => [r[1], r[2]])), workerColorTable(), 'guest page and Worker colour tables drifted');
+});
+
 // ─── no background: byte-identical to before ────────────────────────────────
 
 test('no background (absent, undefined, null): stored byte for byte as before, no background key', async () => {
